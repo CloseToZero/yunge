@@ -2,8 +2,19 @@
 ;; SPDX-FileCopyrightText: 2026 Chen Zhexuan
 ;; SPDX-License-Identifier: MIT
 
+;; Raise the GC threshold during startup, then restore Emacs's default.
+(let ((threshold gc-cons-threshold))
+  (setq gc-cons-threshold (* 128 1024 1024))
+  (add-hook 'emacs-startup-hook
+            (lambda ()
+              (setq gc-cons-threshold threshold))))
+
 ;; Keep text portable without overriding the Windows clipboard encoding.
 (prefer-coding-system 'utf-8-unix)
+
+;; This configuration owns defaults and does not use platform resources.
+(setq inhibit-default-init t
+      inhibit-x-resources t)
 
 ;; Elpaca owns package activation.
 (setq package-enable-at-startup nil)
