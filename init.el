@@ -11,6 +11,9 @@
 (require 'yunge-elpaca)
 (require 'yunge-dired)
 
+;; Load saved Custom state before command-line files are visited.
+(load custom-file 'noerror 'nomessage)
+
 (autoload 'yunge-test "yunge-test" nil t)
 
 ;;; init.el ends here

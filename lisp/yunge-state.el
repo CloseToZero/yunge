@@ -10,6 +10,8 @@
         (expand-file-name "auto-save/session-" directory)
         backup-directory-alist
         `(("." . ,(expand-file-name "backup/" directory)))
+        custom-file
+        (expand-file-name "custom.el" directory)
         project-list-file
         (expand-file-name "project-list.eld" directory)
         recentf-save-file
