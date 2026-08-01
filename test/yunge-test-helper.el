@@ -39,24 +39,34 @@
 (defvar elpaca-sources-directory
   (expand-file-name "source/" elpaca-directory))
 
-(defun yunge-test-add-package-path (&rest packages)
-  "Add Elpaca build directories for PACKAGES to `load-path'."
-  (dolist (name packages)
-    (add-to-list
-     'load-path
-     (expand-file-name (format "var/elpaca/build/%s" name)
-                       yunge-test-root))))
+(defun yunge-test-package-list ()
+  "Return the packages available to tests.
+Elpaca manages itself separately, so it is not recorded in its lock file."
+  (cons
+   'elpaca
+   (mapcar
+    #'car
+    (with-temp-buffer
+      (insert-file-contents
+       (expand-file-name "elpaca-lock.el" yunge-test-root))
+      (read (current-buffer))))))
 
-(defun yunge-test-package-arguments (packages)
-  "Return command-line load path arguments for PACKAGES."
+(defun yunge-test-package-directory (package)
+  "Return PACKAGE's Elpaca build directory."
+  (expand-file-name (format "var/elpaca/build/%s" package)
+                    yunge-test-root))
+
+(defun yunge-test-package-arguments ()
+  "Return command-line load path arguments for locked packages."
   (apply #'append
          (mapcar
           (lambda (name)
-            (list "-L"
-                  (expand-file-name
-                   (format "var/elpaca/build/%s" name)
-                   yunge-test-root)))
-          packages)))
+            (list "-L" (yunge-test-package-directory name)))
+          (yunge-test-package-list))))
+
+(dolist (package (reverse (yunge-test-package-list)))
+  ;; `add-to-list' prepends, so reverse the list to match `-L' order.
+  (add-to-list 'load-path (yunge-test-package-directory package)))
 
 (defun yunge-test-run-emacs (&rest arguments)
   "Run clean Emacs with ARGUMENTS and fail if it exits unsuccessfully."
@@ -70,7 +80,8 @@
       (setq status
             (apply #'call-process
                    (expand-file-name invocation-name invocation-directory)
-                   nil t nil "--batch" "-Q" arguments))
+                   nil t nil "--batch" "-Q"
+                   (append (yunge-test-package-arguments) arguments)))
       (unless (equal status 0)
         (ert-fail
          (format "Emacs exited with %S:\n%s" status (buffer-string))))
@@ -96,47 +107,40 @@
      (yunge-test-assert-lazy-load ',library ',features)))
 
 (cl-defun yunge-test-run-package-config
-    (library package &key dependencies setup before-ready after-ready)
+    (library package &key setup before-ready after-ready)
   "Test the Elpaca lifecycle of LIBRARY's PACKAGE configuration.
-DEPENDENCIES are additional package build directories.  Evaluate SETUP
-before loading LIBRARY, BEFORE-READY after loading it, and AFTER-READY
-after activating PACKAGE and executing its deferred configuration."
-  (let ((autoloads (intern (format "%s-autoloads" package)))
-        (arguments
-         (yunge-test-package-arguments (cons package dependencies))))
-    (apply
-     #'yunge-test-run-emacs
-     (append
-      arguments
-      (list
-       "--eval"
-       (prin1-to-string
-        `(progn
-           ,setup
-           (defvar yunge-test-elpaca-declarations nil)
-           (defmacro elpaca (order &rest body)
-             (list 'push
-                   (list 'list
-                         (list 'quote order)
-                         (list 'quote body))
-                   'yunge-test-elpaca-declarations))))
-       "-L" (expand-file-name "lisp" yunge-test-root)
-       "-l" (symbol-name library)
-       "--eval"
-       (prin1-to-string
-        `(progn
-           (unless
-               (equal (mapcar #'car
-                              (reverse yunge-test-elpaca-declarations))
-                      '(,package))
-             (error "Unexpected Elpaca declarations: %S"
-                    yunge-test-elpaca-declarations))
-           ,before-ready
-           (require ',autoloads)
-           (dolist (declaration
-                    (reverse yunge-test-elpaca-declarations))
-             (eval (cons 'progn (cadr declaration)) t))
-           ,after-ready)))))))
+Evaluate SETUP before loading LIBRARY, BEFORE-READY after loading it, and
+AFTER-READY after activating PACKAGE and executing its deferred configuration."
+  (let ((autoloads (intern (format "%s-autoloads" package))))
+    (yunge-test-run-emacs
+     "--eval"
+     (prin1-to-string
+      `(progn
+         ,setup
+         (defvar yunge-test-elpaca-declarations nil)
+         (defmacro elpaca (order &rest body)
+           (list 'push
+                 (list 'list
+                       (list 'quote order)
+                       (list 'quote body))
+                 'yunge-test-elpaca-declarations))))
+     "-L" (expand-file-name "lisp" yunge-test-root)
+     "-l" (symbol-name library)
+     "--eval"
+     (prin1-to-string
+      `(progn
+         (unless
+             (equal (mapcar #'car
+                            (reverse yunge-test-elpaca-declarations))
+                    '(,package))
+           (error "Unexpected Elpaca declarations: %S"
+                  yunge-test-elpaca-declarations))
+         ,before-ready
+         (require ',autoloads)
+         (dolist (declaration
+                  (reverse yunge-test-elpaca-declarations))
+           (eval (cons 'progn (cadr declaration)) t))
+         ,after-ready)))))
 
 (defun yunge-test-load-package-config (library)
   "Load LIBRARY and synchronously execute its Elpaca configuration."
@@ -195,7 +199,6 @@ after activating PACKAGE and executing its deferred configuration."
 
 (defun yunge-test-enable-evil ()
   "Load Evil and enable the configuration's leader support."
-  (yunge-test-add-package-path 'evil 'goto-chg 'which-key)
   ;; Preserve the production load order required by `evil-want-minibuffer'.
   (require 'yunge-minibuffer)
   (require 'evil-autoloads)

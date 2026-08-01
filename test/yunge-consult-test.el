@@ -13,7 +13,6 @@
 (ert-deftest yunge-consult-configures-after-package-ready ()
   (yunge-test-run-package-config
    'yunge-consult 'consult
-   :dependencies '(compat)
    :setup
    '(progn
       (defvar-keymap yunge-buffer-map)
@@ -40,7 +39,6 @@
         (error "Consult was loaded by its configuration")))))
 
 (ert-deftest yunge-consult-integrates-with-evil ()
-  (yunge-test-add-package-path 'compat 'consult)
   (yunge-test-enable-evil)
   (require 'which-key)
   (require 'consult-autoloads)

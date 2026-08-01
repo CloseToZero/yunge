@@ -4,9 +4,6 @@
 
 (require 'yunge-test-helper)
 
-(yunge-test-add-package-path
- 'compat 'elpaca 'evil 'goto-chg 'vertico 'which-key)
-
 (require 'elpaca-autoloads)
 
 (declare-function evil-local-mode "evil-core")
@@ -24,7 +21,6 @@
 (ert-deftest yunge-vertico-enables-after-package-ready ()
   (yunge-test-run-package-config
    'yunge-vertico 'vertico
-   :dependencies '(compat)
    :before-ready
    '(when (or (featurep 'vertico)
               (bound-and-true-p vertico-mode))

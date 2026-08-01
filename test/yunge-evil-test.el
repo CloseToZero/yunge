@@ -27,7 +27,6 @@
 (ert-deftest yunge-evil-configures-after-package-ready ()
   (yunge-test-run-package-config
    'yunge-evil 'evil
-   :dependencies '(goto-chg)
    :before-ready
    '(when (or (featurep 'evil)
               (bound-and-true-p evil-mode))
