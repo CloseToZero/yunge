@@ -3,12 +3,19 @@
 ;; SPDX-License-Identifier: MIT
 
 (require 'ert)
+(require 'bytecomp)
 (require 'seq)
 
 (declare-function evil-visual-state "evil-states")
+(declare-function evil-mode "evil")
 (declare-function which-key--get-bindings "which-key")
 
+(defvar evil-emacs-state-modes)
+(defvar evil-insert-state-modes)
+(defvar evil-motion-state-modes)
 (defvar evil-state)
+(defvar evil-want-integration)
+(defvar evil-want-keybinding)
 (defvar which-key-replacement-alist)
 
 (defconst yunge-test-root
@@ -47,6 +54,28 @@
         (ert-fail
          (format "Emacs exited with %S:\n%s" status (buffer-string))))
       (buffer-string))))
+
+(defun yunge-test-byte-compile-diagnostics (file)
+  "Return byte compiler diagnostics for FILE without writing an elc file."
+  (let ((log-buffer (generate-new-buffer " *yunge-byte-compile*"))
+        diagnostics)
+    (unwind-protect
+        (let ((byte-compile-dest-file-function #'ignore)
+              (byte-compile-error-on-warn nil)
+              (byte-compile-log-buffer log-buffer)
+              (byte-compile-verbose nil)
+              (byte-compile-warnings t)
+              (byte-compile-log-warning-function
+               (lambda (message position _fill level)
+                 (push (list position level message) diagnostics))))
+          (condition-case error-data
+              (byte-compile-file file)
+            (error
+             (push (list nil :error (error-message-string error-data))
+                   diagnostics))))
+      (when (buffer-live-p log-buffer)
+        (kill-buffer log-buffer)))
+    (nreverse diagnostics)))
 
 (defun yunge-test-enable-evil ()
   "Load Evil and enable the configuration's leader support."

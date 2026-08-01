@@ -7,6 +7,7 @@
 (declare-function dired-copy-filename-as-kill "dired")
 (declare-function evil-set-initial-state "evil-core")
 
+(defvar dired-movement-style)
 (defvar dired-mode-map)
 
 (defun yunge-dired-copy-filename ()

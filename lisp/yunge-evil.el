@@ -6,6 +6,10 @@
 
 (declare-function evil-make-intercept-map "evil-core")
 
+(defgroup yunge nil
+  "Personal Emacs configuration."
+  :group 'emacs)
+
 (defvar-keymap yunge-leader-map
   :doc "Global leader map.")
 
@@ -27,6 +31,7 @@
 (define-minor-mode yunge-leader-mode
   "Keep the global leader above ordinary mode-specific Evil maps."
   :global t
+  :group 'yunge
   :keymap yunge-leader-mode-map)
 
 (defconst yunge-evil-leader-bindings

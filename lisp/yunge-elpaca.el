@@ -7,6 +7,10 @@
 (declare-function elpaca-ui-visit "elpaca-ui")
 (declare-function evil-define-key* "evil-core")
 
+(defvar elpaca-info-mode-map)
+(defvar elpaca-log-mode-map)
+(defvar elpaca-manager-mode-map)
+
 (defun yunge-elpaca-visit-build ()
   "Visit the build directory of the package at point."
   (interactive)

@@ -28,6 +28,8 @@
 (startup-redirect-eln-cache
  (expand-file-name "var/eln-cache/" user-emacs-directory))
 
+(defvar native-comp-async-report-warnings-errors)
+
 ;; Keep async native-comp diagnostics available without popping up *Warnings*.
 (setq native-comp-async-report-warnings-errors 'silent)
 

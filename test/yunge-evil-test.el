@@ -6,6 +6,10 @@
 
 (yunge-test-add-package-path 'elpaca 'evil 'goto-chg 'which-key)
 
+(declare-function evil-visual-state "evil-states")
+
+(defvar evil-state)
+
 (defvar-keymap yunge-test-localleader-map
   "p" #'backward-char)
 

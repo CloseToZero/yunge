@@ -6,6 +6,8 @@
 
 (yunge-test-add-package-path 'elpaca 'evil 'goto-chg 'which-key)
 
+(defvar dired-movement-style)
+
 (ert-deftest yunge-dired-loads-lazily ()
   (yunge-test-run-emacs
    "-L" (expand-file-name "lisp" yunge-test-root)
