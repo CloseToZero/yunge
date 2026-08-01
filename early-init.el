@@ -41,6 +41,9 @@
 (tool-bar-mode -1)
 (scroll-bar-mode -1)
 
+;; Collapse every minor-mode lighter; symbols after `not' remain visible.
+(setq mode-line-collapse-minor-modes '(not))
+
 (setq inhibit-startup-screen t
       inhibit-startup-message t
       initial-scratch-message nil
