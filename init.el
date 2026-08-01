@@ -7,6 +7,7 @@
 (require 'yunge-state)
 (require 'yunge-package)
 (require 'yunge-evil)
+(require 'yunge-window)
 (require 'yunge-which-key)
 (require 'yunge-vertico)
 (require 'yunge-orderless)

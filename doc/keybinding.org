@@ -89,8 +89,18 @@ Group global commands under prefixes by purpose:
 - ~SPC j~ jumps to locations.
 - ~SPC q~ exits Emacs or manages its frames.
 - ~SPC s~ searches text.
+- ~SPC w~ operates on windows.
 
 Use ~SPC SPC~ to execute a command by name.
+
+Window commands under ~SPC w~ execute once.  Use ~SPC w SPC~ to enter an
+explicit persistent window control map when several operations are needed.
+Within that map, recognized keys remain window commands until it is exited;
+an unrecognized key exits and retains its ordinary meaning.
+
+Do not make the ordinary window bindings repeat automatically.  After
+~SPC w h~ selects a window, for example, the next ~j~ belongs to the selected
+buffer.  Only the explicit control map changes that interpretation.
 
 Use ~q~ consistently for closing buffers, windows, tabs, and similar
 temporary objects.

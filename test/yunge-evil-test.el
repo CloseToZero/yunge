@@ -106,7 +106,8 @@
      ("j" nil "+jump")
      ("m" nil "+mode")
      ("q" nil "+quit")
-     ("s" nil "+search")))
+     ("s" nil "+search")
+     ("w" nil "+window")))
 
   (yunge-test-which-key-prefix-bindings
    'yunge-test-buffer-mode "SPC b"

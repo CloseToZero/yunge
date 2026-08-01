@@ -30,6 +30,9 @@
 (defvar-keymap yunge-search-map
   :doc "Global search command map.")
 
+(defvar-keymap yunge-window-map
+  :doc "Global window command map.")
+
 (defvar-keymap yunge-evil--empty-localleader-map
   :doc "Fallback map when the current mode has no local leader.")
 
@@ -56,7 +59,8 @@
     ("f" ,yunge-file-map "file")
     ("j" ,yunge-jump-map "jump")
     ("q" ,yunge-quit-map "quit")
-    ("s" ,yunge-search-map "search")))
+    ("s" ,yunge-search-map "search")
+    ("w" ,yunge-window-map "window")))
 
 (yunge-key-define yunge-leader-map
                   yunge-leader-map-bindings)
