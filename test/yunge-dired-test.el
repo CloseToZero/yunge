@@ -4,19 +4,11 @@
 
 (require 'yunge-test-helper)
 
-(yunge-test-add-package-path 'elpaca 'evil 'goto-chg 'which-key)
-
 (defvar dired-movement-style)
 
 (ert-deftest yunge-dired-loads-lazily ()
-  (yunge-test-run-emacs
-   "-L" (expand-file-name "lisp" yunge-test-root)
-   "-l" "yunge-dired"
-   "--eval"
-   (prin1-to-string
-    '(dolist (feature '(dired evil which-key))
-       (when (featurep feature)
-         (error "yunge-dired eagerly loaded %S" feature))))))
+  (yunge-test-assert-lazy-load
+   'yunge-dired '(dired evil which-key)))
 
 (ert-deftest yunge-dired-copy-commands-select-path-kinds ()
   (require 'yunge-dired)

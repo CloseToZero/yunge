@@ -4,17 +4,9 @@
 
 (require 'yunge-test-helper)
 
-(yunge-test-add-package-path 'elpaca 'evil 'goto-chg 'which-key)
-
 (ert-deftest yunge-elpaca-loads-lazily ()
-  (yunge-test-run-emacs
-   "-L" (expand-file-name "lisp" yunge-test-root)
-   "-l" "yunge-elpaca"
-   "--eval"
-   (prin1-to-string
-    '(dolist (feature '(evil which-key elpaca-ui elpaca-log elpaca-info))
-       (when (featurep feature)
-         (error "yunge-elpaca eagerly loaded %S" feature))))))
+  (yunge-test-assert-lazy-load
+   'yunge-elpaca '(evil which-key elpaca-ui elpaca-log elpaca-info)))
 
 (ert-deftest yunge-elpaca-binds-keys ()
   (require 'yunge-elpaca)

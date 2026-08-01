@@ -7,6 +7,8 @@
 (yunge-test-add-package-path
  'compat 'elpaca 'evil 'goto-chg 'vertico 'which-key)
 
+(require 'elpaca-autoloads)
+
 (declare-function evil-insert-state "evil-states")
 (declare-function evil-local-mode "evil-core")
 (declare-function evil-normal-state "evil-states")
@@ -17,15 +19,8 @@
 (defvar vertico-map)
 
 (ert-deftest yunge-vertico-loads-lazily ()
-  (yunge-test-run-emacs
-   "--eval"
-   (prin1-to-string '(defmacro elpaca (&rest _body) nil))
-   "-L" (expand-file-name "lisp" yunge-test-root)
-   "-l" "yunge-vertico"
-   "--eval"
-   (prin1-to-string
-    '(when (featurep 'vertico)
-       (error "yunge-vertico eagerly loaded Vertico")))))
+  (yunge-test-assert-lazy-load
+   'yunge-vertico '(vertico)))
 
 (ert-deftest yunge-vertico-binds-keys ()
   (require 'yunge-minibuffer)
@@ -55,33 +50,31 @@
 
             (evil-insert-state)
             (should (eq evil-state 'insert))
-            (dolist (binding
-                     '(("C-n" . vertico-next)
-                       ("C-p" . vertico-previous)
-                       ("TAB" . vertico-insert)
-                       ("<tab>" . vertico-insert)
-                       ("RET" . vertico-exit)))
-              (yunge-test-key (car binding) (cdr binding)))
+            (yunge-test-keys
+             '(("C-n" . vertico-next)
+               ("C-p" . vertico-previous)
+               ("TAB" . vertico-insert)
+               ("<tab>" . vertico-insert)
+               ("RET" . vertico-exit)))
 
             (evil-normal-state)
 
-            (dolist (binding
-                     '(("j" . vertico-next)
-                       ("k" . vertico-previous)
-                       ("<down>" . vertico-next)
-                       ("<up>" . vertico-previous)
-                       ("gg" . vertico-first)
-                       ("G" . vertico-last)
-                       ("C-d" . yunge-vertico-next-half-page)
-                       ("C-u" . yunge-vertico-previous-half-page)
-                       ("C-f" . vertico-scroll-up)
-                       ("C-b" . vertico-scroll-down)
-                       ("TAB" . vertico-insert)
-                       ("<tab>" . vertico-insert)
-                       ("RET" . yunge-minibuffer--return)
-                       ("C-g" . abort-minibuffers)
-                       ("d" . evil-delete)))
-              (yunge-test-key (car binding) (cdr binding)))
+            (yunge-test-keys
+             '(("j" . vertico-next)
+               ("k" . vertico-previous)
+               ("<down>" . vertico-next)
+               ("<up>" . vertico-previous)
+               ("gg" . vertico-first)
+               ("G" . vertico-last)
+               ("C-d" . yunge-vertico-next-half-page)
+               ("C-u" . yunge-vertico-previous-half-page)
+               ("C-f" . vertico-scroll-up)
+               ("C-b" . vertico-scroll-down)
+               ("TAB" . vertico-insert)
+               ("<tab>" . vertico-insert)
+               ("RET" . yunge-minibuffer--return)
+               ("C-g" . abort-minibuffers)
+               ("d" . evil-delete)))
 
             (let (called)
               (cl-letf (((symbol-function 'call-interactively)

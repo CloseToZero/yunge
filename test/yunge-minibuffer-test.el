@@ -4,8 +4,6 @@
 
 (require 'yunge-test-helper)
 
-(yunge-test-add-package-path 'elpaca 'evil 'goto-chg 'which-key)
-
 (declare-function evil-local-mode "evil-core")
 (declare-function evil-normal-state "evil-states")
 
@@ -13,13 +11,8 @@
 (defvar evil-state)
 
 (ert-deftest yunge-minibuffer-loads-lazily ()
-  (yunge-test-run-emacs
-   "-L" (expand-file-name "lisp" yunge-test-root)
-   "-l" "yunge-minibuffer"
-   "--eval"
-   (prin1-to-string
-    '(when (featurep 'evil)
-       (error "yunge-minibuffer eagerly loaded Evil")))))
+  (yunge-test-assert-lazy-load
+   'yunge-minibuffer '(evil)))
 
 (ert-deftest yunge-minibuffer-preserves-prompt-actions ()
   (require 'yunge-minibuffer)

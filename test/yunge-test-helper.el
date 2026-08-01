@@ -55,6 +55,19 @@
          (format "Emacs exited with %S:\n%s" status (buffer-string))))
       (buffer-string))))
 
+(defun yunge-test-assert-lazy-load (library features)
+  "Load configuration LIBRARY without eagerly loading FEATURES."
+  (yunge-test-run-emacs
+   "--eval"
+   (prin1-to-string '(defmacro elpaca (&rest _body) nil))
+   "-L" (expand-file-name "lisp" yunge-test-root)
+   "-l" (symbol-name library)
+   "--eval"
+   (prin1-to-string
+    `(dolist (feature ',features)
+       (when (featurep feature)
+         (error "%S eagerly loaded %S" ',library feature))))))
+
 (defun yunge-test-byte-compile-diagnostics (file)
   "Return byte compiler diagnostics for FILE without writing an elc file."
   (let ((log-buffer (generate-new-buffer " *yunge-byte-compile*"))
@@ -79,6 +92,7 @@
 
 (defun yunge-test-enable-evil ()
   "Load Evil and enable the configuration's leader support."
+  (yunge-test-add-package-path 'elpaca 'evil 'goto-chg 'which-key)
   (require 'elpaca-autoloads)
   (require 'yunge-evil)
   (setq evil-emacs-state-modes nil
@@ -93,13 +107,17 @@
   "Check that KEY resolves to EXPECTED in the current buffer."
   (should (eq (key-binding (kbd key)) expected)))
 
+(defun yunge-test-keys (bindings)
+  "Check that each key in BINDINGS resolves in the current buffer."
+  (dolist (binding bindings)
+    (yunge-test-key (car binding) (cdr binding))))
+
 (defun yunge-test-evil-normal-keys (mode bindings)
   "Activate major MODE and check its normal-state BINDINGS."
   (with-temp-buffer
     (funcall mode)
     (should (eq evil-state 'normal))
-    (dolist (binding bindings)
-      (yunge-test-key (car binding) (cdr binding)))))
+    (yunge-test-keys bindings)))
 
 (defun yunge-test-evil-visual-keys (mode bindings)
   "Activate major MODE and check its visual-state BINDINGS."
@@ -108,8 +126,7 @@
     (should (eq evil-state 'normal))
     (evil-visual-state)
     (should (eq evil-state 'visual))
-    (dolist (binding bindings)
-      (yunge-test-key (car binding) (cdr binding)))))
+    (yunge-test-keys bindings)))
 
 (defun yunge-test-which-key-bindings (mode bindings &optional prefix)
   "Check Which-Key descriptions for MODE BINDINGS below optional PREFIX."
