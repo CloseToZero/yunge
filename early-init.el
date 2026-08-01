@@ -5,6 +5,9 @@
 ;; Keep text portable without overriding the Windows clipboard encoding.
 (prefer-coding-system 'utf-8-unix)
 
+;; Elpaca owns package activation.
+(setq package-enable-at-startup nil)
+
 ;; Keep the initial frame clean before it becomes visible.  The fullscreen
 ;; entry belongs here (rather than `default-frame-alist') so later frames keep
 ;; their normal size.
