@@ -8,6 +8,7 @@
 (declare-function evil-normal-state "evil-states")
 
 (defvar evil-local-mode)
+(defvar evil-echo-state)
 (defvar evil-state)
 
 (yunge-test-deftest-lazy-load yunge-minibuffer
@@ -35,9 +36,12 @@
                      (memq function
                            '(evil-initialize yunge-minibuffer--setup)))
                    minibuffer-setup-hook)))
+             ;; Simulate a reused minibuffer whose local value was reset.
+             (setq-local evil-echo-state t)
              (run-hooks 'minibuffer-setup-hook))
 
            (should evil-local-mode)
+           (should-not evil-echo-state)
            (should (eq evil-state 'insert))
            (evil-normal-state)
            (yunge-minibuffer--setup)

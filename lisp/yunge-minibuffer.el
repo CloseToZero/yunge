@@ -5,6 +5,7 @@
 (declare-function evil-local-set-key "evil-core")
 (declare-function evil-insert "evil-commands")
 
+(defvar evil-echo-state)
 (defvar evil-want-minibuffer)
 
 ;; Evil reads this before it installs its minibuffer setup hook.
@@ -27,6 +28,8 @@
 
 (defun yunge-minibuffer--setup ()
   "Enter Insert state and restore Return in Evil Normal state."
+  ;; Do not let Evil's state message overwrite the active prompt.
+  (setq-local evil-echo-state nil)
   (evil-insert 1)
   (dolist (key yunge-minibuffer--return-keys)
     (evil-local-set-key 'normal key #'yunge-minibuffer--return)))
