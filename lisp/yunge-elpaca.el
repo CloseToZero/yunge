@@ -48,15 +48,10 @@
   '(("gd" elpaca-log-view-diff "view diff")))
 
 (defconst yunge-elpaca-info-normal-bindings
-  '(("RET" push-button "activate button")
+  `(("RET" push-button "activate button")
     ("q" quit-window "quit")
     ("gr" revert-buffer "refresh")
-    ("g]" forward-button "next button")
-    ("g[" backward-button "previous button")
-    ("TAB" forward-button "next button")
-    ("<tab>" forward-button nil)
-    ("S-TAB" backward-button "previous button")
-    ("<backtab>" backward-button nil)))
+    ,@yunge-key-button-navigation-bindings))
 
 (defun yunge-elpaca--bind-ui-keys (map)
   "Add Evil bindings shared by Elpaca UI keymap MAP."

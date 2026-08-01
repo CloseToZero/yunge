@@ -7,6 +7,13 @@
 (declare-function which-key-add-major-mode-key-based-replacements
                   "which-key")
 
+(defconst yunge-key-button-navigation-bindings
+  '(("g]" forward-button "next button")
+    ("g[" backward-button "previous button")
+    ("<tab>" forward-button "next button")
+    ("S-TAB" backward-button "previous button")
+    ("<backtab>" backward-button nil)))
+
 (defun yunge-key--parse (key)
   "Return the key sequence represented by KEY."
   (if (stringp key) (kbd key) key))

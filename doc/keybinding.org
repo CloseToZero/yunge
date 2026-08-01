@@ -128,17 +128,17 @@ Give every essential function at least one binding that works without Super,
 Hyper, function keys, or an operating-system-specific modifier.  Prefer Space,
 ASCII letters, ~RET~, and ~TAB~.
 
-Terminals usually cannot distinguish ~TAB~ from ~C-i~.  In a document-oriented
-buffer, physical Tab takes priority for button navigation, with ~g]~ and ~g[~
-as fallbacks.  Do not assume that ~S-RET~ or ~M-RET~ is distinguishable in
-every terminal.
+Terminals usually cannot distinguish ~TAB~ from ~C-i~.  Preserve ~C-i~ for
+jump navigation.  Bind ~<tab>~ for GUI button navigation and use ~g]~ as the
+portable fallback.  Do not assume that ~S-RET~ or ~M-RET~ is distinguishable
+in every terminal.
 
 ~C-u~ scrolls upward in Evil.  Give useful command variants distinct semantic
 bindings, such as ~gf~ and ~gF~, instead of relying on a ~C-u~ prefix.
 
 GUI and terminal Emacs may report one physical key as different events.  Bind
-~TAB~, ~<tab>~, ~S-TAB~, and ~<backtab>~ together when necessary, but do not
-write extensive compatibility code for merely theoretical event combinations.
+~S-TAB~ and ~<backtab>~ together when necessary, but do not write extensive
+compatibility code for merely theoretical event combinations.
 
 * Configuration boundaries
 

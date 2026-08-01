@@ -38,7 +38,7 @@
     ("gr" nil "refresh")
     ("g]" nil "next button")
     ("g[" nil "previous button")
-    ("TAB" nil "next button")
+    ("<tab>" nil "next button")
     ("S-TAB" nil "previous button")))
 
 (ert-deftest yunge-elpaca-binds-keys ()
@@ -88,7 +88,7 @@
      ("gr" . revert-buffer)
      ("g]" . forward-button)
      ("g[" . backward-button)
-     ("TAB" . forward-button)
+     ("<tab>" . forward-button)
      ("S-TAB" . backward-button)))
 
   (dolist (mode '(elpaca-manager-mode elpaca-log-mode))

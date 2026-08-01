@@ -14,6 +14,7 @@
 (require 'yunge-consult)
 (require 'yunge-elpaca)
 (require 'yunge-dired)
+(require 'yunge-help)
 
 ;; Load saved Custom state before command-line files are visited.
 (load custom-file 'noerror 'nomessage)
