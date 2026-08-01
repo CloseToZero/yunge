@@ -62,9 +62,11 @@
   "Run clean Emacs with ARGUMENTS and fail if it exits unsuccessfully."
   (with-temp-buffer
     (let ((process-environment (copy-sequence process-environment))
+          (test-config-home
+           (expand-file-name "var/test/" yunge-test-root))
           status)
-      (setenv "XDG_CONFIG_HOME"
-              (expand-file-name "var/test/" yunge-test-root))
+      (make-directory (expand-file-name "emacs/" test-config-home) t)
+      (setenv "XDG_CONFIG_HOME" test-config-home)
       (setq status
             (apply #'call-process
                    (expand-file-name invocation-name invocation-directory)

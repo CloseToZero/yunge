@@ -30,10 +30,13 @@
         (erase-buffer))
       (setq default-directory user-emacs-directory)
       (compilation-mode))
-    (let ((process-environment (copy-sequence process-environment)))
+    (let ((process-environment (copy-sequence process-environment))
+          (test-config-home
+           (expand-file-name "var/test/" user-emacs-directory)))
       ;; Keep the clean process's default native-comp cache under `var'.
-      (setenv "XDG_CONFIG_HOME"
-              (expand-file-name "var/test/" user-emacs-directory))
+      ;; Emacs only selects XDG_CONFIG_HOME when its emacs directory exists.
+      (make-directory (expand-file-name "emacs/" test-config-home) t)
+      (setenv "XDG_CONFIG_HOME" test-config-home)
       (make-process
        :name "yunge-test"
        :buffer buffer
