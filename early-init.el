@@ -25,6 +25,10 @@
 ;; Elpaca owns package activation.
 (setq package-enable-at-startup nil)
 
+;; Avoid rounding frame and window geometry to character-cell increments.
+(setq frame-resize-pixelwise t
+      window-resize-pixelwise t)
+
 ;; Avoid implicit resizing while startup changes fonts and frame chrome.
 (setq frame-inhibit-implied-resize t)
 
