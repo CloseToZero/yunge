@@ -8,5 +8,8 @@
 (require 'yunge-package)
 (require 'yunge-evil)
 (require 'yunge-which-key)
+(require 'yunge-elpaca)
+
+(autoload 'yunge-test "yunge-test" nil t)
 
 ;;; init.el ends here

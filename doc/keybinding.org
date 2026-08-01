@@ -78,15 +78,22 @@ requires stronger evidence of frequent use.
 * Leader
 
 Reserve ~SPC~ as the global leader and ~SPC m~ as the major-mode local leader.
+Ordinary mode bindings should not replace the global leader.  Temporary
+keymaps used by an active prompt may take precedence while the prompt is
+active.
 
 Place mode-specific commands that mutate state or start background work under
-~SPC m~.  Examples include installing, deleting, pulling, rebuilding, and
-executing a set of marked operations.
+~SPC m~ when no stronger direct-key convention applies.  Examples include
+installing, pulling, and rebuilding.
 
 These administrative actions are normally less frequent than navigation and
 primary actions.  Three sequential keys are acceptable and avoid repurposing
-~d~, ~i~, ~p~, or ~r~ in different buffers.  Promote an action when its
+~i~, ~p~, or ~r~ in different buffers.  Promote an action when its
 observed frequency justifies a shorter binding.
+
+Package integrations bind their command maps to Evil's ~[localleader]~ event.
+Keep the physical ~SPC m~ routing in ~yunge-evil.el~ so changing it does not
+require edits throughout the configuration.
 
 Uppercase letters are not an unstructured overflow area.  Keys such as ~B~,
 ~F~, ~M~, and ~V~ already have Evil meanings.
@@ -96,8 +103,9 @@ Uppercase letters are not an unstructured overflow area.  Keys such as ~B~,
 Lists retain Evil movement, search, scrolling, and visual selection.  Commands
 that accept a region should operate on the visual selection.
 
-Sorting, marking, deleting, and executing batches are not universal list
-operations.  Define their bindings per mode once their semantics are known.
+In list buffers that support persistent marks or queued actions, prefer ~m~ for
+a generic mark, ~d~ for deferred deletion, ~u~ for unmarking, and ~x~ for
+executing queued actions.
 
 * Documentation and help buffers
 
