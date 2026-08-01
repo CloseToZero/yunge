@@ -6,6 +6,7 @@
 
 (require 'yunge-state)
 (require 'yunge-package)
+(require 'yunge-minibuffer)
 (require 'yunge-evil)
 (require 'yunge-which-key)
 (require 'yunge-elpaca)
