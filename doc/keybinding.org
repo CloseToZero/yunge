@@ -1,0 +1,139 @@
+#+title: Keybinding Design Principles
+# SPDX-FileCopyrightText: 2026 Chen Zhexuan
+# SPDX-License-Identifier: MIT
+
+* Goals
+
+Keybindings should form a predictable, consistent system throughout Emacs
+rather than a collection of unrelated package-specific bindings.
+
+Configure only modes that are actually used.  Do not bind every available
+command for completeness; infrequent commands can remain accessible through
+~M-x~.
+
+* Resolving binding conflicts
+
+Do not resolve a conflict with a fixed priority order.  Compare the two actions
+where the binding applies by considering:
+
+- how often each action is used and how central it is;
+- the cost of departing from established conventions; and
+- whether either action has an equally convenient alternative binding.
+
+Evil is a strong default, not an absolute priority.  An editing command that
+has little use in a read-only buffer costs less to replace than navigation or
+search.  Being unavailable alone, however, does not justify reusing its key.
+
+When the practical value is otherwise close, prefer established conventions,
+then common actions of the major mode, and finally the package's original
+bindings.  Treat upstream bindings as a reference.  Choose keys by command
+meaning, not by preserving upstream letters.
+
+* Core Evil bindings
+
+Navigable read-only buffers default to normal state.  A separate Evil state may
+be justified when the mode's frequent actions would otherwise cause widespread
+conflicts with normal-state bindings.
+
+Apply the conflict rules before overriding these bindings:
+
+- ~h/j/k/l~, ~w/b/e~, and ~0/^/$~ move through text.
+- ~gg/G~ move to the beginning or end.
+- ~C-d/C-u~ and ~C-f/C-b~ scroll.
+- ~/~ and ~n/N~ search text and repeat searches.
+- ~v/V/C-v~ start visual selection.
+- ~f/F/t/T~ and ~;/,~ retain character-find semantics.
+- ~m~, the single quote, and the backtick retain mark semantics.
+- ~d/c/y~, ~i/a/o~, ~p~, ~r~, ~u~, and ~x~ retain their Evil meanings in
+  editable buffers.
+
+* Common interface semantics
+
+Use these conventions only where the action is meaningful:
+
+- ~q~ quits a temporary or display-oriented view, usually with ~quit-window~.
+- ~RET~ invokes the primary action for the item at point.
+- ~gr~ refreshes the current contents.
+- ~TAB~ and ~S-TAB~ move between buttons in document-oriented buffers.
+
+In editable buffers, Evil's ~q~ and ~RET~ bindings remain the default.
+
+* The ~g~ navigation prefix
+
+Use ~g~ as the namespace for navigation-related commands.  Beyond ~gr~, use:
+
+- ~gf~ visits a file or source associated with the current item.
+- ~gF~ visits an alternate location for the same item.
+- ~gx~ opens the current item's URL in an external program.
+
+Prefer extending Evil's ~g~ prefix with specific sequences over replacing its
+sparse keymap.  Check existing sequences such as ~gg~, ~gd~, ~gf~, ~gt~,
+~gu~, and ~gv~ before adding a binding.
+
+When overriding an existing sequence, prefer a command whose purpose matches
+the sequence's established meaning.  For example, using ~gf~ to visit package
+source still means visiting an associated file.  An unrelated override
+requires stronger evidence of frequent use.
+
+* Leader
+
+Reserve ~SPC~ as the global leader and ~SPC m~ as the major-mode local leader.
+
+Place mode-specific commands that mutate state or start background work under
+~SPC m~.  Examples include installing, deleting, pulling, rebuilding, and
+executing a set of marked operations.
+
+These administrative actions are normally less frequent than navigation and
+primary actions.  Three sequential keys are acceptable and avoid repurposing
+~d~, ~i~, ~p~, or ~r~ in different buffers.  Promote an action when its
+observed frequency justifies a shorter binding.
+
+Uppercase letters are not an unstructured overflow area.  Keys such as ~B~,
+~F~, ~M~, and ~V~ already have Evil meanings.
+
+* List buffers
+
+Lists retain Evil movement, search, scrolling, and visual selection.  Commands
+that accept a region should operate on the visual selection.
+
+Sorting, marking, deleting, and executing batches are not universal list
+operations.  Define their bindings per mode once their semantics are known.
+
+* Documentation and help buffers
+
+Document-oriented buffers retain Evil movement and text search and use the
+common ~q~, ~RET~, ~TAB~, and ~S-TAB~ conventions.
+
+* Cross-platform rules
+
+Give every essential function at least one binding that works without Super,
+Hyper, function keys, or an operating-system-specific modifier.  Prefer Space,
+ASCII letters, ~RET~, and ~TAB~.
+
+Terminals usually cannot distinguish ~TAB~ from ~C-i~.  In a document-oriented
+buffer, physical Tab takes priority for button navigation, with ~g]~ and ~g[~
+as fallbacks.  Do not assume that ~S-RET~ or ~M-RET~ is distinguishable in
+every terminal.
+
+~C-u~ scrolls upward in Evil.  Give useful command variants distinct semantic
+bindings, such as ~gf~ and ~gF~, instead of relying on a ~C-u~ prefix.
+
+GUI and terminal Emacs may report one physical key as different events.  Bind
+~TAB~, ~<tab>~, ~S-TAB~, and ~<backtab>~ together when necessary, but do not
+write extensive compatibility code for merely theoretical event combinations.
+
+* Configuration boundaries
+
+Keep Evil's core bindings and the leader in ~yunge-evil.el~.  Put package
+integration in the corresponding ~yunge-<feature>.el~ instead of accumulating
+all bindings in one file.
+
+Configure an integration only after both Evil and the target feature have
+loaded.  Do not load an otherwise unused package just to configure keys, and
+do not call ~elpaca-wait~.
+
+* Review
+
+Smoke-test each integration in a real buffer.  Verify its state, core Evil
+bindings, primary actions, and GUI or terminal conflicts.  Do not write
+exhaustive tests for keymap combinations that cannot occur in normal use.
