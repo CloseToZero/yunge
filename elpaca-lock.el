@@ -1,7 +1,17 @@
 ;; SPDX-FileCopyrightText: 2026 Chen Zhexuan
 ;; SPDX-License-Identifier: MIT
 
-((evil
+((compat
+  :source "elpaca-menu-lock-file"
+  :recipe
+  (:package "compat"
+   :repo ("https://github.com/emacs-compat/compat" . "compat")
+   :tar "31.0.0.2"
+   :host gnu
+   :files ("*" (:exclude ".git"))
+   :source "GNU ELPA"
+   :ref "1f3d7596173cf2851d3c4181b15d6c3573a38252"))
+ (evil
   :source "elpaca-menu-lock-file"
   :recipe
   (:package "evil"
@@ -17,6 +27,14 @@
    :fetcher github
    :files (:defaults)
    :ref "72f556524b88e9d30dc7fc5b0dc32078c166fda7"))
+ (vertico
+  :source "elpaca-menu-lock-file"
+  :recipe
+  (:package "vertico"
+   :repo "minad/vertico"
+   :fetcher github
+   :files (:defaults "extensions/vertico-*.el")
+   :ref "77808caeaa658e95e04b1c6a519be1722e9f1a70"))
  (which-key
   :source "elpaca-menu-lock-file"
   :recipe
