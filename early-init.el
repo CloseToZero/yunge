@@ -6,6 +6,8 @@
   (error "This configuration requires Emacs 31 or newer (found %s)"
          emacs-version))
 
+(add-to-list 'load-path (expand-file-name "lisp/" user-emacs-directory))
+
 ;; Raise the GC threshold during startup, then restore Emacs's default.
 (let ((threshold gc-cons-threshold))
   (setq gc-cons-threshold (* 128 1024 1024))
@@ -25,6 +27,8 @@
 
 ;; Avoid implicit resizing while startup changes fonts and frame chrome.
 (setq frame-inhibit-implied-resize t)
+
+(require 'yunge-font)
 
 ;; Keep maximization exclusive to the initial frame.
 (add-to-list 'initial-frame-alist '(fullscreen . maximized))

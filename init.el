@@ -2,8 +2,6 @@
 ;; SPDX-FileCopyrightText: 2026 Chen Zhexuan
 ;; SPDX-License-Identifier: MIT
 
-(add-to-list 'load-path (expand-file-name "lisp/" user-emacs-directory))
-
 (require 'yunge-state)
 (require 'yunge-package)
 (require 'yunge-evil)
