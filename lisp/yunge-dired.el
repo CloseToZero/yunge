@@ -5,7 +5,6 @@
 (require 'yunge-key)
 
 (declare-function dired-copy-filename-as-kill "dired")
-(declare-function evil-set-initial-state "evil-core")
 
 (defvar dired-movement-style)
 (defvar dired-mode-map)
@@ -122,7 +121,6 @@
 
 (defun yunge-dired--setup-keys ()
   "Set up Evil bindings for Dired."
-  (evil-set-initial-state 'dired-mode 'normal)
   (yunge-key-evil-define '(normal visual) dired-mode-map
                          yunge-dired-normal-visual-bindings)
   (yunge-key-evil-define 'normal dired-mode-map
