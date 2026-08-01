@@ -27,6 +27,14 @@
    :fetcher github
    :files (:defaults)
    :ref "72f556524b88e9d30dc7fc5b0dc32078c166fda7"))
+ (marginalia
+  :source "elpaca-menu-lock-file"
+  :recipe
+  (:package "marginalia"
+   :repo "minad/marginalia"
+   :fetcher github
+   :files (:defaults)
+   :ref "10b170ad8006bad535599e5b3e007e643e34345a"))
  (vertico
   :source "elpaca-menu-lock-file"
   :recipe

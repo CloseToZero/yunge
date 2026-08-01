@@ -10,6 +10,7 @@
 (require 'yunge-evil)
 (require 'yunge-which-key)
 (require 'yunge-vertico)
+(require 'yunge-marginalia)
 (require 'yunge-elpaca)
 (require 'yunge-dired)
 
