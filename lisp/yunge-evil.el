@@ -9,13 +9,12 @@
         evil-motion-state-modes nil
         evil-search-module 'evil-search
         evil-symbol-word-search t
+        evil-undo-system 'undo-redo
         evil-want-C-u-delete t
         evil-want-C-u-scroll t
         evil-want-Y-yank-to-eol t
         evil-want-integration t
         evil-want-keybinding nil)
-  (require 'evil)
-  (setopt evil-undo-system 'undo-redo)
   (evil-mode 1))
 
 (provide 'yunge-evil)
