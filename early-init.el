@@ -8,9 +8,10 @@
 ;; Elpaca owns package activation.
 (setq package-enable-at-startup nil)
 
-;; Keep the initial frame clean before it becomes visible.  The fullscreen
-;; entry belongs here (rather than `default-frame-alist') so later frames keep
-;; their normal size.
+;; Avoid implicit resizing while startup changes fonts and frame chrome.
+(setq frame-inhibit-implied-resize t)
+
+;; Keep maximization exclusive to the initial frame.
 (add-to-list 'initial-frame-alist '(fullscreen . maximized))
 
 (startup-redirect-eln-cache
