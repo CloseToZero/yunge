@@ -10,9 +10,8 @@
 (defvar evil-local-mode)
 (defvar evil-state)
 
-(ert-deftest yunge-minibuffer-loads-lazily ()
-  (yunge-test-assert-lazy-load
-   'yunge-minibuffer '(evil)))
+(yunge-test-deftest-lazy-load yunge-minibuffer
+  (evil))
 
 (ert-deftest yunge-minibuffer-preserves-prompt-actions ()
   (require 'yunge-minibuffer)
@@ -26,42 +25,35 @@
     (should setup-position)
     (should (< evil-position setup-position)))
 
-  (with-current-buffer (window-buffer (minibuffer-window))
-    (let ((original-map (current-local-map)))
-      (unwind-protect
-          (cl-labels
-              ((verify (map expected)
-                 (use-local-map map)
-                 (let ((minibuffer-setup-hook
-                        (seq-filter
-                         (lambda (function)
-                           (memq function
-                                 '(evil-initialize
-                                   yunge-minibuffer--setup)))
-                         minibuffer-setup-hook)))
-                   (run-hooks 'minibuffer-setup-hook))
+  (yunge-test-with-evil-minibuffer
+    (cl-labels
+        ((verify (map expected)
+           (use-local-map map)
+           (let ((minibuffer-setup-hook
+                  (seq-filter
+                   (lambda (function)
+                     (memq function
+                           '(evil-initialize yunge-minibuffer--setup)))
+                   minibuffer-setup-hook)))
+             (run-hooks 'minibuffer-setup-hook))
 
-                 (should evil-local-mode)
-                 (should (eq evil-state 'insert))
-                 (yunge-test-key "<escape>" 'evil-normal-state)
-                 (yunge-test-key "C-g" 'abort-minibuffers)
+           (should evil-local-mode)
+           (yunge-test-evil-keys
+            'insert
+            '(("<escape>" . evil-normal-state)
+              ("C-g" . abort-minibuffers)))
+           (evil-normal-state)
+           (yunge-test-evil-keys
+            'normal
+            '(("<escape>" . evil-force-normal-state)
+              ("RET" . yunge-minibuffer--return)
+              ("<return>" . yunge-minibuffer--return)
+              ("C-g" . abort-minibuffers)))
 
-                 (evil-normal-state)
-                 (yunge-test-key "<escape>" 'evil-force-normal-state)
-                 (yunge-test-key "RET" 'yunge-minibuffer--return)
-                 (yunge-test-key "<return>" 'yunge-minibuffer--return)
-                 (yunge-test-key "C-g" 'abort-minibuffers)
-
-                 (let (called)
-                   (cl-letf (((symbol-function 'call-interactively)
-                              (lambda (command &rest _arguments)
-                                (setq called command))))
-                     (yunge-minibuffer--return ?\r))
-                   (should (eq called expected)))))
-            (verify minibuffer-local-map 'exit-minibuffer)
-            (verify minibuffer-local-must-match-map
-                    'minibuffer-complete-and-exit))
-        (evil-local-mode -1)
-        (use-local-map original-map)))))
+           (yunge-test-assert-calls-interactively
+            #'yunge-minibuffer--return expected ?\r)))
+      (verify minibuffer-local-map 'exit-minibuffer)
+      (verify minibuffer-local-must-match-map
+              'minibuffer-complete-and-exit))))
 
 ;;; yunge-minibuffer-test.el ends here

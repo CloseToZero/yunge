@@ -7,6 +7,7 @@
 (require 'seq)
 
 (declare-function evil-visual-state "evil-states")
+(declare-function evil-local-mode "evil-core")
 (declare-function evil-mode "evil")
 (declare-function which-key--get-bindings "which-key")
 
@@ -68,6 +69,22 @@
        (when (featurep feature)
          (error "%S eagerly loaded %S" ',library feature))))))
 
+(defmacro yunge-test-deftest-lazy-load (library features)
+  "Define a lazy-load test for configuration LIBRARY and FEATURES."
+  (declare (indent 1))
+  `(ert-deftest ,(intern (format "%s-loads-lazily" library)) ()
+     (yunge-test-assert-lazy-load ',library ',features)))
+
+(defmacro yunge-test-with-evil-minibuffer (&rest body)
+  "Run BODY in the minibuffer buffer and restore its local state."
+  (declare (indent 0) (debug t))
+  `(with-current-buffer (window-buffer (minibuffer-window))
+     (let ((original-map (current-local-map)))
+       (unwind-protect
+           (progn ,@body)
+         (evil-local-mode -1)
+         (use-local-map original-map)))))
+
 (defun yunge-test-byte-compile-diagnostics (file)
   "Return byte compiler diagnostics for FILE without writing an elc file."
   (let ((log-buffer (generate-new-buffer " *yunge-byte-compile*"))
@@ -112,12 +129,26 @@
   (dolist (binding bindings)
     (yunge-test-key (car binding) (cdr binding))))
 
+(defun yunge-test-evil-keys (state bindings)
+  "Check Evil STATE and BINDINGS in the current buffer."
+  (should (eq evil-state state))
+  (yunge-test-keys bindings))
+
+(defun yunge-test-assert-calls-interactively
+    (function expected &rest arguments)
+  "Check that FUNCTION calls EXPECTED interactively with ARGUMENTS."
+  (let (called)
+    (cl-letf (((symbol-function 'call-interactively)
+               (lambda (command &rest _arguments)
+                 (setq called command))))
+      (apply function arguments))
+    (should (eq called expected))))
+
 (defun yunge-test-evil-normal-keys (mode bindings)
   "Activate major MODE and check its normal-state BINDINGS."
   (with-temp-buffer
     (funcall mode)
-    (should (eq evil-state 'normal))
-    (yunge-test-keys bindings)))
+    (yunge-test-evil-keys 'normal bindings)))
 
 (defun yunge-test-evil-visual-keys (mode bindings)
   "Activate major MODE and check its visual-state BINDINGS."
@@ -125,8 +156,7 @@
     (funcall mode)
     (should (eq evil-state 'normal))
     (evil-visual-state)
-    (should (eq evil-state 'visual))
-    (yunge-test-keys bindings)))
+    (yunge-test-evil-keys 'visual bindings)))
 
 (defun yunge-test-which-key-bindings (mode bindings &optional prefix)
   "Check Which-Key descriptions for MODE BINDINGS below optional PREFIX."

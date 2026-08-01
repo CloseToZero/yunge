@@ -18,17 +18,11 @@
 (defvar vertico-count)
 (defvar vertico-map)
 
-(ert-deftest yunge-vertico-loads-lazily ()
-  (yunge-test-assert-lazy-load
-   'yunge-vertico '(vertico)))
+(yunge-test-deftest-lazy-load yunge-vertico
+  (vertico))
 
-(ert-deftest yunge-vertico-binds-keys ()
-  (require 'yunge-minibuffer)
+(ert-deftest yunge-vertico-moves-by-half-pages ()
   (require 'yunge-vertico)
-  (yunge-test-enable-evil)
-  (require 'which-key)
-  (require 'vertico)
-
   (let ((vertico-count 10)
         movement)
     (cl-letf (((symbol-function 'vertico-next)
@@ -38,55 +32,52 @@
     (cl-letf (((symbol-function 'vertico-previous)
                (lambda (count) (setq movement count))))
       (yunge-vertico-previous-half-page 1)
-      (should (= movement 5))))
+      (should (= movement 5)))))
 
-  (with-current-buffer (window-buffer (minibuffer-window))
-    (let ((original-map (current-local-map)))
-      (unwind-protect
-          (progn
-            (use-local-map vertico-map)
-            (evil-local-mode 1)
-            (yunge-minibuffer--setup)
+(ert-deftest yunge-vertico-binds-keys ()
+  (require 'yunge-minibuffer)
+  (require 'yunge-vertico)
+  (yunge-test-enable-evil)
+  (require 'which-key)
+  (require 'vertico)
 
-            (evil-insert-state)
-            (should (eq evil-state 'insert))
-            (yunge-test-keys
-             '(("C-n" . vertico-next)
-               ("C-p" . vertico-previous)
-               ("TAB" . vertico-insert)
-               ("<tab>" . vertico-insert)
-               ("RET" . vertico-exit)))
+  (yunge-test-with-evil-minibuffer
+    (use-local-map vertico-map)
+    (evil-local-mode 1)
+    (yunge-minibuffer--setup)
 
-            (evil-normal-state)
+    (evil-insert-state)
+    (yunge-test-evil-keys
+     'insert
+     '(("C-n" . vertico-next)
+       ("C-p" . vertico-previous)
+       ("TAB" . vertico-insert)
+       ("<tab>" . vertico-insert)
+       ("RET" . vertico-exit)))
 
-            (yunge-test-keys
-             '(("j" . vertico-next)
-               ("k" . vertico-previous)
-               ("<down>" . vertico-next)
-               ("<up>" . vertico-previous)
-               ("gg" . vertico-first)
-               ("G" . vertico-last)
-               ("C-d" . yunge-vertico-next-half-page)
-               ("C-u" . yunge-vertico-previous-half-page)
-               ("C-f" . vertico-scroll-up)
-               ("C-b" . vertico-scroll-down)
-               ("TAB" . vertico-insert)
-               ("<tab>" . vertico-insert)
-               ("RET" . yunge-minibuffer--return)
-               ("C-g" . abort-minibuffers)
-               ("d" . evil-delete)))
+    (evil-normal-state)
+    (yunge-test-evil-keys
+     'normal
+     '(("j" . vertico-next)
+       ("k" . vertico-previous)
+       ("<down>" . vertico-next)
+       ("<up>" . vertico-previous)
+       ("gg" . vertico-first)
+       ("G" . vertico-last)
+       ("C-d" . yunge-vertico-next-half-page)
+       ("C-u" . yunge-vertico-previous-half-page)
+       ("C-f" . vertico-scroll-up)
+       ("C-b" . vertico-scroll-down)
+       ("TAB" . vertico-insert)
+       ("<tab>" . vertico-insert)
+       ("RET" . yunge-minibuffer--return)
+       ("C-g" . abort-minibuffers)
+       ("d" . evil-delete)))
 
-            (let (called)
-              (cl-letf (((symbol-function 'call-interactively)
-                         (lambda (command &rest _arguments)
-                           (setq called command))))
-                (yunge-minibuffer--return ?\r))
-              (should (eq called 'vertico-exit)))
+    (yunge-test-assert-calls-interactively
+     #'yunge-minibuffer--return 'vertico-exit ?\r)
 
-            (yunge-test-which-key-prefix
-             "g" '(("g" vertico-first
-                     "first candidate or prompt"))))
-        (evil-local-mode -1)
-        (use-local-map original-map)))))
+    (yunge-test-which-key-prefix
+     "g" '(("g" vertico-first "first candidate or prompt")))))
 
 ;;; yunge-vertico-test.el ends here

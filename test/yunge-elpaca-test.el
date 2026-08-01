@@ -4,9 +4,8 @@
 
 (require 'yunge-test-helper)
 
-(ert-deftest yunge-elpaca-loads-lazily ()
-  (yunge-test-assert-lazy-load
-   'yunge-elpaca '(evil which-key elpaca-ui elpaca-log elpaca-info)))
+(yunge-test-deftest-lazy-load yunge-elpaca
+  (evil which-key elpaca-ui elpaca-log elpaca-info))
 
 (ert-deftest yunge-elpaca-binds-keys ()
   (require 'yunge-elpaca)

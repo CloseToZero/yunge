@@ -4,8 +4,7 @@
 
 (require 'yunge-test-helper)
 
-(ert-deftest yunge-marginalia-loads-lazily ()
-  (yunge-test-assert-lazy-load
-   'yunge-marginalia '(marginalia)))
+(yunge-test-deftest-lazy-load yunge-marginalia
+  (marginalia))
 
 ;;; yunge-marginalia-test.el ends here

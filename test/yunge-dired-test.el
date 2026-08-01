@@ -6,9 +6,8 @@
 
 (defvar dired-movement-style)
 
-(ert-deftest yunge-dired-loads-lazily ()
-  (yunge-test-assert-lazy-load
-   'yunge-dired '(dired evil which-key)))
+(yunge-test-deftest-lazy-load yunge-dired
+  (dired evil which-key))
 
 (ert-deftest yunge-dired-copy-commands-select-path-kinds ()
   (require 'yunge-dired)
