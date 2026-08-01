@@ -7,9 +7,6 @@
 
 (declare-function evil-add-command-properties "evil-common")
 
-(defconst yunge-consult-buffer-bindings
-  '(("b" consult-buffer "switch buffer")))
-
 (defconst yunge-consult-search-bindings
   '(("b" consult-line "search buffer")
     ("B" consult-line-multi "search project buffers")
@@ -27,8 +24,6 @@
 
 (defun yunge-consult--setup-keys ()
   "Set up Consult command and remap bindings."
-  (yunge-key-define yunge-buffer-map
-                    yunge-consult-buffer-bindings)
   (yunge-key-define yunge-search-map
                     yunge-consult-search-bindings)
   (yunge-key-define yunge-jump-map
@@ -42,8 +37,6 @@
 
 (defun yunge-consult--describe-keys ()
   "Describe Consult leader bindings to Which-Key."
-  (yunge-key-which-key-describe-map
-   yunge-buffer-map yunge-consult-buffer-bindings)
   (yunge-key-which-key-describe-map
    yunge-search-map yunge-consult-search-bindings)
   (yunge-key-which-key-describe-map

@@ -71,6 +71,17 @@
         (should (eq evil-state 'normal))
         (yunge-test-space-mode 1)
 
+        (yunge-test-key "SPC SPC" 'execute-extended-command)
+        (yunge-test-key "SPC b n" 'next-buffer)
+        (yunge-test-key "SPC b p" 'previous-buffer)
+        (yunge-test-key "SPC b q" 'kill-current-buffer)
+        (yunge-test-key "SPC b r" 'revert-buffer)
+        (yunge-test-key "SPC f d" 'dired)
+        (yunge-test-key "SPC f f" 'find-file)
+        (yunge-test-key "SPC f s" 'save-buffer)
+        (yunge-test-key "SPC q f" 'delete-frame)
+        (yunge-test-key "SPC q q" 'save-buffers-kill-terminal)
+        (yunge-test-key "SPC q r" 'restart-emacs)
         (yunge-test-key "SPC t" 'forward-char)
         (yunge-test-key "SPC m p" 'backward-char)
 
@@ -84,11 +95,37 @@
           (yunge-test-key "SPC" 'forward-line)))
     (keymap-unset yunge-leader-map "t"))
 
+  (should (eq (lookup-key yunge-buffer-map (kbd "b"))
+              'switch-to-buffer))
+
   (yunge-test-which-key-prefix-bindings
    'yunge-test-buffer-mode "SPC"
-   '(("b" nil "+buffer")
+   '(("SPC" nil "execute command")
+     ("b" nil "+buffer")
+     ("f" nil "+file")
      ("j" nil "+jump")
      ("m" nil "+mode")
-     ("s" nil "+search"))))
+     ("q" nil "+quit")
+     ("s" nil "+search")))
+
+  (yunge-test-which-key-prefix-bindings
+   'yunge-test-buffer-mode "SPC b"
+   '(("b" nil "switch buffer")
+     ("n" nil "next buffer")
+     ("p" nil "previous buffer")
+     ("q" nil "close buffer")
+     ("r" nil "revert buffer")))
+
+  (yunge-test-which-key-prefix-bindings
+   'yunge-test-buffer-mode "SPC f"
+   '(("d" nil "open directory")
+     ("f" nil "find file")
+     ("s" nil "save file")))
+
+  (yunge-test-which-key-prefix-bindings
+   'yunge-test-buffer-mode "SPC q"
+   '(("f" nil "delete frame")
+     ("q" nil "quit")
+     ("r" nil "restart Emacs"))))
 
 ;;; yunge-evil-test.el ends here

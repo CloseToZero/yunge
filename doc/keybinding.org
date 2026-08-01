@@ -85,8 +85,15 @@ active.
 Group global commands under prefixes by purpose:
 
 - ~SPC b~ operates on buffers.
+- ~SPC f~ operates on files.
 - ~SPC j~ jumps to locations.
+- ~SPC q~ exits Emacs or manages its frames.
 - ~SPC s~ searches text.
+
+Use ~SPC SPC~ to execute a command by name.
+
+Use ~q~ consistently for closing buffers, windows, tabs, and similar
+temporary objects.
 
 Use an uppercase variant to broaden the scope of its lowercase counterpart
 only when the relationship is clear, such as searching one buffer with ~b~ and
