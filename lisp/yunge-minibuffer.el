@@ -3,6 +3,7 @@
 ;; SPDX-License-Identifier: MIT
 
 (declare-function evil-local-set-key "evil-core")
+(declare-function evil-insert "evil-commands")
 
 (defvar evil-want-minibuffer)
 
@@ -25,12 +26,13 @@
     (call-interactively command)))
 
 (defun yunge-minibuffer--setup ()
-  "Restore the local Return action in Evil normal state."
+  "Enter Insert state and restore Return in Evil Normal state."
+  (evil-insert 1)
   (dolist (key yunge-minibuffer--return-keys)
     (evil-local-set-key 'normal key #'yunge-minibuffer--return)))
 
 (with-eval-after-load 'evil
-  ;; Run after Evil initializes the minibuffer in insert state.
+  ;; Run after Evil creates the minibuffer's state-specific keymaps.
   (add-hook 'minibuffer-setup-hook #'yunge-minibuffer--setup t))
 
 (provide 'yunge-minibuffer)

@@ -30,16 +30,20 @@
         (erase-buffer))
       (setq default-directory user-emacs-directory)
       (compilation-mode))
-    (make-process
-     :name "yunge-test"
-     :buffer buffer
-     :command
-     (list (expand-file-name invocation-name invocation-directory)
-           "--batch" "-Q"
-           "-L" test-directory
-           "-l" "yunge-test-runner")
-     :noquery t
-     :sentinel #'yunge-test--sentinel)
+    (let ((process-environment (copy-sequence process-environment)))
+      ;; Keep the clean process's default native-comp cache under `var'.
+      (setenv "XDG_CONFIG_HOME"
+              (expand-file-name "var/test/" user-emacs-directory))
+      (make-process
+       :name "yunge-test"
+       :buffer buffer
+       :command
+       (list (expand-file-name invocation-name invocation-directory)
+             "--batch" "-Q"
+             "-L" test-directory
+             "-l" "yunge-test-runner")
+       :noquery t
+       :sentinel #'yunge-test--sentinel))
     (display-buffer buffer)))
 
 (provide 'yunge-test)

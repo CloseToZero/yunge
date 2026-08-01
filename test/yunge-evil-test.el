@@ -21,6 +21,38 @@
   "Bind Space in an ordinary Evil mode map."
   :keymap yunge-test-space-mode-map)
 
+(yunge-test-deftest-lazy-load yunge-evil
+  (evil))
+
+(ert-deftest yunge-evil-configures-after-package-ready ()
+  (yunge-test-run-package-config
+   'yunge-evil 'evil
+   :dependencies '(goto-chg)
+   :before-ready
+   '(when (or (featurep 'evil)
+              (bound-and-true-p evil-mode))
+      (error "Evil was enabled before its Elpaca body ran"))
+   :after-ready
+   '(unless
+        (and (featurep 'evil)
+             evil-mode
+             yunge-leader-mode
+             (equal
+              (list evil-emacs-state-modes
+                    evil-insert-state-modes
+                    evil-motion-state-modes
+                    evil-search-module
+                    evil-symbol-word-search
+                    evil-undo-system
+                    evil-want-C-u-delete
+                    evil-want-C-u-scroll
+                    evil-want-Y-yank-to-eol
+                    evil-want-integration
+                    evil-want-keybinding)
+              '(nil nil nil evil-search t undo-redo
+                    t t t t nil)))
+      (error "Unexpected Evil configuration"))))
+
 (ert-deftest yunge-evil-routes-leader-keys ()
   (yunge-test-enable-evil)
   (require 'which-key)

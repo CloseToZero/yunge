@@ -10,8 +10,24 @@
 (ert-deftest yunge-orderless-configures-completion ()
   (yunge-test-run-package-config
    'yunge-orderless 'orderless
+   :setup
    '(setq yunge-test-category-defaults
-          (copy-tree completion-category-defaults))
+          (copy-tree completion-category-defaults)
+          yunge-test-completion-settings
+          (list completion-styles
+                completion-category-overrides
+                completion-pcm-leading-wildcard))
+   :before-ready
+   '(progn
+      (when (featurep 'orderless)
+        (error "Orderless was loaded before its Elpaca body ran"))
+      (unless
+          (equal (list completion-styles
+                       completion-category-overrides
+                       completion-pcm-leading-wildcard)
+                 yunge-test-completion-settings)
+        (error "Orderless configuration ran before package readiness")))
+   :after-ready
    '(progn
       (unless
           (equal

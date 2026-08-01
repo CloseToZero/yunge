@@ -38,6 +38,9 @@
              (run-hooks 'minibuffer-setup-hook))
 
            (should evil-local-mode)
+           (should (eq evil-state 'insert))
+           (evil-normal-state)
+           (yunge-minibuffer--setup)
            (yunge-test-evil-keys
             'insert
             '(("<escape>" . evil-normal-state)

@@ -33,7 +33,8 @@
               (or level :warning)
               message))))
 
-(ert-deftest yunge-configuration-byte-compiles-without-warnings ()
+(defun yunge-byte-compile-test--run ()
+  "Compile configuration files and signal any diagnostics."
   (require 'elpaca)
   (let (diagnostics)
     (dolist (file (yunge-byte-compile-test--source-files))
@@ -41,6 +42,18 @@
         (push (yunge-byte-compile-test--format-diagnostic file diagnostic)
               diagnostics)))
     (when diagnostics
-      (ert-fail (mapconcat #'identity (nreverse diagnostics) "\n")))))
+      (error "%s" (mapconcat #'identity
+                             (nreverse diagnostics) "\n")))))
+
+(ert-deftest yunge-configuration-byte-compiles-without-warnings ()
+  (apply
+   #'yunge-test-run-emacs
+   (append
+    (yunge-test-package-arguments
+     '(compat elpaca evil goto-chg marginalia orderless vertico which-key))
+    (list "-L" (expand-file-name "test" yunge-test-root)
+          "-l" "yunge-test-helper"
+          "-l" "yunge-byte-compile-test"
+          "--eval" "(yunge-byte-compile-test--run)"))))
 
 ;;; yunge-byte-compile-test.el ends here
