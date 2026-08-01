@@ -13,11 +13,6 @@
 (ert-deftest yunge-consult-configures-after-package-ready ()
   (yunge-test-run-package-config
    'yunge-consult 'consult
-   :setup
-   '(progn
-      (defvar-keymap yunge-buffer-map)
-      (defvar-keymap yunge-jump-map)
-      (defvar-keymap yunge-search-map))
    :before-ready
    '(progn
       (when (featurep 'consult)

@@ -40,6 +40,7 @@
               (list evil-emacs-state-modes
                     evil-insert-state-modes
                     evil-motion-state-modes
+                    evil-want-minibuffer
                     evil-search-module
                     evil-symbol-word-search
                     evil-undo-system
@@ -48,7 +49,7 @@
                     evil-want-Y-yank-to-eol
                     evil-want-integration
                     evil-want-keybinding)
-              '(nil nil nil evil-search t undo-redo
+              '(nil nil nil t evil-search t undo-redo
                     t t t t nil)))
       (error "Unexpected Evil configuration"))))
 

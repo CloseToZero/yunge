@@ -81,7 +81,10 @@ Elpaca manages itself separately, so it is not recorded in its lock file."
             (apply #'call-process
                    (expand-file-name invocation-name invocation-directory)
                    nil t nil "--batch" "-Q"
-                   (append (yunge-test-package-arguments) arguments)))
+                   (append
+                    (yunge-test-package-arguments)
+                    (list "-L" (expand-file-name "lisp" yunge-test-root))
+                    arguments)))
       (unless (equal status 0)
         (ert-fail
          (format "Emacs exited with %S:\n%s" status (buffer-string))))
@@ -92,7 +95,6 @@ Elpaca manages itself separately, so it is not recorded in its lock file."
   (yunge-test-run-emacs
    "--eval"
    (prin1-to-string '(defmacro elpaca (&rest _body) nil))
-   "-L" (expand-file-name "lisp" yunge-test-root)
    "-l" (symbol-name library)
    "--eval"
    (prin1-to-string
@@ -110,7 +112,9 @@ Elpaca manages itself separately, so it is not recorded in its lock file."
     (library package &key setup before-ready after-ready)
   "Test the Elpaca lifecycle of LIBRARY's PACKAGE configuration.
 Evaluate SETUP before loading LIBRARY, BEFORE-READY after loading it, and
-AFTER-READY after activating PACKAGE and executing its deferred configuration."
+AFTER-READY after activating PACKAGE and executing its deferred configuration.
+PACKAGE must be the final Elpaca declaration; declarations from required
+configuration libraries remain deferred."
   (let ((autoloads (intern (format "%s-autoloads" package))))
     (yunge-test-run-emacs
      "--eval"
@@ -124,22 +128,18 @@ AFTER-READY after activating PACKAGE and executing its deferred configuration."
                        (list 'quote order)
                        (list 'quote body))
                  'yunge-test-elpaca-declarations))))
-     "-L" (expand-file-name "lisp" yunge-test-root)
      "-l" (symbol-name library)
      "--eval"
      (prin1-to-string
-      `(progn
-         (unless
-             (equal (mapcar #'car
-                            (reverse yunge-test-elpaca-declarations))
-                    '(,package))
-           (error "Unexpected Elpaca declarations: %S"
-                  yunge-test-elpaca-declarations))
+      `(let* ((declarations
+               (reverse yunge-test-elpaca-declarations))
+              (declaration (car (last declarations))))
+         (unless (eq (car declaration) ',package)
+           (error "Expected final declaration for %S: %S"
+                  ',package declarations))
          ,before-ready
          (require ',autoloads)
-         (dolist (declaration
-                  (reverse yunge-test-elpaca-declarations))
-           (eval (cons 'progn (cadr declaration)) t))
+         (eval (cons 'progn (cadr declaration)) t)
          ,after-ready)))))
 
 (defun yunge-test-load-package-config (library)
@@ -199,8 +199,6 @@ AFTER-READY after activating PACKAGE and executing its deferred configuration."
 
 (defun yunge-test-enable-evil ()
   "Load Evil and enable the configuration's leader support."
-  ;; Preserve the production load order required by `evil-want-minibuffer'.
-  (require 'yunge-minibuffer)
   (require 'evil-autoloads)
   (yunge-test-load-package-config 'yunge-evil)
   (unless (bound-and-true-p evil-mode)

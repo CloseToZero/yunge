@@ -3,12 +3,9 @@
 ;; SPDX-License-Identifier: MIT
 
 (require 'yunge-key)
+(require 'yunge-evil)
 
 (declare-function evil-add-command-properties "evil-common")
-
-(defvar yunge-buffer-map)
-(defvar yunge-jump-map)
-(defvar yunge-search-map)
 
 (defconst yunge-consult-buffer-bindings
   '(("b" consult-buffer "switch buffer")))
