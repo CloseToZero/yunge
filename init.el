@@ -7,5 +7,6 @@
 (require 'yunge-state)
 (require 'yunge-package)
 (require 'yunge-evil)
+(require 'yunge-which-key)
 
 ;;; init.el ends here
