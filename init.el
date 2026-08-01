@@ -12,6 +12,7 @@
 (require 'yunge-vertico)
 (require 'yunge-orderless)
 (require 'yunge-marginalia)
+(require 'yunge-consult)
 (require 'yunge-elpaca)
 (require 'yunge-dired)
 

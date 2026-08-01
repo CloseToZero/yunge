@@ -5,8 +5,8 @@
 (require 'yunge-test-helper)
 
 (yunge-test-add-package-path
- 'compat 'elpaca 'evil 'goto-chg 'marginalia 'orderless 'vertico
- 'which-key)
+ 'compat 'consult 'elpaca 'evil 'goto-chg 'marginalia 'orderless
+ 'vertico 'which-key)
 
 (defun yunge-byte-compile-test--source-files ()
   "Return configuration source files that should compile without warnings."
@@ -50,7 +50,8 @@
    #'yunge-test-run-emacs
    (append
     (yunge-test-package-arguments
-     '(compat elpaca evil goto-chg marginalia orderless vertico which-key))
+     '(compat consult elpaca evil goto-chg marginalia orderless
+              vertico which-key))
     (list "-L" (expand-file-name "test" yunge-test-root)
           "-l" "yunge-test-helper"
           "-l" "yunge-byte-compile-test"

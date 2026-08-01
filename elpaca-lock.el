@@ -11,6 +11,14 @@
    :files ("*" (:exclude ".git"))
    :source "GNU ELPA"
    :ref "1f3d7596173cf2851d3c4181b15d6c3573a38252"))
+ (consult
+  :source "elpaca-menu-lock-file"
+  :recipe
+  (:package "consult"
+   :repo "minad/consult"
+   :fetcher github
+   :files (:defaults)
+   :ref "6af0dc99ff8eb8da3ca24bf9abd9a72354dcc5e1"))
  (evil
   :source "elpaca-menu-lock-file"
   :recipe

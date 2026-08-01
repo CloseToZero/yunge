@@ -85,6 +85,10 @@
     (keymap-unset yunge-leader-map "t"))
 
   (yunge-test-which-key-prefix-bindings
-   'yunge-test-buffer-mode "SPC" '(("m" nil "+mode"))))
+   'yunge-test-buffer-mode "SPC"
+   '(("b" nil "+buffer")
+     ("j" nil "+jump")
+     ("m" nil "+mode")
+     ("s" nil "+search"))))
 
 ;;; yunge-evil-test.el ends here

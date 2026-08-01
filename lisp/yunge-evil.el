@@ -13,8 +13,25 @@
 (defvar-keymap yunge-leader-map
   :doc "Global leader map.")
 
+(defvar-keymap yunge-buffer-map
+  :doc "Global buffer command map.")
+
+(defvar-keymap yunge-jump-map
+  :doc "Global jump command map.")
+
+(defvar-keymap yunge-search-map
+  :doc "Global search command map.")
+
 (defvar-keymap yunge-evil--empty-localleader-map
   :doc "Fallback map when the current mode has no local leader.")
+
+(defconst yunge-evil-leader-prefix-bindings
+  `(("b" ,yunge-buffer-map "buffer")
+    ("j" ,yunge-jump-map "jump")
+    ("s" ,yunge-search-map "search")))
+
+(yunge-key-define yunge-leader-map
+                  yunge-evil-leader-prefix-bindings)
 
 (defun yunge-evil--localleader-binding (_binding)
   "Return the current mode's labelled local leader binding."
@@ -49,6 +66,10 @@
 
 (with-eval-after-load 'evil
   (yunge-evil--setup-leader))
+
+(with-eval-after-load 'which-key
+  (yunge-key-which-key-describe-map
+   yunge-leader-map yunge-evil-leader-prefix-bindings))
 
 (elpaca evil
   ;; Keep Evil's command semantics, but own all mode-specific bindings.

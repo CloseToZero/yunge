@@ -82,6 +82,16 @@ Ordinary mode bindings should not replace the global leader.  Temporary
 keymaps used by an active prompt may take precedence while the prompt is
 active.
 
+Group global commands under prefixes by purpose:
+
+- ~SPC b~ operates on buffers.
+- ~SPC j~ jumps to locations.
+- ~SPC s~ searches text.
+
+Use an uppercase variant to broaden the scope of its lowercase counterpart
+only when the relationship is clear, such as searching one buffer with ~b~ and
+a set of buffers with ~B~.
+
 Place mode-specific commands that mutate state or start background work under
 ~SPC m~ when no stronger direct-key convention applies.  Examples include
 installing, pulling, and rebuilding.
@@ -95,8 +105,8 @@ Package integrations bind their command maps to Evil's ~[localleader]~ event.
 Keep the physical ~SPC m~ routing in ~yunge-evil.el~ so changing it does not
 require edits throughout the configuration.
 
-Uppercase letters are not an unstructured overflow area.  Keys such as ~B~,
-~F~, ~M~, and ~V~ already have Evil meanings.
+Before assigning an uppercase letter, check its Evil meaning.  Keys such as
+~B~, ~F~, ~M~, and ~V~ are already bound.
 
 * List buffers
 
