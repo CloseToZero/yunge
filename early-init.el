@@ -2,6 +2,10 @@
 ;; SPDX-FileCopyrightText: 2026 Chen Zhexuan
 ;; SPDX-License-Identifier: MIT
 
+(when (< emacs-major-version 31)
+  (error "This configuration requires Emacs 31 or newer (found %s)"
+         emacs-version))
+
 ;; Raise the GC threshold during startup, then restore Emacs's default.
 (let ((threshold gc-cons-threshold))
   (setq gc-cons-threshold (* 128 1024 1024))
