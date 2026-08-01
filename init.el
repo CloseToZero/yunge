@@ -9,6 +9,7 @@
 (require 'yunge-evil)
 (require 'yunge-which-key)
 (require 'yunge-elpaca)
+(require 'yunge-dired)
 
 (autoload 'yunge-test "yunge-test" nil t)
 
