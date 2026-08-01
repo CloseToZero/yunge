@@ -5,7 +5,8 @@
 (require 'yunge-test-helper)
 
 (yunge-test-add-package-path
- 'compat 'elpaca 'evil 'goto-chg 'marginalia 'vertico 'which-key)
+ 'compat 'elpaca 'evil 'goto-chg 'marginalia 'orderless 'vertico
+ 'which-key)
 
 (defun yunge-byte-compile-test--source-files ()
   "Return configuration source files that should compile without warnings."

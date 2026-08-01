@@ -35,6 +35,14 @@
    :fetcher github
    :files (:defaults)
    :ref "10b170ad8006bad535599e5b3e007e643e34345a"))
+ (orderless
+  :source "elpaca-menu-lock-file"
+  :recipe
+  (:package "orderless"
+   :repo "oantolin/orderless"
+   :fetcher github
+   :files (:defaults)
+   :ref "0ffd9d6903714c1f6d8fcbb6a20941fb33dd7ae5"))
  (vertico
   :source "elpaca-menu-lock-file"
   :recipe

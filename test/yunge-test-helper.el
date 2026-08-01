@@ -75,6 +75,26 @@
   `(ert-deftest ,(intern (format "%s-loads-lazily" library)) ()
      (yunge-test-assert-lazy-load ',library ',features)))
 
+(defun yunge-test-run-package-config
+    (library package setup assertions)
+  "Test Elpaca configuration LIBRARY for PACKAGE in a clean Emacs.
+Evaluate SETUP before loading LIBRARY and ASSERTIONS afterwards."
+  (let ((package-directory
+         (expand-file-name (format "var/elpaca/build/%s" package)
+                           yunge-test-root))
+        (autoloads (intern (format "%s-autoloads" package))))
+    (yunge-test-run-emacs
+     "-L" package-directory
+     "--eval"
+     (prin1-to-string
+      `(progn
+         (require ',autoloads)
+         (defmacro elpaca (_order &rest body) (cons 'progn body))
+         ,setup))
+     "-L" (expand-file-name "lisp" yunge-test-root)
+     "-l" (symbol-name library)
+     "--eval" (prin1-to-string assertions))))
+
 (defmacro yunge-test-with-evil-minibuffer (&rest body)
   "Run BODY in the minibuffer buffer and restore its local state."
   (declare (indent 0) (debug t))
