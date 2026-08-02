@@ -10,6 +10,7 @@
 
 (defvar git-commit-setup-hook)
 (defvar git-rebase-mode-map)
+(defvar magit-define-global-key-bindings)
 (defvar magit-cherry-mode-map)
 (defvar magit-diff-mode-map)
 (defvar magit-diff-section-map)
@@ -19,9 +20,14 @@
 (defvar magit-module-section-map)
 (defvar magit-process-mode-map)
 (defvar magit-repolist-mode-map)
-(defvar magit-revision-mode-map)
 (defvar magit-refs-mode-map)
 (defvar magit-status-mode-map)
+
+;; Global Magit entry points belong to this configuration's leader maps.
+(setq magit-define-global-key-bindings nil)
+
+(defconst yunge-magit-file-bindings
+  '(("g" magit-file-dispatch "Git actions")))
 
 (defconst yunge-magit-go-bindings
   '(("g" magit-status "Git status")))
@@ -168,8 +174,11 @@
     (evil-insert-state)))
 
 (elpaca magit
+  (yunge-key-define yunge-file-map yunge-magit-file-bindings)
   (yunge-key-define yunge-go-map yunge-magit-go-bindings)
   (with-eval-after-load 'which-key
+    (yunge-key-add-which-key-descriptions
+     yunge-file-map yunge-magit-file-bindings)
     (yunge-key-add-which-key-descriptions
      yunge-go-map yunge-magit-go-bindings)
     (yunge-key-add-which-key-descriptions
@@ -220,10 +229,11 @@
                          git-rebase-reword
                          git-rebase-squash))
         (evil-add-command-properties command :exclude-newline t)))
-    (with-eval-after-load 'magit
+    (with-eval-after-load 'magit-mode
       (yunge-key-evil-define
        'normal magit-mode-map
-       yunge-magit-section-normal-bindings)
+       yunge-magit-section-normal-bindings))
+    (with-eval-after-load 'magit-status
       (yunge-key-evil-define
        'normal magit-status-mode-map
        (append yunge-magit-section-normal-bindings
@@ -237,6 +247,10 @@
       ;; treat the next section as selected too.
       (dolist (command '(magit-discard magit-stage magit-unstage))
         (evil-add-command-properties command :exclude-newline t)))
+    (with-eval-after-load 'magit-stash
+      ;; Keep a linewise stash selection from including the next stash.
+      (evil-add-command-properties 'magit-stash-drop
+                                   :exclude-newline t))
     (with-eval-after-load 'magit-log
       (dolist (map (list magit-log-mode-map
                          magit-cherry-mode-map))
@@ -258,14 +272,13 @@
                yunge-magit-repository-normal-bindings
                yunge-magit-mode-quit-normal-bindings)))
     (with-eval-after-load 'magit-diff
-      (dolist (map (list magit-diff-mode-map
-                         magit-revision-mode-map))
-        (yunge-key-evil-define
-         'normal map
-         (append yunge-magit-section-normal-bindings
-                 yunge-magit-view-normal-bindings
-                 yunge-magit-repository-normal-bindings
-                 yunge-magit-mode-quit-normal-bindings))))))
+      ;; Revision mode inherits this map, so configure its shared parent.
+      (yunge-key-evil-define
+       'normal magit-diff-mode-map
+       (append yunge-magit-section-normal-bindings
+               yunge-magit-view-normal-bindings
+               yunge-magit-repository-normal-bindings
+               yunge-magit-mode-quit-normal-bindings)))))
 
 (provide 'yunge-magit)
 

@@ -34,6 +34,7 @@
 
 (defvar evil-state)
 (defvar git-commit-setup-hook)
+(defvar magit-define-global-key-bindings)
 (defvar magit-diff-section-map)
 (defvar magit-module-section-map)
 (defvar magit-root-section)
@@ -119,12 +120,25 @@
    '(progn
       (when (featurep 'magit)
         (error "Magit was loaded before its Elpaca body ran"))
+      (when magit-define-global-key-bindings
+        (error "Magit owns global keys before its package is ready"))
+      (when (keymap-lookup yunge-file-map "g")
+        (error "Magit file keys were bound before its Elpaca body ran"))
       (when (keymap-lookup yunge-go-map "g")
         (error "Magit keys were bound before its Elpaca body ran")))
    :after-ready
    '(progn
+      (unless (eq (keymap-lookup yunge-file-map "g")
+                  'magit-file-dispatch)
+        (error "Magit file keys were not bound after package readiness"))
       (unless (eq (keymap-lookup yunge-go-map "g") 'magit-status)
         (error "Magit keys were not bound after package readiness"))
+      (dolist (binding '(("C-x g" . magit-status)
+                         ("C-x M-g" . magit-dispatch)
+                         ("C-c M-g" . magit-file-dispatch)))
+        (when (eq (keymap-lookup global-map (car binding))
+                  (cdr binding))
+          (error "Magit installed global key %s" (car binding))))
       (when (featurep 'magit)
         (error "Magit was loaded by its configuration")))))
 
@@ -136,7 +150,11 @@
 
   (yunge-test-evil-normal-keys
    'fundamental-mode
-   '(("SPC g g" . magit-status)))
+   '(("SPC f g" . magit-file-dispatch)
+     ("SPC g g" . magit-status)))
+  (yunge-test-which-key-prefix-bindings
+   'fundamental-mode "SPC f"
+   '(("g" nil "Git actions")))
   (yunge-test-which-key-prefix-bindings
    'fundamental-mode "SPC g"
    '(("g" nil "Git status")))
@@ -253,6 +271,37 @@
     (yunge-magit-test--visual-untracked-files
      "V j j x" 'magit-discard-files)
     '("one" "two" "three"))))
+
+(ert-deftest yunge-magit-visual-drop-selects-exact-stashes ()
+  (yunge-test-enable-evil)
+  (require 'magit-autoloads)
+  (yunge-test-load-package-config 'yunge-magit)
+  (require 'magit-stash)
+
+  (with-temp-buffer
+    (magit-status-mode)
+    (let ((inhibit-read-only t)
+          selected)
+      (erase-buffer)
+      (setq magit-root-section nil)
+      (magit-insert-section (status)
+        (magit-insert-section (stashes "refs/stash")
+          (magit-insert-heading "Stashes")
+          (dolist (stash '("one" "two" "three" "four"))
+            (magit-insert-section (stash stash)
+              (magit-insert-heading stash)))))
+      (goto-char (point-min))
+      (search-forward "one")
+      (beginning-of-line)
+      (evil-normal-state)
+      (cl-letf (((symbol-function 'magit-stash-drop)
+                 (lambda (&optional _stash)
+                   (interactive)
+                   (setq selected (magit-region-values 'stash)))))
+        (save-window-excursion
+          (switch-to-buffer (current-buffer))
+          (execute-kbd-macro (kbd "V j x"))))
+      (should (equal selected '("one" "two"))))))
 
 (ert-deftest yunge-magit-enters-insert-state-for-blank-commit-message ()
   (yunge-test-enable-evil)

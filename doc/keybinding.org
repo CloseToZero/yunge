@@ -58,8 +58,8 @@ Use these conventions only where the action is meaningful:
 - ~q~ quits a temporary or display-oriented view, usually with ~quit-window~.
 - ~RET~ invokes the primary action for the item at point.
 - ~gr~ refreshes the current contents.
-- ~C-j~ and ~C-k~ move to the next or previous completion candidate or visible
-  section.
+- ~C-j~ and ~C-k~ move to the next or previous candidate, revision, chunk, or
+  visible section.
 - ~M-h~ moves to the parent in hierarchical views.
 - In collapsible views, ~za~ toggles the current section; ~zc~/~zo~ hide or
   show it, ~zC~/~zO~ hide or show its child sections, and ~z1~ through ~z4~
@@ -90,7 +90,7 @@ Use ~g~ as the namespace for navigation-related commands.  Beyond ~gr~, use:
 
 - ~gf~ visits a file or source associated with the current item.
 - ~gF~ visits an alternate location for the same item.
-- ~g<~ shows output from the most recent external command when available.
+- ~g<~ opens recorded output from external commands when available.
 - ~gx~ opens the current item's URL in an external program.
 
 Prefer extending Evil's ~g~ prefix with specific sequences over replacing its
