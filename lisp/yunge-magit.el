@@ -18,7 +18,12 @@
     ("C-k" magit-section-backward "previous section")
     ("M-h" magit-section-up "parent section")
     ("M-j" magit-section-forward-sibling "next sibling")
-    ("M-k" magit-section-backward-sibling "previous sibling")))
+    ("M-k" magit-section-backward-sibling "previous sibling")
+    ("za" magit-section-toggle "toggle section")
+    ("zc" magit-section-hide "hide section")
+    ("zC" magit-section-hide-children "hide child sections")
+    ("zo" magit-section-show "show section")
+    ("zO" magit-section-show-children "show child sections")))
 
 (defconst yunge-magit-status-normal-bindings
   '(("RET" magit-visit-thing "visit")
