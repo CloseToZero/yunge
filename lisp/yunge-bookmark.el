@@ -42,10 +42,8 @@
     (yunge-bookmark--setup-bmenu-keys)))
 
 (with-eval-after-load 'which-key
-  (yunge-key-which-key-describe-map
-   yunge-jump-map yunge-bookmark-jump-bindings)
-  (yunge-key-which-key-describe
-   'bookmark-bmenu-mode yunge-bookmark-bmenu-normal-bindings))
+  (yunge-key-add-which-key-descriptions
+   yunge-jump-map yunge-bookmark-jump-bindings))
 
 (provide 'yunge-bookmark)
 

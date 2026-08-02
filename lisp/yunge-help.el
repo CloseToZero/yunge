@@ -23,10 +23,6 @@
     (yunge-key-evil-define 'normal help-mode-map
                            yunge-help-normal-bindings)))
 
-(with-eval-after-load 'which-key
-  (yunge-key-which-key-describe
-   'help-mode yunge-help-normal-bindings))
-
 (provide 'yunge-help)
 
 ;;; yunge-help.el ends here

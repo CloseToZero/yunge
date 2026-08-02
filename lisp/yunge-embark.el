@@ -69,7 +69,7 @@
 
 (defun yunge-embark--describe-keys ()
   "Describe the Embark entry point to Which-Key."
-  (yunge-key-which-key-describe-map
+  (yunge-key-add-which-key-descriptions
    global-map yunge-embark-global-bindings))
 
 (defun yunge-embark-target-file-at-point ()

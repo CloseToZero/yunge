@@ -76,17 +76,8 @@
                            yunge-elpaca-info-normal-bindings)))
 
 (with-eval-after-load 'which-key
-  (yunge-key-which-key-describe-map
-   yunge-elpaca-command-map yunge-elpaca-command-bindings)
-  (dolist (mode '(elpaca-manager-mode elpaca-log-mode))
-    (yunge-key-which-key-describe
-     mode yunge-elpaca-ui-normal-visual-bindings)
-    (yunge-key-which-key-describe
-     mode yunge-elpaca-ui-normal-bindings))
-  (yunge-key-which-key-describe
-   'elpaca-log-mode yunge-elpaca-log-normal-bindings)
-  (yunge-key-which-key-describe
-   'elpaca-info-mode yunge-elpaca-info-normal-bindings))
+  (yunge-key-add-which-key-descriptions
+   yunge-elpaca-command-map yunge-elpaca-command-bindings))
 
 (provide 'yunge-elpaca)
 

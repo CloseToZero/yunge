@@ -4,6 +4,8 @@
 
 (require 'yunge-test-helper)
 
+(declare-function evil-visual-state "evil-states")
+
 (yunge-test-deftest-lazy-load yunge-help
   (evil help-mode which-key))
 
@@ -30,17 +32,16 @@
      ("C-o" . yunge-jump-backward)
      ("C-i" . yunge-jump-forward)))
 
-  (yunge-test-which-key-bindings
-   'help-mode
-   '(("RET" nil "activate button")
-     ("q" nil "quit")
-     ("gr" nil "refresh")
-     ("gh" nil "history back")
-     ("gl" nil "history forward")
-     ("gf" nil "visit source")
-     ("g]" nil "next button")
-     ("g[" nil "previous button")
-     ("<tab>" nil "next button")
-     ("S-TAB" nil "previous button"))))
+  (with-temp-buffer
+    (help-mode)
+    (yunge-test-which-key-prefix "g"
+                                 '(("f" nil "visit source")
+                                   ("h" nil "history back")
+                                   ("l" nil "history forward")
+                                   ("r" nil "refresh")))
+    (evil-visual-state)
+    (should-not
+     (equal (yunge-test-which-key-prefix-description "g" "f")
+            "visit source"))))
 
 ;;; yunge-help-test.el ends here

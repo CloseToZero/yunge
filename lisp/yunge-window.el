@@ -68,9 +68,9 @@
                   yunge-window-control-bindings)
 
 (with-eval-after-load 'which-key
-  (yunge-key-which-key-describe-map
+  (yunge-key-add-which-key-descriptions
    yunge-window-map yunge-window-bindings)
-  (yunge-key-which-key-describe-map
+  (yunge-key-add-which-key-descriptions
    yunge-window-control-map yunge-window-control-bindings))
 
 (provide 'yunge-window)

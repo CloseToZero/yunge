@@ -4,7 +4,6 @@
 
 (require 'yunge-key)
 
-(declare-function evil-get-minor-mode-keymap "evil-core")
 (declare-function global-corfu-mode "corfu")
 
 (defvar completion-in-region-mode)
@@ -45,13 +44,6 @@
     (yunge-key-evil-define-minor-mode
      'insert 'yunge-corfu--completion-mode
      yunge-corfu-insert-bindings)))
-
-(with-eval-after-load 'which-key
-  (with-eval-after-load 'evil
-    (with-eval-after-load 'corfu
-      (yunge-key-which-key-describe-map
-       (evil-get-minor-mode-keymap 'insert 'yunge-corfu--completion-mode)
-       yunge-corfu-insert-bindings))))
 
 (elpaca corfu
   (setq tab-always-indent 'complete

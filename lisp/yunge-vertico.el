@@ -4,7 +4,6 @@
 
 (require 'yunge-key)
 
-(declare-function evil-get-auxiliary-keymap "evil-core")
 (declare-function vertico-mode "vertico")
 (declare-function vertico-next "vertico")
 (declare-function vertico-previous "vertico")
@@ -52,15 +51,6 @@
 (with-eval-after-load 'evil
   (with-eval-after-load 'vertico
     (yunge-vertico--setup-keys)))
-
-(with-eval-after-load 'which-key
-  (with-eval-after-load 'evil
-    (with-eval-after-load 'vertico
-      (dolist (entry `((normal ,yunge-vertico-normal-bindings)
-                       (insert ,yunge-vertico-insert-bindings)))
-        (yunge-key-which-key-describe-map
-         (evil-get-auxiliary-keymap vertico-map (car entry) t t)
-         (cadr entry))))))
 
 (elpaca vertico
   (vertico-mode 1))

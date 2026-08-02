@@ -57,19 +57,19 @@
 
 (defun yunge-consult--describe-keys ()
   "Describe Consult leader bindings to Which-Key."
-  (yunge-key-which-key-describe-map
+  (yunge-key-add-which-key-descriptions
    yunge-file-map yunge-consult-file-bindings)
-  (yunge-key-which-key-describe-map
+  (yunge-key-add-which-key-descriptions
    yunge-search-map yunge-consult-search-bindings)
-  (yunge-key-which-key-describe-map
+  (yunge-key-add-which-key-descriptions
    yunge-jump-map yunge-consult-jump-bindings)
-  (yunge-key-which-key-describe-map
+  (yunge-key-add-which-key-descriptions
    minibuffer-local-map yunge-consult-history-bindings))
 
 (defun yunge-consult--describe-evil-history-keys ()
   "Describe history selection in Evil command-line maps."
   (dolist (map (list evil-command-line-map evil-eval-map))
-    (yunge-key-which-key-describe-map
+    (yunge-key-add-which-key-descriptions
      map yunge-consult-history-bindings)))
 
 (elpaca consult

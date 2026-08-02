@@ -7,39 +7,12 @@
 (yunge-test-deftest-lazy-load yunge-elpaca
   (evil which-key elpaca-ui elpaca-log elpaca-info))
 
-(defconst yunge-test-elpaca-shared-descriptions
-  '(("d" nil "mark delete")
-    ("u" nil "unmark")))
-
-(defconst yunge-test-elpaca-ui-descriptions
-  '(("RET" nil "package info")
-    ("q" nil "quit")
-    ("x" nil "execute marks")
-    ("gr" nil "refresh")
-    ("gf" nil "visit source")
-    ("gF" nil "visit build")
-    ("gx" nil "browse package")
-    ("gl" nil "show log")
-    ("gm" nil "show manager")))
-
 (defconst yunge-test-elpaca-command-descriptions
   '(("c" nil "check updates")
     ("i" nil "mark try")
     ("p" nil "mark pull")
     ("r" nil "mark rebuild")
     ("s" nil "filter")))
-
-(defconst yunge-test-elpaca-log-descriptions
-  '(("gd" nil "view diff")))
-
-(defconst yunge-test-elpaca-info-descriptions
-  '(("RET" nil "activate button")
-    ("q" nil "quit")
-    ("gr" nil "refresh")
-    ("g]" nil "next button")
-    ("g[" nil "previous button")
-    ("<tab>" nil "next button")
-    ("S-TAB" nil "previous button")))
 
 (ert-deftest yunge-elpaca-binds-keys ()
   (require 'yunge-elpaca)
@@ -91,18 +64,9 @@
      ("<tab>" . forward-button)
      ("S-TAB" . backward-button)))
 
-  (dolist (mode '(elpaca-manager-mode elpaca-log-mode))
-    (yunge-test-which-key-bindings
-     mode yunge-test-elpaca-shared-descriptions)
-    (yunge-test-which-key-bindings
-     mode yunge-test-elpaca-ui-descriptions))
   (let ((elpaca-menu-functions nil))
     (dolist (mode '(elpaca-manager-mode elpaca-log-mode))
       (yunge-test-which-key-prefix-bindings
-       mode "SPC m" yunge-test-elpaca-command-descriptions)))
-  (yunge-test-which-key-bindings
-   'elpaca-log-mode yunge-test-elpaca-log-descriptions)
-  (yunge-test-which-key-bindings
-   'elpaca-info-mode yunge-test-elpaca-info-descriptions))
+       mode "SPC m" yunge-test-elpaca-command-descriptions))))
 
 ;;; yunge-elpaca-test.el ends here

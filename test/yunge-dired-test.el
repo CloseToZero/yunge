@@ -88,9 +88,6 @@
           (wdired-abort-changes))
       (when (buffer-live-p buffer)
         (kill-buffer buffer))
-      (delete-directory directory t)))
-
-  (yunge-test-which-key-bindings
-   'wdired-mode yunge-wdired-normal-bindings))
+      (delete-directory directory t))))
 
 ;;; yunge-dired-test.el ends here

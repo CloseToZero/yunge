@@ -157,13 +157,7 @@
                     ,yunge-dired-link-bindings)
                    (,yunge-dired-command-map
                     ,yunge-dired-command-bindings)))
-    (yunge-key-which-key-describe-map (car entry) (cadr entry)))
-  (yunge-key-which-key-describe
-   'dired-mode yunge-dired-normal-visual-bindings)
-  (yunge-key-which-key-describe
-   'dired-mode yunge-dired-normal-bindings)
-  (yunge-key-which-key-describe
-   'wdired-mode yunge-wdired-normal-bindings))
+    (yunge-key-add-which-key-descriptions (car entry) (cadr entry))))
 
 (provide 'yunge-dired)
 

@@ -4,9 +4,9 @@
 
 (declare-function evil-define-key* "evil-core")
 (declare-function evil-define-minor-mode-key "evil-core")
+(declare-function evil-get-auxiliary-keymap "evil-core")
+(declare-function evil-get-minor-mode-keymap "evil-core")
 (declare-function which-key-add-keymap-based-replacements "which-key")
-(declare-function which-key-add-major-mode-key-based-replacements
-                  "which-key")
 
 (defconst yunge-key-button-navigation-bindings
   '(("g]" forward-button "next button")
@@ -32,34 +32,28 @@ Each binding has the form (KEY DEFINITION DESCRIPTION).  KEY may be a
 string accepted by `kbd' or a vector key sequence."
   (dolist (binding bindings)
     (evil-define-key* state map
-      (yunge-key--parse (car binding)) (nth 1 binding))))
+      (yunge-key--parse (car binding)) (nth 1 binding)))
+  (with-eval-after-load 'which-key
+    (dolist (current (if (listp state) state (list state)))
+      (yunge-key-add-which-key-descriptions
+       (evil-get-auxiliary-keymap map current t t) bindings))))
 
 (defun yunge-key-evil-define-minor-mode (state mode bindings)
   "Define Evil STATE BINDINGS while minor MODE is active."
   (dolist (binding bindings)
     (evil-define-minor-mode-key state mode
-      (yunge-key--parse (car binding)) (nth 1 binding))))
+      (yunge-key--parse (car binding)) (nth 1 binding)))
+  (with-eval-after-load 'which-key
+    (dolist (current (if (listp state) state (list state)))
+      (yunge-key-add-which-key-descriptions
+       (evil-get-minor-mode-keymap current mode) bindings))))
 
-(defun yunge-key-which-key-describe-map (map bindings)
+(defun yunge-key-add-which-key-descriptions (map bindings)
   "Add the descriptions from BINDINGS directly to MAP for Which-Key."
   (dolist (binding bindings)
     (when-let* ((description (nth 2 binding)))
       (which-key-add-keymap-based-replacements
         map (car binding) (cons description (nth 1 binding))))))
-
-(defun yunge-key-which-key-describe (mode bindings &optional prefix)
-  "Describe MODE BINDINGS to Which-Key, optionally below PREFIX."
-  (let (replacements)
-    (dolist (binding bindings)
-      (let ((description (nth 2 binding)))
-        (when description
-          (push (if prefix
-                    (concat prefix " " (car binding))
-                  (car binding))
-                replacements)
-          (push description replacements))))
-    (apply #'which-key-add-major-mode-key-based-replacements
-           mode (nreverse replacements))))
 
 (provide 'yunge-key)
 

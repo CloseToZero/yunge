@@ -26,7 +26,6 @@
 (defvar evil-state)
 (defvar evil-want-integration)
 (defvar evil-want-keybinding)
-(defvar which-key-replacement-alist)
 
 (add-to-list 'load-path (expand-file-name "lisp" yunge-test-root))
 
@@ -248,38 +247,24 @@ configuration libraries remain deferred."
     (evil-visual-state)
     (yunge-test-evil-keys 'visual bindings)))
 
-(defun yunge-test-which-key-bindings (mode bindings &optional prefix)
-  "Check Which-Key descriptions for MODE BINDINGS below optional PREFIX."
-  (dolist (binding bindings)
-    (let ((description (nth 2 binding)))
-      (when description
-        (let ((key (if prefix
-                       (concat prefix " " (car binding))
-                     (car binding)))
-              (case-fold-search nil)
-              found)
-          (dolist (replacement
-                   (cdr (assq mode which-key-replacement-alist)))
-            (when (string-match-p
-                   (caar replacement) (key-description (kbd key)))
-              (setq found (cddr replacement))))
-          (should (equal found description)))))))
+(defun yunge-test-which-key-prefix-description (prefix key)
+  "Return the visible Which-Key description for KEY below PREFIX."
+  (when-let* ((entry
+              (seq-find
+               (lambda (candidate)
+                 (equal (substring-no-properties (car candidate)) key))
+               (which-key--get-bindings (kbd prefix)))))
+    (substring-no-properties (nth 2 entry))))
 
 (defun yunge-test-which-key-prefix (prefix bindings)
   "Check Which-Key BINDINGS shown below PREFIX in the current buffer."
-  (let ((visible (which-key--get-bindings (kbd prefix))))
-    (dolist (binding bindings)
-      (when-let* ((description (nth 2 binding)))
-        (let ((entry
-               (seq-find
-                (lambda (candidate)
-                  (equal (substring-no-properties (car candidate))
-                         (car binding)))
-                visible)))
-          (should entry)
-          (should
-           (equal (substring-no-properties (nth 2 entry))
-                  description)))))))
+  (dolist (binding bindings)
+    (when-let* ((description (nth 2 binding)))
+      (should
+       (equal
+        (yunge-test-which-key-prefix-description
+         prefix (car binding))
+        description)))))
 
 (defun yunge-test-which-key-prefix-bindings (mode prefix bindings)
   "Check Which-Key BINDINGS shown below PREFIX after activating MODE."

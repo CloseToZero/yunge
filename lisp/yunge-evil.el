@@ -103,13 +103,13 @@
   (yunge-evil--setup-leader))
 
 (with-eval-after-load 'which-key
-  (yunge-key-which-key-describe-map
+  (yunge-key-add-which-key-descriptions
    yunge-leader-map yunge-leader-map-bindings)
-  (yunge-key-which-key-describe-map
+  (yunge-key-add-which-key-descriptions
    yunge-buffer-map yunge-buffer-bindings)
-  (yunge-key-which-key-describe-map
+  (yunge-key-add-which-key-descriptions
    yunge-file-map yunge-file-bindings)
-  (yunge-key-which-key-describe-map
+  (yunge-key-add-which-key-descriptions
    yunge-quit-map yunge-quit-bindings))
 
 (elpaca evil
