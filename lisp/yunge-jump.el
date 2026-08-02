@@ -54,6 +54,12 @@
            :fallback (yunge-jump--fallback)
            :position (marker-position marker)))))))
 
+(defun yunge-jump--window-entry (window)
+  "Return an entry for WINDOW's current location."
+  (when (window-live-p window)
+    (with-current-buffer (window-buffer window)
+      (yunge-jump--entry (window-point window)))))
+
 (defun yunge-jump--same-place-p (left right)
   "Return non-nil when LEFT and RIGHT identify the same location."
   (let ((left-marker (yunge-jump--entry-marker left))
@@ -98,6 +104,25 @@ When BRANCH is non-nil, discard entries newer than the current one."
   (unless yunge-jump--moving
     (when-let* ((entry (yunge-jump--entry position)))
       (yunge-jump--push (yunge-jump--history) entry t))))
+
+(defun yunge-jump--track-navigation (function &rest arguments)
+  "Record a successful location change made by FUNCTION with ARGUMENTS."
+  (let* ((origin (yunge-jump--window-entry (selected-window)))
+         ;; Ignore transient locations visited by completion previews.
+         (yunge-jump--moving t)
+         (result (apply function arguments))
+         (window (selected-window))
+         (destination (yunge-jump--window-entry window)))
+    (when (and origin
+               destination
+               (not (yunge-jump--same-place-p origin destination)))
+      (yunge-jump--push (yunge-jump--history window) origin t))
+    result))
+
+(defun yunge-jump-track-command (command)
+  "Track successful location changes made by COMMAND."
+  (unless (advice-member-p #'yunge-jump--track-navigation command)
+    (advice-add command :around #'yunge-jump--track-navigation)))
 
 (defun yunge-jump--target (entry)
   "Return the live buffer and position represented by ENTRY."

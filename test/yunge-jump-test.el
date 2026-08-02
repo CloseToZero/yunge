@@ -7,6 +7,7 @@
 (declare-function evil-set-jump "evil-jumps")
 (declare-function yunge-jump-backward "yunge-jump")
 (declare-function yunge-jump-forward "yunge-jump")
+(declare-function yunge-jump-track-command "yunge-jump")
 
 (defvar evil--jumps-jump-command)
 
@@ -33,6 +34,105 @@
   (dolist (buffer buffers)
     (when (buffer-live-p buffer)
       (kill-buffer buffer))))
+
+(defun yunge-jump-test--navigate (action)
+  "Run ACTION as a navigation command."
+  (funcall action))
+
+(ert-deftest yunge-jump-tracks-successful-navigation ()
+  (yunge-test-enable-evil)
+  (yunge-jump-test--reset)
+  (let ((origin (yunge-jump-test--buffer " *yunge-jump-origin*"))
+        (preview (yunge-jump-test--buffer " *yunge-jump-preview*"))
+        (destination
+         (yunge-jump-test--buffer " *yunge-jump-destination*")))
+    (unwind-protect
+        (save-window-excursion
+          (switch-to-buffer origin)
+          (goto-char 4)
+          (yunge-jump-track-command 'yunge-jump-test--navigate)
+
+          (yunge-jump-test--navigate
+           (lambda ()
+             (switch-to-buffer preview)
+             (goto-char 6)
+             (evil-set-jump)
+             (switch-to-buffer destination)
+             (goto-char 8)))
+
+          (yunge-jump-backward)
+          (should (eq (current-buffer) origin))
+          (should (= (point) 4))
+          (should-error (yunge-jump-backward) :type 'user-error)
+
+          (yunge-jump-forward)
+          (should (eq (current-buffer) destination))
+          (should (= (point) 8)))
+      (yunge-jump-test--kill origin preview destination)
+      (yunge-jump-test--reset))))
+
+(ert-deftest yunge-jump-preserves-forward-history-after-cancel ()
+  (yunge-test-enable-evil)
+  (yunge-jump-test--reset)
+  (let ((older (yunge-jump-test--buffer " *yunge-jump-older*"))
+        (latest (yunge-jump-test--buffer " *yunge-jump-latest*"))
+        (preview (yunge-jump-test--buffer " *yunge-jump-preview*")))
+    (unwind-protect
+        (save-window-excursion
+          (switch-to-buffer latest)
+          (goto-char 7)
+          (yunge-jump-test--record older 3)
+          (yunge-jump-backward)
+          (yunge-jump-track-command 'yunge-jump-test--navigate)
+
+          (let (cancelled)
+            (condition-case nil
+                (yunge-jump-test--navigate
+                 (lambda ()
+                   (switch-to-buffer preview)
+                   (evil-set-jump)
+                   (switch-to-buffer older)
+                   (goto-char 3)
+                   (signal 'quit nil)))
+              (quit (setq cancelled t)))
+            (should cancelled))
+
+          (yunge-jump-forward)
+          (should (eq (current-buffer) latest))
+          (should (= (point) 7)))
+      (yunge-jump-test--kill older latest preview)
+      (yunge-jump-test--reset))))
+
+(ert-deftest yunge-jump-records-navigation-in-destination-window ()
+  (yunge-test-enable-evil)
+  (yunge-jump-test--reset)
+  (let ((origin (yunge-jump-test--buffer " *yunge-jump-origin*"))
+        (destination
+         (yunge-jump-test--buffer " *yunge-jump-destination*")))
+    (unwind-protect
+        (save-window-excursion
+          (delete-other-windows)
+          (switch-to-buffer origin)
+          (goto-char 4)
+          (let ((destination-window (split-window-right)))
+            (set-window-buffer destination-window destination)
+            (set-window-point destination-window 8)
+            (yunge-jump-track-command 'yunge-jump-test--navigate)
+
+            (yunge-jump-test--navigate
+             (lambda ()
+               (select-window destination-window)))
+
+            (yunge-jump-backward)
+            (should (eq (selected-window) destination-window))
+            (should (eq (current-buffer) origin))
+            (should (= (point) 4))
+
+            (yunge-jump-forward)
+            (should (eq (current-buffer) destination))
+            (should (= (point) 8))))
+      (yunge-jump-test--kill origin destination)
+      (yunge-jump-test--reset))))
 
 (ert-deftest yunge-jump-crosses-a-live-non-file-buffer ()
   (yunge-test-enable-evil)

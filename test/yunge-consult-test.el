@@ -5,7 +5,7 @@
 (require 'yunge-test-helper)
 
 (declare-function evil-get-command-property "evil-common")
-(declare-function evil-has-command-property-p "evil-common")
+(declare-function yunge-jump--track-navigation "yunge-jump")
 
 (defvar evil-command-line-map)
 (defvar evil-eval-map)
@@ -93,11 +93,12 @@
    '(("b" nil "jump to bookmark")
      ("i" nil "jump to symbol")))
 
-  (dolist (command '(consult-bookmark consult-imenu consult-line
-                     consult-line-multi consult-recent-file
+  (dolist (command '(consult-bookmark consult-buffer consult-imenu
+                     consult-line consult-line-multi consult-recent-file
                      consult-ripgrep))
-    (should (eq (evil-get-command-property command :jump) t))
-    (should (evil-has-command-property-p command :repeat))
-    (should-not (evil-get-command-property command :repeat))))
+    (should-not (evil-get-command-property command :jump))
+    (should-not (evil-get-command-property command :repeat t))
+    (should
+     (advice-member-p #'yunge-jump--track-navigation command))))
 
 ;;; yunge-consult-test.el ends here

@@ -3,6 +3,7 @@
 ;; SPDX-License-Identifier: MIT
 
 (require 'yunge-key)
+(require 'yunge-jump)
 (require 'yunge-evil)
 
 (declare-function evil-add-command-properties "evil-common")
@@ -29,9 +30,9 @@
   '(([remap switch-to-buffer] consult-buffer nil)
     ([remap imenu] consult-imenu nil)))
 
-(defconst yunge-consult-jump-commands
-  '(consult-bookmark consult-imenu consult-line consult-line-multi
-    consult-recent-file consult-ripgrep))
+(defconst yunge-consult-navigation-commands
+  '(consult-bookmark consult-buffer consult-imenu consult-line
+    consult-line-multi consult-recent-file consult-ripgrep))
 
 (defun yunge-consult--setup-keys ()
   "Set up Consult command and remap bindings."
@@ -51,9 +52,10 @@
     (yunge-key-define map yunge-consult-history-bindings)))
 
 (defun yunge-consult--setup-evil ()
-  "Give Consult navigation commands Evil jump semantics."
-  (dolist (command yunge-consult-jump-commands)
-    (evil-add-command-properties command :jump t :repeat nil)))
+  "Track successful Consult navigation without making it repeatable."
+  (dolist (command yunge-consult-navigation-commands)
+    (evil-add-command-properties command :jump nil :repeat nil)
+    (yunge-jump-track-command command)))
 
 (defun yunge-consult--describe-keys ()
   "Describe Consult leader bindings to Which-Key."
