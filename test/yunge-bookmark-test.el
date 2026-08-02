@@ -26,6 +26,34 @@
   (yunge-test-which-key-prefix-bindings
    'fundamental-mode "SPC j"
    '(("B" nil "manage bookmarks")
-     ("m" nil "set bookmark"))))
+     ("m" nil "set bookmark")))
+
+  (require 'bookmark)
+  (yunge-test-evil-normal-keys
+   'bookmark-bmenu-mode
+   '(("RET" . bookmark-bmenu-this-window)
+     ("d" . bookmark-bmenu-delete)
+     ("gr" . revert-buffer)
+     ("j" . next-line)
+     ("k" . previous-line)
+     ("m" . bookmark-bmenu-mark)
+     ("M" . bookmark-bmenu-select)
+     ("q" . quit-window)
+     ("r" . bookmark-bmenu-rename)
+     ("R" . bookmark-bmenu-relocate)
+     ("u" . bookmark-bmenu-unmark)
+     ("x" . bookmark-bmenu-execute-deletions)))
+  (yunge-test-which-key-bindings
+   'bookmark-bmenu-mode
+   '(("RET" nil "jump")
+     ("d" nil "mark delete")
+     ("gr" nil "refresh")
+     ("m" nil "mark")
+     ("M" nil "open marked")
+     ("q" nil "quit")
+     ("r" nil "rename")
+     ("R" nil "relocate")
+     ("u" nil "unmark")
+     ("x" nil "execute deletions"))))
 
 ;;; yunge-bookmark-test.el ends here
