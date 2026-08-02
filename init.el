@@ -8,6 +8,7 @@
   (require 'yunge-mac))
 (require 'yunge-package)
 (require 'yunge-evil)
+(require 'yunge-bookmark)
 (require 'yunge-window)
 (require 'yunge-which-key)
 (require 'yunge-vertico)
