@@ -10,6 +10,7 @@
 
 (defvar git-commit-setup-hook)
 (defvar git-rebase-mode-map)
+(defvar magit-cherry-mode-map)
 (defvar magit-diff-mode-map)
 (defvar magit-diff-section-map)
 (defvar magit-log-mode-map)
@@ -17,6 +18,7 @@
 (defvar magit-mode-map)
 (defvar magit-module-section-map)
 (defvar magit-revision-mode-map)
+(defvar magit-refs-mode-map)
 (defvar magit-status-mode-map)
 
 (defconst yunge-magit-go-bindings
@@ -55,7 +57,8 @@
     ([localleader] ,yunge-magit-command-map nil)))
 
 (defconst yunge-magit-repository-normal-bindings
-  '(("b" magit-branch "branch")
+  '(("A" magit-cherry-pick "cherry-pick")
+    ("b" magit-branch "branch")
     ("c" magit-commit "commit")
     ("d" magit-diff "diff")
     ("f" magit-fetch "fetch")
@@ -72,7 +75,7 @@
     ("u" magit-unstage-files "unstage")
     ("x" magit-delete-thing "discard")))
 
-(defconst yunge-magit-log-normal-bindings
+(defconst yunge-magit-history-normal-bindings
   '(("q" magit-log-bury-buffer "quit")))
 
 (defconst yunge-magit-log-select-normal-bindings
@@ -170,16 +173,25 @@
       (dolist (command '(magit-discard magit-stage magit-unstage))
         (evil-add-command-properties command :exclude-newline t)))
     (with-eval-after-load 'magit-log
-      (yunge-key-evil-define
-       'normal magit-log-mode-map
-       (append yunge-magit-section-normal-bindings
-               yunge-magit-view-normal-bindings
-               yunge-magit-repository-normal-bindings
-               yunge-magit-log-normal-bindings))
+      (dolist (map (list magit-log-mode-map
+                         magit-cherry-mode-map))
+        (yunge-key-evil-define
+         'normal map
+         (append yunge-magit-section-normal-bindings
+                 yunge-magit-view-normal-bindings
+                 yunge-magit-repository-normal-bindings
+                 yunge-magit-history-normal-bindings)))
       (yunge-key-evil-define
        'normal magit-log-select-mode-map
        (append yunge-magit-section-normal-bindings
                yunge-magit-log-select-normal-bindings)))
+    (with-eval-after-load 'magit-refs
+      (yunge-key-evil-define
+       'normal magit-refs-mode-map
+       (append yunge-magit-section-normal-bindings
+               yunge-magit-view-normal-bindings
+               yunge-magit-repository-normal-bindings
+               yunge-magit-mode-quit-normal-bindings)))
     (with-eval-after-load 'magit-diff
       (dolist (map (list magit-diff-mode-map
                          magit-revision-mode-map))

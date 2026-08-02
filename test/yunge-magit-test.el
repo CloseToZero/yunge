@@ -10,14 +10,19 @@
 (declare-function evil-normal-state "evil-states")
 (declare-function evil-local-mode "evil-core" (&optional arg))
 (declare-function git-rebase-mode "git-rebase")
+(declare-function magit-cherry-mode "magit-log")
 (declare-function magit-diff-mode "magit-diff")
 (declare-function magit-insert-heading "magit-section")
 (declare-function magit-insert-section--create "magit-section")
 (declare-function magit-insert-section--finish "magit-section")
 (declare-function magit-log-mode "magit-log")
 (declare-function magit-log-select-mode "magit-log")
+(declare-function magit-reflog-mode "magit-reflog")
+(declare-function magit-refs-mode "magit-refs")
 (declare-function magit-region-values "magit-section")
 (declare-function magit-revision-mode "magit-diff")
+(declare-function magit-stash-mode "magit-stash")
+(declare-function magit-stashes-mode "magit-stash")
 (declare-function magit-status-mode "magit-status")
 (declare-function yunge-magit--enter-insert-state-for-blank-commit-message
                   "yunge-magit")
@@ -29,7 +34,8 @@
 (defvar magit-root-section)
 
 (defconst yunge-magit-test-repository-bindings
-  '(("b" . magit-branch)
+  '(("A" . magit-cherry-pick)
+    ("b" . magit-branch)
     ("c" . magit-commit)
     ("d" . magit-diff)
     ("f" . magit-fetch)
@@ -165,10 +171,20 @@
   (yunge-test-load-package-config 'yunge-magit)
   (require 'magit-log)
   (require 'magit-diff)
+  (require 'magit-reflog)
+  (require 'magit-refs)
+  (require 'magit-stash)
 
+  (dolist (mode '(magit-log-mode
+                  magit-reflog-mode
+                  magit-stashes-mode
+                  magit-cherry-mode))
+    (yunge-magit-test--view-keys mode 'magit-log-bury-buffer))
   (yunge-magit-test--view-keys
-   'magit-log-mode 'magit-log-bury-buffer)
-  (dolist (mode '(magit-diff-mode magit-revision-mode))
+   'magit-refs-mode 'magit-mode-bury-buffer)
+  (dolist (mode '(magit-diff-mode
+                  magit-revision-mode
+                  magit-stash-mode))
     (yunge-magit-test--view-keys mode 'magit-mode-bury-buffer))
   (yunge-test-evil-normal-keys
    'magit-log-select-mode
