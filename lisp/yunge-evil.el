@@ -8,6 +8,8 @@
 
 (declare-function evil-make-intercept-map "evil-core")
 
+(defvar help-map)
+
 (defgroup yunge nil
   "Personal Emacs configuration."
   :group 'emacs)
@@ -57,6 +59,7 @@
   `(("SPC" execute-extended-command "execute command")
     ("b" ,yunge-buffer-map "buffer")
     ("f" ,yunge-file-map "file")
+    ("h" ,help-map "help")
     ("j" ,yunge-jump-map "jump")
     ("q" ,yunge-quit-map "quit")
     ("s" ,yunge-search-map "search")

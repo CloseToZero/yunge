@@ -6,6 +6,8 @@
 
 (declare-function evil-visual-state "evil-states")
 
+(defvar evil-state)
+
 (yunge-test-deftest-lazy-load yunge-help
   (evil help-mode which-key))
 
@@ -16,6 +18,24 @@
   (require 'help-mode)
 
   (should (eq help-window-select t))
+
+  (with-temp-buffer
+    (fundamental-mode)
+    (should (eq evil-state 'normal))
+    (yunge-test-keys
+     '(("SPC h b" . describe-bindings)
+       ("SPC h c" . describe-key-briefly)
+       ("SPC h f" . describe-function)
+       ("SPC h i" . info)
+       ("SPC h k" . describe-key)
+       ("SPC h m" . describe-mode)
+       ("SPC h o" . describe-symbol)
+       ("SPC h v" . describe-variable)))
+
+    (yunge-test-which-key-prefix "SPC"
+                                 '(("h" nil "+help")))
+    (yunge-test-which-key-prefix "SPC h"
+                                 yunge-help-command-bindings))
 
   (yunge-test-evil-normal-keys
    'help-mode
