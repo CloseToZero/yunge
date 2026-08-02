@@ -7,6 +7,9 @@
 (declare-function evil-get-command-property "evil-common")
 (declare-function evil-has-command-property-p "evil-common")
 
+(defvar evil-command-line-map)
+(defvar evil-eval-map)
+
 (yunge-test-deftest-lazy-load yunge-consult
   (consult consult-imenu))
 
@@ -20,15 +23,23 @@
       (unless (eq (lookup-key yunge-buffer-map (kbd "b"))
                   'switch-to-buffer)
         (error "Core buffer binding is missing"))
-      (when (or (keymap-lookup yunge-jump-map "i")
+      (when (or (keymap-lookup yunge-file-map "r")
+                (keymap-lookup yunge-jump-map "b")
+                (keymap-lookup yunge-jump-map "i")
                 (keymap-lookup yunge-search-map "b"))
         (error "Consult keys were bound before its Elpaca body ran")))
    :after-ready
    '(progn
-      (unless (and (eq (keymap-lookup yunge-jump-map "i")
+      (unless (and (eq (keymap-lookup yunge-file-map "r")
+                       'consult-recent-file)
+                   (eq (keymap-lookup yunge-jump-map "b")
+                       'consult-bookmark)
+                   (eq (keymap-lookup yunge-jump-map "i")
                        'consult-imenu)
                    (eq (keymap-lookup yunge-search-map "b")
                        'consult-line)
+                   (eq (keymap-lookup minibuffer-local-map "M-r")
+                       'consult-history)
                    (eq (command-remapping 'switch-to-buffer)
                        'consult-buffer))
         (error "Consult keys were not bound after package readiness"))
@@ -44,10 +55,22 @@
   (yunge-test-evil-normal-keys
    'fundamental-mode
    '(("SPC b b" . consult-buffer)
+     ("SPC f r" . consult-recent-file)
+     ("SPC j b" . consult-bookmark)
      ("SPC s b" . consult-line)
      ("SPC s B" . consult-line-multi)
      ("SPC s p" . consult-ripgrep)
      ("SPC j i" . consult-imenu)))
+
+  (yunge-test-keymap-keys
+   minibuffer-local-map
+   '(("M-r" . consult-history)))
+  (yunge-test-keymap-keys
+   evil-command-line-map
+   '(("M-r" . consult-history)))
+  (yunge-test-keymap-keys
+   evil-eval-map
+   '(("M-r" . consult-history)))
 
   (with-temp-buffer
     (should (eq (command-remapping 'switch-to-buffer)
@@ -58,16 +81,21 @@
    'fundamental-mode "SPC b"
    '(("b" nil "switch buffer")))
   (yunge-test-which-key-prefix-bindings
+   'fundamental-mode "SPC f"
+   '(("r" nil "find recent file")))
+  (yunge-test-which-key-prefix-bindings
    'fundamental-mode "SPC s"
    '(("b" nil "search buffer")
      ("B" nil "search project buffers")
      ("p" nil "search project")))
   (yunge-test-which-key-prefix-bindings
    'fundamental-mode "SPC j"
-   '(("i" nil "jump to symbol")))
+   '(("b" nil "jump to bookmark")
+     ("i" nil "jump to symbol")))
 
-  (dolist (command '(consult-imenu consult-line
-                     consult-line-multi consult-ripgrep))
+  (dolist (command '(consult-bookmark consult-imenu consult-line
+                     consult-line-multi consult-recent-file
+                     consult-ripgrep))
     (should (eq (evil-get-command-property command :jump) t))
     (should (evil-has-command-property-p command :repeat))
     (should-not (evil-get-command-property command :repeat))))
