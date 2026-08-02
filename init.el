@@ -4,6 +4,7 @@
 
 (require 'yunge-state)
 (require 'yunge-history)
+(require 'yunge-edit)
 (when (eq system-type 'darwin)
   (require 'yunge-mac))
 (require 'yunge-package)
