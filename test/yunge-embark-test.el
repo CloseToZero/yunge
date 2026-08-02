@@ -4,7 +4,7 @@
 
 (require 'yunge-test-helper)
 
-(declare-function embark--targets "embark")
+(declare-function embark-target-file-at-point "embark")
 
 (defvar embark-buffer-map)
 (defvar embark-command-map)
@@ -13,22 +13,12 @@
 (defvar embark-tab-map)
 (defvar embark-url-map)
 
-(defun yunge-embark-test--assert-file-target (path)
-  "Check that PATH is the first complete file target at point."
-  (let ((target
-         (abbreviate-file-name
-          (expand-file-name path yunge-test-root))))
-    (with-temp-buffer
-      (setq default-directory yunge-test-root)
-      (insert path ":12:3")
-      (search-backward (file-name-base path))
-      (let ((file-target (car (embark--targets))))
-        (should (eq (plist-get file-target :orig-type) 'file))
-        (should (equal (plist-get file-target :orig-target) target))
-        (should
-         (equal (plist-get file-target :bounds)
-                (cons (point-min)
-                      (+ (point-min) (length path)))))))))
+(defun yunge-embark-test--file-target (path)
+  "Return Embark's file target for PATH."
+  (with-temp-buffer
+    (insert path)
+    (goto-char (point-min))
+    (embark-target-file-at-point)))
 
 (yunge-test-deftest-lazy-load yunge-embark
   (embark embark-consult))
@@ -61,13 +51,7 @@
    (prin1-to-string
     '(progn
        (require 'embark)
-       (let ((targets
-              (mapcar
-               (lambda (finder)
-                 (if (eq finder 'embark-target-file-at-point)
-                     'yunge-embark-target-file-at-point
-                   finder))
-               embark-target-finders))
+       (let ((targets (copy-sequence embark-target-finders))
              (actions (copy-tree embark-keymap-alist))
              (indicators (copy-tree embark-indicators))
              (help-key embark-help-key))
@@ -136,28 +120,29 @@
   (skip-unless (eq system-type 'windows-nt))
   (yunge-test-load-package-config 'yunge-embark)
   (require 'embark)
-  (let* ((missing-directory
-          (make-temp-name
-           (expand-file-name "var/test/embark-missing-"
-                             yunge-test-root))))
-    (dolist (separator '("/" "\\"))
-      (let* ((path
-              (string-replace
-               "/" separator
-               (expand-file-name "cde.txt" missing-directory))))
-        (should-not (file-exists-p path))
-        (yunge-embark-test--assert-file-target path)))))
-
-(ert-deftest yunge-embark-targets-explicit-relative-path ()
-  (yunge-test-load-package-config 'yunge-embark)
-  (require 'embark)
-  (let* ((missing-directory
-          (make-temp-name
-           (expand-file-name "var/test/embark-relative-"
-                             yunge-test-root)))
-         (absolute (expand-file-name "file.el" missing-directory))
-         (path (file-relative-name absolute yunge-test-root)))
-    (should-not (file-exists-p absolute))
-    (yunge-embark-test--assert-file-target path)))
+  (let* ((directory (make-temp-file "yunge-embark-" t))
+         (existing (expand-file-name "existing.el" directory))
+         (missing (expand-file-name "missing.el" directory)))
+    (unwind-protect
+        (progn
+          (write-region "" nil existing nil 'silent)
+          (dolist (separator '("/" "\\"))
+            (let* ((existing-text
+                    (string-replace "/" separator existing))
+                   (existing-target
+                    (yunge-embark-test--file-target existing-text))
+                   (missing-text
+                    (string-replace "/" separator missing))
+                   (missing-target
+                    (yunge-embark-test--file-target missing-text)))
+              (should (equal (cadr existing-target)
+                             (abbreviate-file-name existing)))
+              (should (equal (cddr existing-target)
+                             (cons 1 (1+ (length existing-text)))))
+              ;; Keep FFAP's native existence-based fallback.
+              (should (file-exists-p (cadr missing-target)))
+              (should-not (equal (cadr missing-target)
+                                 (abbreviate-file-name missing))))))
+      (delete-directory directory t))))
 
 ;;; yunge-embark-test.el ends here
