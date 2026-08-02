@@ -4,11 +4,19 @@
 
 (require 'yunge-test-helper)
 
+(eval-when-compile
+  (require 'magit-section))
+
 (declare-function evil-normal-state "evil-states")
+(declare-function magit-insert-heading "magit-section")
+(declare-function magit-insert-section--create "magit-section")
+(declare-function magit-insert-section--finish "magit-section")
+(declare-function magit-region-values "magit-section")
 (declare-function magit-status-mode "magit-status")
 
 (defvar magit-diff-section-map)
 (defvar magit-module-section-map)
+(defvar magit-root-section)
 
 (yunge-test-deftest-lazy-load yunge-magit
   (magit))
@@ -73,7 +81,41 @@
      ("C-i" . yunge-jump-forward)))
   (yunge-test-which-key-prefix-bindings
    'magit-status-mode "SPC m"
-   '(("SPC" nil "dispatch"))))
+   '(("SPC" nil "dispatch")))
+  (yunge-test-evil-visual-keys
+   'magit-status-mode
+   '(("s" . magit-stage-files)
+     ("u" . magit-unstage-files))))
+
+(ert-deftest yunge-magit-visual-stage-selects-exact-untracked-files ()
+  (yunge-test-enable-evil)
+  (require 'magit-autoloads)
+  (yunge-test-load-package-config 'yunge-magit)
+  (require 'magit)
+
+  (with-temp-buffer
+    (magit-status-mode)
+    (let ((inhibit-read-only t)
+          staged)
+      (erase-buffer)
+      (setq magit-root-section nil)
+      (magit-insert-section (status)
+        (magit-insert-section (untracked)
+          (magit-insert-heading "Untracked files")
+          (dolist (file '("one" "two" "three" "four"))
+            (magit-insert-section (file file)
+              (magit-insert-heading file)))))
+      (goto-char (point-min))
+      (search-forward "one")
+      (beginning-of-line)
+      (evil-normal-state)
+      (cl-letf (((symbol-function 'magit-stage-untracked)
+                 (lambda (&optional _intent)
+                   (setq staged (magit-region-values nil t)))))
+        (save-window-excursion
+          (switch-to-buffer (current-buffer))
+          (execute-kbd-macro (kbd "V j j s"))))
+      (should (equal staged '("one" "two" "three"))))))
 
 (ert-deftest yunge-magit-resolves-point-local-keys ()
   (yunge-test-enable-evil)
