@@ -10,6 +10,8 @@
 (declare-function evil-normal-state "evil-states")
 (declare-function evil-local-mode "evil-core" (&optional arg))
 (declare-function git-rebase-mode "git-rebase")
+(declare-function magit-blame-read-only-mode "magit-blame")
+(declare-function magit-blob-mode "magit-files")
 (declare-function magit-cherry-mode "magit-log")
 (declare-function magit-diff-mode "magit-diff")
 (declare-function magit-insert-heading "magit-section")
@@ -17,6 +19,7 @@
 (declare-function magit-insert-section--finish "magit-section")
 (declare-function magit-log-mode "magit-log")
 (declare-function magit-log-select-mode "magit-log")
+(declare-function magit-process-mode "magit-process")
 (declare-function magit-reflog-mode "magit-reflog")
 (declare-function magit-refs-mode "magit-refs")
 (declare-function magit-region-values "magit-section")
@@ -95,6 +98,15 @@
     yunge-magit-test-repository-bindings
     '(("SPC m SPC" . magit-dispatch)
       ("C-i" . yunge-jump-forward)))))
+
+(defun yunge-magit-test--minor-mode-keys (mode bindings)
+  "Enable minor MODE and check its normal-state BINDINGS."
+  (with-temp-buffer
+    (fundamental-mode)
+    (evil-local-mode 1)
+    (evil-normal-state)
+    (funcall mode 1)
+    (yunge-test-evil-keys 'normal bindings)))
 
 (ert-deftest yunge-magit-configures-after-package-ready ()
   (yunge-test-run-package-config
@@ -279,6 +291,37 @@
      ("s" . git-rebase-squash)
      ("f" . git-rebase-fixup)
      ("d" . git-rebase-drop))))
+
+(ert-deftest yunge-magit-integrates-read-only-tools-with-evil ()
+  (yunge-test-enable-evil)
+  (require 'magit-autoloads)
+  (yunge-test-load-package-config 'yunge-magit)
+  (require 'magit-blame)
+  (require 'magit-files)
+  (require 'magit-process)
+
+  (yunge-magit-test--minor-mode-keys
+   'magit-blame-read-only-mode
+   '(("RET" . magit-show-commit)
+     ("C-j" . magit-blame-next-chunk)
+     ("C-k" . magit-blame-previous-chunk)
+     ("M-j" . magit-blame-next-chunk-same-commit)
+     ("M-k" . magit-blame-previous-chunk-same-commit)
+     ("c" . magit-blame-cycle-style)
+     ("q" . magit-blame-quit)))
+  (yunge-magit-test--minor-mode-keys
+   'magit-blob-mode
+   '(("C-j" . magit-blob-next)
+     ("C-k" . magit-blob-previous)
+     ("q" . magit-bury-or-kill-buffer)))
+  (yunge-test-evil-normal-keys
+   'magit-process-mode
+   '(("C-j" . magit-section-forward)
+     ("C-k" . magit-section-backward)
+     ("M-h" . magit-section-up)
+     ("<tab>" . magit-section-toggle)
+     ("q" . magit-mode-bury-buffer)
+     ("x" . magit-process-kill))))
 
 (ert-deftest yunge-magit-rebase-visual-action-excludes-the-next-line ()
   (yunge-test-enable-evil)

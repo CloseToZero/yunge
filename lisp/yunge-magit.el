@@ -17,6 +17,7 @@
 (defvar magit-log-select-mode-map)
 (defvar magit-mode-map)
 (defvar magit-module-section-map)
+(defvar magit-process-mode-map)
 (defvar magit-revision-mode-map)
 (defvar magit-refs-mode-map)
 (defvar magit-status-mode-map)
@@ -114,6 +115,27 @@
     ("f" git-rebase-fixup "fixup")
     ("d" git-rebase-drop "drop")))
 
+(defconst yunge-magit-blame-normal-bindings
+  '(("RET" magit-show-commit "show commit")
+    ("C-j" magit-blame-next-chunk "next chunk")
+    ("C-k" magit-blame-previous-chunk "previous chunk")
+    ("M-j" magit-blame-next-chunk-same-commit
+     "next chunk from this commit")
+    ("M-k" magit-blame-previous-chunk-same-commit
+     "previous chunk from this commit")
+    ("c" magit-blame-cycle-style "cycle style")
+    ("q" magit-blame-quit "quit")))
+
+(defconst yunge-magit-blob-normal-bindings
+  '(("C-j" magit-blob-next "next revision")
+    ("C-k" magit-blob-previous "previous revision")
+    ("q" magit-bury-or-kill-buffer "quit")))
+
+(defconst yunge-magit-process-normal-bindings
+  '(("<tab>" magit-section-toggle "toggle section")
+    ("q" magit-mode-bury-buffer "quit")
+    ("x" magit-process-kill "kill process")))
+
 (defun yunge-magit--enter-insert-state-for-blank-commit-message ()
   "Enter Insert state when a new commit message starts blank."
   (when (and (bound-and-true-p evil-local-mode)
@@ -139,6 +161,19 @@
     (add-hook 'git-commit-setup-hook
               #'yunge-magit--enter-insert-state-for-blank-commit-message))
   (with-eval-after-load 'evil
+    (with-eval-after-load 'magit-blame
+      (yunge-key-evil-define-minor-mode
+       'normal 'magit-blame-read-only-mode
+       yunge-magit-blame-normal-bindings))
+    (with-eval-after-load 'magit-files
+      (yunge-key-evil-define-minor-mode
+       'normal 'magit-blob-mode
+       yunge-magit-blob-normal-bindings))
+    (with-eval-after-load 'magit-process
+      (yunge-key-evil-define
+       'normal magit-process-mode-map
+       (append yunge-magit-section-normal-bindings
+               yunge-magit-process-normal-bindings)))
     (with-eval-after-load 'git-rebase
       (yunge-key-evil-define
        'normal git-rebase-mode-map
