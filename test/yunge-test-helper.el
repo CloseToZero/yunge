@@ -213,6 +213,12 @@ configuration libraries remain deferred."
   (dolist (binding bindings)
     (yunge-test-key (car binding) (cdr binding))))
 
+(defun yunge-test-keymap-keys (map bindings)
+  "Check that each key in BINDINGS resolves in keymap MAP."
+  (dolist (binding bindings)
+    (should (eq (lookup-key map (kbd (car binding)))
+                (cdr binding)))))
+
 (defun yunge-test-evil-keys (state bindings)
   "Check Evil STATE and BINDINGS in the current buffer."
   (should (eq evil-state state))

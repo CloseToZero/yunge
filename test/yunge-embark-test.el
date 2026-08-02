@@ -6,6 +6,13 @@
 
 (declare-function embark--targets "embark")
 
+(defvar embark-buffer-map)
+(defvar embark-command-map)
+(defvar embark-function-map)
+(defvar embark-general-map)
+(defvar embark-tab-map)
+(defvar embark-url-map)
+
 (defun yunge-embark-test--assert-file-target (path)
   "Check that PATH is the first complete file target at point."
   (let ((target
@@ -48,7 +55,7 @@
   (require 'embark)
   (should (featurep 'embark-consult)))
 
-(ert-deftest yunge-embark-only-replaces-file-target-finder ()
+(ert-deftest yunge-embark-preserves-upstream-registrations ()
   (yunge-test-run-emacs
    "--eval"
    (prin1-to-string
@@ -72,6 +79,58 @@
                       (equal embark-indicators indicators)
                       (equal embark-help-key help-key))
            (error "Unexpected Embark configuration changes")))))))
+
+(ert-deftest yunge-embark-binds-action-keys ()
+  (yunge-test-load-package-config 'yunge-embark)
+  (require 'embark)
+
+  (yunge-test-keymap-keys
+   embark-general-map
+   '(("C-q" . embark-toggle-quit)
+     ("q")
+     ("w")
+     ("y" . embark-copy-as-kill)))
+
+  (yunge-test-keymap-keys
+   embark-buffer-map
+   '(("b" . embark-bury-buffer)
+     ("k")
+     ("K")
+     ("q" . kill-buffer)
+     ("Q" . embark-kill-buffer-and-window)
+     ("z")))
+
+  (yunge-test-keymap-keys
+   embark-tab-map
+   '(("RET" . tab-bar-select-tab-by-name)
+     ("k")
+     ("q" . tab-bar-close-tab-by-name)
+     ("s")))
+
+  (yunge-test-keymap-keys
+   embark-function-map
+   '(("D b" . debug-on-entry)
+     ("D c" . cancel-debug-on-entry)
+     ("D m" . elp-instrument-function)
+     ("D r" . elp-restore-function)
+     ("D t" . trace-function)
+     ("D u" . untrace-function)
+     ("k")
+     ("K")
+     ("m")
+     ("M")
+     ("t")
+     ("T")))
+
+  ;; Commands inherit the function debugging actions.
+  (yunge-test-keymap-keys
+   embark-command-map
+   '(("b" . where-is)
+     ("D b" . debug-on-entry)))
+
+  (yunge-test-keymap-keys
+   embark-url-map
+   '(("d" . embark-download-url))))
 
 (ert-deftest yunge-embark-targets-windows-paths ()
   (skip-unless (eq system-type 'windows-nt))
