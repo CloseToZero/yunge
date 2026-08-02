@@ -26,8 +26,8 @@
     ("<tab>" vertico-insert nil)))
 
 (defconst yunge-vertico-insert-bindings
-  '(("C-n" vertico-next "next candidate")
-    ("C-p" vertico-previous "previous candidate")
+  '(("C-j" vertico-next "next candidate")
+    ("C-k" vertico-previous "previous candidate")
     ("TAB" vertico-insert "insert candidate")
     ("<tab>" vertico-insert nil)))
 

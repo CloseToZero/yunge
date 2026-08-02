@@ -21,8 +21,8 @@
 (setq text-mode-ispell-word-completion nil)
 
 (defconst yunge-corfu-insert-bindings
-  '(("C-n" corfu-next "next candidate")
-    ("C-p" corfu-previous "previous candidate")
+  '(("C-j" corfu-next "next candidate")
+    ("C-k" corfu-previous "previous candidate")
     ("TAB" corfu-complete "complete candidate")
     ("<tab>" corfu-complete nil)))
 

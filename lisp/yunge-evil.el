@@ -43,8 +43,8 @@
 
 (defconst yunge-buffer-bindings
   '(("b" switch-to-buffer "switch buffer")
-    ("n" next-buffer "next buffer")
-    ("p" previous-buffer "previous buffer")
+    ("j" next-buffer "next buffer")
+    ("k" previous-buffer "previous buffer")
     ("q" kill-current-buffer "close buffer")
     ("r" revert-buffer "revert buffer")))
 

@@ -65,8 +65,8 @@
       (should (eq (current-local-map) vertico-map))
       (yunge-test-evil-keys
        'insert
-       '(("C-n" . vertico-next)
-         ("C-p" . vertico-previous)
+       '(("C-j" . vertico-next)
+         ("C-k" . vertico-previous)
          ("TAB" . vertico-insert)
          ("<tab>" . vertico-insert)
          ("RET" . vertico-exit)))

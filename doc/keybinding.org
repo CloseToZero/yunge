@@ -62,7 +62,7 @@ In editable buffers, Evil's ~q~ and ~RET~ bindings remain the default.
 
 While a completion interface is active:
 
-- ~C-n~ and ~C-p~ select the next or previous candidate without accepting it.
+- ~C-j~ and ~C-k~ select the next or previous candidate without accepting it.
 - ~TAB~ incorporates the current candidate or common prefix into the input and
   keeps the interface active when further completion is possible.
 - ~RET~ accepts the current candidate or input and leaves the completion

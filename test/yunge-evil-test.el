@@ -72,8 +72,8 @@
         (yunge-test-space-mode 1)
 
         (yunge-test-key "SPC SPC" 'execute-extended-command)
-        (yunge-test-key "SPC b n" 'next-buffer)
-        (yunge-test-key "SPC b p" 'previous-buffer)
+        (yunge-test-key "SPC b j" 'next-buffer)
+        (yunge-test-key "SPC b k" 'previous-buffer)
         (yunge-test-key "SPC b q" 'kill-current-buffer)
         (yunge-test-key "SPC b r" 'revert-buffer)
         (yunge-test-key "SPC f d" 'dired)
@@ -115,8 +115,8 @@
   (yunge-test-which-key-prefix-bindings
    'yunge-test-buffer-mode "SPC b"
    '(("b" nil "switch buffer")
-     ("n" nil "next buffer")
-     ("p" nil "previous buffer")
+     ("j" nil "next buffer")
+     ("k" nil "previous buffer")
      ("q" nil "close buffer")
      ("r" nil "revert buffer")))
 
