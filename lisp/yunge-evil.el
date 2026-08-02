@@ -23,6 +23,9 @@
 (defvar-keymap yunge-file-map
   :doc "Global file command map.")
 
+(defvar-keymap yunge-go-map
+  :doc "Global context-sensitive destination map.")
+
 (defvar-keymap yunge-jump-map
   :doc "Global jump command map.")
 
@@ -59,6 +62,7 @@
   `(("SPC" execute-extended-command "execute command")
     ("b" ,yunge-buffer-map "buffer")
     ("f" ,yunge-file-map "file")
+    ("g" ,yunge-go-map "go")
     ("h" ,help-map "help")
     ("j" ,yunge-jump-map "jump")
     ("q" ,yunge-quit-map "quit")

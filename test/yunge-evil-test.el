@@ -104,6 +104,7 @@
    '(("SPC" nil "execute command")
      ("b" nil "+buffer")
      ("f" nil "+file")
+     ("g" nil "+go")
      ("h" nil "+help")
      ("j" nil "+jump")
      ("m" nil "+mode")

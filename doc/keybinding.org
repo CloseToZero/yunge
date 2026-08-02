@@ -86,6 +86,7 @@ Group global commands under prefixes by purpose:
 
 - ~SPC b~ operates on buffers.
 - ~SPC f~ operates on files.
+- ~SPC g~ goes to destinations associated with the current context.
 - ~SPC h~ opens documentation and help.
 - ~SPC j~ jumps to locations.
 - ~SPC q~ exits Emacs or manages its frames.
