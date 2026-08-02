@@ -11,6 +11,7 @@
 (require 'yunge-orderless)
 (require 'yunge-marginalia)
 (require 'yunge-consult)
+(require 'yunge-embark)
 (require 'yunge-elpaca)
 (require 'yunge-dired)
 (require 'yunge-help)

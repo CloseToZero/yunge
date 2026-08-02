@@ -19,6 +19,24 @@
    :fetcher github
    :files (:defaults)
    :ref "6af0dc99ff8eb8da3ca24bf9abd9a72354dcc5e1"))
+ (embark
+  :source "elpaca-menu-lock-file"
+  :recipe
+  (:package "embark"
+   :repo "oantolin/embark"
+   :fetcher github
+   :files ("embark.el" "embark-org.el" "embark.texi")
+   :source "MELPA"
+   :ref "350ca86924c5027e80875943fba7b912a71e5791"))
+ (embark-consult
+  :source "elpaca-menu-lock-file"
+  :recipe
+  (:package "embark-consult"
+   :repo "oantolin/embark"
+   :fetcher github
+   :files ("embark-consult.el")
+   :source "MELPA"
+   :ref "350ca86924c5027e80875943fba7b912a71e5791"))
  (evil
   :source "elpaca-menu-lock-file"
   :recipe
