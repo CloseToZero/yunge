@@ -7,9 +7,18 @@
 (declare-function global-corfu-mode "corfu")
 
 (defvar completion-in-region-mode)
+(defvar corfu-auto)
+(defvar corfu-auto-delay)
+(defvar corfu-auto-prefix)
+(defvar corfu-cycle)
 (defvar corfu-map)
 (defvar corfu-mode)
 (defvar corfu-preview-current)
+(defvar text-mode-ispell-word-completion)
+
+;; Ispell launches an external dictionary search for prose completion, which
+;; is too costly to run automatically while typing.
+(setq text-mode-ispell-word-completion nil)
 
 (defconst yunge-corfu-insert-bindings
   '(("C-n" corfu-next "next candidate")
@@ -29,8 +38,6 @@
 
 (defun yunge-corfu--setup-keys ()
   "Set up bindings for Corfu."
-  ;; Completion stays on TAB; RET keeps its editing or shell meaning.
-  (keymap-unset corfu-map "RET")
   (add-hook 'completion-in-region-mode-hook
             #'yunge-corfu--sync-completion-mode))
 
@@ -46,7 +53,10 @@
      yunge-corfu-insert-bindings)))
 
 (elpaca corfu
-  (setq tab-always-indent 'complete
+  (setq corfu-auto t
+        corfu-auto-delay 0.1
+        corfu-auto-prefix 2
+        corfu-cycle t
         corfu-preview-current nil)
   (global-corfu-mode 1))
 

@@ -19,18 +19,28 @@
 (ert-deftest yunge-corfu-enables-after-package-ready ()
   (yunge-test-run-package-config
    'yunge-corfu 'corfu
-   :setup '(setq tab-always-indent nil)
+   :setup '(setq corfu-auto nil
+                 corfu-auto-delay 0
+                 corfu-auto-prefix 3
+                 corfu-cycle nil
+                 tab-always-indent nil
+                 text-mode-ispell-word-completion t)
    :before-ready
    '(when (or (featurep 'corfu)
-              (bound-and-true-p global-corfu-mode))
-      (error "Corfu was enabled before its package was ready"))
+              (bound-and-true-p global-corfu-mode)
+              text-mode-ispell-word-completion)
+      (error "Corfu's early configuration was not applied"))
    :after-ready
    '(unless (and (bound-and-true-p global-corfu-mode)
-                 (eq tab-always-indent 'complete)
+                 corfu-auto
+                 (= corfu-auto-delay 0.1)
+                 (= corfu-auto-prefix 2)
+                 corfu-cycle
+                 (null tab-always-indent)
                  (null corfu-preview-current))
       (error "Corfu configuration was not applied"))))
 
-(ert-deftest yunge-corfu-preserves-editing-return ()
+(ert-deftest yunge-corfu-owns-popup-keys ()
   (yunge-test-enable-evil)
   (require 'corfu-autoloads)
   (yunge-test-load-package-config 'yunge-corfu)
@@ -61,12 +71,13 @@
                '(("C-n" . corfu-next)
                  ("C-p" . corfu-previous)
                  ("TAB" . corfu-complete)
-                 ("<tab>" . corfu-complete)))
-              (should (eq (key-binding (kbd "RET"))
-                          return-command))
+                 ("<tab>" . corfu-complete)
+                 ("RET" . corfu-insert)))
               (completion-in-region-mode -1)
               (should (eq (key-binding (kbd "C-n"))
-                          next-command)))))
+                          next-command))
+              (should (eq (key-binding (kbd "RET"))
+                          return-command)))))
       (set-window-buffer window original-buffer)
       (when (buffer-live-p buffer)
         (kill-buffer buffer)))))
