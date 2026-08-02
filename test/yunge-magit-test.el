@@ -4,6 +4,12 @@
 
 (require 'yunge-test-helper)
 
+(declare-function evil-normal-state "evil-states")
+(declare-function magit-status-mode "magit-status")
+
+(defvar magit-diff-section-map)
+(defvar magit-module-section-map)
+
 (yunge-test-deftest-lazy-load yunge-magit
   (magit))
 
@@ -39,10 +45,34 @@
   (require 'magit)
   (yunge-test-evil-normal-keys
    'magit-status-mode
-   '(("RET" . magit-visit-thing)
+   '(("C-j" . magit-section-forward)
+     ("C-k" . magit-section-backward)
+     ("RET" . magit-visit-thing)
      ("<tab>" . magit-section-toggle)
      ("q" . magit-mode-bury-buffer)
      ("gr" . magit-refresh)
      ("C-i" . yunge-jump-forward))))
+
+(ert-deftest yunge-magit-navigates-from-section-keymaps ()
+  (yunge-test-enable-evil)
+  (require 'magit-autoloads)
+  (yunge-test-load-package-config 'yunge-magit)
+  (require 'magit)
+  (require 'magit-submodule)
+
+  (dolist (entry `((,magit-diff-section-map
+                    . magit-diff-visit-worktree-file)
+                   (,magit-module-section-map
+                    . magit-submodule-visit)))
+    (with-temp-buffer
+      (magit-status-mode)
+      (let ((inhibit-read-only t))
+        (insert (propertize "section" 'keymap (car entry))))
+      (goto-char (point-min))
+      (evil-normal-state)
+      (yunge-test-keys
+       `(("C-j" . magit-section-forward)
+         ("C-k" . magit-section-backward)
+         ("C-<return>" . ,(cdr entry)))))))
 
 ;;; yunge-magit-test.el ends here
