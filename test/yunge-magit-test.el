@@ -23,7 +23,7 @@
       (when (featurep 'magit)
         (error "Magit was loaded by its configuration")))))
 
-(ert-deftest yunge-magit-integrates-with-leader ()
+(ert-deftest yunge-magit-integrates-with-evil ()
   (yunge-test-enable-evil)
   (require 'which-key)
   (require 'magit-autoloads)
@@ -34,6 +34,15 @@
    '(("SPC g g" . magit-status)))
   (yunge-test-which-key-prefix-bindings
    'fundamental-mode "SPC g"
-   '(("g" nil "Git status"))))
+   '(("g" nil "Git status")))
+
+  (require 'magit)
+  (yunge-test-evil-normal-keys
+   'magit-status-mode
+   '(("RET" . magit-visit-thing)
+     ("<tab>" . magit-section-toggle)
+     ("q" . magit-mode-bury-buffer)
+     ("gr" . magit-refresh)
+     ("C-i" . yunge-jump-forward))))
 
 ;;; yunge-magit-test.el ends here
