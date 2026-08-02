@@ -19,6 +19,14 @@
    :fetcher github
    :files (:defaults)
    :ref "6af0dc99ff8eb8da3ca24bf9abd9a72354dcc5e1"))
+ (corfu
+  :source "elpaca-menu-lock-file"
+  :recipe
+  (:package "corfu"
+   :repo "minad/corfu"
+   :files (:defaults "extensions/corfu-*.el")
+   :fetcher github
+   :ref "f6306d8c5ba540e75c208c8069b3b677de48a183"))
  (embark
   :source "elpaca-menu-lock-file"
   :recipe

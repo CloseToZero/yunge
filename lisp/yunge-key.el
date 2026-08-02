@@ -3,6 +3,7 @@
 ;; SPDX-License-Identifier: MIT
 
 (declare-function evil-define-key* "evil-core")
+(declare-function evil-define-minor-mode-key "evil-core")
 (declare-function which-key-add-keymap-based-replacements "which-key")
 (declare-function which-key-add-major-mode-key-based-replacements
                   "which-key")
@@ -31,6 +32,12 @@ Each binding has the form (KEY DEFINITION DESCRIPTION).  KEY may be a
 string accepted by `kbd' or a vector key sequence."
   (dolist (binding bindings)
     (evil-define-key* state map
+      (yunge-key--parse (car binding)) (nth 1 binding))))
+
+(defun yunge-key-evil-define-minor-mode (state mode bindings)
+  "Define Evil STATE BINDINGS while minor MODE is active."
+  (dolist (binding bindings)
+    (evil-define-minor-mode-key state mode
       (yunge-key--parse (car binding)) (nth 1 binding))))
 
 (defun yunge-key-which-key-describe-map (map bindings)
