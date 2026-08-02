@@ -6,7 +6,9 @@
 (require 'yunge-evil)
 
 (declare-function evil-add-command-properties "evil-common")
+(declare-function evil-insert-state "evil-states")
 
+(defvar git-commit-setup-hook)
 (defvar magit-diff-section-map)
 (defvar magit-mode-map)
 (defvar magit-module-section-map)
@@ -57,6 +59,13 @@
     ("u" magit-unstage-files "unstage")
     ("x" magit-delete-thing "discard")))
 
+(defun yunge-magit--enter-insert-state-for-blank-commit-message ()
+  "Enter Insert state when a new commit message starts blank."
+  (when (and (bound-and-true-p evil-local-mode)
+             (bobp)
+             (eolp))
+    (evil-insert-state)))
+
 (elpaca magit
   (yunge-key-define yunge-go-map yunge-magit-go-bindings)
   (with-eval-after-load 'which-key
@@ -71,6 +80,9 @@
     (keymap-unset magit-diff-section-map "C-j" t))
   (with-eval-after-load 'magit-submodule
     (keymap-unset magit-module-section-map "C-j" t))
+  (with-eval-after-load 'git-commit
+    (add-hook 'git-commit-setup-hook
+              #'yunge-magit--enter-insert-state-for-blank-commit-message))
   (with-eval-after-load 'evil
     (with-eval-after-load 'magit
       (yunge-key-evil-define

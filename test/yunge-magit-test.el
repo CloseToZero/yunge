@@ -8,12 +8,17 @@
   (require 'magit-section))
 
 (declare-function evil-normal-state "evil-states")
+(declare-function evil-local-mode "evil-core" (&optional arg))
 (declare-function magit-insert-heading "magit-section")
 (declare-function magit-insert-section--create "magit-section")
 (declare-function magit-insert-section--finish "magit-section")
 (declare-function magit-region-values "magit-section")
 (declare-function magit-status-mode "magit-status")
+(declare-function yunge-magit--enter-insert-state-for-blank-commit-message
+                  "yunge-magit")
 
+(defvar evil-state)
+(defvar git-commit-setup-hook)
 (defvar magit-diff-section-map)
 (defvar magit-module-section-map)
 (defvar magit-root-section)
@@ -133,6 +138,26 @@
     (yunge-magit-test--visual-untracked-files
      "V j j x" 'magit-discard-files)
     '("one" "two" "three"))))
+
+(ert-deftest yunge-magit-enters-insert-state-for-blank-commit-message ()
+  (yunge-test-enable-evil)
+  (require 'magit-autoloads)
+  (yunge-test-load-package-config 'yunge-magit)
+  (require 'git-commit)
+  (should
+   (memq #'yunge-magit--enter-insert-state-for-blank-commit-message
+         git-commit-setup-hook))
+
+  (dolist (case '(("\n# Commit message" insert)
+                  ("Existing subject\n" normal)))
+    (with-temp-buffer
+      (text-mode)
+      (insert (car case))
+      (goto-char (point-min))
+      (evil-local-mode 1)
+      (evil-normal-state)
+      (yunge-magit--enter-insert-state-for-blank-commit-message)
+      (should (eq evil-state (cadr case))))))
 
 (ert-deftest yunge-magit-resolves-point-local-keys ()
   (yunge-test-enable-evil)
