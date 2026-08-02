@@ -8,6 +8,7 @@
 
 (defvar dired-movement-style)
 (defvar dired-mode-map)
+(defvar wdired-mode-map)
 
 (defun yunge-dired-copy-filename ()
   "Copy the names of the selected files without their directories."
@@ -111,6 +112,7 @@
     ("R" dired-do-rename "rename")
     ("RET" dired-find-file "open")
     ("gr" revert-buffer "refresh")
+    ("i" dired-toggle-read-only "edit filenames")
     ("j" dired-next-line nil)
     ("k" dired-previous-line nil)
     ("o" dired-find-file-other-window "open in other window")
@@ -119,6 +121,10 @@
     ("x" dired-do-flagged-delete "delete flagged files")
     ("y" ,yunge-dired-copy-map "copy")))
 
+(defconst yunge-wdired-normal-bindings
+  '(("ZQ" wdired-abort-changes "discard changes")
+    ("ZZ" wdired-finish-edit "apply changes")))
+
 (defun yunge-dired--setup-keys ()
   "Set up Evil bindings for Dired."
   (yunge-key-evil-define '(normal visual) dired-mode-map
@@ -126,10 +132,17 @@
   (yunge-key-evil-define 'normal dired-mode-map
                          yunge-dired-normal-bindings))
 
+(defun yunge-dired--setup-wdired-keys ()
+  "Set up Evil bindings for Wdired."
+  (yunge-key-evil-define 'normal wdired-mode-map
+                         yunge-wdired-normal-bindings))
+
 (with-eval-after-load 'evil
   (with-eval-after-load 'dired
     (setq dired-movement-style 'bounded-files)
-    (yunge-dired--setup-keys)))
+    (yunge-dired--setup-keys))
+  (with-eval-after-load 'wdired
+    (yunge-dired--setup-wdired-keys)))
 
 (with-eval-after-load 'which-key
   (dolist (entry `((,yunge-dired-mark-map
@@ -148,7 +161,9 @@
   (yunge-key-which-key-describe
    'dired-mode yunge-dired-normal-visual-bindings)
   (yunge-key-which-key-describe
-   'dired-mode yunge-dired-normal-bindings))
+   'dired-mode yunge-dired-normal-bindings)
+  (yunge-key-which-key-describe
+   'wdired-mode yunge-wdired-normal-bindings))
 
 (provide 'yunge-dired)
 

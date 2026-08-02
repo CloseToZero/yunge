@@ -4,10 +4,12 @@
 
 (require 'yunge-test-helper)
 
+(declare-function wdired-abort-changes "wdired")
+
 (defvar dired-movement-style)
 
 (yunge-test-deftest-lazy-load yunge-dired
-  (dired evil which-key))
+  (dired evil wdired which-key))
 
 (ert-deftest yunge-dired-copy-commands-select-path-kinds ()
   (require 'yunge-dired)
@@ -30,6 +32,7 @@
    'dired-mode
    '(("RET" . dired-find-file)
      ("-" . dired-up-directory)
+     ("i" . dired-toggle-read-only)
      ("j" . dired-next-line)
      ("k" . dired-previous-line)
      ("m" . dired-mark)
@@ -67,5 +70,27 @@
   (yunge-test-which-key-prefix-bindings
    'dired-mode "SPC m" '(("a" nil "+attribute")
                           ("l" nil "+link"))))
+
+(ert-deftest yunge-wdired-integrates-with-evil-editing ()
+  (require 'yunge-dired)
+  (yunge-test-enable-evil)
+  (require 'which-key)
+  (let* ((directory (make-temp-file "yunge-wdired-" t))
+         (buffer (dired-noselect directory)))
+    (unwind-protect
+        (with-current-buffer buffer
+          (call-interactively (key-binding (kbd "i")))
+          (yunge-test-evil-keys
+           'normal
+           '(("i" . evil-insert)
+             ("ZQ" . wdired-abort-changes)
+             ("ZZ" . wdired-finish-edit)))
+          (wdired-abort-changes))
+      (when (buffer-live-p buffer)
+        (kill-buffer buffer))
+      (delete-directory directory t)))
+
+  (yunge-test-which-key-bindings
+   'wdired-mode yunge-wdired-normal-bindings))
 
 ;;; yunge-dired-test.el ends here
