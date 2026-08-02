@@ -2,6 +2,10 @@
 ;; SPDX-FileCopyrightText: 2026 Chen Zhexuan
 ;; SPDX-License-Identifier: MIT
 
+(defvar transient-history-file)
+(defvar transient-levels-file)
+(defvar transient-values-file)
+
 (let* ((directory (expand-file-name "var/" user-emacs-directory))
        (auto-save-directory
         (expand-file-name "auto-save/" directory))
@@ -34,7 +38,13 @@
         tramp-auto-save-directory
         tramp-auto-save-directory-path
         tramp-persistency-file-name
-        (expand-file-name "tramp/persistency.eld" directory))
+        (expand-file-name "tramp/persistency.eld" directory)
+        transient-history-file
+        (expand-file-name "transient/history.el" directory)
+        transient-levels-file
+        (expand-file-name "transient/levels.el" directory)
+        transient-values-file
+        (expand-file-name "transient/values.el" directory))
 
   ;; We almost never edit one file from multiple Emacs instances.  Lock-file
   ;; churn is more likely to trigger pointless project-watcher automation.

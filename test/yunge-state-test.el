@@ -4,7 +4,7 @@
 
 (require 'yunge-test-helper)
 
-(ert-deftest yunge-state-provisions-auto-save-storage ()
+(ert-deftest yunge-state-configures-mutable-storage ()
   (yunge-test-run-emacs
    "--eval"
    (prin1-to-string
@@ -28,7 +28,18 @@
                (set-buffer-modified-p nil)
                (kill-buffer))
              (unless (file-directory-p tramp-auto-save-directory)
-               (error "TRAMP auto-save directory was not created")))
+               (error "TRAMP auto-save directory was not created"))
+             (unless (equal
+                      (list transient-history-file
+                            transient-levels-file
+                            transient-values-file)
+                      (mapcar
+                       (lambda (file)
+                         (expand-file-name file root))
+                       '("var/transient/history.el"
+                         "var/transient/levels.el"
+                         "var/transient/values.el")))
+               (error "Transient state was not redirected under var")))
          (delete-directory root t))))))
 
 (provide 'yunge-state-test)
