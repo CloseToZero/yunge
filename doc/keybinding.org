@@ -142,6 +142,8 @@ Package integrations bind their command maps to Evil's ~[localleader]~ event.
 Keep the physical ~SPC m~ routing in ~yunge-evil.el~ so changing it does not
 require edits throughout the configuration.
 
+Use ~SPC m SPC~ for a mode's primary command dispatcher when it provides one.
+
 Before assigning an uppercase letter, check its Evil meaning.  Keys such as
 ~B~, ~F~, ~M~, and ~V~ are already bound.
 

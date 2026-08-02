@@ -13,6 +13,15 @@
 (defconst yunge-magit-go-bindings
   '(("g" magit-status "Git status")))
 
+(defconst yunge-magit-command-bindings
+  '(("SPC" magit-dispatch "dispatch")))
+
+(defvar-keymap yunge-magit-command-map
+  :doc "Keymap for Magit commands.")
+
+(yunge-key-define yunge-magit-command-map
+                  yunge-magit-command-bindings)
+
 (defconst yunge-magit-section-normal-bindings
   '(("C-j" magit-section-forward "next section")
     ("C-k" magit-section-backward "previous section")
@@ -30,16 +39,23 @@
     ("zO" magit-section-show-children "show child sections")))
 
 (defconst yunge-magit-status-normal-bindings
-  '(("RET" magit-visit-thing "visit")
+  `(("RET" magit-visit-thing "visit")
     ("<tab>" magit-section-toggle "toggle section")
+    ("c" magit-commit "commit")
     ("q" magit-mode-bury-buffer "quit")
-    ("gr" magit-refresh "refresh")))
+    ("gr" magit-refresh "refresh")
+    ("gR" magit-refresh-all "refresh all")
+    ("s" magit-stage-files "stage")
+    ("u" magit-unstage-files "unstage")
+    ([localleader] ,yunge-magit-command-map nil)))
 
 (elpaca magit
   (yunge-key-define yunge-go-map yunge-magit-go-bindings)
   (with-eval-after-load 'which-key
     (yunge-key-add-which-key-descriptions
-     yunge-go-map yunge-magit-go-bindings))
+     yunge-go-map yunge-magit-go-bindings)
+    (yunge-key-add-which-key-descriptions
+     yunge-magit-command-map yunge-magit-command-bindings))
   ;; Section keymaps at point take precedence over Evil's mode bindings.
   ;; Remove their C-j bindings so navigation also works on file and module
   ;; rows.  C-RET retains the original visit commands.

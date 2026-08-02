@@ -61,13 +61,21 @@
      ("zO" . magit-section-show-children)
      ("zz" . evil-scroll-line-to-center)
      ("1" . digit-argument)
+     ("c" . magit-commit)
      ("RET" . magit-visit-thing)
      ("<tab>" . magit-section-toggle)
      ("q" . magit-mode-bury-buffer)
      ("gr" . magit-refresh)
-     ("C-i" . yunge-jump-forward))))
+     ("gR" . magit-refresh-all)
+     ("s" . magit-stage-files)
+     ("u" . magit-unstage-files)
+     ("SPC m SPC" . magit-dispatch)
+     ("C-i" . yunge-jump-forward)))
+  (yunge-test-which-key-prefix-bindings
+   'magit-status-mode "SPC m"
+   '(("SPC" nil "dispatch"))))
 
-(ert-deftest yunge-magit-navigates-from-section-keymaps ()
+(ert-deftest yunge-magit-resolves-point-local-keys ()
   (yunge-test-enable-evil)
   (require 'magit-autoloads)
   (yunge-test-load-package-config 'yunge-magit)
@@ -87,6 +95,8 @@
       (yunge-test-keys
        `(("C-j" . magit-section-forward)
          ("C-k" . magit-section-backward)
+         ("s" . magit-stage)
+         ("u" . magit-unstage)
          ("C-<return>" . ,(cdr entry)))))))
 
 ;;; yunge-magit-test.el ends here
