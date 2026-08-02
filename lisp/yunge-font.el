@@ -32,8 +32,7 @@
 
 (defun yunge-font--supported-p (family frame)
   "Return non-nil when FAMILY is available on FRAME."
-  (display-supports-face-attributes-p
-   (list :family family) frame))
+  (find-font (font-spec :family family) frame))
 
 (defun yunge-font--select-profile (frame)
   "Return the first complete font profile available on FRAME."
