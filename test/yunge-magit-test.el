@@ -9,6 +9,7 @@
 
 (declare-function evil-normal-state "evil-states")
 (declare-function evil-local-mode "evil-core" (&optional arg))
+(declare-function git-rebase-mode "git-rebase")
 (declare-function magit-diff-mode "magit-diff")
 (declare-function magit-insert-heading "magit-section")
 (declare-function magit-insert-section--create "magit-section")
@@ -230,6 +231,58 @@
       (evil-normal-state)
       (yunge-magit--enter-insert-state-for-blank-commit-message)
       (should (eq evil-state (cadr case))))))
+
+(ert-deftest yunge-magit-integrates-interactive-rebase-with-evil ()
+  (yunge-test-enable-evil)
+  (require 'magit-autoloads)
+  (yunge-test-load-package-config 'yunge-magit)
+  (require 'git-rebase)
+
+  (yunge-test-evil-normal-keys
+   'git-rebase-mode
+   '(("RET" . git-rebase-show-commit)
+     ("M-j" . git-rebase-move-line-down)
+     ("M-k" . git-rebase-move-line-up)
+     ("p" . git-rebase-pick)
+     ("r" . git-rebase-reword)
+     ("e" . git-rebase-edit)
+     ("s" . git-rebase-squash)
+     ("f" . git-rebase-fixup)
+     ("d" . git-rebase-drop)
+     ("x" . git-rebase-exec)
+     ("u" . git-rebase-undo)
+     ("ZZ" . with-editor-finish)
+     ("ZQ" . with-editor-cancel)))
+  (yunge-test-evil-visual-keys
+   'git-rebase-mode
+   '(("M-j" . git-rebase-move-line-down)
+     ("M-k" . git-rebase-move-line-up)
+     ("p" . git-rebase-pick)
+     ("r" . git-rebase-reword)
+     ("e" . git-rebase-edit)
+     ("s" . git-rebase-squash)
+     ("f" . git-rebase-fixup)
+     ("d" . git-rebase-drop))))
+
+(ert-deftest yunge-magit-rebase-visual-action-excludes-the-next-line ()
+  (yunge-test-enable-evil)
+  (require 'magit-autoloads)
+  (yunge-test-load-package-config 'yunge-magit)
+  (require 'git-rebase)
+
+  (with-temp-buffer
+    (insert "pick 1111111 one\npick 2222222 two\npick 3333333 three\n")
+    (git-rebase-mode)
+    (goto-char (point-min))
+    (evil-normal-state)
+    (save-window-excursion
+      (switch-to-buffer (current-buffer))
+      (execute-kbd-macro (kbd "V j d")))
+    (should
+     (equal
+      (mapcar (lambda (line) (car (split-string line)))
+              (split-string (buffer-string) "\n" t))
+      '("drop" "drop" "pick")))))
 
 (ert-deftest yunge-magit-resolves-point-local-keys ()
   (yunge-test-enable-evil)

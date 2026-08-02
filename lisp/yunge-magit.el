@@ -9,6 +9,7 @@
 (declare-function evil-insert-state "evil-states")
 
 (defvar git-commit-setup-hook)
+(defvar git-rebase-mode-map)
 (defvar magit-diff-mode-map)
 (defvar magit-diff-section-map)
 (defvar magit-log-mode-map)
@@ -87,6 +88,29 @@
     ("u" magit-unstage-files "unstage")
     ("x" magit-delete-thing "discard")))
 
+(defconst yunge-magit-rebase-normal-bindings
+  '(("RET" git-rebase-show-commit "show commit")
+    ("M-j" git-rebase-move-line-down "move line down")
+    ("M-k" git-rebase-move-line-up "move line up")
+    ("p" git-rebase-pick "pick")
+    ("r" git-rebase-reword "reword")
+    ("e" git-rebase-edit "edit")
+    ("s" git-rebase-squash "squash")
+    ("f" git-rebase-fixup "fixup")
+    ("d" git-rebase-drop "drop")
+    ("x" git-rebase-exec "execute")
+    ("u" git-rebase-undo "undo")))
+
+(defconst yunge-magit-rebase-visual-bindings
+  '(("M-j" git-rebase-move-line-down "move selection down")
+    ("M-k" git-rebase-move-line-up "move selection up")
+    ("p" git-rebase-pick "pick")
+    ("r" git-rebase-reword "reword")
+    ("e" git-rebase-edit "edit")
+    ("s" git-rebase-squash "squash")
+    ("f" git-rebase-fixup "fixup")
+    ("d" git-rebase-drop "drop")))
+
 (defun yunge-magit--enter-insert-state-for-blank-commit-message ()
   "Enter Insert state when a new commit message starts blank."
   (when (and (bound-and-true-p evil-local-mode)
@@ -112,6 +136,22 @@
     (add-hook 'git-commit-setup-hook
               #'yunge-magit--enter-insert-state-for-blank-commit-message))
   (with-eval-after-load 'evil
+    (with-eval-after-load 'git-rebase
+      (yunge-key-evil-define
+       'normal git-rebase-mode-map
+       yunge-magit-rebase-normal-bindings)
+      (yunge-key-evil-define
+       'visual git-rebase-mode-map
+       yunge-magit-rebase-visual-bindings)
+      ;; Evil's linewise region includes its final newline.  Excluding it
+      ;; prevents a rebase action from changing the following commit too.
+      (dolist (command '(git-rebase-drop
+                         git-rebase-edit
+                         git-rebase-fixup
+                         git-rebase-pick
+                         git-rebase-reword
+                         git-rebase-squash))
+        (evil-add-command-properties command :exclude-newline t)))
     (with-eval-after-load 'magit
       (yunge-key-evil-define
        'normal magit-mode-map
