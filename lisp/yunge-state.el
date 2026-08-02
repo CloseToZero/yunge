@@ -2,12 +2,21 @@
 ;; SPDX-FileCopyrightText: 2026 Chen Zhexuan
 ;; SPDX-License-Identifier: MIT
 
-(let ((directory (expand-file-name "var/" user-emacs-directory)))
+(let* ((directory (expand-file-name "var/" user-emacs-directory))
+       (auto-save-directory
+        (expand-file-name "auto-save/" directory))
+       (tramp-auto-save-directory-path
+        (expand-file-name "tramp/auto-save/" directory)))
+  ;; Unlike the backup writer, auto-save does not create its destination.
+  (dolist (path (list auto-save-directory
+                      tramp-auto-save-directory-path))
+    (make-directory path t))
+
   ;; Keep state produced by common editing features out of source trees.
   (setq auto-save-file-name-transforms
-        `((".*" ,(expand-file-name "auto-save/" directory) t))
+        `((".*" ,auto-save-directory t))
         auto-save-list-file-prefix
-        (expand-file-name "auto-save/session-" directory)
+        (expand-file-name "session-" auto-save-directory)
         backup-directory-alist
         `(("." . ,(expand-file-name "backup/" directory)))
         bookmark-default-file
@@ -23,7 +32,7 @@
         savehist-file
         (expand-file-name "savehist.eld" directory)
         tramp-auto-save-directory
-        (expand-file-name "tramp/auto-save/" directory)
+        tramp-auto-save-directory-path
         tramp-persistency-file-name
         (expand-file-name "tramp/persistency.eld" directory))
 
