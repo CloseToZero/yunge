@@ -56,6 +56,7 @@ Use these conventions only where the action is meaningful:
 - ~gr~ refreshes the current contents.
 - ~C-j~ and ~C-k~ move to the next or previous completion candidate or visible
   section.
+- ~M-h~ moves to the parent in hierarchical views.
 - ~TAB~ and ~S-TAB~ move between buttons in document-oriented buffers.
 
 In editable buffers, Evil's ~q~ and ~RET~ bindings remain the default.

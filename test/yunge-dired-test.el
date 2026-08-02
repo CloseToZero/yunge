@@ -31,7 +31,7 @@
   (yunge-test-evil-normal-keys
    'dired-mode
    '(("RET" . dired-find-file)
-     ("-" . dired-up-directory)
+     ("M-h" . dired-up-directory)
      ("i" . dired-toggle-read-only)
      ("j" . dired-next-line)
      ("k" . dired-previous-line)
