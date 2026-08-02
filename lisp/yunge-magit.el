@@ -18,6 +18,7 @@
 (defvar magit-mode-map)
 (defvar magit-module-section-map)
 (defvar magit-process-mode-map)
+(defvar magit-repolist-mode-map)
 (defvar magit-revision-mode-map)
 (defvar magit-refs-mode-map)
 (defvar magit-status-mode-map)
@@ -50,11 +51,22 @@
     ("zo" magit-section-show "show section")
     ("zO" magit-section-show-children "show child sections")))
 
+(defconst yunge-magit-copy-bindings
+  '(("s" magit-copy-section-value "section value")))
+
+(defvar-keymap yunge-magit-copy-map
+  :doc "Keymap for copying values from Magit views.")
+
+(yunge-key-define yunge-magit-copy-map
+                  yunge-magit-copy-bindings)
+
 (defconst yunge-magit-view-normal-bindings
   `(("RET" magit-visit-thing "visit")
     ("<tab>" magit-section-toggle "toggle section")
+    ("g<" magit-process-buffer "show process output")
     ("gr" magit-refresh "refresh")
     ("gR" magit-refresh-all "refresh all")
+    ("y" ,yunge-magit-copy-map "copy")
     ([localleader] ,yunge-magit-command-map nil)))
 
 (defconst yunge-magit-repository-normal-bindings
@@ -71,7 +83,11 @@
     ("Z" magit-stash "stash")))
 
 (defconst yunge-magit-status-normal-bindings
-  '(("q" magit-mode-bury-buffer "quit")
+  '(("gn" magit-jump-to-untracked "go to untracked")
+    ("gs" magit-jump-to-staged "go to staged")
+    ("gu" magit-jump-to-unstaged "go to unstaged")
+    ("gz" magit-jump-to-stashes "go to stashes")
+    ("q" magit-mode-bury-buffer "quit")
     ("s" magit-stage-files "stage")
     ("u" magit-unstage-files "unstage")
     ("x" magit-delete-thing "discard")))
@@ -136,6 +152,14 @@
     ("q" magit-mode-bury-buffer "quit")
     ("x" magit-process-kill "kill process")))
 
+(defconst yunge-magit-repolist-normal-bindings
+  '(("RET" magit-repolist-status "show status")
+    ("f" magit-repolist-fetch "fetch")
+    ("gr" revert-buffer "refresh")
+    ("m" magit-repolist-mark "mark")
+    ("q" quit-window "quit")
+    ("u" magit-repolist-unmark "unmark")))
+
 (defun yunge-magit--enter-insert-state-for-blank-commit-message ()
   "Enter Insert state when a new commit message starts blank."
   (when (and (bound-and-true-p evil-local-mode)
@@ -148,6 +172,8 @@
   (with-eval-after-load 'which-key
     (yunge-key-add-which-key-descriptions
      yunge-go-map yunge-magit-go-bindings)
+    (yunge-key-add-which-key-descriptions
+     yunge-magit-copy-map yunge-magit-copy-bindings)
     (yunge-key-add-which-key-descriptions
      yunge-magit-command-map yunge-magit-command-bindings))
   ;; Section keymaps at point take precedence over Evil's mode bindings.
@@ -174,6 +200,10 @@
        'normal magit-process-mode-map
        (append yunge-magit-section-normal-bindings
                yunge-magit-process-normal-bindings)))
+    (with-eval-after-load 'magit-repos
+      (yunge-key-evil-define
+       'normal magit-repolist-mode-map
+       yunge-magit-repolist-normal-bindings))
     (with-eval-after-load 'git-rebase
       (yunge-key-evil-define
        'normal git-rebase-mode-map

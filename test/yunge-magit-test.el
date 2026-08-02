@@ -20,6 +20,7 @@
 (declare-function magit-log-mode "magit-log")
 (declare-function magit-log-select-mode "magit-log")
 (declare-function magit-process-mode "magit-process")
+(declare-function magit-repolist-mode "magit-repos")
 (declare-function magit-reflog-mode "magit-reflog")
 (declare-function magit-refs-mode "magit-refs")
 (declare-function magit-region-values "magit-section")
@@ -27,6 +28,7 @@
 (declare-function magit-stash-mode "magit-stash")
 (declare-function magit-stashes-mode "magit-stash")
 (declare-function magit-status-mode "magit-status")
+(declare-function magit-submodule-list-mode "magit-submodule")
 (declare-function yunge-magit--enter-insert-state-for-blank-commit-message
                   "yunge-magit")
 
@@ -92,9 +94,11 @@
       ("C-k" . magit-section-backward)
       ("RET" . magit-visit-thing)
       ("<tab>" . magit-section-toggle)
+      ("g<" . magit-process-buffer)
       ("q" . ,quit-command)
       ("gr" . magit-refresh)
-      ("gR" . magit-refresh-all))
+      ("gR" . magit-refresh-all)
+      ("y s" . magit-copy-section-value))
     yunge-magit-test-repository-bindings
     '(("SPC m SPC" . magit-dispatch)
       ("C-i" . yunge-jump-forward)))))
@@ -159,23 +163,33 @@
       ("1" . digit-argument)
       ("RET" . magit-visit-thing)
       ("<tab>" . magit-section-toggle)
+      ("g<" . magit-process-buffer)
       ("q" . magit-mode-bury-buffer)
       ("gr" . magit-refresh)
       ("gR" . magit-refresh-all)
+      ("gn" . magit-jump-to-untracked)
+      ("gs" . magit-jump-to-staged)
+      ("gu" . magit-jump-to-unstaged)
+      ("gz" . magit-jump-to-stashes)
       ("s" . magit-stage-files)
       ("u" . magit-unstage-files)
-      ("x" . magit-delete-thing))
+      ("x" . magit-delete-thing)
+      ("y s" . magit-copy-section-value))
     yunge-magit-test-repository-bindings
     '(("SPC m SPC" . magit-dispatch)
       ("C-i" . yunge-jump-forward))))
   (yunge-test-which-key-prefix-bindings
    'magit-status-mode "SPC m"
    '(("SPC" nil "dispatch")))
+  (yunge-test-which-key-prefix-bindings
+   'magit-status-mode "y"
+   '(("s" nil "section value")))
   (yunge-test-evil-visual-keys
    'magit-status-mode
    '(("s" . magit-stage-files)
      ("u" . magit-unstage-files)
-     ("x" . magit-delete-thing))))
+     ("x" . magit-delete-thing)
+     ("y" . evil-yank))))
 
 (ert-deftest yunge-magit-integrates-history-views-with-evil ()
   (yunge-test-enable-evil)
@@ -299,6 +313,8 @@
   (require 'magit-blame)
   (require 'magit-files)
   (require 'magit-process)
+  (require 'magit-repos)
+  (require 'magit-submodule)
 
   (yunge-magit-test--minor-mode-keys
    'magit-blame-read-only-mode
@@ -321,7 +337,17 @@
      ("M-h" . magit-section-up)
      ("<tab>" . magit-section-toggle)
      ("q" . magit-mode-bury-buffer)
-     ("x" . magit-process-kill))))
+     ("x" . magit-process-kill)))
+  (dolist (mode '(magit-repolist-mode
+                  magit-submodule-list-mode))
+    (yunge-test-evil-normal-keys
+     mode
+     '(("RET" . magit-repolist-status)
+       ("f" . magit-repolist-fetch)
+       ("gr" . revert-buffer)
+       ("m" . magit-repolist-mark)
+       ("q" . quit-window)
+       ("u" . magit-repolist-unmark)))))
 
 (ert-deftest yunge-magit-rebase-visual-action-excludes-the-next-line ()
   (yunge-test-enable-evil)

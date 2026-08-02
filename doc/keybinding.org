@@ -68,6 +68,10 @@ Use these conventions only where the action is meaningful:
 
 In editable buffers, Evil's ~q~ and ~RET~ bindings remain the default.
 
+Structured read-only views may use ~y~ as a prefix for copying item
+identifiers, paths, or other semantic values.  Keep Visual ~y~ for copying
+selected text.
+
 * Completion interfaces
 
 While a completion interface is active:
@@ -86,6 +90,7 @@ Use ~g~ as the namespace for navigation-related commands.  Beyond ~gr~, use:
 
 - ~gf~ visits a file or source associated with the current item.
 - ~gF~ visits an alternate location for the same item.
+- ~g<~ shows output from the most recent external command when available.
 - ~gx~ opens the current item's URL in an external program.
 
 Prefer extending Evil's ~g~ prefix with specific sequences over replacing its
