@@ -21,6 +21,37 @@
 (yunge-test-deftest-lazy-load yunge-magit
   (magit))
 
+(defun yunge-magit-test--visual-untracked-files (keys target)
+  "Return the untracked files selected by KEYS before calling TARGET."
+  (yunge-test-enable-evil)
+  (require 'magit-autoloads)
+  (yunge-test-load-package-config 'yunge-magit)
+  (require 'magit)
+
+  (with-temp-buffer
+    (magit-status-mode)
+    (let ((inhibit-read-only t)
+          selected)
+      (erase-buffer)
+      (setq magit-root-section nil)
+      (magit-insert-section (status)
+        (magit-insert-section (untracked)
+          (magit-insert-heading "Untracked files")
+          (dolist (file '("one" "two" "three" "four"))
+            (magit-insert-section (file file)
+              (magit-insert-heading file)))))
+      (goto-char (point-min))
+      (search-forward "one")
+      (beginning-of-line)
+      (evil-normal-state)
+      (cl-letf (((symbol-function target)
+                 (lambda (&rest _arguments)
+                   (setq selected (magit-region-values nil t)))))
+        (save-window-excursion
+          (switch-to-buffer (current-buffer))
+          (execute-kbd-macro (kbd keys))))
+      selected)))
+
 (ert-deftest yunge-magit-configures-after-package-ready ()
   (yunge-test-run-package-config
    'yunge-magit 'magit
@@ -77,6 +108,7 @@
      ("gR" . magit-refresh-all)
      ("s" . magit-stage-files)
      ("u" . magit-unstage-files)
+     ("x" . magit-delete-thing)
      ("SPC m SPC" . magit-dispatch)
      ("C-i" . yunge-jump-forward)))
   (yunge-test-which-key-prefix-bindings
@@ -85,37 +117,22 @@
   (yunge-test-evil-visual-keys
    'magit-status-mode
    '(("s" . magit-stage-files)
-     ("u" . magit-unstage-files))))
+     ("u" . magit-unstage-files)
+     ("x" . magit-delete-thing))))
 
 (ert-deftest yunge-magit-visual-stage-selects-exact-untracked-files ()
-  (yunge-test-enable-evil)
-  (require 'magit-autoloads)
-  (yunge-test-load-package-config 'yunge-magit)
-  (require 'magit)
+  (should
+   (equal
+    (yunge-magit-test--visual-untracked-files
+     "V j j s" 'magit-stage-untracked)
+    '("one" "two" "three"))))
 
-  (with-temp-buffer
-    (magit-status-mode)
-    (let ((inhibit-read-only t)
-          staged)
-      (erase-buffer)
-      (setq magit-root-section nil)
-      (magit-insert-section (status)
-        (magit-insert-section (untracked)
-          (magit-insert-heading "Untracked files")
-          (dolist (file '("one" "two" "three" "four"))
-            (magit-insert-section (file file)
-              (magit-insert-heading file)))))
-      (goto-char (point-min))
-      (search-forward "one")
-      (beginning-of-line)
-      (evil-normal-state)
-      (cl-letf (((symbol-function 'magit-stage-untracked)
-                 (lambda (&optional _intent)
-                   (setq staged (magit-region-values nil t)))))
-        (save-window-excursion
-          (switch-to-buffer (current-buffer))
-          (execute-kbd-macro (kbd "V j j s"))))
-      (should (equal staged '("one" "two" "three"))))))
+(ert-deftest yunge-magit-visual-discard-selects-exact-untracked-files ()
+  (should
+   (equal
+    (yunge-magit-test--visual-untracked-files
+     "V j j x" 'magit-discard-files)
+    '("one" "two" "three"))))
 
 (ert-deftest yunge-magit-resolves-point-local-keys ()
   (yunge-test-enable-evil)
@@ -125,9 +142,11 @@
   (require 'magit-submodule)
 
   (dolist (entry `((,magit-diff-section-map
-                    . magit-diff-visit-worktree-file)
+                    magit-diff-visit-worktree-file
+                    magit-discard)
                    (,magit-module-section-map
-                    . magit-submodule-visit)))
+                    magit-submodule-visit
+                    magit-delete-thing)))
     (with-temp-buffer
       (magit-status-mode)
       (let ((inhibit-read-only t))
@@ -139,6 +158,7 @@
          ("C-k" . magit-section-backward)
          ("s" . magit-stage)
          ("u" . magit-unstage)
-         ("C-<return>" . ,(cdr entry)))))))
+         ("x" . ,(nth 2 entry))
+         ("C-<return>" . ,(nth 1 entry)))))))
 
 ;;; yunge-magit-test.el ends here

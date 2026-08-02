@@ -49,11 +49,13 @@
     ("gR" magit-refresh-all "refresh all")
     ("s" magit-stage-files "stage")
     ("u" magit-unstage-files "unstage")
+    ("x" magit-delete-thing "discard")
     ([localleader] ,yunge-magit-command-map nil)))
 
 (defconst yunge-magit-status-visual-bindings
   '(("s" magit-stage-files "stage")
-    ("u" magit-unstage-files "unstage")))
+    ("u" magit-unstage-files "unstage")
+    ("x" magit-delete-thing "discard")))
 
 (elpaca magit
   (yunge-key-define yunge-go-map yunge-magit-go-bindings)
@@ -83,7 +85,7 @@
        yunge-magit-status-visual-bindings)
       ;; A linewise selection includes its final newline, which makes Magit
       ;; treat the next section as selected too.
-      (dolist (command '(magit-stage magit-unstage))
+      (dolist (command '(magit-discard magit-stage magit-unstage))
         (evil-add-command-properties command :exclude-newline t)))))
 
 (provide 'yunge-magit)
