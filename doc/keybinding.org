@@ -58,6 +58,19 @@ Use these conventions only where the action is meaningful:
 
 In editable buffers, Evil's ~q~ and ~RET~ bindings remain the default.
 
+* Completion interfaces
+
+While a completion interface is active:
+
+- ~C-n~ and ~C-p~ select the next or previous candidate without accepting it.
+- ~TAB~ incorporates the current candidate or common prefix into the input and
+  keeps the interface active when further completion is possible.
+- ~RET~ accepts the current candidate or input and leaves the completion
+  interface.
+
+These bindings apply only while completion is active.  The surrounding mode's
+bindings resume when completion ends.
+
 * The ~g~ navigation prefix
 
 Use ~g~ as the namespace for navigation-related commands.  Beyond ~gr~, use:
@@ -148,8 +161,10 @@ Hyper, function keys, or an operating-system-specific modifier.  Prefer Space,
 ASCII letters, ~RET~, and ~TAB~.
 
 Terminals usually cannot distinguish ~TAB~ from ~C-i~.  Preserve ~C-i~ for
-jump navigation.  Bind ~<tab>~ for GUI button navigation and use ~g]~ as the
-portable fallback.  Do not assume that ~S-RET~ or ~M-RET~ is distinguishable
+jump navigation in Normal state.  Bind ~<tab>~ for GUI navigation and give an
+essential action a portable alternative; use ~g]~ for button navigation.  A
+completion interface may bind ~TAB~ while it owns input, where jump traversal
+is not meaningful.  Do not assume that ~S-RET~ or ~M-RET~ is distinguishable
 in every terminal.
 
 ~C-u~ scrolls upward in Evil.  Give useful command variants distinct semantic
