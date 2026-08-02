@@ -66,8 +66,9 @@
 (add-hook 'after-init-hook #'elpaca-process-queues)
 (elpaca `(,@elpaca-order))
 
-;; This Windows setup cannot create symlinks; copy package build files.
-(elpaca-no-symlink-mode)
+(when (eq system-type 'windows-nt)
+  ;; Avoid requiring symlink privileges on Windows.
+  (elpaca-no-symlink-mode 1))
 
 (provide 'yunge-package)
 
