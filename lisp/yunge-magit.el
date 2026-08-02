@@ -9,16 +9,21 @@
 (declare-function evil-insert-state "evil-states")
 
 (defvar git-commit-setup-hook)
+(defvar magit-diff-mode-map)
 (defvar magit-diff-section-map)
+(defvar magit-log-mode-map)
+(defvar magit-log-select-mode-map)
 (defvar magit-mode-map)
 (defvar magit-module-section-map)
+(defvar magit-revision-mode-map)
 (defvar magit-status-mode-map)
 
 (defconst yunge-magit-go-bindings
   '(("g" magit-status "Git status")))
 
 (defconst yunge-magit-command-bindings
-  '(("SPC" magit-dispatch "dispatch")))
+  '(("SPC" magit-dispatch "dispatch")
+    ("l" magit-log-current "show current log")))
 
 (defvar-keymap yunge-magit-command-map
   :doc "Keymap for Magit commands.")
@@ -42,17 +47,30 @@
     ("zo" magit-section-show "show section")
     ("zO" magit-section-show-children "show child sections")))
 
-(defconst yunge-magit-status-normal-bindings
+(defconst yunge-magit-view-normal-bindings
   `(("RET" magit-visit-thing "visit")
     ("<tab>" magit-section-toggle "toggle section")
-    ("c" magit-commit "commit")
-    ("q" magit-mode-bury-buffer "quit")
     ("gr" magit-refresh "refresh")
     ("gR" magit-refresh-all "refresh all")
+    ([localleader] ,yunge-magit-command-map nil)))
+
+(defconst yunge-magit-status-normal-bindings
+  '(("c" magit-commit "commit")
+    ("q" magit-mode-bury-buffer "quit")
     ("s" magit-stage-files "stage")
     ("u" magit-unstage-files "unstage")
-    ("x" magit-delete-thing "discard")
-    ([localleader] ,yunge-magit-command-map nil)))
+    ("x" magit-delete-thing "discard")))
+
+(defconst yunge-magit-log-normal-bindings
+  '(("q" magit-log-bury-buffer "quit")))
+
+(defconst yunge-magit-log-select-normal-bindings
+  '(("RET" magit-log-select-pick "select")
+    ("<tab>" magit-section-toggle "toggle section")
+    ("q" magit-log-select-quit "cancel")))
+
+(defconst yunge-magit-mode-quit-normal-bindings
+  '(("q" magit-mode-bury-buffer "quit")))
 
 (defconst yunge-magit-status-visual-bindings
   '(("s" magit-stage-files "stage")
@@ -91,6 +109,7 @@
       (yunge-key-evil-define
        'normal magit-status-mode-map
        (append yunge-magit-section-normal-bindings
+               yunge-magit-view-normal-bindings
                yunge-magit-status-normal-bindings))
       (yunge-key-evil-define
        'visual magit-status-mode-map
@@ -98,7 +117,25 @@
       ;; A linewise selection includes its final newline, which makes Magit
       ;; treat the next section as selected too.
       (dolist (command '(magit-discard magit-stage magit-unstage))
-        (evil-add-command-properties command :exclude-newline t)))))
+        (evil-add-command-properties command :exclude-newline t)))
+    (with-eval-after-load 'magit-log
+      (yunge-key-evil-define
+       'normal magit-log-mode-map
+       (append yunge-magit-section-normal-bindings
+               yunge-magit-view-normal-bindings
+               yunge-magit-log-normal-bindings))
+      (yunge-key-evil-define
+       'normal magit-log-select-mode-map
+       (append yunge-magit-section-normal-bindings
+               yunge-magit-log-select-normal-bindings)))
+    (with-eval-after-load 'magit-diff
+      (dolist (map (list magit-diff-mode-map
+                         magit-revision-mode-map))
+        (yunge-key-evil-define
+         'normal map
+         (append yunge-magit-section-normal-bindings
+                 yunge-magit-view-normal-bindings
+                 yunge-magit-mode-quit-normal-bindings))))))
 
 (provide 'yunge-magit)
 

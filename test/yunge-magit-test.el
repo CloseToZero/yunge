@@ -9,10 +9,14 @@
 
 (declare-function evil-normal-state "evil-states")
 (declare-function evil-local-mode "evil-core" (&optional arg))
+(declare-function magit-diff-mode "magit-diff")
 (declare-function magit-insert-heading "magit-section")
 (declare-function magit-insert-section--create "magit-section")
 (declare-function magit-insert-section--finish "magit-section")
+(declare-function magit-log-mode "magit-log")
+(declare-function magit-log-select-mode "magit-log")
 (declare-function magit-region-values "magit-section")
+(declare-function magit-revision-mode "magit-diff")
 (declare-function magit-status-mode "magit-status")
 (declare-function yunge-magit--enter-insert-state-for-blank-commit-message
                   "yunge-magit")
@@ -56,6 +60,21 @@
           (switch-to-buffer (current-buffer))
           (execute-kbd-macro (kbd keys))))
       selected)))
+
+(defun yunge-magit-test--view-keys (mode quit-command)
+  "Check common bindings in Magit view MODE, including QUIT-COMMAND."
+  (yunge-test-evil-normal-keys
+   mode
+   `(("C-j" . magit-section-forward)
+     ("C-k" . magit-section-backward)
+     ("RET" . magit-visit-thing)
+     ("<tab>" . magit-section-toggle)
+     ("q" . ,quit-command)
+     ("gr" . magit-refresh)
+     ("gR" . magit-refresh-all)
+     ("SPC m SPC" . magit-dispatch)
+     ("SPC m l" . magit-log-current)
+     ("C-i" . yunge-jump-forward))))
 
 (ert-deftest yunge-magit-configures-after-package-ready ()
   (yunge-test-run-package-config
@@ -115,15 +134,56 @@
      ("u" . magit-unstage-files)
      ("x" . magit-delete-thing)
      ("SPC m SPC" . magit-dispatch)
+     ("SPC m l" . magit-log-current)
      ("C-i" . yunge-jump-forward)))
   (yunge-test-which-key-prefix-bindings
    'magit-status-mode "SPC m"
-   '(("SPC" nil "dispatch")))
+   '(("SPC" nil "dispatch")
+     ("l" nil "show current log")))
   (yunge-test-evil-visual-keys
    'magit-status-mode
    '(("s" . magit-stage-files)
      ("u" . magit-unstage-files)
      ("x" . magit-delete-thing))))
+
+(ert-deftest yunge-magit-integrates-history-views-with-evil ()
+  (yunge-test-enable-evil)
+  (require 'magit-autoloads)
+  (yunge-test-load-package-config 'yunge-magit)
+  (require 'magit-log)
+  (require 'magit-diff)
+
+  (yunge-magit-test--view-keys
+   'magit-log-mode 'magit-log-bury-buffer)
+  (dolist (mode '(magit-diff-mode magit-revision-mode))
+    (yunge-magit-test--view-keys mode 'magit-mode-bury-buffer))
+  (yunge-test-evil-normal-keys
+   'magit-log-select-mode
+   '(("C-j" . magit-section-forward)
+     ("C-k" . magit-section-backward)
+     ("RET" . magit-log-select-pick)
+     ("<tab>" . magit-section-toggle)
+     ("q" . magit-log-select-quit)
+     ("C-i" . yunge-jump-forward))))
+
+(ert-deftest yunge-magit-log-ret-visits-the-commit-at-point ()
+  (yunge-test-enable-evil)
+  (require 'magit-autoloads)
+  (yunge-test-load-package-config 'yunge-magit)
+  (require 'magit-log)
+
+  (with-temp-buffer
+    (magit-log-mode)
+    (let ((inhibit-read-only t))
+      (setq magit-root-section nil)
+      (magit-insert-section (log)
+        (magit-insert-section (commit "deadbeef")
+          (magit-insert-heading "commit"))))
+    (goto-char (point-min))
+    (search-forward "commit")
+    (beginning-of-line)
+    (evil-normal-state)
+    (yunge-test-key "RET" 'magit-show-commit)))
 
 (ert-deftest yunge-magit-visual-stage-selects-exact-untracked-files ()
   (should
