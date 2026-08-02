@@ -4,6 +4,25 @@
 
 (require 'yunge-test-helper)
 
+(declare-function embark--targets "embark")
+
+(defun yunge-embark-test--assert-file-target (path)
+  "Check that PATH is the first complete file target at point."
+  (let ((target
+         (abbreviate-file-name
+          (expand-file-name path yunge-test-root))))
+    (with-temp-buffer
+      (setq default-directory yunge-test-root)
+      (insert path ":12:3")
+      (search-backward (file-name-base path))
+      (let ((file-target (car (embark--targets))))
+        (should (eq (plist-get file-target :orig-type) 'file))
+        (should (equal (plist-get file-target :orig-target) target))
+        (should
+         (equal (plist-get file-target :bounds)
+                (cons (point-min)
+                      (+ (point-min) (length path)))))))))
+
 (yunge-test-deftest-lazy-load yunge-embark
   (embark embark-consult))
 
@@ -29,22 +48,57 @@
   (require 'embark)
   (should (featurep 'embark-consult)))
 
-(ert-deftest yunge-embark-preserves-package-defaults ()
+(ert-deftest yunge-embark-only-replaces-file-target-finder ()
   (yunge-test-run-emacs
    "--eval"
    (prin1-to-string
     '(progn
        (require 'embark)
-       (let ((targets (copy-tree embark-target-finders))
+       (let ((targets
+              (mapcar
+               (lambda (finder)
+                 (if (eq finder 'embark-target-file-at-point)
+                     'yunge-embark-target-file-at-point
+                   finder))
+               embark-target-finders))
              (actions (copy-tree embark-keymap-alist))
              (indicators (copy-tree embark-indicators))
              (help-key embark-help-key))
-         (defmacro elpaca (&rest _body) nil)
+         (defmacro elpaca (_order &rest body)
+           (cons 'progn body))
          (require 'yunge-embark)
          (unless (and (equal embark-target-finders targets)
                       (equal embark-keymap-alist actions)
                       (equal embark-indicators indicators)
                       (equal embark-help-key help-key))
-           (error "Embark package defaults were changed")))))))
+           (error "Unexpected Embark configuration changes")))))))
+
+(ert-deftest yunge-embark-targets-windows-paths ()
+  (skip-unless (eq system-type 'windows-nt))
+  (yunge-test-load-package-config 'yunge-embark)
+  (require 'embark)
+  (let* ((missing-directory
+          (make-temp-name
+           (expand-file-name "var/test/embark-missing-"
+                             yunge-test-root))))
+    (dolist (separator '("/" "\\"))
+      (let* ((path
+              (string-replace
+               "/" separator
+               (expand-file-name "cde.txt" missing-directory))))
+        (should-not (file-exists-p path))
+        (yunge-embark-test--assert-file-target path)))))
+
+(ert-deftest yunge-embark-targets-explicit-relative-path ()
+  (yunge-test-load-package-config 'yunge-embark)
+  (require 'embark)
+  (let* ((missing-directory
+          (make-temp-name
+           (expand-file-name "var/test/embark-relative-"
+                             yunge-test-root)))
+         (absolute (expand-file-name "file.el" missing-directory))
+         (path (file-relative-name absolute yunge-test-root)))
+    (should-not (file-exists-p absolute))
+    (yunge-embark-test--assert-file-target path)))
 
 ;;; yunge-embark-test.el ends here
