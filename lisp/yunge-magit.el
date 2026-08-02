@@ -15,7 +15,10 @@
 
 (defconst yunge-magit-section-normal-bindings
   '(("C-j" magit-section-forward "next section")
-    ("C-k" magit-section-backward "previous section")))
+    ("C-k" magit-section-backward "previous section")
+    ("M-h" magit-section-up "parent section")
+    ("M-j" magit-section-forward-sibling "next sibling")
+    ("M-k" magit-section-backward-sibling "previous sibling")))
 
 (defconst yunge-magit-status-normal-bindings
   '(("RET" magit-visit-thing "visit")

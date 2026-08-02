@@ -47,6 +47,9 @@
    'magit-status-mode
    '(("C-j" . magit-section-forward)
      ("C-k" . magit-section-backward)
+     ("M-h" . magit-section-up)
+     ("M-j" . magit-section-forward-sibling)
+     ("M-k" . magit-section-backward-sibling)
      ("RET" . magit-visit-thing)
      ("<tab>" . magit-section-toggle)
      ("q" . magit-mode-bury-buffer)
