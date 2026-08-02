@@ -58,7 +58,8 @@ Use these conventions only where the action is meaningful:
   section.
 - ~M-h~ moves to the parent in hierarchical views.
 - In collapsible views, ~za~ toggles the current section; ~zc~/~zo~ hide or
-  show it, and ~zC~/~zO~ hide or show its child sections.
+  show it, ~zC~/~zO~ hide or show its child sections, and ~z1~ through ~z4~
+  show all sections through the selected level.
 - ~TAB~ and ~S-TAB~ move between buttons in document-oriented buffers.
 
 In editable buffers, Evil's ~q~ and ~RET~ bindings remain the default.
