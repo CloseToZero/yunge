@@ -3,6 +3,7 @@
 ;; SPDX-License-Identifier: MIT
 
 (require 'yunge-state)
+(require 'yunge-history)
 (when (eq system-type 'darwin)
   (require 'yunge-mac))
 (require 'yunge-package)
