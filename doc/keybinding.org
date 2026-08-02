@@ -24,6 +24,10 @@ Evil is a strong default, not an absolute priority.  An editing command that
 has little use in a read-only buffer costs less to replace than navigation or
 search.  Being unavailable alone, however, does not justify reusing its key.
 
+In a structured read-only view, a frequent mode command may replace a text
+motion when users normally move by items or sections and those motions remain
+convenient.  Apply the override consistently across related views.
+
 When the practical value is otherwise close, prefer established conventions,
 then common actions of the major mode, and finally the package's original
 bindings.  Treat upstream bindings as a reference.  Choose keys by command

@@ -27,6 +27,18 @@
 (defvar magit-module-section-map)
 (defvar magit-root-section)
 
+(defconst yunge-magit-test-repository-bindings
+  '(("b" . magit-branch)
+    ("c" . magit-commit)
+    ("d" . magit-diff)
+    ("f" . magit-fetch)
+    ("F" . magit-pull)
+    ("l" . magit-log-current)
+    ("m" . magit-merge)
+    ("p" . magit-push)
+    ("r" . magit-rebase)
+    ("Z" . magit-stash)))
+
 (yunge-test-deftest-lazy-load yunge-magit
   (magit))
 
@@ -65,16 +77,17 @@
   "Check common bindings in Magit view MODE, including QUIT-COMMAND."
   (yunge-test-evil-normal-keys
    mode
-   `(("C-j" . magit-section-forward)
-     ("C-k" . magit-section-backward)
-     ("RET" . magit-visit-thing)
-     ("<tab>" . magit-section-toggle)
-     ("q" . ,quit-command)
-     ("gr" . magit-refresh)
-     ("gR" . magit-refresh-all)
-     ("SPC m SPC" . magit-dispatch)
-     ("SPC m l" . magit-log-current)
-     ("C-i" . yunge-jump-forward))))
+   (append
+    `(("C-j" . magit-section-forward)
+      ("C-k" . magit-section-backward)
+      ("RET" . magit-visit-thing)
+      ("<tab>" . magit-section-toggle)
+      ("q" . ,quit-command)
+      ("gr" . magit-refresh)
+      ("gR" . magit-refresh-all))
+    yunge-magit-test-repository-bindings
+    '(("SPC m SPC" . magit-dispatch)
+      ("C-i" . yunge-jump-forward)))))
 
 (ert-deftest yunge-magit-configures-after-package-ready ()
   (yunge-test-run-package-config
@@ -108,38 +121,37 @@
   (require 'magit)
   (yunge-test-evil-normal-keys
    'magit-status-mode
-   '(("C-j" . magit-section-forward)
-     ("C-k" . magit-section-backward)
-     ("M-h" . magit-section-up)
-     ("M-j" . magit-section-forward-sibling)
-     ("M-k" . magit-section-backward-sibling)
-     ("z1" . magit-section-show-level-1-all)
-     ("z2" . magit-section-show-level-2-all)
-     ("z3" . magit-section-show-level-3-all)
-     ("z4" . magit-section-show-level-4-all)
-     ("za" . magit-section-toggle)
-     ("zc" . magit-section-hide)
-     ("zC" . magit-section-hide-children)
-     ("zo" . magit-section-show)
-     ("zO" . magit-section-show-children)
-     ("zz" . evil-scroll-line-to-center)
-     ("1" . digit-argument)
-     ("c" . magit-commit)
-     ("RET" . magit-visit-thing)
-     ("<tab>" . magit-section-toggle)
-     ("q" . magit-mode-bury-buffer)
-     ("gr" . magit-refresh)
-     ("gR" . magit-refresh-all)
-     ("s" . magit-stage-files)
-     ("u" . magit-unstage-files)
-     ("x" . magit-delete-thing)
-     ("SPC m SPC" . magit-dispatch)
-     ("SPC m l" . magit-log-current)
-     ("C-i" . yunge-jump-forward)))
+   (append
+    '(("C-j" . magit-section-forward)
+      ("C-k" . magit-section-backward)
+      ("M-h" . magit-section-up)
+      ("M-j" . magit-section-forward-sibling)
+      ("M-k" . magit-section-backward-sibling)
+      ("z1" . magit-section-show-level-1-all)
+      ("z2" . magit-section-show-level-2-all)
+      ("z3" . magit-section-show-level-3-all)
+      ("z4" . magit-section-show-level-4-all)
+      ("za" . magit-section-toggle)
+      ("zc" . magit-section-hide)
+      ("zC" . magit-section-hide-children)
+      ("zo" . magit-section-show)
+      ("zO" . magit-section-show-children)
+      ("zz" . evil-scroll-line-to-center)
+      ("1" . digit-argument)
+      ("RET" . magit-visit-thing)
+      ("<tab>" . magit-section-toggle)
+      ("q" . magit-mode-bury-buffer)
+      ("gr" . magit-refresh)
+      ("gR" . magit-refresh-all)
+      ("s" . magit-stage-files)
+      ("u" . magit-unstage-files)
+      ("x" . magit-delete-thing))
+    yunge-magit-test-repository-bindings
+    '(("SPC m SPC" . magit-dispatch)
+      ("C-i" . yunge-jump-forward))))
   (yunge-test-which-key-prefix-bindings
    'magit-status-mode "SPC m"
-   '(("SPC" nil "dispatch")
-     ("l" nil "show current log")))
+   '(("SPC" nil "dispatch")))
   (yunge-test-evil-visual-keys
    'magit-status-mode
    '(("s" . magit-stage-files)

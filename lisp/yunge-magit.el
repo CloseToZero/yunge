@@ -22,8 +22,7 @@
   '(("g" magit-status "Git status")))
 
 (defconst yunge-magit-command-bindings
-  '(("SPC" magit-dispatch "dispatch")
-    ("l" magit-log-current "show current log")))
+  '(("SPC" magit-dispatch "dispatch")))
 
 (defvar-keymap yunge-magit-command-map
   :doc "Keymap for Magit commands.")
@@ -54,9 +53,20 @@
     ("gR" magit-refresh-all "refresh all")
     ([localleader] ,yunge-magit-command-map nil)))
 
+(defconst yunge-magit-repository-normal-bindings
+  '(("b" magit-branch "branch")
+    ("c" magit-commit "commit")
+    ("d" magit-diff "diff")
+    ("f" magit-fetch "fetch")
+    ("F" magit-pull "pull")
+    ("l" magit-log-current "show current log")
+    ("m" magit-merge "merge")
+    ("p" magit-push "push")
+    ("r" magit-rebase "rebase")
+    ("Z" magit-stash "stash")))
+
 (defconst yunge-magit-status-normal-bindings
-  '(("c" magit-commit "commit")
-    ("q" magit-mode-bury-buffer "quit")
+  '(("q" magit-mode-bury-buffer "quit")
     ("s" magit-stage-files "stage")
     ("u" magit-unstage-files "unstage")
     ("x" magit-delete-thing "discard")))
@@ -110,6 +120,7 @@
        'normal magit-status-mode-map
        (append yunge-magit-section-normal-bindings
                yunge-magit-view-normal-bindings
+               yunge-magit-repository-normal-bindings
                yunge-magit-status-normal-bindings))
       (yunge-key-evil-define
        'visual magit-status-mode-map
@@ -123,6 +134,7 @@
        'normal magit-log-mode-map
        (append yunge-magit-section-normal-bindings
                yunge-magit-view-normal-bindings
+               yunge-magit-repository-normal-bindings
                yunge-magit-log-normal-bindings))
       (yunge-key-evil-define
        'normal magit-log-select-mode-map
@@ -135,6 +147,7 @@
          'normal map
          (append yunge-magit-section-normal-bindings
                  yunge-magit-view-normal-bindings
+                 yunge-magit-repository-normal-bindings
                  yunge-magit-mode-quit-normal-bindings))))))
 
 (provide 'yunge-magit)
