@@ -48,7 +48,7 @@
     ("d" . magit-diff)
     ("f" . magit-fetch)
     ("F" . magit-pull)
-    ("l" . magit-log-current)
+    ("l" . magit-log)
     ("m" . magit-merge)
     ("p" . magit-push)
     ("r" . magit-rebase)

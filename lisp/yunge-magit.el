@@ -87,7 +87,7 @@
     ("d" magit-diff "diff")
     ("f" magit-fetch "fetch")
     ("F" magit-pull "pull")
-    ("l" magit-log-current "show current log")
+    ("l" magit-log "log")
     ("m" magit-merge "merge")
     ("p" magit-push "push")
     ("r" magit-rebase "rebase")
