@@ -6,11 +6,10 @@
 (require 'yunge-evil)
 (require 'yunge-input-source)
 (require 'yunge-key)
+(require 'yunge-pinyin)
 
 (declare-function avy-jump "avy" (regex &rest arguments))
 (declare-function evil-add-command-properties "evil-common")
-(declare-function pyim-cregexp-build "pyim-cregexp"
-                  (string &optional char-level-num chinese-only))
 
 (defvar avy-action)
 (defvar avy-command)
@@ -20,14 +19,8 @@
 
 (defun yunge-avy--query-regexp (text)
   "Return a literal or Pinyin-aware regexp for TEXT."
-  (if (string-match-p "\\`[A-Za-z']+\\'" text)
-      (progn
-        ;; Pyim's regexp layer needs a dcache backend, but using it does not
-        ;; register or enable Pyim as an Emacs input method.
-        (require 'pyim-dhashcache)
-        (require 'pyim-cregexp)
-        (pyim-cregexp-build (downcase text)))
-    (regexp-quote text)))
+  (or (yunge-pinyin-regexp text)
+      (regexp-quote text)))
 
 (defun yunge-avy-jump-to-text (text)
   "Jump to visible TEXT, also accepting full or abbreviated Pinyin."
@@ -52,8 +45,6 @@
   (with-eval-after-load 'which-key
     (yunge-key-add-which-key-descriptions
      yunge-jump-map yunge-avy-bindings)))
-
-(elpaca pyim)
 
 (elpaca avy
   (yunge-avy--setup))

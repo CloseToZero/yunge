@@ -4,6 +4,9 @@
 
 (require 'yunge-test-helper)
 
+(declare-function evil-ex-make-search-pattern "evil-search" (regexp))
+(declare-function evil-ex-pattern-ignore-case "evil-search" (pattern))
+(declare-function evil-ex-pattern-regex "evil-search" (pattern))
 (declare-function evil-visual-state "evil-states")
 
 (defvar evil-state)
@@ -22,7 +25,7 @@
   :keymap yunge-test-space-mode-map)
 
 (yunge-test-deftest-lazy-load yunge-evil
-  (evil project))
+  (evil project pyim pyim-cregexp))
 
 (ert-deftest yunge-evil-configures-after-package-ready ()
   (yunge-test-run-package-config
@@ -50,8 +53,25 @@
                     evil-want-integration
                     evil-want-keybinding)
               '(nil nil nil t evil-search t undo-redo
-                    t t t t nil)))
+                    t t t t nil))
+             (advice-member-p #'yunge-evil--pinyin-search-pattern
+                              'evil-ex-make-search-pattern))
       (error "Unexpected Evil configuration"))))
+
+(ert-deftest yunge-evil-search-expands-plain-pinyin-only ()
+  (yunge-test-enable-evil)
+  (let* ((pattern (evil-ex-make-search-pattern "bl"))
+         (regexp (evil-ex-pattern-regex pattern)))
+    (should (string-match-p regexp "保留"))
+    (should (string-match-p regexp "bl")))
+  (let* ((pattern (evil-ex-make-search-pattern "BL"))
+         (regexp (evil-ex-pattern-regex pattern)))
+    (should (string-match-p regexp "保留"))
+    (should (string-match-p regexp "BL"))
+    (should-not (evil-ex-pattern-ignore-case pattern)))
+  (should (equal (evil-ex-pattern-regex
+                  (evil-ex-make-search-pattern "b.*l"))
+                 "b.*l")))
 
 (ert-deftest yunge-evil-routes-leader-keys ()
   (yunge-test-enable-evil)

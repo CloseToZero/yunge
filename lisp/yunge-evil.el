@@ -5,11 +5,22 @@
 (require 'yunge-key)
 (require 'yunge-jump-history)
 (require 'yunge-minibuffer)
+(require 'yunge-pinyin)
 
 (declare-function evil-make-intercept-map "evil-core")
 
 (defvar help-map)
 (defvar project-prefix-map)
+
+(defun yunge-evil--pinyin-search-pattern (function regexp)
+  "Call FUNCTION for REGEXP, expanding plain alphabetic searches as Pinyin."
+  (let ((pattern (funcall function regexp))
+        (pinyin-regexp (yunge-pinyin-regexp regexp)))
+    (when pinyin-regexp
+      ;; Evil returns a fresh (REGEXP IGNORE-CASE WHOLE-LINE) pattern.
+      ;; Replacing only its regexp preserves Vim's smart-case decision.
+      (setcar pattern pinyin-regexp))
+    pattern))
 
 (defgroup yunge nil
   "Personal Emacs configuration."
@@ -138,6 +149,8 @@
         evil-want-Y-yank-to-eol t
         evil-want-integration t
         evil-want-keybinding nil)
+  (advice-add 'evil-ex-make-search-pattern
+              :around #'yunge-evil--pinyin-search-pattern)
   (evil-mode 1))
 
 (provide 'yunge-evil)

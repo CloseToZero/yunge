@@ -2,10 +2,19 @@
 ;; SPDX-FileCopyrightText: 2026 Chen Zhexuan
 ;; SPDX-License-Identifier: MIT
 
+(require 'yunge-pinyin)
+
 (defvar completion-pcm-leading-wildcard)
+(defvar orderless-matching-styles)
+
+(defun yunge-orderless-pinyin (component)
+  "Return a Pinyin-aware regexp for alphabetic Orderless COMPONENT."
+  (yunge-pinyin-regexp component))
 
 (elpaca orderless
   (setq completion-styles '(orderless basic)
+        orderless-matching-styles
+        '(orderless-literal orderless-regexp yunge-orderless-pinyin)
         ;; Preserve native path and TRAMP completion semantics.
         completion-category-overrides
         '((file (styles partial-completion)))
