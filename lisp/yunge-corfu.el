@@ -20,16 +20,29 @@
 ;; is too costly to run automatically while typing.
 (setq text-mode-ispell-word-completion nil)
 
-(defconst yunge-corfu-insert-bindings
+(defconst yunge-corfu-popup-bindings
   '(("C-j" corfu-next "next candidate")
     ("C-k" corfu-previous "previous candidate")
+    ("RET" corfu-insert "accept candidate")
+    ("<return>" corfu-insert nil)
     ("TAB" corfu-complete "complete candidate")
     ("<tab>" corfu-complete nil)))
+
+(defvar-keymap yunge-corfu--completion-mode-map
+  :doc "Keymap active while Corfu owns a completion session.")
+
+(yunge-key-define yunge-corfu--completion-mode-map
+                  yunge-corfu-popup-bindings)
+
+(defvar yunge-corfu--emulation-map-alist
+  `((yunge-corfu--completion-mode
+     . ,yunge-corfu--completion-mode-map)))
 
 (define-minor-mode yunge-corfu--completion-mode
   "Give Corfu's active completion session precedence over Evil."
   :init-value nil
-  :lighter nil)
+  :lighter nil
+  :keymap yunge-corfu--completion-mode-map)
 
 (defun yunge-corfu--sync-completion-mode ()
   "Track whether Corfu owns the active completion session."
@@ -46,11 +59,14 @@
 
 (with-eval-after-load 'evil
   (with-eval-after-load 'corfu
-    ;; This adapter follows Corfu's popup, so these bindings become active
-    ;; without refreshing all of Evil's keymaps for every completion session.
-    (yunge-key-evil-define-minor-mode
-     'insert 'yunge-corfu--completion-mode
-     yunge-corfu-insert-bindings)))
+    ;; An active completion interface owns acceptance even when the surrounding
+    ;; mode, such as a REPL, binds RET in its own Evil minor-mode map.
+    (add-to-list 'emulation-mode-map-alists
+                 'yunge-corfu--emulation-map-alist)))
+
+(with-eval-after-load 'which-key
+  (yunge-key-add-which-key-descriptions
+   yunge-corfu--completion-mode-map yunge-corfu-popup-bindings))
 
 (elpaca corfu
   (setq corfu-auto t

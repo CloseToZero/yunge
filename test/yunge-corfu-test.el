@@ -6,12 +6,16 @@
 
 (declare-function completion-at-point "minibuffer")
 (declare-function corfu-mode "corfu")
+(declare-function evil-define-minor-mode-key "evil-core")
 (declare-function evil-insert-state "evil-states")
 (declare-function evil-local-mode "evil-core")
 
 (defvar completion-in-region-mode)
 (defvar corfu-map)
 (defvar corfu-mode)
+
+(define-minor-mode yunge-corfu-test-input-mode
+  "Simulate an input mode that owns RET while no completion is active.")
 
 (yunge-test-deftest-lazy-load yunge-corfu
   (corfu))
@@ -74,7 +78,8 @@
                  ("C-k" . corfu-previous)
                  ("TAB" . corfu-complete)
                  ("<tab>" . corfu-complete)
-                 ("RET" . corfu-insert)))
+                 ("RET" . corfu-insert)
+                 ("<return>" . corfu-insert)))
               (completion-in-region-mode -1)
               (should (eq (key-binding (kbd "C-j"))
                           next-command))
@@ -82,6 +87,43 @@
                           previous-command))
               (should (eq (key-binding (kbd "RET"))
                           return-command)))))
+      (set-window-buffer window original-buffer)
+      (when (buffer-live-p buffer)
+        (kill-buffer buffer)))))
+
+(ert-deftest yunge-corfu-accepts-before-a-surrounding-input-mode ()
+  (yunge-test-enable-evil)
+  (require 'corfu-autoloads)
+  (yunge-test-load-package-config 'yunge-corfu)
+  (evil-define-minor-mode-key 'insert 'yunge-corfu-test-input-mode
+    (kbd "RET") #'ignore
+    (kbd "<return>") #'ignore)
+  (let ((buffer (generate-new-buffer " *yunge-corfu-input-test*"))
+        (window (selected-window))
+        (original-buffer (window-buffer)))
+    (unwind-protect
+        (progn
+          (set-window-buffer window buffer)
+          (with-current-buffer buffer
+            (fundamental-mode)
+            (corfu-mode 1)
+            (insert "al")
+            (setq-local completion-at-point-functions
+                        (list
+                         (lambda ()
+                           (list (- (point) 2) (point)
+                                 '("alpha" "alpine")))))
+            (evil-local-mode 1)
+            (evil-insert-state)
+            (yunge-corfu-test-input-mode 1)
+            (should (eq (key-binding (kbd "RET")) #'ignore))
+            (completion-at-point)
+            (should completion-in-region-mode)
+            (yunge-test-keys
+             '(("RET" . corfu-insert)
+               ("<return>" . corfu-insert)))
+            (completion-in-region-mode -1)
+            (should (eq (key-binding (kbd "RET")) #'ignore))))
       (set-window-buffer window original-buffer)
       (when (buffer-live-p buffer)
         (kill-buffer buffer)))))
