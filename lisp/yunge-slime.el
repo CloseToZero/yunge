@@ -17,9 +17,12 @@
 (defvar lisp-mode-map)
 (defvar slime-completion-at-point-functions)
 (defvar slime-default-lisp)
+(defvar slime-apropos-mode-map)
+(defvar slime-inspector-mode-map)
 (defvar slime-lisp-implementations)
 (defvar slime-repl-history-file)
 (defvar slime-repl-history-size)
+(defvar slime-xref-mode-map)
 
 (defconst yunge-slime-eval-bindings
   '(("b" slime-eval-buffer "buffer")
@@ -100,6 +103,29 @@
 (yunge-key-define yunge-slime-repl-command-map
                   yunge-slime-repl-command-bindings)
 
+(defconst yunge-slime-inspector-command-bindings
+  '(("e" slime-inspector-eval "evaluate")
+    ("f" slime-inspector-fetch-all "fetch all")
+    ("h" slime-inspector-history "history")
+    ("p" slime-inspector-pprint "pretty print")
+    ("v" slime-inspector-toggle-verbose "toggle verbose")))
+
+(defvar-keymap yunge-slime-inspector-command-map
+  :doc "Keymap for SLIME Inspector commands.")
+
+(yunge-key-define yunge-slime-inspector-command-map
+                  yunge-slime-inspector-command-bindings)
+
+(defconst yunge-slime-xref-command-bindings
+  '(("c" slime-recompile-xref "recompile reference")
+    ("C" slime-recompile-all-xrefs "recompile all")))
+
+(defvar-keymap yunge-slime-xref-command-map
+  :doc "Keymap for SLIME cross-reference commands.")
+
+(yunge-key-define yunge-slime-xref-command-map
+                  yunge-slime-xref-command-bindings)
+
 (defun yunge-slime-completion-at-point ()
   "Complete a Common Lisp symbol when SLIME is connected."
   (when (slime-connected-p)
@@ -155,6 +181,33 @@
   '(("RET" slime-repl-return "submit input")
     ("<return>" slime-repl-return nil)))
 
+(defconst yunge-slime-apropos-normal-bindings
+  `(("RET" push-button "activate button")
+    ("q" quit-window "quit")
+    ("C-j" slime-apropos-next-symbol "next symbol")
+    ("C-k" slime-apropos-previous-symbol "previous symbol")
+    ,@yunge-key-button-navigation-bindings))
+
+(defconst yunge-slime-inspector-normal-bindings
+  `(("RET" slime-inspector-operate-on-point "inspect or act")
+    ("q" slime-inspector-quit "quit")
+    ("C-j" slime-inspector-next-inspectable-object "next object")
+    ("C-k" slime-inspector-previous-inspectable-object "previous object")
+    ("gh" slime-inspector-pop "history back")
+    ("gl" slime-inspector-next "history forward")
+    ("gf" slime-inspector-show-source "visit source")
+    ("gr" slime-inspector-reinspect "refresh")
+    ("K" slime-inspector-describe "describe object")
+    ([localleader] ,yunge-slime-inspector-command-map nil)))
+
+(defconst yunge-slime-xref-normal-bindings
+  `(("RET" slime-goto-xref "visit")
+    ("q" quit-window "quit")
+    ("C-j" slime-xref-next-line "next reference")
+    ("C-k" slime-xref-prev-line "previous reference")
+    ("gf" slime-show-xref "show source")
+    ([localleader] ,yunge-slime-xref-command-map nil)))
+
 (defun yunge-slime--setup-source-keys ()
   "Set up Evil bindings in Common Lisp source buffers."
   (yunge-key-evil-define '(normal visual) lisp-mode-map
@@ -172,12 +225,27 @@
    '(normal insert) 'slime-repl-map-mode
    yunge-slime-repl-return-bindings))
 
+(defun yunge-slime--setup-view-keys ()
+  "Set up Evil bindings in SLIME browsing views."
+  (dolist (mode '(slime-apropos-mode
+                  slime-inspector-mode
+                  slime-xref-mode))
+    (evil-set-initial-state mode 'normal))
+  (yunge-key-evil-define 'normal slime-apropos-mode-map
+                         yunge-slime-apropos-normal-bindings)
+  (yunge-key-evil-define 'normal slime-inspector-mode-map
+                         yunge-slime-inspector-normal-bindings)
+  (yunge-key-evil-define 'normal slime-xref-mode-map
+                         yunge-slime-xref-normal-bindings))
+
 (with-eval-after-load 'evil
   ;; SLIME resolves definitions asynchronously, so Evil must record the
   ;; origin before the command returns rather than compare locations later.
   (evil-add-command-properties 'slime-edit-definition :jump t)
   (with-eval-after-load 'lisp-mode
     (yunge-slime--setup-source-keys))
+  (with-eval-after-load 'slime
+    (yunge-slime--setup-view-keys))
   (with-eval-after-load 'slime-repl
     (yunge-slime--setup-repl-keys)))
 
@@ -196,6 +264,11 @@
    yunge-slime-repl-clear-map yunge-slime-repl-clear-bindings)
   (yunge-key-add-which-key-descriptions
    yunge-slime-repl-command-map yunge-slime-repl-command-bindings)
+  (yunge-key-add-which-key-descriptions
+   yunge-slime-inspector-command-map
+   yunge-slime-inspector-command-bindings)
+  (yunge-key-add-which-key-descriptions
+   yunge-slime-xref-command-map yunge-slime-xref-command-bindings)
   (yunge-key-add-which-key-descriptions
    yunge-slime-quit-map yunge-slime-quit-bindings))
 

@@ -6,9 +6,11 @@
 
 (declare-function evil-get-auxiliary-keymap "evil-core")
 (declare-function evil-normal-state "evil-states")
+(declare-function slime-inspector-mode "slime")
 (declare-function slime-mode "slime")
 (declare-function slime-repl-mode "slime-repl")
 (declare-function slime-setup "slime")
+(declare-function slime-xref-mode "slime")
 (declare-function yunge-slime--default-implementation "yunge-slime")
 
 (defvar lisp-mode-map)
@@ -193,5 +195,62 @@
     (yunge-test-which-key-prefix
      "SPC m c"
      yunge-slime-repl-clear-bindings)))
+
+(ert-deftest yunge-slime-integrates-browsing-views-with-evil ()
+  (yunge-test-enable-evil)
+  (require 'slime-autoloads)
+  (yunge-test-load-package-config 'yunge-slime)
+  (require 'slime)
+  (require 'which-key)
+
+  (yunge-test-evil-normal-keys
+   'slime-apropos-mode
+   '(("RET" . push-button)
+     ("q" . quit-window)
+     ("C-j" . slime-apropos-next-symbol)
+     ("C-k" . slime-apropos-previous-symbol)
+     ("g]" . forward-button)
+     ("g[" . backward-button)
+     ("<tab>" . forward-button)
+     ("S-TAB" . backward-button)))
+
+  (yunge-test-evil-normal-keys
+   'slime-inspector-mode
+   '(("RET" . slime-inspector-operate-on-point)
+     ("q" . slime-inspector-quit)
+     ("C-j" . slime-inspector-next-inspectable-object)
+     ("C-k" . slime-inspector-previous-inspectable-object)
+     ("gh" . slime-inspector-pop)
+     ("gl" . slime-inspector-next)
+     ("gf" . slime-inspector-show-source)
+     ("gr" . slime-inspector-reinspect)
+     ("K" . slime-inspector-describe)
+     ("SPC m e" . slime-inspector-eval)
+     ("SPC m f" . slime-inspector-fetch-all)
+     ("SPC m h" . slime-inspector-history)
+     ("SPC m p" . slime-inspector-pprint)
+     ("SPC m v" . slime-inspector-toggle-verbose)))
+
+  (let ((lisp-mode-hook nil))
+    (yunge-test-evil-normal-keys
+     'slime-xref-mode
+     '(("RET" . slime-goto-xref)
+       ("q" . quit-window)
+       ("C-j" . slime-xref-next-line)
+       ("C-k" . slime-xref-prev-line)
+       ("gf" . slime-show-xref)
+       ("SPC m c" . slime-recompile-xref)
+       ("SPC m C" . slime-recompile-all-xrefs))))
+
+  (with-temp-buffer
+    (slime-inspector-mode)
+    (yunge-test-which-key-prefix
+     "SPC m" yunge-slime-inspector-command-bindings))
+
+  (let ((lisp-mode-hook nil))
+    (with-temp-buffer
+      (slime-xref-mode)
+      (yunge-test-which-key-prefix
+       "SPC m" yunge-slime-xref-command-bindings))))
 
 ;;; yunge-slime-test.el ends here
