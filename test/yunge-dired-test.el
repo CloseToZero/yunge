@@ -62,6 +62,7 @@
        ("y a" . yunge-dired-copy-absolute-path)
        ("y p" . yunge-dired-copy-project-path)
        ("SPC m a m" . dired-do-chmod)
+       ("SPC m e" . yunge-dired-open-directory-externally)
        ("SPC m l s" . dired-do-symlink)))
 
     (yunge-test-evil-visual-keys
@@ -92,7 +93,18 @@
      'dired-mode "y" '(("a" nil "absolute path")))
     (yunge-test-which-key-prefix-bindings
      'dired-mode "SPC m" '(("a" nil "+attribute")
+                            ("e" nil "open in file manager")
                             ("l" nil "+link")))))
+
+(ert-deftest yunge-dired-opens-current-directory-externally ()
+  (require 'yunge-dired)
+  (let ((default-directory "C:/project/")
+        opened-files)
+    (cl-letf (((symbol-function 'shell-command-do-open)
+               (lambda (files)
+                 (setq opened-files files))))
+      (call-interactively #'yunge-dired-open-directory-externally))
+    (should (equal opened-files (list default-directory)))))
 
 (ert-deftest yunge-dired-installs-portable-file-drop-handler ()
   (require 'yunge-dired)

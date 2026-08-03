@@ -15,6 +15,7 @@
                   (&optional maybe-prompt directory))
 (declare-function project-remember-project "project"
                   (project &optional no-write stable))
+(declare-function shell-command-do-open "dired-aux" (files))
 (declare-function x-popup-menu "menu.c" (position menu))
 
 (defvar dnd-protocol-alist)
@@ -167,9 +168,15 @@ inconsistently from keyboard modifiers and the source application."
 
 (yunge-key-define yunge-dired-link-map yunge-dired-link-bindings)
 
+(defun yunge-dired-open-directory-externally ()
+  "Open the current Dired directory in the system file manager."
+  (interactive)
+  (shell-command-do-open (list default-directory)))
+
 (defconst yunge-dired-command-bindings
   `(("a" ,yunge-dired-attribute-map "attribute")
     ("d" dired-hide-details-mode "toggle details")
+    ("e" yunge-dired-open-directory-externally "open in file manager")
     ("l" ,yunge-dired-link-map "link")
     ("o" dired-do-open "open externally")))
 
