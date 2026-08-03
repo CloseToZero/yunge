@@ -157,14 +157,18 @@
     (should slime-repl-map-mode)
     (yunge-test-evil-keys
      'insert
-     '(("RET" . slime-repl-return)
+     '(("M-p" . slime-repl-previous-input)
+       ("M-n" . slime-repl-next-input)
+       ("RET" . slime-repl-return)
        ("<return>" . slime-repl-return)
        ("C-j" . slime-repl-next-prompt)
        ("C-k" . slime-repl-previous-prompt)))
     (evil-normal-state)
     (yunge-test-evil-keys
      'normal
-     '(("RET" . slime-repl-return)
+     '(("M-p" . slime-repl-previous-input)
+       ("M-n" . slime-repl-next-input)
+       ("RET" . slime-repl-return)
        ("<return>" . slime-repl-return)
        ("C-j" . slime-repl-next-prompt)
        ("C-k" . slime-repl-previous-prompt)

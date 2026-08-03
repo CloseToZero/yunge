@@ -62,6 +62,8 @@ Use these conventions only where the action is meaningful:
 - ~RET~ invokes the primary action for the item at point.
 - In programming buffers, ~K~ describes the symbol at point.
 - ~gr~ refreshes the current contents.
+- ~M-p~ and ~M-n~ move to the previous or next entry in minibuffer and REPL
+  input histories.
 - ~C-j~ and ~C-k~ move to the next or previous candidate, revision, chunk, or
   visible section.
 - ~M-h~ moves to the parent in hierarchical views.
