@@ -1,7 +1,16 @@
 ;; SPDX-FileCopyrightText: 2026 Chen Zhexuan
 ;; SPDX-License-Identifier: MIT
 
-((compat
+((avy
+  :source "elpaca-menu-lock-file"
+  :recipe
+  (:package "avy"
+   :repo "abo-abo/avy"
+   :fetcher github
+   :files (:defaults)
+   :source "MELPA"
+   :ref "933d1f36cca0f71e4acb5fac707e9ae26c536264"))
+ (compat
   :source "elpaca-menu-lock-file"
   :recipe
   (:package "compat"

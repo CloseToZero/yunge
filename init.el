@@ -19,6 +19,7 @@
 (require 'yunge-orderless)
 (require 'yunge-corfu)
 (require 'yunge-marginalia)
+(require 'yunge-avy)
 (require 'yunge-consult)
 (require 'yunge-embark)
 (require 'yunge-magit)
