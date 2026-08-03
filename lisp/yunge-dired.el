@@ -5,15 +5,85 @@
 (require 'yunge-key)
 
 (declare-function dired-copy-filename-as-kill "dired")
+(declare-function dired-dnd-handle-file "dired" (uri action))
+(declare-function dired-dnd-handle-local-file "dired" (uri action))
+(declare-function dnd-get-local-file-name "dnd"
+                  (uri &optional must-exist))
+(declare-function dnd-open-file "dnd" (uri action))
 (declare-function project-current "project"
                   (&optional maybe-prompt directory))
 (declare-function project-remember-project "project"
                   (project &optional no-write stable))
+(declare-function x-popup-menu "menu.c" (position menu))
 
+(defvar dnd-protocol-alist)
 (defvar dired-movement-style)
 (defvar dired-directory)
 (defvar dired-mode-map)
 (defvar wdired-mode-map)
+
+(defun yunge-dired--drop-items-description (uris)
+  "Return a short description of dropped file URIS."
+  (if (cdr uris)
+      (format "%d items" (length uris))
+    (let ((file (or (dnd-get-local-file-name (car uris))
+                    (car uris))))
+      (format "`%s'"
+              (file-name-nondirectory (directory-file-name file))))))
+
+(defun yunge-dired--drop-action-menu (uris)
+  "Ask which action to perform for dropped file URIS."
+  (x-popup-menu
+   t
+   `(,(format "Drop %s" (yunge-dired--drop-items-description uris))
+     (""
+      ("Open" . open)
+      ("Copy here" . copy)
+      ("Move here" . move)
+      ("Link here" . link)
+      "--"
+      ("Cancel" . nil)))))
+
+(defun yunge-dired--transfer-dropped-file (uri action)
+  "Perform transfer ACTION on the file designated by URI."
+  (if (string-match-p "\\`file://[^/]" uri)
+      (dired-dnd-handle-file uri action)
+    (dired-dnd-handle-local-file uri action)))
+
+(defun yunge-dired--perform-file-drop (window uris action)
+  "Perform ACTION on file URIS dropped into WINDOW.
+ACTION is `open', `copy', `move', or `link'."
+  (require 'dnd)
+  (with-selected-window window
+    (let ((result (if (eq action 'open) 'private action)))
+      (dolist (uri uris)
+        (let ((performed
+               (if (eq action 'open)
+                   (dnd-open-file uri 'private)
+                 (yunge-dired--transfer-dropped-file uri action))))
+          (unless (eq performed result)
+            (setq result 'private))))
+      result)))
+
+(defun yunge-dired-handle-file-drop (uris _source-action)
+  "Ask how to handle a batch of file URIS dropped into Dired.
+Ignore SOURCE-ACTION because drag-and-drop backends derive it
+inconsistently from keyboard modifiers and the source application."
+  (when-let* ((action (yunge-dired--drop-action-menu uris)))
+    (yunge-dired--perform-file-drop (selected-window) uris action)))
+
+(put 'yunge-dired-handle-file-drop 'dnd-multiple-handler t)
+
+(defun yunge-dired--setup-dnd ()
+  "Use the portable file-drop handler in the current Dired buffer."
+  (when (boundp 'dnd-protocol-alist)
+    (let (non-file-handlers)
+      (dolist (entry dnd-protocol-alist)
+        (unless (string-match-p (car entry) "file:///yunge-dired-drop")
+          (push entry non-file-handlers)))
+      (setq-local dnd-protocol-alist
+                  (cons '("^file:" . yunge-dired-handle-file-drop)
+                        (nreverse non-file-handlers))))))
 
 (defun yunge-dired--remember-project ()
   "Remember the project containing the current Dired directory."
@@ -149,7 +219,21 @@
                          yunge-wdired-normal-bindings))
 
 (with-eval-after-load 'dired
-  (add-hook 'dired-mode-hook #'yunge-dired--remember-project))
+  (require 'dnd)
+  ;; Remove bindings left by the earlier Windows-only implementation.
+  (dolist (event '([drag-n-drop]
+                   [C-drag-n-drop]
+                   [S-drag-n-drop]
+                   [C-S-drag-n-drop]))
+    (when (eq (lookup-key dired-mode-map event)
+              #'yunge-dired-handle-file-drop)
+      (define-key dired-mode-map event nil)))
+  (add-hook 'dired-mode-hook #'yunge-dired--remember-project)
+  (add-hook 'dired-mode-hook #'yunge-dired--setup-dnd)
+  (dolist (buffer (buffer-list))
+    (with-current-buffer buffer
+      (when (derived-mode-p 'dired-mode)
+        (yunge-dired--setup-dnd)))))
 
 (with-eval-after-load 'evil
   (with-eval-after-load 'dired

@@ -6,10 +6,15 @@
 
 (declare-function project-known-project-roots "project")
 (declare-function wdired-abort-changes "wdired")
+(declare-function yunge-dired--perform-file-drop
+                  "yunge-dired" (window uris action))
 (declare-function yunge-dired--remember-project "yunge-dired")
+(declare-function yunge-dired--setup-dnd "yunge-dired")
 
 (defvar dired-directory)
+(defvar dired-mode-map)
 (defvar dired-movement-style)
+(defvar dnd-protocol-alist)
 (defvar project--list)
 (defvar project-list-file)
 
@@ -68,6 +73,13 @@
 
     (should (eq dired-movement-style 'bounded-files))
 
+    (dolist (event '([drag-n-drop]
+                     [C-drag-n-drop]
+                     [S-drag-n-drop]
+                     [C-S-drag-n-drop]))
+      (should-not (eq (lookup-key dired-mode-map event)
+                      #'yunge-dired-handle-file-drop)))
+
     (yunge-test-which-key-prefix-bindings
      'dired-mode "*" '(("t" nil "invert marks")))
     (yunge-test-which-key-prefix-bindings
@@ -77,6 +89,55 @@
     (yunge-test-which-key-prefix-bindings
      'dired-mode "SPC m" '(("a" nil "+attribute")
                             ("l" nil "+link")))))
+
+(ert-deftest yunge-dired-installs-portable-file-drop-handler ()
+  (require 'yunge-dired)
+  (with-temp-buffer
+    (setq-local dnd-protocol-alist
+                '(("^file:///" . dnd-open-local-file)
+                  ("^file:" . dired-dnd-handle-local-file)
+                  ("^https?://" . dnd-open-file)))
+    (yunge-dired--setup-dnd)
+    (should (equal dnd-protocol-alist
+                   '(("^file:" . yunge-dired-handle-file-drop)
+                     ("^https?://" . dnd-open-file))))
+    (should (get 'yunge-dired-handle-file-drop 'dnd-multiple-handler))))
+
+(ert-deftest yunge-dired-performs-portable-file-drop-actions ()
+  (require 'yunge-dired)
+  (let ((uris '("file:///source/one.txt" "file:///source/two.txt"))
+        opened transferred menu-action (menu-count 0))
+    (cl-letf (((symbol-function 'dnd-open-file)
+               (lambda (uri action)
+                 (push (list uri action) opened)
+                 'private))
+              ((symbol-function 'dired-dnd-handle-local-file)
+               (lambda (uri action)
+                 (push (list uri action) transferred)
+                 action))
+              ((symbol-function 'dnd-get-local-file-name)
+               (lambda (uri &rest _arguments) uri))
+              ((symbol-function 'x-popup-menu)
+               (lambda (&rest _arguments)
+                 (cl-incf menu-count)
+                 menu-action)))
+      (setq menu-action 'open)
+      (should (eq (yunge-dired-handle-file-drop uris 'move) 'private))
+      (should (equal (nreverse opened)
+                     '(("file:///source/one.txt" private)
+                       ("file:///source/two.txt" private))))
+
+      (setq menu-action 'copy)
+      (should (eq (yunge-dired-handle-file-drop uris 'private) 'copy))
+      (should (equal (nreverse transferred)
+                     '(("file:///source/one.txt" copy)
+                       ("file:///source/two.txt" copy))))
+
+      (setq menu-action nil
+            transferred nil)
+      (should-not (yunge-dired-handle-file-drop uris 'copy))
+      (should-not transferred)
+      (should (= menu-count 3)))))
 
 (ert-deftest yunge-dired-remembers-containing-project ()
   (require 'yunge-dired)
