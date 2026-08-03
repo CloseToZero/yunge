@@ -6,6 +6,7 @@
 (require 'yunge-server)
 (require 'yunge-history)
 (require 'yunge-edit)
+(require 'yunge-treesit)
 (when (eq system-type 'darwin)
   (require 'yunge-mac))
 (require 'yunge-package)
