@@ -9,6 +9,7 @@
 
 (defvar evil-command-line-map)
 (defvar evil-eval-map)
+(defvar consult-source-buffer)
 
 (yunge-test-deftest-lazy-load yunge-consult
   (consult consult-imenu))
@@ -100,5 +101,25 @@
     (should-not (evil-get-command-property command :repeat t))
     (should
      (advice-member-p #'yunge-jump-history--track-navigation command))))
+
+(ert-deftest yunge-consult-prefers-the-selected-window-history ()
+  (require 'consult)
+  (yunge-test-load-package-config 'yunge-consult)
+  (let ((shared (generate-new-buffer "*yunge-consult-shared*"))
+        (current (generate-new-buffer "*yunge-consult-current*")))
+    (unwind-protect
+        (save-window-excursion
+          (delete-other-windows)
+          (switch-to-buffer shared)
+          (set-window-buffer (split-window-right) shared)
+          (switch-to-buffer current)
+          (should (get-buffer-window shared))
+          (should (eq (yunge-consult--previous-window-buffer) shared))
+          (should (eq (plist-get consult-source-buffer :items)
+                      #'yunge-consult--buffer-items))
+          (should (eq (cdar (yunge-consult--buffer-items)) shared)))
+      (dolist (buffer (list shared current))
+        (when (buffer-live-p buffer)
+          (kill-buffer buffer))))))
 
 ;;; yunge-consult-test.el ends here

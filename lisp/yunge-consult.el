@@ -7,6 +7,8 @@
 (require 'yunge-evil)
 
 (declare-function evil-add-command-properties "evil-common")
+(declare-function consult--buffer-pair "consult")
+(declare-function consult--buffer-query "consult")
 
 (defvar evil-command-line-map)
 (defvar evil-eval-map)
@@ -33,6 +35,38 @@
 (defconst yunge-consult-navigation-commands
   '(consult-bookmark consult-buffer consult-imenu consult-line
     consult-line-multi consult-recent-file consult-ripgrep))
+
+(defun yunge-consult--previous-window-buffer (&optional window)
+  "Return the most recent live buffer previously shown in WINDOW."
+  (let* ((window (or window (selected-window)))
+         (current (window-buffer window)))
+    (catch 'buffer
+      (dolist (entry (window-prev-buffers window))
+        (let ((buffer (car entry)))
+          (when (and (buffer-live-p buffer)
+                     (not (eq buffer current)))
+            (throw 'buffer buffer)))))))
+
+(defun yunge-consult--buffer-items ()
+  "Return Consult buffer items with the selected window's history first."
+  ;; Consult normally moves every visible buffer behind invisible buffers.
+  ;; When two windows show the same buffer and one of them switches away,
+  ;; that shared buffer remains visible, so pressing RET without typing in
+  ;; `consult-buffer' can select an unrelated buffer instead of returning
+  ;; to it.
+  (let* ((previous (yunge-consult--previous-window-buffer))
+         (items (consult--buffer-query :sort 'visibility
+                                       :as #'consult--buffer-pair))
+         previous-item)
+    (when previous
+      (setq previous-item
+            (catch 'item
+              (dolist (item items)
+                (when (eq (cdr item) previous)
+                  (throw 'item item))))))
+    (if previous-item
+        (cons previous-item (delq previous-item items))
+      items)))
 
 (defun yunge-consult--setup-keys ()
   "Set up Consult command and remap bindings."
@@ -87,8 +121,11 @@
   ;; non-autoloaded `consult-customize' macro is expanded only after Consult
   ;; has loaded.
   (eval-after-load 'consult
-    '(consult-customize
-      consult-ripgrep :preview-key '(:debounce 0.4 any))))
+    '(progn
+       (consult-customize
+        consult-source-buffer :items #'yunge-consult--buffer-items)
+       (consult-customize
+        consult-ripgrep :preview-key '(:debounce 0.4 any)))))
 
 (provide 'yunge-consult)
 
