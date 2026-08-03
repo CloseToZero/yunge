@@ -17,6 +17,7 @@
 (declare-function slime-repl "slime-repl")
 (declare-function slime-scratch "slime-scratch")
 (declare-function slime-setup "slime")
+(declare-function slime-trace-dialog-fetch-traces "slime-trace-dialog")
 (declare-function slime-update-threads-buffer "slime")
 
 (defvar lisp-mode-map)
@@ -31,6 +32,8 @@
 (defvar slime-repl-history-size)
 (defvar slime-popup-buffer-mode-map)
 (defvar slime-thread-control-mode-map)
+(defvar slime-trace-dialog--detail-mode-map)
+(defvar slime-trace-dialog-mode-map)
 (defvar slime-xref-mode-map)
 (defvar sldb-mode-map)
 
@@ -91,6 +94,18 @@
 (yunge-key-define yunge-slime-macro-map
                   yunge-slime-macro-bindings)
 
+(defconst yunge-slime-trace-bindings
+  '(("d" slime-trace-dialog "dialog")
+    ("t" slime-trace-dialog-toggle-trace "toggle trace")
+    ("T" slime-trace-dialog-toggle-complex-trace
+     "toggle complex trace")))
+
+(defvar-keymap yunge-slime-trace-map
+  :doc "Keymap for tracing Common Lisp calls.")
+
+(yunge-key-define yunge-slime-trace-map
+                  yunge-slime-trace-bindings)
+
 (defconst yunge-slime-repl-clear-bindings
   '(("b" slime-repl-clear-buffer "buffer")
     ("o" slime-repl-clear-output "latest output")))
@@ -108,7 +123,8 @@
     ("i" slime-repl-inspect "inspect")
     ("m" ,yunge-slime-macro-map "macro")
     ("p" slime-repl-set-package "set package")
-    ("q" ,yunge-slime-process-map "process")))
+    ("q" ,yunge-slime-process-map "process")
+    ("t" ,yunge-slime-trace-map "trace")))
 
 (defvar-keymap yunge-slime-repl-command-map
   :doc "Keymap for SLIME REPL commands.")
@@ -173,7 +189,8 @@
     ("m" ,yunge-slime-macro-map "macro")
     ("q" ,yunge-slime-process-map "process")
     ("r" yunge-slime-repl "REPL")
-    ("s" slime "start")))
+    ("s" slime "start")
+    ("t" ,yunge-slime-trace-map "trace")))
 
 (defvar-keymap yunge-slime-command-map
   :doc "Keymap for Common Lisp development commands.")
@@ -282,6 +299,51 @@
     ([remap slime-macroexpand-1] slime-macroexpand-1-inplace nil)
     ([remap slime-macroexpand-all] slime-macroexpand-all-inplace nil)))
 
+(defconst yunge-slime-trace-copy-bindings
+  '(("r" slime-trace-dialog-copy-down-to-repl "value to REPL")))
+
+(defvar-keymap yunge-slime-trace-copy-map
+  :doc "Keymap for copying SLIME trace values.")
+
+(yunge-key-define yunge-slime-trace-copy-map
+                  yunge-slime-trace-copy-bindings)
+
+(defconst yunge-slime-trace-dialog-command-bindings
+  '(("a" slime-trace-dialog-autofollow-mode "toggle autofollow")
+    ("d" slime-trace-dialog-hide-details-mode "toggle details")))
+
+(defvar-keymap yunge-slime-trace-dialog-command-map
+  :doc "Keymap for SLIME Trace Dialog commands.")
+
+(yunge-key-define yunge-slime-trace-dialog-command-map
+                  yunge-slime-trace-dialog-command-bindings)
+
+(defun yunge-slime-trace-dialog-fetch-all ()
+  "Fetch every outstanding SLIME Trace Dialog entry."
+  (interactive)
+  (slime-trace-dialog-fetch-traces t))
+
+(defconst yunge-slime-trace-dialog-normal-bindings
+  `(("RET" push-button "activate button")
+    ("q" quit-window "quit")
+    ("C-j" slime-trace-dialog-next-button "next item")
+    ("C-k" slime-trace-dialog-prev-button "previous item")
+    ("gr" slime-trace-dialog-fetch-status "refresh status")
+    ("f" slime-trace-dialog-fetch-traces "fetch next batch")
+    ("F" yunge-slime-trace-dialog-fetch-all "fetch all")
+    ("x" slime-trace-dialog-clear-fetched-traces "clear all traces")
+    ("y" ,yunge-slime-trace-copy-map "copy")
+    ,@yunge-key-button-navigation-bindings
+    ([localleader] ,yunge-slime-trace-dialog-command-map nil)))
+
+(defconst yunge-slime-trace-detail-normal-bindings
+  `(("RET" push-button "activate button")
+    ("q" quit-window "quit")
+    ("C-j" slime-trace-dialog-next-button "next item")
+    ("C-k" slime-trace-dialog-prev-button "previous item")
+    ("y" ,yunge-slime-trace-copy-map "copy")
+    ,@yunge-key-button-navigation-bindings))
+
 (defun yunge-slime-thread-kill ()
   "Kill the thread at point or threads covered by the active region."
   (interactive)
@@ -375,6 +437,16 @@
   ;; must rebuild the active auxiliary maps at that point.
   (add-hook 'slime-popup-buffer-mode-hook #'evil-normalize-keymaps))
 
+(defun yunge-slime--setup-trace-keys ()
+  "Set up Evil bindings in SLIME trace views."
+  (dolist (mode '(slime-trace-dialog-mode
+                  slime-trace-dialog--detail-mode))
+    (evil-set-initial-state mode 'normal))
+  (yunge-key-evil-define 'normal slime-trace-dialog-mode-map
+                         yunge-slime-trace-dialog-normal-bindings)
+  (yunge-key-evil-define 'normal slime-trace-dialog--detail-mode-map
+                         yunge-slime-trace-detail-normal-bindings))
+
 (with-eval-after-load 'evil
   ;; SLIME resolves definitions asynchronously, so Evil must record the
   ;; origin before the command returns rather than compare locations later.
@@ -383,6 +455,8 @@
     (yunge-slime--setup-source-keys))
   (with-eval-after-load 'slime
     (yunge-slime--setup-view-keys))
+  (with-eval-after-load 'slime-trace-dialog
+    (yunge-slime--setup-trace-keys))
   (with-eval-after-load 'slime-repl
     (yunge-slime--setup-repl-keys)))
 
@@ -398,6 +472,8 @@
   (yunge-key-add-which-key-descriptions
    yunge-slime-macro-map yunge-slime-macro-bindings)
   (yunge-key-add-which-key-descriptions
+   yunge-slime-trace-map yunge-slime-trace-bindings)
+  (yunge-key-add-which-key-descriptions
    yunge-slime-repl-clear-map yunge-slime-repl-clear-bindings)
   (yunge-key-add-which-key-descriptions
    yunge-slime-repl-command-map yunge-slime-repl-command-bindings)
@@ -407,7 +483,12 @@
   (yunge-key-add-which-key-descriptions
    yunge-slime-xref-command-map yunge-slime-xref-command-bindings)
   (yunge-key-add-which-key-descriptions
-   yunge-slime-process-map yunge-slime-process-bindings))
+   yunge-slime-process-map yunge-slime-process-bindings)
+  (yunge-key-add-which-key-descriptions
+   yunge-slime-trace-copy-map yunge-slime-trace-copy-bindings)
+  (yunge-key-add-which-key-descriptions
+   yunge-slime-trace-dialog-command-map
+   yunge-slime-trace-dialog-command-bindings))
 
 (elpaca slime
   (let ((directory

@@ -14,6 +14,8 @@
 (declare-function slime-repl-mode "slime-repl")
 (declare-function slime-setup "slime")
 (declare-function slime-thread-control-mode "slime")
+(declare-function slime-trace-dialog--detail-mode "slime-trace-dialog")
+(declare-function slime-trace-dialog-mode "slime-trace-dialog")
 (declare-function slime-xref-mode "slime")
 (declare-function sldb-mode "slime")
 (declare-function yunge-slime--default-implementation "yunge-slime")
@@ -121,6 +123,9 @@
          ("SPC m q q" . slime-quit-lisp)
          ("SPC m q r" . slime-restart-inferior-lisp)
          ("SPC m q t" . slime-list-threads)
+         ("SPC m t d" . slime-trace-dialog)
+         ("SPC m t t" . slime-trace-dialog-toggle-trace)
+         ("SPC m t T" . slime-trace-dialog-toggle-complex-trace)
          ("SPC m e b" . slime-eval-buffer)
          ("SPC m e d" . slime-eval-defun)
          ("SPC m e e" . slime-eval-last-expression)
@@ -139,7 +144,8 @@
          ("m" nil "+macro")
          ("q" nil "+process")
          ("r" nil "REPL")
-         ("s" nil "start")))
+         ("s" nil "start")
+         ("t" nil "+trace")))
       (yunge-test-which-key-prefix
        "SPC m e"
        yunge-slime-eval-bindings)
@@ -154,7 +160,10 @@
        yunge-slime-macro-bindings)
       (yunge-test-which-key-prefix
        "SPC m q"
-       yunge-slime-process-bindings))))
+       yunge-slime-process-bindings)
+      (yunge-test-which-key-prefix
+       "SPC m t"
+       yunge-slime-trace-bindings))))
 
 (ert-deftest yunge-slime-integrates-repl-with-evil ()
   (yunge-test-enable-evil)
@@ -195,7 +204,10 @@
        ("SPC m q c" . slime-list-connections)
        ("SPC m q q" . slime-quit-lisp)
        ("SPC m q r" . slime-restart-inferior-lisp)
-       ("SPC m q t" . slime-list-threads)))
+       ("SPC m q t" . slime-list-threads)
+       ("SPC m t d" . slime-trace-dialog)
+       ("SPC m t t" . slime-trace-dialog-toggle-trace)
+       ("SPC m t T" . slime-trace-dialog-toggle-complex-trace)))
     (yunge-test-which-key-prefix
      "SPC m"
      '(("b" nil "scratch")
@@ -204,13 +216,17 @@
        ("i" nil "inspect")
        ("m" nil "+macro")
        ("p" nil "set package")
-       ("q" nil "+process")))
+       ("q" nil "+process")
+       ("t" nil "+trace")))
     (yunge-test-which-key-prefix
      "SPC m c"
      yunge-slime-repl-clear-bindings)
     (yunge-test-which-key-prefix
      "SPC m q"
-     yunge-slime-process-bindings)))
+     yunge-slime-process-bindings)
+    (yunge-test-which-key-prefix
+     "SPC m t"
+     yunge-slime-trace-bindings)))
 
 (ert-deftest yunge-slime-integrates-browsing-views-with-evil ()
   (yunge-test-enable-evil)
@@ -353,6 +369,69 @@
        ("q" . quit-window)
        ("SPC m m a" . slime-macroexpand-all-inplace)
        ("SPC m m o" . slime-macroexpand-1-inplace)))))
+
+(ert-deftest yunge-slime-integrates-trace-dialog-with-evil ()
+  (yunge-test-enable-evil)
+  (require 'slime-autoloads)
+  (yunge-test-load-package-config 'yunge-slime)
+  (require 'slime)
+  (slime-setup)
+  (require 'which-key)
+
+  (yunge-test-evil-normal-keys
+   'slime-trace-dialog-mode
+   '(("RET" . push-button)
+     ("q" . quit-window)
+     ("C-j" . slime-trace-dialog-next-button)
+     ("C-k" . slime-trace-dialog-prev-button)
+     ("gr" . slime-trace-dialog-fetch-status)
+     ("f" . slime-trace-dialog-fetch-traces)
+     ("F" . yunge-slime-trace-dialog-fetch-all)
+     ("x" . slime-trace-dialog-clear-fetched-traces)
+     ("y r" . slime-trace-dialog-copy-down-to-repl)
+     ("g]" . forward-button)
+     ("g[" . backward-button)
+     ("<tab>" . forward-button)
+     ("S-TAB" . backward-button)
+     ("SPC m a" . slime-trace-dialog-autofollow-mode)
+     ("SPC m d" . slime-trace-dialog-hide-details-mode)))
+
+  (yunge-test-evil-normal-keys
+   'slime-trace-dialog--detail-mode
+   '(("RET" . push-button)
+     ("q" . quit-window)
+     ("C-j" . slime-trace-dialog-next-button)
+     ("C-k" . slime-trace-dialog-prev-button)
+     ("y r" . slime-trace-dialog-copy-down-to-repl)
+     ("g]" . forward-button)
+     ("g[" . backward-button)
+     ("<tab>" . forward-button)
+     ("S-TAB" . backward-button)))
+
+  (with-temp-buffer
+    (slime-trace-dialog-mode)
+    (yunge-test-which-key-prefix
+     "SPC m" yunge-slime-trace-dialog-command-bindings)
+    (yunge-test-which-key-prefix
+     "y" yunge-slime-trace-copy-bindings))
+
+  (with-temp-buffer
+    (slime-trace-dialog--detail-mode)
+    (slime-popup-buffer-mode 1)
+    (evil-normal-state)
+    (yunge-test-evil-keys
+     'normal
+     '(("q" . quit-window)
+       ("C-j" . slime-trace-dialog-next-button)
+       ("C-k" . slime-trace-dialog-prev-button)
+       ("y r" . slime-trace-dialog-copy-down-to-repl))))
+
+  (let (recurse)
+    (cl-letf (((symbol-function 'slime-trace-dialog-fetch-traces)
+               (lambda (&optional all)
+                 (setq recurse all))))
+      (call-interactively #'yunge-slime-trace-dialog-fetch-all))
+    (should recurse)))
 
 (ert-deftest yunge-slime-integrates-runtime-views-with-evil ()
   (yunge-test-enable-evil)
