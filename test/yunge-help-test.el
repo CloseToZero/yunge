@@ -49,8 +49,8 @@
      ("g[" . backward-button)
      ("<tab>" . forward-button)
      ("S-TAB" . backward-button)
-     ("C-o" . yunge-jump-backward)
-     ("C-i" . yunge-jump-forward)))
+     ("C-o" . yunge-jump-history-backward)
+     ("C-i" . yunge-jump-history-forward)))
 
   (with-temp-buffer
     (help-mode)

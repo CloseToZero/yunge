@@ -109,7 +109,7 @@
       ("y s" . magit-copy-section-value))
     yunge-magit-test-repository-bindings
     '(("SPC m SPC" . magit-dispatch)
-      ("C-i" . yunge-jump-forward)))))
+      ("C-i" . yunge-jump-history-forward)))))
 
 (defun yunge-magit-test--minor-mode-keys (mode bindings)
   "Enable minor MODE and check its normal-state BINDINGS."
@@ -275,7 +275,7 @@
       ("y s" . magit-copy-section-value))
     yunge-magit-test-repository-bindings
     '(("SPC m SPC" . magit-dispatch)
-      ("C-i" . yunge-jump-forward))))
+      ("C-i" . yunge-jump-history-forward))))
   (yunge-test-which-key-prefix-bindings
    'magit-status-mode "SPC m"
    '(("SPC" nil "dispatch")))
@@ -317,7 +317,7 @@
      ("RET" . magit-log-select-pick)
      ("<tab>" . magit-section-toggle)
      ("q" . magit-log-select-quit)
-     ("C-i" . yunge-jump-forward))))
+     ("C-i" . yunge-jump-history-forward))))
 
 (ert-deftest yunge-magit-log-ret-visits-the-commit-at-point ()
   (yunge-test-enable-evil)

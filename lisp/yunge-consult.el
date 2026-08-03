@@ -3,7 +3,7 @@
 ;; SPDX-License-Identifier: MIT
 
 (require 'yunge-key)
-(require 'yunge-jump)
+(require 'yunge-jump-history)
 (require 'yunge-evil)
 
 (declare-function evil-add-command-properties "evil-common")
@@ -55,7 +55,7 @@
   "Track successful Consult navigation without making it repeatable."
   (dolist (command yunge-consult-navigation-commands)
     (evil-add-command-properties command :jump nil :repeat nil)
-    (yunge-jump-track-command command)))
+    (yunge-jump-history-track-command command)))
 
 (defun yunge-consult--describe-keys ()
   "Describe Consult leader bindings to Which-Key."

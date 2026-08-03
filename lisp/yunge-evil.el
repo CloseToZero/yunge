@@ -3,7 +3,7 @@
 ;; SPDX-License-Identifier: MIT
 
 (require 'yunge-key)
-(require 'yunge-jump)
+(require 'yunge-jump-history)
 (require 'yunge-minibuffer)
 
 (declare-function evil-make-intercept-map "evil-core")

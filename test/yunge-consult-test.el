@@ -5,7 +5,7 @@
 (require 'yunge-test-helper)
 
 (declare-function evil-get-command-property "evil-common")
-(declare-function yunge-jump--track-navigation "yunge-jump")
+(declare-function yunge-jump-history--track-navigation "yunge-jump-history")
 
 (defvar evil-command-line-map)
 (defvar evil-eval-map)
@@ -99,6 +99,6 @@
     (should-not (evil-get-command-property command :jump))
     (should-not (evil-get-command-property command :repeat t))
     (should
-     (advice-member-p #'yunge-jump--track-navigation command))))
+     (advice-member-p #'yunge-jump-history--track-navigation command))))
 
 ;;; yunge-consult-test.el ends here
