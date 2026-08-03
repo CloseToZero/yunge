@@ -52,6 +52,7 @@
     ("m" . magit-merge)
     ("p" . magit-push)
     ("r" . magit-rebase)
+    ("X" . magit-reset)
     ("Z" . magit-stash)))
 
 (yunge-test-deftest-lazy-load yunge-magit
