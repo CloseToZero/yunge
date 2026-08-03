@@ -1,7 +1,22 @@
 ;; SPDX-FileCopyrightText: 2026 Chen Zhexuan
 ;; SPDX-License-Identifier: MIT
 
-((avy
+((async
+  :source "elpaca-menu-lock-file"
+  :recipe
+  (:package "async"
+   :repo "jwiegley/emacs-async"
+   :fetcher github
+   :files
+   ("*.el" "*.el.in" "dir" "*.info" "*.texi" "*.texinfo"
+    "doc/dir" "doc/*.info" "doc/*.texi" "doc/*.texinfo"
+    "lisp/*.el" "docs/dir" "docs/*.info" "docs/*.texi"
+    "docs/*.texinfo"
+    (:exclude ".dir-locals.el" "test.el" "tests.el" "*-test.el"
+              "*-tests.el" "LICENSE" "README*" "*-pkg.el"))
+   :source "MELPA"
+   :ref "4fdcb061a166e0d6ccc27d3829a28e04415ae825"))
+ (avy
   :source "elpaca-menu-lock-file"
   :recipe
   (:package "avy"
@@ -158,6 +173,21 @@
    :fetcher github
    :files (:defaults)
    :ref "0ffd9d6903714c1f6d8fcbb6a20941fb33dd7ae5"))
+ (pyim
+  :source "elpaca-menu-lock-file"
+  :recipe
+  (:package "pyim"
+   :repo "tumashu/pyim"
+   :fetcher github
+   :files
+   ("*.el" "*.el.in" "dir" "*.info" "*.texi" "*.texinfo"
+    "doc/dir" "doc/*.info" "doc/*.texi" "doc/*.texinfo"
+    "lisp/*.el" "docs/dir" "docs/*.info" "docs/*.texi"
+    "docs/*.texinfo"
+    (:exclude ".dir-locals.el" "test.el" "tests.el" "*-test.el"
+              "*-tests.el" "LICENSE" "README*" "*-pkg.el"))
+   :source "MELPA"
+   :ref "a56c8d992c872addcfc295c409a7bae70d00af87"))
  (vertico
   :source "elpaca-menu-lock-file"
   :recipe
@@ -182,4 +212,14 @@
    :fetcher github
    :files (:defaults)
    :source "MELPA"
-   :ref "a1f92a26e53033ec58e1d2ce9b132da7ebae816e")))
+   :ref "a1f92a26e53033ec58e1d2ce9b132da7ebae816e"))
+ (xr
+  :source "elpaca-menu-lock-file"
+  :recipe
+  (:package "xr"
+   :repo ("https://github.com/mattiase/xr" . "xr")
+   :tar "2.2"
+   :host gnu
+   :files ("*" (:exclude ".git" "Makefile" ".github" "*-test.el*"))
+   :source "GNU ELPA"
+   :ref "fc4d6b5ddae9eb2c8adc2b117e6f33f3a09a4e96")))

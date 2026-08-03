@@ -8,13 +8,15 @@
 (defvar avy-keys)
 (defvar avy-single-candidate-jump)
 
+(declare-function yunge-avy--query-regexp "yunge-avy" (text))
+
 (defun yunge-avy-test--load-config ()
   "Load the Avy configuration synchronously for command tests."
   (require 'evil-autoloads)
   (yunge-test-load-package-config 'yunge-avy))
 
 (yunge-test-deftest-lazy-load yunge-avy
-  (avy))
+  (avy pyim pyim-cregexp))
 
 (ert-deftest yunge-avy-configures-after-package-is-ready ()
   (yunge-test-run-package-config
@@ -52,6 +54,13 @@
   (yunge-avy-test--load-config)
   (should-error (yunge-avy-jump-to-text "") :type 'user-error))
 
+(ert-deftest yunge-avy-pinyin-query-matches-full-and-abbreviated-input ()
+  (yunge-avy-test--load-config)
+  (dolist (query '("baoliu" "baol" "bl"))
+    (let ((regexp (yunge-avy--query-regexp query)))
+      (should (string-match-p regexp "保留"))
+      (should (string-match-p regexp query)))))
+
 (ert-deftest yunge-avy-jump-to-text-selects-visible-non-ascii-text ()
   (yunge-avy-test--load-config)
   (require 'avy)
@@ -73,5 +82,33 @@
           (should (= (point) 6)))
       (when (buffer-live-p buffer)
         (kill-buffer buffer)))))
+
+(ert-deftest yunge-avy-pinyin-query-jumps-across-windows ()
+  (yunge-avy-test--load-config)
+  (require 'avy)
+  (let ((origin (generate-new-buffer " *yunge-avy-origin*"))
+        (target (generate-new-buffer " *yunge-avy-target*")))
+    (unwind-protect
+        (save-window-excursion
+          (delete-other-windows)
+          (switch-to-buffer origin)
+          (insert "source")
+          (let ((target-window (split-window-right)))
+            (with-current-buffer target
+              (insert "保留"))
+            (set-window-buffer target-window target)
+            (let ((avy-all-windows t)
+                  (avy-single-candidate-jump t))
+              (cl-letf
+                  (((symbol-function
+                     'yunge-input-source-call-with-ascii)
+                    (lambda (function) (funcall function))))
+                (yunge-avy-jump-to-text "bl")))
+            (should (eq (selected-window) target-window))
+            (should (eq (current-buffer) target))
+            (should (= (point) 1))))
+      (dolist (buffer (list origin target))
+        (when (buffer-live-p buffer)
+          (kill-buffer buffer))))))
 
 ;;; yunge-avy-test.el ends here
