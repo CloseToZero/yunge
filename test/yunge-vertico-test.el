@@ -4,8 +4,6 @@
 
 (require 'yunge-test-helper)
 
-(require 'elpaca-autoloads)
-
 (declare-function evil-local-mode "evil-core")
 (declare-function evil-normal-state "evil-states")
 (declare-function vertico--advice "vertico")
@@ -30,7 +28,8 @@
       (error "Vertico was not enabled after package readiness"))))
 
 (ert-deftest yunge-vertico-moves-by-half-pages ()
-  (require 'yunge-vertico)
+  (require 'vertico-autoloads)
+  (yunge-test-load-package-config 'yunge-vertico)
   (let ((vertico-count 10)
         movement)
     (cl-letf (((symbol-function 'vertico-next)

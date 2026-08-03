@@ -11,7 +11,6 @@
 (defvar corfu-auto-delay)
 (defvar corfu-auto-prefix)
 (defvar corfu-cycle)
-(defvar corfu-map)
 (defvar corfu-mode)
 (defvar corfu-preview-current)
 (defvar text-mode-ispell-word-completion)

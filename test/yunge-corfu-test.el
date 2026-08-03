@@ -11,7 +11,6 @@
 (declare-function evil-local-mode "evil-core")
 
 (defvar completion-in-region-mode)
-(defvar corfu-map)
 (defvar corfu-mode)
 
 (define-minor-mode yunge-corfu-test-input-mode
@@ -91,7 +90,7 @@
       (when (buffer-live-p buffer)
         (kill-buffer buffer)))))
 
-(ert-deftest yunge-corfu-accepts-before-a-surrounding-input-mode ()
+(ert-deftest yunge-corfu-popup-return-outranks-a-surrounding-input-mode ()
   (yunge-test-enable-evil)
   (require 'corfu-autoloads)
   (yunge-test-load-package-config 'yunge-corfu)
