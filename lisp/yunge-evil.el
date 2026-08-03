@@ -9,6 +9,7 @@
 (declare-function evil-make-intercept-map "evil-core")
 
 (defvar help-map)
+(defvar project-prefix-map)
 
 (defgroup yunge nil
   "Personal Emacs configuration."
@@ -65,6 +66,7 @@
     ("g" ,yunge-go-map "go")
     ("h" ,help-map "help")
     ("j" ,yunge-jump-map "jump")
+    ("p" ,project-prefix-map "project")
     ("q" ,yunge-quit-map "quit")
     ("s" ,yunge-search-map "search")
     ("w" ,yunge-window-map "window")))

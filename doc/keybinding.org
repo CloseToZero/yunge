@@ -116,6 +116,7 @@ Group global commands under prefixes by purpose:
 - ~SPC g~ goes to destinations associated with the current context.
 - ~SPC h~ opens documentation and help.
 - ~SPC j~ jumps to locations.
+- ~SPC p~ operates on projects.
 - ~SPC q~ exits Emacs or manages its frames.
 - ~SPC s~ searches text.
 - ~SPC w~ operates on windows.

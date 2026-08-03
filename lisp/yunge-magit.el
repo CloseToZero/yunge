@@ -22,6 +22,8 @@
 (defvar magit-repolist-mode-map)
 (defvar magit-refs-mode-map)
 (defvar magit-status-mode-map)
+(defvar project-prefix-map)
+(defvar project-switch-commands)
 
 ;; Global Magit entry points belong to this configuration's leader maps.
 (setq magit-define-global-key-bindings nil)
@@ -31,6 +33,9 @@
 
 (defconst yunge-magit-go-bindings
   '(("g" magit-status "Git status")))
+
+(defconst yunge-magit-project-bindings
+  '(("m" magit-project-status "Magit status")))
 
 (defconst yunge-magit-command-bindings
   '(("SPC" magit-dispatch "dispatch")))
@@ -176,11 +181,17 @@
 (elpaca magit
   (yunge-key-define yunge-file-map yunge-magit-file-bindings)
   (yunge-key-define yunge-go-map yunge-magit-go-bindings)
+  (yunge-key-define project-prefix-map yunge-magit-project-bindings)
+  (with-eval-after-load 'project
+    (add-to-list 'project-switch-commands
+                 '(magit-project-status "Magit") t))
   (with-eval-after-load 'which-key
     (yunge-key-add-which-key-descriptions
      yunge-file-map yunge-magit-file-bindings)
     (yunge-key-add-which-key-descriptions
      yunge-go-map yunge-magit-go-bindings)
+    (yunge-key-add-which-key-descriptions
+     project-prefix-map yunge-magit-project-bindings)
     (yunge-key-add-which-key-descriptions
      yunge-magit-copy-map yunge-magit-copy-bindings)
     (yunge-key-add-which-key-descriptions

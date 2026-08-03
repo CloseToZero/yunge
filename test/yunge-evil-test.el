@@ -22,7 +22,7 @@
   :keymap yunge-test-space-mode-map)
 
 (yunge-test-deftest-lazy-load yunge-evil
-  (evil))
+  (evil project))
 
 (ert-deftest yunge-evil-configures-after-package-ready ()
   (yunge-test-run-package-config
@@ -80,6 +80,7 @@
         (yunge-test-key "SPC f f" 'find-file)
         (yunge-test-key "SPC f s" 'save-buffer)
         (yunge-test-key "SPC h f" 'describe-function)
+        (yunge-test-key "SPC p p" 'project-switch-project)
         (yunge-test-key "SPC q f" 'delete-frame)
         (yunge-test-key "SPC q q" 'save-buffers-kill-terminal)
         (yunge-test-key "SPC q r" 'restart-emacs)
@@ -108,6 +109,7 @@
      ("h" nil "+help")
      ("j" nil "+jump")
      ("m" nil "+mode")
+     ("p" nil "+project")
      ("q" nil "+quit")
      ("s" nil "+search")
      ("w" nil "+window")))

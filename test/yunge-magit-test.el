@@ -38,6 +38,8 @@
 (defvar magit-diff-section-map)
 (defvar magit-module-section-map)
 (defvar magit-root-section)
+(defvar project-prefix-map)
+(defvar project-switch-commands)
 
 (defconst yunge-magit-test-repository-bindings
   '(("A" . magit-cherry-pick)
@@ -53,7 +55,7 @@
     ("Z" . magit-stash)))
 
 (yunge-test-deftest-lazy-load yunge-magit
-  (magit))
+  (magit project))
 
 (defun yunge-magit-test--visual-untracked-files (keys target)
   "Return the untracked files selected by KEYS before calling TARGET."
@@ -125,7 +127,12 @@
       (when (keymap-lookup yunge-file-map "g")
         (error "Magit file keys were bound before its Elpaca body ran"))
       (when (keymap-lookup yunge-go-map "g")
-        (error "Magit keys were bound before its Elpaca body ran")))
+        (error "Magit keys were bound before its Elpaca body ran"))
+      (when (keymap-lookup project-prefix-map "m")
+        (error "Magit project key was bound before package readiness"))
+      (when (and (boundp 'project-switch-commands)
+                 (assq 'magit-project-status project-switch-commands))
+        (error "Magit project action was added before package readiness")))
    :after-ready
    '(progn
       (unless (eq (keymap-lookup yunge-file-map "g")
@@ -133,6 +140,15 @@
         (error "Magit file keys were not bound after package readiness"))
       (unless (eq (keymap-lookup yunge-go-map "g") 'magit-status)
         (error "Magit keys were not bound after package readiness"))
+      (unless (eq (keymap-lookup project-prefix-map "m")
+                  'magit-project-status)
+        (error "Magit project key was not bound after package readiness"))
+      (when (featurep 'project)
+        (error "Project was loaded by the Magit configuration"))
+      (require 'project)
+      (unless (equal (car (last project-switch-commands))
+                     '(magit-project-status "Magit"))
+        (error "Magit project action was not appended after readiness"))
       (dolist (binding '(("C-x g" . magit-status)
                          ("C-x M-g" . magit-dispatch)
                          ("C-c M-g" . magit-file-dispatch)))
@@ -151,13 +167,17 @@
   (yunge-test-evil-normal-keys
    'fundamental-mode
    '(("SPC f g" . magit-file-dispatch)
-     ("SPC g g" . magit-status)))
+     ("SPC g g" . magit-status)
+     ("SPC p m" . magit-project-status)))
   (yunge-test-which-key-prefix-bindings
    'fundamental-mode "SPC f"
    '(("g" nil "Git actions")))
   (yunge-test-which-key-prefix-bindings
    'fundamental-mode "SPC g"
    '(("g" nil "Git status")))
+  (yunge-test-which-key-prefix-bindings
+   'fundamental-mode "SPC p"
+   '(("m" nil "Magit status")))
 
   (require 'magit)
   (yunge-test-evil-normal-keys
