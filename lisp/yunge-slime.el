@@ -11,12 +11,16 @@
 (declare-function slime "slime")
 (declare-function slime-c-p-c-completion-at-point "slime-c-p-c")
 (declare-function slime-connected-p "slime")
+(declare-function slime-eval "slime")
+(declare-function slime-get-region-properties "slime")
 (declare-function slime-lisp-mode-hook "slime")
 (declare-function slime-repl "slime-repl")
 (declare-function slime-setup "slime")
+(declare-function slime-update-threads-buffer "slime")
 
 (defvar lisp-mode-map)
 (defvar slime-completion-at-point-functions)
+(defvar slime-connection-list-mode-map)
 (defvar slime-default-lisp)
 (defvar slime-apropos-mode-map)
 (defvar slime-inspector-mode-map)
@@ -24,6 +28,7 @@
 (defvar slime-repl-history-file)
 (defvar slime-repl-history-size)
 (defvar slime-popup-buffer-mode-map)
+(defvar slime-thread-control-mode-map)
 (defvar slime-xref-mode-map)
 (defvar sldb-mode-map)
 
@@ -50,15 +55,17 @@
 (yunge-key-define yunge-slime-compile-map
                   yunge-slime-compile-bindings)
 
-(defconst yunge-slime-quit-bindings
-  '(("q" slime-quit-lisp "quit Lisp")
-    ("r" slime-restart-inferior-lisp "restart Lisp")))
+(defconst yunge-slime-process-bindings
+  '(("c" slime-list-connections "connections")
+    ("q" slime-quit-lisp "quit Lisp")
+    ("r" slime-restart-inferior-lisp "restart Lisp")
+    ("t" slime-list-threads "threads")))
 
-(defvar-keymap yunge-slime-quit-map
-  :doc "Keymap for quitting or restarting the Common Lisp process.")
+(defvar-keymap yunge-slime-process-map
+  :doc "Keymap for managing Common Lisp processes and threads.")
 
-(yunge-key-define yunge-slime-quit-map
-                  yunge-slime-quit-bindings)
+(yunge-key-define yunge-slime-process-map
+                  yunge-slime-process-bindings)
 
 (defconst yunge-slime-help-bindings
   '(("a" slime-apropos "apropos")
@@ -98,7 +105,7 @@
     ("i" slime-repl-inspect "inspect")
     ("m" ,yunge-slime-macro-map "macro")
     ("p" slime-repl-set-package "set package")
-    ("q" ,yunge-slime-quit-map "quit")))
+    ("q" ,yunge-slime-process-map "process")))
 
 (defvar-keymap yunge-slime-repl-command-map
   :doc "Keymap for SLIME REPL commands.")
@@ -154,7 +161,7 @@
     ("e" ,yunge-slime-eval-map "evaluate")
     ("h" ,yunge-slime-help-map "help")
     ("m" ,yunge-slime-macro-map "macro")
-    ("q" ,yunge-slime-quit-map "quit")
+    ("q" ,yunge-slime-process-map "process")
     ("r" yunge-slime-repl "REPL")
     ("s" slime "start")))
 
@@ -257,6 +264,51 @@
   `(("q" quit-window "quit")
     ,@yunge-slime-navigation-bindings))
 
+(defun yunge-slime-thread-kill ()
+  "Kill the thread at point or threads covered by the active region."
+  (interactive)
+  (let* ((active (use-region-p))
+         (start (and active (region-beginning)))
+         (end (and active (region-end)))
+         (threads
+          (if active
+              (delete-dups
+               (delq nil
+                     (slime-get-region-properties
+                      'thread-index start
+                      ;; Emacs excludes the region end, whereas SLIME's
+                      ;; helper treats its END argument as inclusive.
+                      (if (> end start) (1- end) start))))
+            (when-let* ((thread
+                         (get-text-property (point) 'thread-index)))
+              (list thread)))))
+    (unless threads
+      (user-error "No thread selected"))
+    (slime-eval `(cl:mapc 'swank:kill-nth-thread ',threads))
+    (slime-update-threads-buffer)))
+
+(defconst yunge-slime-thread-normal-bindings
+  '(("RET" slime-thread-debug "debug thread")
+    ("C-j" next-line "next thread")
+    ("C-k" previous-line "previous thread")
+    ("gr" slime-update-threads-buffer "refresh")
+    ("q" slime-quit-threads-buffer "quit")
+    ("a" slime-thread-attach "attach")
+    ("x" yunge-slime-thread-kill "kill thread")
+    ([remap quit-window] slime-quit-threads-buffer nil)))
+
+(defconst yunge-slime-thread-visual-bindings
+  '(("x" yunge-slime-thread-kill "kill threads")))
+
+(defconst yunge-slime-connection-normal-bindings
+  '(("RET" slime-connection-list-make-default "make default")
+    ("C-j" next-line "next connection")
+    ("C-k" previous-line "previous connection")
+    ("gr" slime-update-connection-list "refresh")
+    ("q" quit-window "quit")
+    ("r" slime-restart-connection-at-point "restart connection")
+    ("x" slime-quit-connection-at-point "quit connection")))
+
 (defun yunge-slime--setup-source-keys ()
   "Set up Evil bindings in Common Lisp source buffers."
   (yunge-key-evil-define '(normal visual) lisp-mode-map
@@ -277,7 +329,9 @@
 (defun yunge-slime--setup-view-keys ()
   "Set up Evil bindings in SLIME read-only views."
   (dolist (mode '(slime-apropos-mode
+                  slime-connection-list-mode
                   slime-inspector-mode
+                  slime-thread-control-mode
                   slime-xref-mode
                   sldb-mode))
     (evil-set-initial-state mode 'normal))
@@ -291,6 +345,12 @@
                          yunge-slime-debugger-normal-bindings)
   (yunge-key-evil-define 'normal slime-popup-buffer-mode-map
                          yunge-slime-popup-normal-bindings)
+  (yunge-key-evil-define 'normal slime-thread-control-mode-map
+                         yunge-slime-thread-normal-bindings)
+  (yunge-key-evil-define 'visual slime-thread-control-mode-map
+                         yunge-slime-thread-visual-bindings)
+  (yunge-key-evil-define 'normal slime-connection-list-mode-map
+                         yunge-slime-connection-normal-bindings)
   ;; SLIME enables this minor mode after creating each popup buffer, so Evil
   ;; must rebuild the active auxiliary maps at that point.
   (add-hook 'slime-popup-buffer-mode-hook #'evil-normalize-keymaps))
@@ -327,7 +387,7 @@
   (yunge-key-add-which-key-descriptions
    yunge-slime-xref-command-map yunge-slime-xref-command-bindings)
   (yunge-key-add-which-key-descriptions
-   yunge-slime-quit-map yunge-slime-quit-bindings))
+   yunge-slime-process-map yunge-slime-process-bindings))
 
 (elpaca slime
   (let ((directory

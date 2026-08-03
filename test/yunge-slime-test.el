@@ -6,11 +6,13 @@
 
 (declare-function evil-get-auxiliary-keymap "evil-core")
 (declare-function evil-normal-state "evil-states")
+(declare-function slime-connection-list-mode "slime")
 (declare-function slime-inspector-mode "slime")
 (declare-function slime-mode "slime")
 (declare-function slime-popup-buffer-mode "slime")
 (declare-function slime-repl-mode "slime-repl")
 (declare-function slime-setup "slime")
+(declare-function slime-thread-control-mode "slime")
 (declare-function slime-xref-mode "slime")
 (declare-function sldb-mode "slime")
 (declare-function yunge-slime--default-implementation "yunge-slime")
@@ -113,8 +115,10 @@
          ("SPC m h s" . slime-describe-symbol)
          ("SPC m m a" . slime-macroexpand-all)
          ("SPC m m o" . slime-macroexpand-1)
+         ("SPC m q c" . slime-list-connections)
          ("SPC m q q" . slime-quit-lisp)
          ("SPC m q r" . slime-restart-inferior-lisp)
+         ("SPC m q t" . slime-list-threads)
          ("SPC m e b" . slime-eval-buffer)
          ("SPC m e d" . slime-eval-defun)
          ("SPC m e e" . slime-eval-last-expression)
@@ -130,7 +134,7 @@
          ("e" nil "+evaluate")
          ("h" nil "+help")
          ("m" nil "+macro")
-         ("q" nil "+quit")
+         ("q" nil "+process")
          ("r" nil "REPL")
          ("s" nil "start")))
       (yunge-test-which-key-prefix
@@ -147,7 +151,7 @@
        yunge-slime-macro-bindings)
       (yunge-test-which-key-prefix
        "SPC m q"
-       yunge-slime-quit-bindings))))
+       yunge-slime-process-bindings))))
 
 (ert-deftest yunge-slime-integrates-repl-with-evil ()
   (yunge-test-enable-evil)
@@ -184,8 +188,10 @@
        ("SPC m i" . slime-repl-inspect)
        ("SPC m m o" . slime-macroexpand-1)
        ("SPC m p" . slime-repl-set-package)
+       ("SPC m q c" . slime-list-connections)
        ("SPC m q q" . slime-quit-lisp)
-       ("SPC m q r" . slime-restart-inferior-lisp)))
+       ("SPC m q r" . slime-restart-inferior-lisp)
+       ("SPC m q t" . slime-list-threads)))
     (yunge-test-which-key-prefix
      "SPC m"
      '(("c" nil "+clear")
@@ -193,10 +199,13 @@
        ("i" nil "inspect")
        ("m" nil "+macro")
        ("p" nil "set package")
-       ("q" nil "+quit")))
+       ("q" nil "+process")))
     (yunge-test-which-key-prefix
      "SPC m c"
-     yunge-slime-repl-clear-bindings)))
+     yunge-slime-repl-clear-bindings)
+    (yunge-test-which-key-prefix
+     "SPC m q"
+     yunge-slime-process-bindings)))
 
 (ert-deftest yunge-slime-integrates-browsing-views-with-evil ()
   (yunge-test-enable-evil)
@@ -319,5 +328,67 @@
      '(("q" . slime-inspector-quit)
        ("K" . slime-inspector-describe)
        ("gd" . slime-edit-definition)))))
+
+(ert-deftest yunge-slime-integrates-runtime-views-with-evil ()
+  (yunge-test-enable-evil)
+  (require 'slime-autoloads)
+  (yunge-test-load-package-config 'yunge-slime)
+  (require 'slime)
+
+  (yunge-test-evil-normal-keys
+   'slime-thread-control-mode
+   '(("RET" . slime-thread-debug)
+     ("C-j" . next-line)
+     ("C-k" . previous-line)
+     ("gr" . slime-update-threads-buffer)
+     ("q" . slime-quit-threads-buffer)
+     ("a" . slime-thread-attach)
+     ("x" . yunge-slime-thread-kill)))
+  (yunge-test-evil-visual-keys
+   'slime-thread-control-mode
+   '(("x" . yunge-slime-thread-kill)))
+
+  (yunge-test-evil-normal-keys
+   'slime-connection-list-mode
+   '(("RET" . slime-connection-list-make-default)
+     ("C-j" . next-line)
+     ("C-k" . previous-line)
+     ("gr" . slime-update-connection-list)
+     ("q" . quit-window)
+     ("r" . slime-restart-connection-at-point)
+     ("x" . slime-quit-connection-at-point)))
+
+  ;; The popup map must not reduce thread view cleanup to `quit-window'.
+  (with-temp-buffer
+    (slime-thread-control-mode)
+    (slime-popup-buffer-mode 1)
+    (yunge-test-evil-keys
+     'normal '(("q" . slime-quit-threads-buffer)))))
+
+(ert-deftest yunge-slime-thread-kill-respects-visual-line-selection ()
+  (yunge-test-enable-evil)
+  (require 'slime-autoloads)
+  (yunge-test-load-package-config 'yunge-slime)
+  (require 'slime)
+
+  (with-temp-buffer
+    (slime-thread-control-mode)
+    (let ((inhibit-read-only t))
+      (insert (propertize "one\n" 'thread-index 0)
+              (propertize "two\n" 'thread-index 1)
+              (propertize "three\n" 'thread-index 2)))
+    (goto-char (point-min))
+    (evil-normal-state)
+    (let (request)
+      (cl-letf (((symbol-function 'slime-eval)
+                 (lambda (form &optional _package)
+                   (setq request form)))
+                ((symbol-function 'slime-update-threads-buffer) #'ignore))
+        (save-window-excursion
+          (switch-to-buffer (current-buffer))
+          (execute-kbd-macro (kbd "V j x"))))
+      (should
+       (equal request
+              '(cl:mapc 'swank:kill-nth-thread '(0 1)))))))
 
 ;;; yunge-slime-test.el ends here
