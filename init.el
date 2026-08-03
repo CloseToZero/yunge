@@ -18,6 +18,7 @@
 (require 'yunge-vertico)
 (require 'yunge-orderless)
 (require 'yunge-corfu)
+(require 'yunge-slime)
 (require 'yunge-marginalia)
 (require 'yunge-avy)
 (require 'yunge-consult)

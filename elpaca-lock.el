@@ -157,6 +157,21 @@
     "magit-section-pkg.el")
    :source "MELPA"
    :ref "67f203853e74e926e2c99f60ed508840714f7ced"))
+ (macrostep
+  :source "elpaca-menu-lock-file"
+  :recipe
+  (:package "macrostep"
+   :fetcher github
+   :repo "emacsorphanage/macrostep"
+   :files
+   ("*.el" "*.el.in" "dir" "*.info" "*.texi" "*.texinfo"
+    "doc/dir" "doc/*.info" "doc/*.texi" "doc/*.texinfo"
+    "lisp/*.el" "docs/dir" "docs/*.info" "docs/*.texi"
+    "docs/*.texinfo"
+    (:exclude ".dir-locals.el" "test.el" "tests.el" "*-test.el"
+              "*-tests.el" "LICENSE" "README*" "*-pkg.el"))
+   :source "MELPA"
+   :ref "d0928626b4711dcf9f8f90439d23701118724199"))
  (marginalia
   :source "elpaca-menu-lock-file"
   :recipe
@@ -197,6 +212,19 @@
               "*-tests.el" "LICENSE" "README*" "*-pkg.el"))
    :source "MELPA"
    :ref "a56c8d992c872addcfc295c409a7bae70d00af87"))
+ (slime
+  :source "elpaca-menu-lock-file"
+  :recipe
+  (:package "slime"
+   :fetcher github
+   :repo "slime/slime"
+   :files
+   ("*.el" ("lib" "lib/hyperspec.el") "swank" "*.lisp" "*.asd"
+    "doc/slime.texi" "doc/slime.info" "doc/dir" "ChangeLog"
+    ("contrib" "contrib/*")
+    (:exclude "contrib/test" "contrib/Makefile"))
+   :source "MELPA"
+   :ref "957f61d8b8b57c1f463b56620a274eb77a09bc16"))
  (vertico
   :source "elpaca-menu-lock-file"
   :recipe
