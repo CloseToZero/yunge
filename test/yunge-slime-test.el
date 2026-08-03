@@ -8,9 +8,11 @@
 (declare-function evil-normal-state "evil-states")
 (declare-function slime-inspector-mode "slime")
 (declare-function slime-mode "slime")
+(declare-function slime-popup-buffer-mode "slime")
 (declare-function slime-repl-mode "slime-repl")
 (declare-function slime-setup "slime")
 (declare-function slime-xref-mode "slime")
+(declare-function sldb-mode "slime")
 (declare-function yunge-slime--default-implementation "yunge-slime")
 
 (defvar lisp-mode-map)
@@ -252,5 +254,70 @@
       (slime-xref-mode)
       (yunge-test-which-key-prefix
        "SPC m" yunge-slime-xref-command-bindings))))
+
+(ert-deftest yunge-slime-integrates-debugger-with-evil ()
+  (yunge-test-enable-evil)
+  (require 'slime-autoloads)
+  (yunge-test-load-package-config 'yunge-slime)
+  (require 'slime)
+
+  (cl-letf (((symbol-function 'slime-connection) #'ignore))
+    (yunge-test-evil-normal-keys
+     'sldb-mode
+     '(("RET" . sldb-default-action)
+       ("q" . sldb-quit)
+       ("a" . sldb-abort)
+       ("c" . sldb-continue)
+       ("s" . sldb-step)
+       ("n" . sldb-next)
+       ("o" . sldb-out)
+       ("b" . sldb-break-on-return)
+       ("C-j" . sldb-down)
+       ("C-k" . sldb-up)
+       ("M-j" . sldb-details-down)
+       ("M-k" . sldb-details-up)
+       ("gg" . sldb-beginning-of-backtrace)
+       ("G" . sldb-end-of-backtrace)
+       ("]]" . sldb-cycle)
+       ("gf" . sldb-show-source)
+       ("za" . sldb-toggle-details)
+       ("<tab>" . sldb-toggle-details)
+       ("e" . sldb-eval-in-frame)
+       ("E" . sldb-pprint-eval-in-frame)
+       ("i" . sldb-inspect-in-frame)
+       ("D" . sldb-disassemble)
+       ("r" . sldb-restart-frame)
+       ("R" . sldb-return-from-frame)
+       ("I" . sldb-invoke-restart-by-name)
+       ("0" . sldb-invoke-restart-0)
+       ("9" . sldb-invoke-restart-9)
+       ("C-o" . yunge-jump-history-backward)
+       ("C-i" . yunge-jump-history-forward)))))
+
+(ert-deftest yunge-slime-integrates-popup-buffers-with-evil ()
+  (yunge-test-enable-evil)
+  (require 'slime-autoloads)
+  (yunge-test-load-package-config 'yunge-slime)
+  (require 'slime)
+
+  (with-temp-buffer
+    (fundamental-mode)
+    (slime-popup-buffer-mode 1)
+    (yunge-test-evil-keys
+     'normal
+     '(("q" . quit-window)
+       ("gd" . slime-edit-definition)
+       ("K" . slime-describe-symbol))))
+
+  ;; The Inspector must retain its cleanup and object actions when SLIME also
+  ;; enables the generic popup minor mode.
+  (with-temp-buffer
+    (slime-inspector-mode)
+    (slime-popup-buffer-mode 1)
+    (yunge-test-evil-keys
+     'normal
+     '(("q" . slime-inspector-quit)
+       ("K" . slime-inspector-describe)
+       ("gd" . slime-edit-definition)))))
 
 ;;; yunge-slime-test.el ends here

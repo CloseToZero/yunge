@@ -6,6 +6,7 @@
 (require 'yunge-key)
 
 (declare-function evil-add-command-properties "evil-common")
+(declare-function evil-normalize-keymaps "evil-core")
 (declare-function evil-set-initial-state "evil-core")
 (declare-function slime "slime")
 (declare-function slime-c-p-c-completion-at-point "slime-c-p-c")
@@ -22,7 +23,9 @@
 (defvar slime-lisp-implementations)
 (defvar slime-repl-history-file)
 (defvar slime-repl-history-size)
+(defvar slime-popup-buffer-mode-map)
 (defvar slime-xref-mode-map)
+(defvar sldb-mode-map)
 
 (defconst yunge-slime-eval-bindings
   '(("b" slime-eval-buffer "buffer")
@@ -198,6 +201,11 @@
     ("gf" slime-inspector-show-source "visit source")
     ("gr" slime-inspector-reinspect "refresh")
     ("K" slime-inspector-describe "describe object")
+    ;; Inspector buffers also enable the generic popup minor mode.  Remap its
+    ;; commands so quitting still releases the remote inspector state and
+    ;; describing still acts on the inspected object.
+    ([remap quit-window] slime-inspector-quit nil)
+    ([remap slime-describe-symbol] slime-inspector-describe nil)
     ([localleader] ,yunge-slime-inspector-command-map nil)))
 
 (defconst yunge-slime-xref-normal-bindings
@@ -207,6 +215,47 @@
     ("C-k" slime-xref-prev-line "previous reference")
     ("gf" slime-show-xref "show source")
     ([localleader] ,yunge-slime-xref-command-map nil)))
+
+(defconst yunge-slime-debugger-normal-bindings
+  '(("RET" sldb-default-action "invoke at point")
+    ("q" sldb-quit "quit to top level")
+    ("a" sldb-abort "abort")
+    ("c" sldb-continue "continue")
+    ("s" sldb-step "step into")
+    ("n" sldb-next "step over")
+    ("o" sldb-out "step out")
+    ("b" sldb-break-on-return "break on return")
+    ("C-j" sldb-down "next frame")
+    ("C-k" sldb-up "previous frame")
+    ("M-j" sldb-details-down "next frame with details")
+    ("M-k" sldb-details-up "previous frame with details")
+    ("gg" sldb-beginning-of-backtrace "first frame")
+    ("G" sldb-end-of-backtrace "last frame")
+    ("]]" sldb-cycle "cycle restarts/backtrace")
+    ("gf" sldb-show-source "show source")
+    ("za" sldb-toggle-details "toggle frame details")
+    ("<tab>" sldb-toggle-details nil)
+    ("e" sldb-eval-in-frame "evaluate in frame")
+    ("E" sldb-pprint-eval-in-frame "pretty-print evaluation")
+    ("i" sldb-inspect-in-frame "inspect in frame")
+    ("D" sldb-disassemble "disassemble")
+    ("r" sldb-restart-frame "restart frame")
+    ("R" sldb-return-from-frame "return from frame")
+    ("I" sldb-invoke-restart-by-name "invoke named restart")
+    ("0" sldb-invoke-restart-0 "invoke restart 0")
+    ("1" sldb-invoke-restart-1 "invoke restart 1")
+    ("2" sldb-invoke-restart-2 "invoke restart 2")
+    ("3" sldb-invoke-restart-3 "invoke restart 3")
+    ("4" sldb-invoke-restart-4 "invoke restart 4")
+    ("5" sldb-invoke-restart-5 "invoke restart 5")
+    ("6" sldb-invoke-restart-6 "invoke restart 6")
+    ("7" sldb-invoke-restart-7 "invoke restart 7")
+    ("8" sldb-invoke-restart-8 "invoke restart 8")
+    ("9" sldb-invoke-restart-9 "invoke restart 9")))
+
+(defconst yunge-slime-popup-normal-bindings
+  `(("q" quit-window "quit")
+    ,@yunge-slime-navigation-bindings))
 
 (defun yunge-slime--setup-source-keys ()
   "Set up Evil bindings in Common Lisp source buffers."
@@ -226,17 +275,25 @@
    yunge-slime-repl-return-bindings))
 
 (defun yunge-slime--setup-view-keys ()
-  "Set up Evil bindings in SLIME browsing views."
+  "Set up Evil bindings in SLIME read-only views."
   (dolist (mode '(slime-apropos-mode
                   slime-inspector-mode
-                  slime-xref-mode))
+                  slime-xref-mode
+                  sldb-mode))
     (evil-set-initial-state mode 'normal))
   (yunge-key-evil-define 'normal slime-apropos-mode-map
                          yunge-slime-apropos-normal-bindings)
   (yunge-key-evil-define 'normal slime-inspector-mode-map
                          yunge-slime-inspector-normal-bindings)
   (yunge-key-evil-define 'normal slime-xref-mode-map
-                         yunge-slime-xref-normal-bindings))
+                         yunge-slime-xref-normal-bindings)
+  (yunge-key-evil-define 'normal sldb-mode-map
+                         yunge-slime-debugger-normal-bindings)
+  (yunge-key-evil-define 'normal slime-popup-buffer-mode-map
+                         yunge-slime-popup-normal-bindings)
+  ;; SLIME enables this minor mode after creating each popup buffer, so Evil
+  ;; must rebuild the active auxiliary maps at that point.
+  (add-hook 'slime-popup-buffer-mode-hook #'evil-normalize-keymaps))
 
 (with-eval-after-load 'evil
   ;; SLIME resolves definitions asynchronously, so Evil must record the
