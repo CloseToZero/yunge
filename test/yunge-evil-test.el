@@ -73,6 +73,16 @@
                   (evil-ex-make-search-pattern "b.*l"))
                  "b.*l")))
 
+(ert-deftest yunge-evil-opens-config-directory ()
+  (yunge-test-enable-evil)
+  (let ((user-emacs-directory "C:/config/emacs/")
+        opened-directory)
+    (cl-letf (((symbol-function 'dired)
+               (lambda (directory)
+                 (setq opened-directory directory))))
+      (call-interactively #'yunge-open-config-directory))
+    (should (equal opened-directory user-emacs-directory))))
+
 (ert-deftest yunge-evil-routes-leader-keys ()
   (yunge-test-enable-evil)
   (require 'which-key)
@@ -96,6 +106,7 @@
         (yunge-test-key "SPC b k" 'previous-buffer)
         (yunge-test-key "SPC b q" 'kill-current-buffer)
         (yunge-test-key "SPC b r" 'revert-buffer)
+        (yunge-test-key "SPC f c" 'yunge-open-config-directory)
         (yunge-test-key "SPC f d" 'dired)
         (yunge-test-key "SPC f f" 'find-file)
         (yunge-test-key "SPC f s" 'save-buffer)
@@ -146,7 +157,8 @@
 
   (yunge-test-which-key-prefix-bindings
    'yunge-test-buffer-mode "SPC f"
-   '(("d" nil "open directory")
+   '(("c" nil "open config directory")
+     ("d" nil "open directory")
      ("f" nil "find file")
      ("s" nil "save file")))
 

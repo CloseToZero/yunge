@@ -63,8 +63,14 @@
     ("q" kill-current-buffer "close buffer")
     ("r" revert-buffer "revert buffer")))
 
+(defun yunge-open-config-directory ()
+  "Open `user-emacs-directory' in Dired."
+  (interactive)
+  (dired user-emacs-directory))
+
 (defconst yunge-file-bindings
-  '(("d" dired "open directory")
+  '(("c" yunge-open-config-directory "open config directory")
+    ("d" dired "open directory")
     ("f" find-file "find file")
     ("s" save-buffer "save file")))
 
