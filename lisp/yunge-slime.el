@@ -6,6 +6,7 @@
 (require 'yunge-key)
 
 (declare-function evil-add-command-properties "evil-common")
+(declare-function evil-set-initial-state "evil-core")
 (declare-function slime "slime")
 (declare-function slime-c-p-c-completion-at-point "slime-c-p-c")
 (declare-function slime-connected-p "slime")
@@ -75,6 +76,30 @@
 (yunge-key-define yunge-slime-macro-map
                   yunge-slime-macro-bindings)
 
+(defconst yunge-slime-repl-clear-bindings
+  '(("b" slime-repl-clear-buffer "buffer")
+    ("o" slime-repl-clear-output "latest output")))
+
+(defvar-keymap yunge-slime-repl-clear-map
+  :doc "Keymap for clearing SLIME REPL output.")
+
+(yunge-key-define yunge-slime-repl-clear-map
+                  yunge-slime-repl-clear-bindings)
+
+(defconst yunge-slime-repl-command-bindings
+  `(("c" ,yunge-slime-repl-clear-map "clear")
+    ("h" ,yunge-slime-help-map "help")
+    ("i" slime-repl-inspect "inspect")
+    ("m" ,yunge-slime-macro-map "macro")
+    ("p" slime-repl-set-package "set package")
+    ("q" ,yunge-slime-quit-map "quit")))
+
+(defvar-keymap yunge-slime-repl-command-map
+  :doc "Keymap for SLIME REPL commands.")
+
+(yunge-key-define yunge-slime-repl-command-map
+                  yunge-slime-repl-command-bindings)
+
 (defun yunge-slime-completion-at-point ()
   "Complete a Common Lisp symbol when SLIME is connected."
   (when (slime-connected-p)
@@ -110,22 +135,51 @@
 (yunge-key-define yunge-slime-command-map
                   yunge-slime-command-bindings)
 
+(defconst yunge-slime-navigation-bindings
+  '(("gd" slime-edit-definition "definition")
+    ("K" slime-describe-symbol "describe symbol")))
+
 (defconst yunge-slime-source-bindings
-  `(("gd" slime-edit-definition "definition")
-    ("K" slime-describe-symbol "describe symbol")
+  `(,@yunge-slime-navigation-bindings
     ([localleader] ,yunge-slime-command-map nil)))
+
+(defconst yunge-slime-repl-normal-bindings
+  `(,@yunge-slime-navigation-bindings
+    ([localleader] ,yunge-slime-repl-command-map nil)))
+
+(defconst yunge-slime-repl-prompt-bindings
+  '(("C-j" slime-repl-next-prompt "next prompt")
+    ("C-k" slime-repl-previous-prompt "previous prompt")))
+
+(defconst yunge-slime-repl-return-bindings
+  '(("RET" slime-repl-return "submit input")
+    ("<return>" slime-repl-return nil)))
 
 (defun yunge-slime--setup-source-keys ()
   "Set up Evil bindings in Common Lisp source buffers."
   (yunge-key-evil-define '(normal visual) lisp-mode-map
                          yunge-slime-source-bindings))
 
+(defun yunge-slime--setup-repl-keys ()
+  "Set up Evil bindings in SLIME REPL buffers."
+  (evil-set-initial-state 'slime-repl-mode 'insert)
+  (yunge-key-evil-define-minor-mode
+   'normal 'slime-repl-map-mode yunge-slime-repl-normal-bindings)
+  (yunge-key-evil-define-minor-mode
+   '(normal insert) 'slime-repl-map-mode
+   yunge-slime-repl-prompt-bindings)
+  (yunge-key-evil-define-minor-mode
+   '(normal insert) 'slime-repl-map-mode
+   yunge-slime-repl-return-bindings))
+
 (with-eval-after-load 'evil
   ;; SLIME resolves definitions asynchronously, so Evil must record the
   ;; origin before the command returns rather than compare locations later.
   (evil-add-command-properties 'slime-edit-definition :jump t)
   (with-eval-after-load 'lisp-mode
-    (yunge-slime--setup-source-keys)))
+    (yunge-slime--setup-source-keys))
+  (with-eval-after-load 'slime-repl
+    (yunge-slime--setup-repl-keys)))
 
 (with-eval-after-load 'which-key
   (yunge-key-add-which-key-descriptions
@@ -138,6 +192,10 @@
    yunge-slime-help-map yunge-slime-help-bindings)
   (yunge-key-add-which-key-descriptions
    yunge-slime-macro-map yunge-slime-macro-bindings)
+  (yunge-key-add-which-key-descriptions
+   yunge-slime-repl-clear-map yunge-slime-repl-clear-bindings)
+  (yunge-key-add-which-key-descriptions
+   yunge-slime-repl-command-map yunge-slime-repl-command-bindings)
   (yunge-key-add-which-key-descriptions
    yunge-slime-quit-map yunge-slime-quit-bindings))
 

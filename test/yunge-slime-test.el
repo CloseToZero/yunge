@@ -5,7 +5,9 @@
 (require 'yunge-test-helper)
 
 (declare-function evil-get-auxiliary-keymap "evil-core")
+(declare-function evil-normal-state "evil-states")
 (declare-function slime-mode "slime")
+(declare-function slime-repl-mode "slime-repl")
 (declare-function slime-setup "slime")
 (declare-function yunge-slime--default-implementation "yunge-slime")
 
@@ -15,6 +17,7 @@
 (defvar slime-lisp-implementations)
 (defvar slime-repl-history-file)
 (defvar slime-repl-history-size)
+(defvar slime-repl-map-mode)
 
 (yunge-test-deftest-lazy-load yunge-slime
   (slime slime-fancy slime-repl))
@@ -141,5 +144,50 @@
       (yunge-test-which-key-prefix
        "SPC m q"
        yunge-slime-quit-bindings))))
+
+(ert-deftest yunge-slime-integrates-repl-with-evil ()
+  (yunge-test-enable-evil)
+  (require 'slime-autoloads)
+  (yunge-test-load-package-config 'yunge-slime)
+  (require 'slime)
+  (require 'slime-repl)
+  (require 'which-key)
+  (with-temp-buffer
+    (slime-repl-mode)
+    (should slime-repl-map-mode)
+    (yunge-test-evil-keys
+     'insert
+     '(("RET" . slime-repl-return)
+       ("<return>" . slime-repl-return)
+       ("C-j" . slime-repl-next-prompt)
+       ("C-k" . slime-repl-previous-prompt)))
+    (evil-normal-state)
+    (yunge-test-evil-keys
+     'normal
+     '(("RET" . slime-repl-return)
+       ("<return>" . slime-repl-return)
+       ("C-j" . slime-repl-next-prompt)
+       ("C-k" . slime-repl-previous-prompt)
+       ("gd" . slime-edit-definition)
+       ("K" . slime-describe-symbol)
+       ("SPC m c b" . slime-repl-clear-buffer)
+       ("SPC m c o" . slime-repl-clear-output)
+       ("SPC m h s" . slime-describe-symbol)
+       ("SPC m i" . slime-repl-inspect)
+       ("SPC m m o" . slime-macroexpand-1)
+       ("SPC m p" . slime-repl-set-package)
+       ("SPC m q q" . slime-quit-lisp)
+       ("SPC m q r" . slime-restart-inferior-lisp)))
+    (yunge-test-which-key-prefix
+     "SPC m"
+     '(("c" nil "+clear")
+       ("h" nil "+help")
+       ("i" nil "inspect")
+       ("m" nil "+macro")
+       ("p" nil "set package")
+       ("q" nil "+quit")))
+    (yunge-test-which-key-prefix
+     "SPC m c"
+     yunge-slime-repl-clear-bindings)))
 
 ;;; yunge-slime-test.el ends here
