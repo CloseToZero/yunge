@@ -7,6 +7,7 @@
 (declare-function dired-copy-filename-as-kill "dired")
 (declare-function dired-dnd-handle-file "dired" (uri action))
 (declare-function dired-dnd-handle-local-file "dired" (uri action))
+(declare-function dired-dwim-target-recent "dired-aux")
 (declare-function dnd-get-local-file-name "dnd"
                   (uri &optional must-exist))
 (declare-function dnd-open-file "dnd" (uri action))
@@ -17,6 +18,7 @@
 (declare-function x-popup-menu "menu.c" (position menu))
 
 (defvar dnd-protocol-alist)
+(defvar dired-dwim-target)
 (defvar dired-movement-style)
 (defvar dired-directory)
 (defvar dired-mode-map)
@@ -220,6 +222,7 @@ inconsistently from keyboard modifiers and the source application."
 
 (with-eval-after-load 'dired
   (require 'dnd)
+  (setq dired-dwim-target #'dired-dwim-target-recent)
   ;; Remove bindings left by the earlier Windows-only implementation.
   (dolist (event '([drag-n-drop]
                    [C-drag-n-drop]

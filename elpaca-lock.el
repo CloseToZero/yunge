@@ -1,7 +1,16 @@
 ;; SPDX-FileCopyrightText: 2026 Chen Zhexuan
 ;; SPDX-License-Identifier: MIT
 
-((async
+((ace-window
+  :source "elpaca-menu-lock-file"
+  :recipe
+  (:package "ace-window"
+   :repo "abo-abo/ace-window"
+   :fetcher github
+   :files (:defaults)
+   :source "MELPA"
+   :ref "77115afc1b0b9f633084cf7479c767988106c196"))
+ (async
   :source "elpaca-menu-lock-file"
   :recipe
   (:package "async"

@@ -5,6 +5,8 @@
 (require 'yunge-test-helper)
 
 (declare-function project-known-project-roots "project")
+(declare-function dired-dwim-target-directory "dired-aux")
+(declare-function dired-dwim-target-recent "dired-aux")
 (declare-function wdired-abort-changes "wdired")
 (declare-function yunge-dired--perform-file-drop
                   "yunge-dired" (window uris action))
@@ -12,6 +14,7 @@
 (declare-function yunge-dired--setup-dnd "yunge-dired")
 
 (defvar dired-directory)
+(defvar dired-dwim-target)
 (defvar dired-mode-map)
 (defvar dired-movement-style)
 (defvar dnd-protocol-alist)
@@ -72,6 +75,7 @@
        ("y" . evil-yank)))
 
     (should (eq dired-movement-style 'bounded-files))
+    (should (eq dired-dwim-target #'dired-dwim-target-recent))
 
     (dolist (event '([drag-n-drop]
                      [C-drag-n-drop]
@@ -185,6 +189,42 @@
                  (setq remembered candidate))))
       (yunge-dired--remember-project))
     (should (eq remembered project))))
+
+(ert-deftest yunge-dired-prefers-last-selected-target-window ()
+  (require 'yunge-dired)
+  (require 'dired)
+  (let* ((root (make-temp-file "yunge-dired-target-" t))
+         (source-directory (expand-file-name "source/" root))
+         (older-directory (expand-file-name "older/" root))
+         (target-directory (expand-file-name "target/" root))
+         buffers)
+    (dolist (directory
+             (list source-directory older-directory target-directory))
+      (make-directory directory))
+    (unwind-protect
+        (save-window-excursion
+          (delete-other-windows)
+          (let* ((source-window (selected-window))
+                 (older-window (split-window-right))
+                 (target-window
+                  (split-window older-window nil 'below)))
+            (dolist (entry
+                     (list (cons source-window source-directory)
+                           (cons older-window older-directory)
+                           (cons target-window target-directory)))
+              (let ((buffer (dired-noselect (cdr entry))))
+                (push buffer buffers)
+                (set-window-buffer (car entry) buffer)))
+            (select-window older-window)
+            (select-window target-window)
+            (select-window source-window)
+            (should
+             (equal (dired-dwim-target-directory)
+                    target-directory))))
+      (dolist (buffer buffers)
+        (when (buffer-live-p buffer)
+          (kill-buffer buffer)))
+      (delete-directory root t))))
 
 (ert-deftest yunge-wdired-integrates-with-evil-editing ()
   (require 'yunge-dired)

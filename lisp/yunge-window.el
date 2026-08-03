@@ -24,6 +24,7 @@
 
 (defconst yunge-window-bindings
   `(("SPC" yunge-window-control "window control")
+    ("a" ace-window "select window")
     ,@yunge-window-action-bindings))
 
 (defconst yunge-window-control-bindings
@@ -38,6 +39,7 @@
     ("=" "balance")
     ("+/-" "height")
     ("</>" "width")
+    ("w" "next")
     ("SPC/RET/ESC" "exit")))
 
 (defvar-keymap yunge-window-control-map
@@ -72,6 +74,8 @@
    yunge-window-map yunge-window-bindings)
   (yunge-key-add-which-key-descriptions
    yunge-window-control-map yunge-window-control-bindings))
+
+(elpaca ace-window)
 
 (provide 'yunge-window)
 
