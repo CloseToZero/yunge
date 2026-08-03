@@ -56,6 +56,9 @@ Apply the conflict rules before overriding these bindings:
 Use these conventions only where the action is meaningful:
 
 - ~q~ quits a temporary or display-oriented view, usually with ~quit-window~.
+- In read-only command menus, ~x~ performs an immediate destructive action on
+  the semantic object.  Use ~X~ for a clearly related action with broader
+  scope.
 - ~RET~ invokes the primary action for the item at point.
 - ~gr~ refreshes the current contents.
 - ~C-j~ and ~C-k~ move to the next or previous candidate, revision, chunk, or
@@ -67,6 +70,10 @@ Use these conventions only where the action is meaningful:
 - ~TAB~ and ~S-TAB~ move between buttons in document-oriented buffers.
 
 In editable buffers, Evil's ~q~ and ~RET~ bindings remain the default.
+
+Closing a buffer, window, tab, or menu dismisses an interface object; it does
+not delete the underlying domain data.  These actions therefore use ~q~, not
+~d~ or ~x~.
 
 Structured read-only views may use ~y~ as a prefix for copying item
 identifiers, paths, or other semantic values.  Keep Visual ~y~ for copying
@@ -165,6 +172,11 @@ that accept a region should operate on the visual selection.
 In list buffers that support persistent marks or queued actions, prefer ~m~ for
 a generic mark, ~d~ for deferred deletion, ~u~ for unmarking, and ~x~ for
 executing queued actions.
+
+Do not extend deferred ~d~ semantics to immediate destructive commands or
+interface dismissal.  A command menu can use ~x~ to delete, discard, drop, or
+remove its current semantic object while retaining ~d~ for another established
+contextual action such as diff.
 
 * Documentation and help buffers
 

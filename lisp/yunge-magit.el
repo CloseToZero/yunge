@@ -7,6 +7,9 @@
 
 (declare-function evil-add-command-properties "evil-common")
 (declare-function evil-insert-state "evil-states")
+(declare-function transient-bind-q-to-quit "transient")
+(declare-function transient-suffix-put "transient"
+                  (prefix loc prop value))
 
 (defvar git-commit-setup-hook)
 (defvar git-rebase-mode-map)
@@ -24,6 +27,7 @@
 (defvar magit-status-mode-map)
 (defvar project-prefix-map)
 (defvar project-switch-commands)
+(defvar transient-popup-navigation-map)
 
 ;; Global Magit entry points belong to this configuration's leader maps.
 (setq magit-define-global-key-bindings nil)
@@ -186,6 +190,46 @@
   (with-eval-after-load 'project
     (add-to-list 'project-switch-commands
                  '(magit-project-status "Magit") t))
+  (with-eval-after-load 'transient
+    (transient-bind-q-to-quit)
+    ;; Keep popup navigation consistent with completion and Magit views.
+    (keymap-set transient-popup-navigation-map "C-j"
+                #'transient-forward-button)
+    (keymap-set transient-popup-navigation-map "C-k"
+                #'transient-backward-button))
+  (with-eval-after-load 'magit
+    (transient-suffix-put 'magit-dispatch 'magit-discard :key "x"))
+  (with-eval-after-load 'magit-files
+    ;; These are duplicate conditional suffixes, so change both locations.
+    (transient-suffix-put 'magit-file-dispatch ", k" :key ", X")
+    (transient-suffix-put 'magit-file-dispatch "k" :key "X"))
+  (with-eval-after-load 'magit-branch
+    (transient-suffix-put
+     'magit-branch 'magit-branch-reset :key "X")
+    (transient-suffix-put
+     'magit-branch 'magit-branch-delete :key "x"))
+  (with-eval-after-load 'magit-stash
+    (transient-suffix-put
+     'magit-stash 'magit-stash-keep-index :key "k")
+    (transient-suffix-put
+     'magit-stash 'magit-stash-drop :key "x"))
+  (with-eval-after-load 'magit-sequence
+    (transient-suffix-put
+     'magit-rebase 'magit-rebase-remove-commit :key "x"))
+  (with-eval-after-load 'magit-remote
+    (transient-suffix-put
+     'magit-remote 'magit-remote-remove :key "x"))
+  (with-eval-after-load 'magit-submodule
+    (transient-suffix-put
+     'magit-submodule 'magit-submodule-remove :key "x"))
+  (with-eval-after-load 'magit-tag
+    (transient-suffix-put 'magit-tag 'magit-tag-delete :key "x"))
+  (with-eval-after-load 'magit-worktree
+    (transient-suffix-put
+     'magit-worktree 'magit-worktree-delete :key "x"))
+  (with-eval-after-load 'magit-notes
+    (transient-suffix-put
+     'magit-notes 'magit-notes-remove :key "x"))
   (with-eval-after-load 'which-key
     (yunge-key-add-which-key-descriptions
      yunge-file-map yunge-magit-file-bindings)

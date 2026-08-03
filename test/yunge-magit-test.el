@@ -29,6 +29,7 @@
 (declare-function magit-stashes-mode "magit-stash")
 (declare-function magit-status-mode "magit-status")
 (declare-function magit-submodule-list-mode "magit-submodule")
+(declare-function transient-get-suffix "transient" (prefix loc))
 (declare-function yunge-magit--enter-insert-state-for-blank-commit-message
                   "yunge-magit")
 
@@ -40,6 +41,9 @@
 (defvar magit-root-section)
 (defvar project-prefix-map)
 (defvar project-switch-commands)
+(defvar transient-map)
+(defvar transient-popup-navigation-map)
+(defvar transient-sticky-map)
 
 (defconst yunge-magit-test-repository-bindings
   '(("A" . magit-cherry-pick)
@@ -56,7 +60,7 @@
     ("Z" . magit-stash)))
 
 (yunge-test-deftest-lazy-load yunge-magit
-  (magit project))
+  (magit project transient))
 
 (defun yunge-magit-test--visual-untracked-files (keys target)
   "Return the untracked files selected by KEYS before calling TARGET."
@@ -116,6 +120,14 @@
     (funcall mode 1)
     (yunge-test-evil-keys 'normal bindings)))
 
+(defun yunge-magit-test--transient-command (prefix key)
+  "Return the command bound to KEY in transient PREFIX."
+  (plist-get (cdr (transient-get-suffix prefix key)) :command))
+
+(defun yunge-magit-test--transient-key (prefix command)
+  "Return the key bound to COMMAND in transient PREFIX."
+  (plist-get (cdr (transient-get-suffix prefix command)) :key))
+
 (ert-deftest yunge-magit-configures-after-package-ready ()
   (yunge-test-run-package-config
    'yunge-magit 'magit
@@ -157,7 +169,54 @@
                   (cdr binding))
           (error "Magit installed global key %s" (car binding))))
       (when (featurep 'magit)
-        (error "Magit was loaded by its configuration")))))
+        (error "Magit was loaded by its configuration"))
+      (when (featurep 'transient)
+        (error "Transient was loaded by the Magit configuration")))))
+
+(ert-deftest yunge-magit-configures-transient-navigation ()
+  (require 'magit-autoloads)
+  (yunge-test-load-package-config 'yunge-magit)
+  (require 'transient)
+
+  (should (eq (keymap-lookup transient-map "q")
+              'transient-quit-one))
+  (should (eq (keymap-lookup transient-sticky-map "q")
+              'transient-quit-seq))
+  (should (eq (keymap-lookup transient-popup-navigation-map "C-j")
+              'transient-forward-button))
+  (should (eq (keymap-lookup transient-popup-navigation-map "C-k")
+              'transient-backward-button)))
+
+(ert-deftest yunge-magit-normalizes-destructive-transient-keys ()
+  (require 'magit-autoloads)
+  (yunge-test-load-package-config 'yunge-magit)
+  (dolist (feature '(magit magit-branch magit-files magit-notes
+                           magit-remote magit-sequence magit-stash
+                           magit-submodule magit-tag magit-worktree))
+    (require feature))
+
+  (dolist (binding '((magit-dispatch magit-discard "x")
+                     (magit-branch magit-branch-reset "X")
+                     (magit-branch magit-branch-delete "x")
+                     (magit-stash magit-stash-keep-index "k")
+                     (magit-stash magit-stash-drop "x")
+                     (magit-rebase magit-rebase-remove-commit "x")
+                     (magit-remote magit-remote-remove "x")
+                     (magit-submodule magit-submodule-remove "x")
+                     (magit-tag magit-tag-delete "x")
+                     (magit-worktree magit-worktree-delete "x")
+                     (magit-notes magit-notes-remove "x")))
+    (should (equal (yunge-magit-test--transient-key
+                    (nth 0 binding) (nth 1 binding))
+                   (nth 2 binding))))
+  ;; File dispatch has separate layouts inside and outside file buffers.
+  (dolist (binding '((", x" . magit-file-untrack)
+                     ("x" . magit-file-untrack)
+                     (", X" . magit-file-delete)
+                     ("X" . magit-file-delete)))
+    (should (eq (yunge-magit-test--transient-command
+                 'magit-file-dispatch (car binding))
+                (cdr binding)))))
 
 (ert-deftest yunge-magit-integrates-with-evil ()
   (yunge-test-enable-evil)
