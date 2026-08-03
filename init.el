@@ -9,6 +9,7 @@
 (when (eq system-type 'darwin)
   (require 'yunge-mac))
 (require 'yunge-package)
+(require 'yunge-theme)
 (require 'yunge-evil)
 (require 'yunge-bookmark)
 (require 'yunge-window)

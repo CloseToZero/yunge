@@ -132,6 +132,15 @@
    :fetcher github
    :files (:defaults)
    :ref "10b170ad8006bad535599e5b3e007e643e34345a"))
+ (modus-themes
+  :source "elpaca-menu-lock-file"
+  :recipe
+  (:package "modus-themes"
+   :repo "protesilaos/modus-themes"
+   :fetcher github
+   :files (:defaults)
+   :source "MELPA"
+   :ref "2d044ac89f3bca7011fa2bfda003cf80ce115f70"))
  (orderless
   :source "elpaca-menu-lock-file"
   :recipe

@@ -60,17 +60,19 @@
       (dolist (target '(han cjk-misc))
         (set-fontset-font nil target font frame)))))
 
-;; Face specs are resolved while each frame is created, avoiding a visible
-;; change of the Latin font after startup.
-(let ((spec (yunge-font--face-spec)))
-  (face-spec-set 'default spec)
-  (face-spec-set 'fixed-pitch spec))
+(defun yunge-font-setup ()
+  "Apply configured fonts to faces and existing graphical frames."
+  ;; Face specs are resolved while each frame is created, avoiding a visible
+  ;; change of the Latin font after startup.
+  (let ((spec (yunge-font--face-spec)))
+    (face-spec-set 'default spec)
+    (face-spec-set 'fixed-pitch spec))
+  (dolist (frame (frame-list))
+    (yunge-font-setup-frame frame)))
 
 (add-hook 'after-make-frame-functions #'yunge-font-setup-frame)
 
-;; Also support reloading this library after graphical frames already exist.
-(dolist (frame (frame-list))
-  (yunge-font-setup-frame frame))
+(yunge-font-setup)
 
 (provide 'yunge-font)
 
