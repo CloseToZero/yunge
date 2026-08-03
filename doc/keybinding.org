@@ -126,9 +126,12 @@ Group global commands under prefixes by purpose:
 - ~SPC p~ operates on projects.
 - ~SPC q~ exits Emacs or manages its frames.
 - ~SPC s~ searches text.
+- ~SPC t~ toggles settings or opens a terminal.
 - ~SPC w~ operates on windows.
 
 Use ~SPC SPC~ to execute a command by name.
+Use ~SPC t t~ to open a terminal in the current directory.  Under the
+project map, ~SPC p t~ opens a terminal at the current project root.
 
 Window commands under ~SPC w~ execute once.  Use ~SPC w SPC~ to enter an
 explicit persistent window control map when several operations are needed.

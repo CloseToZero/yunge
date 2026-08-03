@@ -64,7 +64,7 @@
    '(normal visual) yunge-test-space-mode-map
    '(("SPC" ignore nil)))
 
-  (keymap-set yunge-leader-map "t" #'forward-char)
+  (keymap-set yunge-leader-map "z" #'forward-char)
   (unwind-protect
       (with-temp-buffer
         (yunge-test-buffer-mode)
@@ -84,18 +84,19 @@
         (yunge-test-key "SPC q f" 'delete-frame)
         (yunge-test-key "SPC q q" 'save-buffers-kill-terminal)
         (yunge-test-key "SPC q r" 'restart-emacs)
-        (yunge-test-key "SPC t" 'forward-char)
+        (should (keymapp (key-binding (kbd "SPC t"))))
+        (yunge-test-key "SPC z" 'forward-char)
         (yunge-test-key "SPC m p" 'backward-char)
 
         (evil-visual-state)
         (should (eq evil-state 'visual))
-        (yunge-test-key "SPC t" 'forward-char)
+        (yunge-test-key "SPC z" 'forward-char)
         (yunge-test-key "SPC m p" 'backward-char)
 
         (let ((overriding-terminal-local-map
                (define-keymap "SPC" #'forward-line)))
           (yunge-test-key "SPC" 'forward-line)))
-    (keymap-unset yunge-leader-map "t"))
+    (keymap-unset yunge-leader-map "z"))
 
   (should (eq (lookup-key yunge-buffer-map (kbd "b"))
               'switch-to-buffer))
@@ -112,6 +113,7 @@
      ("p" nil "+project")
      ("q" nil "+quit")
      ("s" nil "+search")
+     ("t" nil "+toggle/terminal")
      ("w" nil "+window")))
 
   (yunge-test-which-key-prefix-bindings

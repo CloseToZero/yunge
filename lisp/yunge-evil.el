@@ -36,6 +36,9 @@
 (defvar-keymap yunge-search-map
   :doc "Global search command map.")
 
+(defvar-keymap yunge-toggle-map
+  :doc "Global toggle and terminal command map.")
+
 (defvar-keymap yunge-window-map
   :doc "Global window command map.")
 
@@ -69,6 +72,7 @@
     ("p" ,project-prefix-map "project")
     ("q" ,yunge-quit-map "quit")
     ("s" ,yunge-search-map "search")
+    ("t" ,yunge-toggle-map "toggle/terminal")
     ("w" ,yunge-window-map "window")))
 
 (yunge-key-define yunge-leader-map

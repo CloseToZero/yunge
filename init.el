@@ -20,6 +20,7 @@
 (require 'yunge-consult)
 (require 'yunge-embark)
 (require 'yunge-magit)
+(require 'yunge-ghostel)
 (require 'yunge-elpaca)
 (require 'yunge-dired)
 (require 'yunge-help)
