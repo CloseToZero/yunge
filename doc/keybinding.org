@@ -60,6 +60,7 @@ Use these conventions only where the action is meaningful:
   the semantic object.  Use ~X~ for a clearly related action with broader
   scope.
 - ~RET~ invokes the primary action for the item at point.
+- In programming buffers, ~K~ describes the symbol at point.
 - ~gr~ refreshes the current contents.
 - ~C-j~ and ~C-k~ move to the next or previous candidate, revision, chunk, or
   visible section.
@@ -95,6 +96,7 @@ bindings resume when completion ends.
 
 Use ~g~ as the namespace for navigation-related commands.  Beyond ~gr~, use:
 
+- ~gd~ visits the definition of the symbol at point.
 - ~gf~ visits a file or source associated with the current item.
 - ~gF~ visits an alternate location for the same item.
 - ~g<~ opens recorded output from external commands when available.

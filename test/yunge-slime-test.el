@@ -100,6 +100,12 @@
        'normal
        '(("SPC m s" . slime)
          ("SPC m r" . yunge-slime-repl)
+         ("SPC m h a" . slime-apropos)
+         ("SPC m h f" . slime-describe-function)
+         ("SPC m h h" . slime-documentation-lookup)
+         ("SPC m h s" . slime-describe-symbol)
+         ("SPC m m a" . slime-macroexpand-all)
+         ("SPC m m o" . slime-macroexpand-1)
          ("SPC m q q" . slime-quit-lisp)
          ("SPC m q r" . slime-restart-inferior-lisp)
          ("SPC m e b" . slime-eval-buffer)
@@ -108,11 +114,15 @@
          ("SPC m e r" . slime-eval-region)
          ("SPC m c d" . slime-compile-defun)
          ("SPC m c f" . slime-compile-and-load-file)
-         ("SPC m c r" . slime-compile-region)))
+         ("SPC m c r" . slime-compile-region)
+         ("gd" . slime-edit-definition)
+         ("K" . slime-describe-symbol)))
       (yunge-test-which-key-prefix
        "SPC m"
        '(("c" nil "+compile")
          ("e" nil "+evaluate")
+         ("h" nil "+help")
+         ("m" nil "+macro")
          ("q" nil "+quit")
          ("r" nil "REPL")
          ("s" nil "start")))
@@ -122,6 +132,12 @@
       (yunge-test-which-key-prefix
        "SPC m c"
        yunge-slime-compile-bindings)
+      (yunge-test-which-key-prefix
+       "SPC m h"
+       yunge-slime-help-bindings)
+      (yunge-test-which-key-prefix
+       "SPC m m"
+       yunge-slime-macro-bindings)
       (yunge-test-which-key-prefix
        "SPC m q"
        yunge-slime-quit-bindings))))
