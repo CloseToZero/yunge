@@ -15,6 +15,7 @@
 (declare-function slime-get-region-properties "slime")
 (declare-function slime-lisp-mode-hook "slime")
 (declare-function slime-repl "slime-repl")
+(declare-function slime-scratch "slime-scratch")
 (declare-function slime-setup "slime")
 (declare-function slime-update-threads-buffer "slime")
 
@@ -25,6 +26,7 @@
 (defvar slime-apropos-mode-map)
 (defvar slime-inspector-mode-map)
 (defvar slime-lisp-implementations)
+(defvar slime-macroexpansion-minor-mode-map)
 (defvar slime-repl-history-file)
 (defvar slime-repl-history-size)
 (defvar slime-popup-buffer-mode-map)
@@ -100,7 +102,8 @@
                   yunge-slime-repl-clear-bindings)
 
 (defconst yunge-slime-repl-command-bindings
-  `(("c" ,yunge-slime-repl-clear-map "clear")
+  `(("b" yunge-slime-scratch "scratch")
+    ("c" ,yunge-slime-repl-clear-map "clear")
     ("h" ,yunge-slime-help-map "help")
     ("i" slime-repl-inspect "inspect")
     ("m" ,yunge-slime-macro-map "macro")
@@ -156,8 +159,15 @@
         (slime-repl))
     (call-interactively #'slime)))
 
+(defun yunge-slime-scratch ()
+  "Open the SLIME scratch buffer."
+  (interactive)
+  (require 'slime-scratch)
+  (slime-scratch))
+
 (defconst yunge-slime-command-bindings
-  `(("c" ,yunge-slime-compile-map "compile")
+  `(("b" yunge-slime-scratch "scratch")
+    ("c" ,yunge-slime-compile-map "compile")
     ("e" ,yunge-slime-eval-map "evaluate")
     ("h" ,yunge-slime-help-map "help")
     ("m" ,yunge-slime-macro-map "macro")
@@ -264,6 +274,14 @@
   `(("q" quit-window "quit")
     ,@yunge-slime-navigation-bindings))
 
+(defconst yunge-slime-macroexpansion-normal-bindings
+  '(("gr" slime-macroexpand-again "repeat expansion")
+    ("u" slime-macroexpand-undo "undo expansion")
+    ;; SLIME's ordinary minor-mode remaps cannot override Evil's auxiliary
+    ;; localleader map, so repeat them at the same precedence.
+    ([remap slime-macroexpand-1] slime-macroexpand-1-inplace nil)
+    ([remap slime-macroexpand-all] slime-macroexpand-all-inplace nil)))
+
 (defun yunge-slime-thread-kill ()
   "Kill the thread at point or threads covered by the active region."
   (interactive)
@@ -345,6 +363,8 @@
                          yunge-slime-debugger-normal-bindings)
   (yunge-key-evil-define 'normal slime-popup-buffer-mode-map
                          yunge-slime-popup-normal-bindings)
+  (yunge-key-evil-define 'normal slime-macroexpansion-minor-mode-map
+                         yunge-slime-macroexpansion-normal-bindings)
   (yunge-key-evil-define 'normal slime-thread-control-mode-map
                          yunge-slime-thread-normal-bindings)
   (yunge-key-evil-define 'visual slime-thread-control-mode-map

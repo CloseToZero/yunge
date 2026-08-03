@@ -8,6 +8,7 @@
 (declare-function evil-normal-state "evil-states")
 (declare-function slime-connection-list-mode "slime")
 (declare-function slime-inspector-mode "slime")
+(declare-function slime-macroexpansion-minor-mode "slime")
 (declare-function slime-mode "slime")
 (declare-function slime-popup-buffer-mode "slime")
 (declare-function slime-repl-mode "slime-repl")
@@ -107,7 +108,8 @@
       (should-not (bound-and-true-p slime-mode))
       (yunge-test-evil-keys
        'normal
-       '(("SPC m s" . slime)
+       '(("SPC m b" . yunge-slime-scratch)
+         ("SPC m s" . slime)
          ("SPC m r" . yunge-slime-repl)
          ("SPC m h a" . slime-apropos)
          ("SPC m h f" . slime-describe-function)
@@ -130,7 +132,8 @@
          ("K" . slime-describe-symbol)))
       (yunge-test-which-key-prefix
        "SPC m"
-       '(("c" nil "+compile")
+       '(("b" nil "scratch")
+         ("c" nil "+compile")
          ("e" nil "+evaluate")
          ("h" nil "+help")
          ("m" nil "+macro")
@@ -182,6 +185,7 @@
        ("C-k" . slime-repl-previous-prompt)
        ("gd" . slime-edit-definition)
        ("K" . slime-describe-symbol)
+       ("SPC m b" . yunge-slime-scratch)
        ("SPC m c b" . slime-repl-clear-buffer)
        ("SPC m c o" . slime-repl-clear-output)
        ("SPC m h s" . slime-describe-symbol)
@@ -194,7 +198,8 @@
        ("SPC m q t" . slime-list-threads)))
     (yunge-test-which-key-prefix
      "SPC m"
-     '(("c" nil "+clear")
+     '(("b" nil "scratch")
+       ("c" nil "+clear")
        ("h" nil "+help")
        ("i" nil "inspect")
        ("m" nil "+macro")
@@ -328,6 +333,26 @@
      '(("q" . slime-inspector-quit)
        ("K" . slime-inspector-describe)
        ("gd" . slime-edit-definition)))))
+
+(ert-deftest yunge-slime-integrates-macroexpansion-with-evil ()
+  (yunge-test-enable-evil)
+  (require 'slime-autoloads)
+  (yunge-test-load-package-config 'yunge-slime)
+  (require 'slime)
+
+  (with-temp-buffer
+    (lisp-mode)
+    (slime-mode 1)
+    (slime-macroexpansion-minor-mode 1)
+    (slime-popup-buffer-mode 1)
+    (evil-normal-state)
+    (yunge-test-evil-keys
+     'normal
+     '(("gr" . slime-macroexpand-again)
+       ("u" . slime-macroexpand-undo)
+       ("q" . quit-window)
+       ("SPC m m a" . slime-macroexpand-all-inplace)
+       ("SPC m m o" . slime-macroexpand-1-inplace)))))
 
 (ert-deftest yunge-slime-integrates-runtime-views-with-evil ()
   (yunge-test-enable-evil)
