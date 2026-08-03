@@ -4,10 +4,14 @@
 
 (require 'yunge-key)
 
+(declare-function dbus-call-method "dbus"
+                  (bus service path interface method &rest args))
 (declare-function dired-copy-filename-as-kill "dired")
 (declare-function dired-dnd-handle-file "dired" (uri action))
 (declare-function dired-dnd-handle-local-file "dired" (uri action))
 (declare-function dired-dwim-target-recent "dired-aux")
+(declare-function dired-get-marked-files "dired"
+                  (&optional localp arg filter distinguish-one-marked error))
 (declare-function dnd-get-local-file-name "dnd"
                   (uri &optional must-exist))
 (declare-function dnd-open-file "dnd" (uri action))
@@ -16,6 +20,9 @@
 (declare-function project-remember-project "project"
                   (project &optional no-write stable))
 (declare-function shell-command-do-open "dired-aux" (files))
+(declare-function url-encode-url "url-util" (url))
+(declare-function w32-shell-execute "w32fns.c"
+                  (operation document &optional parameters show-flag))
 (declare-function x-popup-menu "menu.c" (position menu))
 
 (defvar dnd-protocol-alist)
@@ -173,12 +180,113 @@ inconsistently from keyboard modifiers and the source application."
   (interactive)
   (shell-command-do-open (list default-directory)))
 
+(defun yunge-dired--files-to-reveal ()
+  "Return marked Dired files, or the file at point when none are marked."
+  (dired-get-marked-files nil nil nil nil "No files specified"))
+
+(defun yunge-dired--powershell-literal (string)
+  "Return STRING as a single-quoted PowerShell literal."
+  (concat "'"
+          (replace-regexp-in-string "'" "''" string t t)
+          "'"))
+
+(defun yunge-dired--reveal-one-on-windows (file)
+  "Reveal FILE in Windows Explorer."
+  (w32-shell-execute
+   "open" "explorer.exe"
+   (format "/select,\"%s\""
+           (subst-char-in-string ?/ ?\\ file))))
+
+(defun yunge-dired--reveal-on-windows (files)
+  "Reveal FILES in Windows Explorer."
+  (if (null (cdr files))
+      (yunge-dired--reveal-one-on-windows (car files))
+    (let ((powershell (or (executable-find "pwsh")
+                          (executable-find "powershell"))))
+      (if (not powershell)
+          (progn
+            (yunge-dired--reveal-one-on-windows (car files))
+            (message
+             "Explorer can reveal only the first item without PowerShell"))
+        (let* ((script
+                (expand-file-name
+                 "script/yunge-reveal.ps1"
+                 user-emacs-directory))
+               (command
+                (concat
+                 "& "
+                 (mapconcat
+                  #'yunge-dired--powershell-literal
+                  (cons script files)
+                  " ")))
+               (encoded-command
+                (base64-encode-string
+                 (encode-coding-string command 'utf-16le)
+                 t)))
+          ;; Explorer's command line can select only one item.  Use the native
+          ;; multi-select API through PowerShell only when it is necessary.
+          ;; Hide PowerShell when it is created; the script makes only the
+          ;; resulting Explorer window visible.
+          (w32-shell-execute
+           "open" powershell
+           (concat
+            "-NoLogo -NoProfile -NonInteractive -WindowStyle Hidden "
+            "-ExecutionPolicy Bypass -EncodedCommand "
+            encoded-command)
+           0))))))
+
+(defun yunge-dired--reveal-on-mac (files)
+  "Reveal FILES in macOS Finder."
+  (make-process
+   :name "yunge-dired-reveal"
+   :command (append '("open" "-R") files)
+   :noquery t))
+
+(defun yunge-dired--reveal-on-freedesktop (files)
+  "Reveal FILES through the freedesktop file-manager interface."
+  (require 'dbus)
+  (require 'url-util)
+  (condition-case error-data
+      (dbus-call-method
+       :session "org.freedesktop.FileManager1"
+       "/org/freedesktop/FileManager1"
+       "org.freedesktop.FileManager1" "ShowItems"
+       :timeout 3000
+       (cons :array
+             (mapcar
+              (lambda (file)
+                (url-encode-url
+                 (concat "file://" (expand-file-name file))))
+              files))
+       "")
+    (dbus-error
+     (user-error "The file manager cannot reveal files: %s"
+                 (error-message-string error-data)))))
+
+(defun yunge-dired-reveal-in-file-manager ()
+  "Reveal Dired files in the system file manager.
+If point is on a marked file, reveal all marked files where supported.
+Otherwise, ignore marks and reveal only the file at point."
+  (interactive)
+  (let ((files (yunge-dired--files-to-reveal)))
+    (dolist (file files)
+      (when (file-remote-p file)
+        (user-error "Cannot reveal a remote file externally")))
+    (pcase system-type
+      ('windows-nt (yunge-dired--reveal-on-windows files))
+      ('darwin (yunge-dired--reveal-on-mac files))
+      ((or 'gnu 'gnu/linux 'gnu/kfreebsd 'berkeley-unix)
+       (yunge-dired--reveal-on-freedesktop files))
+      (_ (user-error "Revealing files is unsupported on %s"
+                     system-type)))))
+
 (defconst yunge-dired-command-bindings
   `(("a" ,yunge-dired-attribute-map "attribute")
     ("d" dired-hide-details-mode "toggle details")
     ("e" yunge-dired-open-directory-externally "open in file manager")
     ("l" ,yunge-dired-link-map "link")
-    ("o" dired-do-open "open externally")))
+    ("o" dired-do-open "open externally")
+    ("r" yunge-dired-reveal-in-file-manager "reveal in file manager")))
 
 (defvar-keymap yunge-dired-command-map
   :doc "Keymap for Dired commands.")
