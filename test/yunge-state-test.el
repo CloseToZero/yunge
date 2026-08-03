@@ -29,6 +29,9 @@
                (kill-buffer))
              (unless (file-directory-p tramp-auto-save-directory)
                (error "TRAMP auto-save directory was not created"))
+             (unless (equal server-auth-dir
+                            (expand-file-name "var/server/" root))
+               (error "Server authentication was not redirected under var"))
              (unless (equal
                       (list transient-history-file
                             transient-levels-file

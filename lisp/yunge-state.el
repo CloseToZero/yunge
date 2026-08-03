@@ -5,6 +5,7 @@
 (defvar transient-history-file)
 (defvar transient-levels-file)
 (defvar transient-values-file)
+(defvar server-auth-dir)
 
 (let* ((directory (expand-file-name "var/" user-emacs-directory))
        (auto-save-directory
@@ -35,6 +36,8 @@
         (expand-file-name "save-place.eld" directory)
         savehist-file
         (expand-file-name "savehist.eld" directory)
+        server-auth-dir
+        (expand-file-name "server/" directory)
         tramp-auto-save-directory
         tramp-auto-save-directory-path
         tramp-persistency-file-name
