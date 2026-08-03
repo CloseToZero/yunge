@@ -91,7 +91,7 @@
     ("d" magit-diff "diff")
     ("f" magit-fetch "fetch")
     ("F" magit-pull "pull")
-    ("l" magit-log "log")
+    ("L" magit-log "log")
     ("m" magit-merge "merge")
     ("p" magit-push "push")
     ("r" magit-rebase "rebase")

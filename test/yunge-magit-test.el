@@ -52,12 +52,16 @@
     ("d" . magit-diff)
     ("f" . magit-fetch)
     ("F" . magit-pull)
-    ("l" . magit-log)
+    ("L" . magit-log)
     ("m" . magit-merge)
     ("p" . magit-push)
     ("r" . magit-rebase)
     ("X" . magit-reset)
     ("Z" . magit-stash)))
+
+(defconst yunge-magit-test-horizontal-bindings
+  '(("h" . evil-backward-char)
+    ("l" . evil-forward-char)))
 
 (yunge-test-deftest-lazy-load yunge-magit
   (magit project transient))
@@ -108,6 +112,7 @@
       ("gR" . magit-refresh-all)
       ("y s" . magit-copy-section-value))
     yunge-magit-test-repository-bindings
+    yunge-magit-test-horizontal-bindings
     '(("SPC m SPC" . magit-dispatch)
       ("C-i" . yunge-jump-history-forward)))))
 
@@ -274,6 +279,7 @@
       ("x" . magit-delete-thing)
       ("y s" . magit-copy-section-value))
     yunge-magit-test-repository-bindings
+    yunge-magit-test-horizontal-bindings
     '(("SPC m SPC" . magit-dispatch)
       ("C-i" . yunge-jump-history-forward))))
   (yunge-test-which-key-prefix-bindings
@@ -312,12 +318,14 @@
     (yunge-magit-test--view-keys mode 'magit-mode-bury-buffer))
   (yunge-test-evil-normal-keys
    'magit-log-select-mode
-   '(("C-j" . magit-section-forward)
-     ("C-k" . magit-section-backward)
-     ("RET" . magit-log-select-pick)
-     ("<tab>" . magit-section-toggle)
-     ("q" . magit-log-select-quit)
-     ("C-i" . yunge-jump-history-forward))))
+   (append
+    '(("C-j" . magit-section-forward)
+      ("C-k" . magit-section-backward)
+      ("RET" . magit-log-select-pick)
+      ("<tab>" . magit-section-toggle)
+      ("q" . magit-log-select-quit)
+      ("C-i" . yunge-jump-history-forward))
+    yunge-magit-test-horizontal-bindings)))
 
 (ert-deftest yunge-magit-log-ret-visits-the-commit-at-point ()
   (yunge-test-enable-evil)
@@ -411,19 +419,21 @@
 
   (yunge-test-evil-normal-keys
    'git-rebase-mode
-   '(("RET" . git-rebase-show-commit)
-     ("M-j" . git-rebase-move-line-down)
-     ("M-k" . git-rebase-move-line-up)
-     ("p" . git-rebase-pick)
-     ("r" . git-rebase-reword)
-     ("e" . git-rebase-edit)
-     ("s" . git-rebase-squash)
-     ("f" . git-rebase-fixup)
-     ("d" . git-rebase-drop)
-     ("x" . git-rebase-exec)
-     ("u" . git-rebase-undo)
-     ("ZZ" . with-editor-finish)
-     ("ZQ" . with-editor-cancel)))
+   (append
+    '(("RET" . git-rebase-show-commit)
+      ("M-j" . git-rebase-move-line-down)
+      ("M-k" . git-rebase-move-line-up)
+      ("p" . git-rebase-pick)
+      ("r" . git-rebase-reword)
+      ("e" . git-rebase-edit)
+      ("s" . git-rebase-squash)
+      ("f" . git-rebase-fixup)
+      ("d" . git-rebase-drop)
+      ("x" . git-rebase-exec)
+      ("u" . git-rebase-undo)
+      ("ZZ" . with-editor-finish)
+      ("ZQ" . with-editor-cancel))
+    yunge-magit-test-horizontal-bindings))
   (yunge-test-evil-visual-keys
    'git-rebase-mode
    '(("M-j" . git-rebase-move-line-down)
@@ -447,36 +457,44 @@
 
   (yunge-magit-test--minor-mode-keys
    'magit-blame-read-only-mode
-   '(("RET" . magit-show-commit)
-     ("C-j" . magit-blame-next-chunk)
-     ("C-k" . magit-blame-previous-chunk)
-     ("M-j" . magit-blame-next-chunk-same-commit)
-     ("M-k" . magit-blame-previous-chunk-same-commit)
-     ("c" . magit-blame-cycle-style)
-     ("q" . magit-blame-quit)))
+   (append
+    '(("RET" . magit-show-commit)
+      ("C-j" . magit-blame-next-chunk)
+      ("C-k" . magit-blame-previous-chunk)
+      ("M-j" . magit-blame-next-chunk-same-commit)
+      ("M-k" . magit-blame-previous-chunk-same-commit)
+      ("c" . magit-blame-cycle-style)
+      ("q" . magit-blame-quit))
+    yunge-magit-test-horizontal-bindings))
   (yunge-magit-test--minor-mode-keys
    'magit-blob-mode
-   '(("C-j" . magit-blob-next)
-     ("C-k" . magit-blob-previous)
-     ("q" . magit-bury-or-kill-buffer)))
+   (append
+    '(("C-j" . magit-blob-next)
+      ("C-k" . magit-blob-previous)
+      ("q" . magit-bury-or-kill-buffer))
+    yunge-magit-test-horizontal-bindings))
   (yunge-test-evil-normal-keys
    'magit-process-mode
-   '(("C-j" . magit-section-forward)
-     ("C-k" . magit-section-backward)
-     ("M-h" . magit-section-up)
-     ("<tab>" . magit-section-toggle)
-     ("q" . magit-mode-bury-buffer)
-     ("x" . magit-process-kill)))
+   (append
+    '(("C-j" . magit-section-forward)
+      ("C-k" . magit-section-backward)
+      ("M-h" . magit-section-up)
+      ("<tab>" . magit-section-toggle)
+      ("q" . magit-mode-bury-buffer)
+      ("x" . magit-process-kill))
+    yunge-magit-test-horizontal-bindings))
   (dolist (mode '(magit-repolist-mode
                   magit-submodule-list-mode))
     (yunge-test-evil-normal-keys
      mode
-     '(("RET" . magit-repolist-status)
-       ("f" . magit-repolist-fetch)
-       ("gr" . revert-buffer)
-       ("m" . magit-repolist-mark)
-       ("q" . quit-window)
-       ("u" . magit-repolist-unmark)))))
+     (append
+      '(("RET" . magit-repolist-status)
+        ("f" . magit-repolist-fetch)
+        ("gr" . revert-buffer)
+        ("m" . magit-repolist-mark)
+        ("q" . quit-window)
+        ("u" . magit-repolist-unmark))
+      yunge-magit-test-horizontal-bindings))))
 
 (ert-deftest yunge-magit-rebase-visual-action-excludes-the-next-line ()
   (yunge-test-enable-evil)
@@ -520,6 +538,8 @@
       (yunge-test-keys
        `(("C-j" . magit-section-forward)
          ("C-k" . magit-section-backward)
+         ("h" . evil-backward-char)
+         ("l" . evil-forward-char)
          ("s" . magit-stage)
          ("u" . magit-unstage)
          ("x" . ,(nth 2 entry))
