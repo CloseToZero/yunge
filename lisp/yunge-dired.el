@@ -5,10 +5,21 @@
 (require 'yunge-key)
 
 (declare-function dired-copy-filename-as-kill "dired")
+(declare-function project-current "project"
+                  (&optional maybe-prompt directory))
+(declare-function project-remember-project "project"
+                  (project &optional no-write stable))
 
 (defvar dired-movement-style)
+(defvar dired-directory)
 (defvar dired-mode-map)
 (defvar wdired-mode-map)
+
+(defun yunge-dired--remember-project ()
+  "Remember the project containing the current Dired directory."
+  (when (bound-and-true-p dired-directory)
+    (when-let* ((project (project-current nil default-directory)))
+      (project-remember-project project))))
 
 (defun yunge-dired-copy-filename ()
   "Copy the names of the selected files without their directories."
@@ -136,6 +147,9 @@
   "Set up Evil bindings for Wdired."
   (yunge-key-evil-define 'normal wdired-mode-map
                          yunge-wdired-normal-bindings))
+
+(with-eval-after-load 'dired
+  (add-hook 'dired-mode-hook #'yunge-dired--remember-project))
 
 (with-eval-after-load 'evil
   (with-eval-after-load 'dired
