@@ -9,11 +9,13 @@
                   "ghostel" (key-name mods &optional utf8))
 (declare-function ghostel--send-event "ghostel" ())
 (declare-function ghostel-alt-screen-p "ghostel" ())
+(declare-function ghostel-project "ghostel" (&optional arg))
 
 (defvar evil-ghostel-mode-map)
 (defvar ghostel-mode-hook)
 (defvar ghostel-module-auto-install)
 (defvar ghostel-module-directory)
+(defvar ghostel-buffer-name-function)
 (defvar ghostel-readonly-fake-cursor)
 (defvar ghostel-semi-char-mode-map)
 (defvar ghostel-shell)
@@ -39,7 +41,7 @@ prompt without changing the user's PowerShell profile.")
   '(("t" ghostel "terminal")))
 
 (defconst yunge-ghostel-project-bindings
-  '(("t" ghostel-project "terminal")))
+  '(("t" yunge-ghostel-project "terminal")))
 
 (defconst yunge-ghostel-history-bindings
   '(("M-n" yunge-ghostel-next-input "next input")
@@ -72,6 +74,19 @@ prompt without changing the user's PowerShell profile.")
   (interactive)
   (yunge-ghostel--send-history-key "up"))
 
+(defun yunge-ghostel-project (&optional arg)
+  "Start a project Ghostel terminal with a stable project-based name.
+ARG follows the prefix conventions of `ghostel-project'."
+  (interactive "P")
+  (require 'ghostel)
+  (let ((ghostel-buffer-name-function nil))
+    (let ((buffer (ghostel-project arg)))
+      (with-current-buffer buffer
+        ;; Shell titles often contain the executable path, but project
+        ;; terminals are more useful when their project identity stays visible.
+        (setq-local ghostel-buffer-name-function nil))
+      buffer)))
+
 (defun yunge-ghostel--setup-keys ()
   "Set up shell history and Evil mouse bindings for Ghostel."
   (yunge-key-define ghostel-semi-char-mode-map
@@ -93,7 +108,7 @@ prompt without changing the user's PowerShell profile.")
   (yunge-key-define project-prefix-map yunge-ghostel-project-bindings)
   (with-eval-after-load 'project
     (add-to-list 'project-switch-commands
-                 '(ghostel-project "Ghostel") t))
+                 '(yunge-ghostel-project "Ghostel") t))
   (add-hook 'ghostel-mode-hook #'evil-ghostel-mode)
   (with-eval-after-load 'evil-ghostel
     (yunge-ghostel--setup-keys))

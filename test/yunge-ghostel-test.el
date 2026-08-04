@@ -6,12 +6,16 @@
 
 (declare-function evil-normal-state "evil-states")
 (declare-function evil-visual-state "evil-states")
+(declare-function ghostel--set-title "ghostel" (title))
 (declare-function ghostel-mode "ghostel")
 (declare-function yunge-ghostel--windows-shell-spec "yunge-ghostel")
 (declare-function yunge-ghostel-next-input "yunge-ghostel")
 (declare-function yunge-ghostel-previous-input "yunge-ghostel")
+(declare-function yunge-ghostel-project "yunge-ghostel" (&optional arg))
 
 (defvar ghostel-semi-char-mode-map)
+(defvar ghostel-buffer-name-function)
+(defvar ghostel--managed-buffer-name)
 (defvar ghostel-mode-hook)
 (defvar ghostel-module-auto-install)
 (defvar ghostel-module-directory)
@@ -44,7 +48,7 @@
       (unless (eq (keymap-lookup yunge-toggle-map "t") 'ghostel)
         (error "Ghostel terminal key was not bound"))
       (unless (eq (keymap-lookup project-prefix-map "t")
-                  'ghostel-project)
+                  'yunge-ghostel-project)
         (error "Ghostel project key was not bound"))
       (unless (eq ghostel-module-auto-install 'download)
         (error "Ghostel module download was not configured"))
@@ -59,7 +63,7 @@
       (when (featurep 'project)
         (error "Project was loaded by the Ghostel configuration"))
       (require 'project)
-      (unless (member '(ghostel-project "Ghostel")
+      (unless (member '(yunge-ghostel-project "Ghostel")
                       project-switch-commands)
         (error "Ghostel project action was not added"))
       (when (featurep 'ghostel)
@@ -74,13 +78,32 @@
   (yunge-test-evil-normal-keys
    'fundamental-mode
    '(("SPC t t" . ghostel)
-     ("SPC p t" . ghostel-project)))
+     ("SPC p t" . yunge-ghostel-project)))
   (yunge-test-which-key-prefix-bindings
    'fundamental-mode "SPC t"
    '(("t" nil "terminal")))
   (yunge-test-which-key-prefix-bindings
    'fundamental-mode "SPC p"
    '(("t" nil "terminal"))))
+
+(ert-deftest yunge-ghostel-project-keeps-its-project-name ()
+  (yunge-ghostel-test--load-config)
+  (require 'ghostel)
+  (let ((buffer (generate-new-buffer "*sample-ghostel*"))
+        received-arg)
+    (unwind-protect
+        (cl-letf (((symbol-function 'ghostel-project)
+                   (lambda (&optional arg)
+                     (setq received-arg arg)
+                     buffer)))
+          (should (eq (yunge-ghostel-project '(4)) buffer))
+          (should (equal received-arg '(4)))
+          (with-current-buffer buffer
+            (setq-local ghostel--managed-buffer-name (buffer-name))
+            (ghostel--set-title "C:/Program Files/PowerShell/pwsh.exe")
+            (should (equal (buffer-name) "*sample-ghostel*"))))
+      (when (buffer-live-p buffer)
+        (kill-buffer buffer)))))
 
 (ert-deftest yunge-ghostel-integrates-input-with-evil ()
   (yunge-ghostel-test--load-config)
