@@ -4,15 +4,28 @@
 
 (require 'yunge-test-helper)
 
+(declare-function evil-normal-state "evil-states")
+(declare-function evil-visual-state "evil-states")
+(declare-function ghostel-mode "ghostel")
 (declare-function yunge-ghostel--windows-shell-spec "yunge-ghostel")
+(declare-function yunge-ghostel-next-input "yunge-ghostel")
+(declare-function yunge-ghostel-previous-input "yunge-ghostel")
 
+(defvar ghostel-semi-char-mode-map)
 (defvar ghostel-mode-hook)
 (defvar ghostel-module-auto-install)
 (defvar ghostel-module-directory)
+(defvar ghostel-readonly-fake-cursor)
 (defvar ghostel-shell)
 (defvar project-prefix-map)
 (defvar project-switch-commands)
 (defvar yunge-toggle-map)
+
+(defun yunge-ghostel-test--load-config ()
+  "Load the Ghostel configuration synchronously for command tests."
+  (yunge-test-enable-evil)
+  (require 'evil-ghostel-autoloads)
+  (yunge-test-load-package-config 'yunge-ghostel))
 
 (yunge-test-deftest-lazy-load yunge-ghostel
   (evil evil-ghostel ghostel project which-key))
@@ -39,6 +52,8 @@
                      (expand-file-name "var/ghostel/"
                                        user-emacs-directory))
         (error "Ghostel module directory was not redirected"))
+      (when ghostel-readonly-fake-cursor
+        (error "Ghostel read-only hint cursor was not disabled"))
       (unless (memq 'evil-ghostel-mode ghostel-mode-hook)
         (error "Evil Ghostel integration was not enabled"))
       (when (featurep 'project)
@@ -53,9 +68,7 @@
         (error "Evil Ghostel was loaded by its configuration")))))
 
 (ert-deftest yunge-ghostel-binds-entry-points ()
-  (require 'evil-ghostel-autoloads)
-  (yunge-test-load-package-config 'yunge-ghostel)
-  (yunge-test-enable-evil)
+  (yunge-ghostel-test--load-config)
   (require 'which-key)
 
   (yunge-test-evil-normal-keys
@@ -68,6 +81,49 @@
   (yunge-test-which-key-prefix-bindings
    'fundamental-mode "SPC p"
    '(("t" nil "terminal"))))
+
+(ert-deftest yunge-ghostel-integrates-input-with-evil ()
+  (yunge-ghostel-test--load-config)
+  (require 'evil-ghostel)
+  (yunge-test-keymap-keys
+   ghostel-semi-char-mode-map
+   '(("M-n" . yunge-ghostel-next-input)
+     ("M-p" . yunge-ghostel-previous-input)))
+  (with-temp-buffer
+    (ghostel-mode)
+    (evil-normal-state)
+    (yunge-test-evil-keys
+     'normal
+     '(("<down-mouse-1>" . ghostel-mouse-press-or-copy-mode)))
+    (evil-visual-state)
+    (yunge-test-evil-keys
+     'visual
+     '(("<down-mouse-1>" . ghostel-mouse-press-or-copy-mode)))))
+
+(ert-deftest yunge-ghostel-history-keys-drive-the-shell-line-editor ()
+  (yunge-ghostel-test--load-config)
+  (let (sent)
+    (cl-letf (((symbol-function 'ghostel-alt-screen-p) #'ignore)
+              ((symbol-function 'ghostel--send-encoded)
+               (lambda (key modifiers &optional _utf8)
+                 (push (list key modifiers) sent))))
+      (yunge-ghostel-previous-input)
+      (yunge-ghostel-next-input))
+    (should (equal (nreverse sent) '(("up" "") ("down" ""))))))
+
+(ert-deftest yunge-ghostel-history-keys-pass-through-in-full-screen-apps ()
+  (yunge-ghostel-test--load-config)
+  (let (sent)
+    (cl-letf (((symbol-function 'ghostel-alt-screen-p)
+               (lambda () t))
+              ((symbol-function 'ghostel--send-event)
+               (lambda () (setq sent last-command-event)))
+              ((symbol-function 'ghostel--send-encoded)
+               (lambda (&rest _)
+                 (ert-fail "History key was rewritten"))))
+      (let ((last-command-event ?\M-p))
+        (yunge-ghostel-previous-input)))
+    (should (eq sent ?\M-p))))
 
 (ert-deftest yunge-ghostel-prefers-modern-powershell ()
   (cl-letf (((symbol-function 'executable-find)
