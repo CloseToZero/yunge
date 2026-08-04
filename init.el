@@ -5,6 +5,7 @@
 (require 'yunge-state)
 (require 'yunge-server)
 (require 'yunge-history)
+(require 'yunge-autorevert)
 (require 'yunge-edit)
 (require 'yunge-treesit)
 (require 'yunge-cc)
