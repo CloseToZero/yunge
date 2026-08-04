@@ -14,6 +14,7 @@
 (require 'yunge-package)
 (require 'yunge-theme)
 (require 'yunge-evil)
+(require 'yunge-tab)
 (require 'yunge-bookmark)
 (require 'yunge-window)
 (require 'yunge-which-key)

@@ -122,6 +122,7 @@ active.
 
 Group global commands under prefixes by purpose:
 
+- ~SPC TAB~ operates on tab-based task layouts.
 - ~SPC b~ operates on buffers.
 - ~SPC f~ operates on files.
 - ~SPC g~ goes to destinations associated with the current context.
