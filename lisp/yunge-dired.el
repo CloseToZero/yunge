@@ -284,6 +284,7 @@ Otherwise, ignore marks and reveal only the file at point."
   `(("a" ,yunge-dired-attribute-map "attribute")
     ("d" dired-hide-details-mode "toggle details")
     ("e" yunge-dired-open-directory-externally "open in file manager")
+    ("h" dired-summary "summary and errors")
     ("l" ,yunge-dired-link-map "link")
     ("o" dired-do-open "open externally")
     ("r" yunge-dired-reveal-in-file-manager "reveal in file manager")))

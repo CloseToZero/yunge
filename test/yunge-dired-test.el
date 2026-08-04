@@ -68,6 +68,7 @@
        ("y p" . yunge-dired-copy-project-path)
        ("SPC m a m" . dired-do-chmod)
        ("SPC m e" . yunge-dired-open-directory-externally)
+       ("SPC m h" . dired-summary)
        ("SPC m l s" . dired-do-symlink)
        ("SPC m r" . yunge-dired-reveal-in-file-manager)))
 
@@ -100,6 +101,7 @@
     (yunge-test-which-key-prefix-bindings
      'dired-mode "SPC m" '(("a" nil "+attribute")
                             ("e" nil "open in file manager")
+                            ("h" nil "summary and errors")
                             ("l" nil "+link")
                             ("r" nil "reveal in file manager")))))
 
