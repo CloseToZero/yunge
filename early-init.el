@@ -33,6 +33,7 @@
 (setq frame-inhibit-implied-resize t)
 
 (require 'yunge-font)
+(require 'yunge-frame)
 
 ;; Keep maximization exclusive to the initial frame.
 (add-to-list 'initial-frame-alist '(fullscreen . maximized))
