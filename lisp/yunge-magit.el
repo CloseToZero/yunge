@@ -92,6 +92,7 @@
     ("f" magit-fetch "fetch")
     ("F" magit-pull "pull")
     ("L" magit-log "log")
+    ("M" magit-remote "remote")
     ("m" magit-merge "merge")
     ("p" magit-push "push")
     ("r" magit-rebase "rebase")

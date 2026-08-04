@@ -53,6 +53,7 @@
     ("f" . magit-fetch)
     ("F" . magit-pull)
     ("L" . magit-log)
+    ("M" . magit-remote)
     ("m" . magit-merge)
     ("p" . magit-push)
     ("r" . magit-rebase)
