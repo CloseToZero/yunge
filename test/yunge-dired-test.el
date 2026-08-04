@@ -4,6 +4,7 @@
 
 (require 'yunge-test-helper)
 
+(declare-function dired-do-copy "dired-aux" (&optional arg))
 (declare-function dired-goto-file "dired" (file))
 (declare-function dired-mark "dired" (arg &optional interactive))
 (declare-function dired-unmark-all-marks "dired")
@@ -19,10 +20,13 @@
 (declare-function yunge-dired--setup-dnd "yunge-dired")
 
 (defvar dired-directory)
+(defvar dired-do-revert-buffer)
 (defvar dired-dwim-target)
 (defvar dired-mode-map)
 (defvar dired-movement-style)
 (defvar dnd-protocol-alist)
+(defvar ls-lisp-filesize-d-fmt)
+(defvar ls-lisp-uid-s-fmt)
 (defvar project--list)
 (defvar project-list-file)
 
@@ -39,6 +43,45 @@
       (yunge-dired-copy-absolute-path)
       (yunge-dired-copy-project-path))
     (should (equal (nreverse arguments) '(nil 0 1)))))
+
+(ert-deftest yunge-dired-isolates-ls-lisp-widths-when-copying ()
+  (require 'yunge-dired)
+  (require 'dired)
+  (require 'dired-aux)
+  (let* ((root (make-temp-file "yunge-dired-add-" t))
+         (source-directory (expand-file-name "source/" root))
+         (target-directory (expand-file-name "target/" root))
+         (source (expand-file-name "copied.txt" source-directory))
+         (target (expand-file-name "copied.txt" target-directory))
+         (existing (expand-file-name "existing.txt" target-directory))
+         source-buffer target-buffer)
+    (make-directory source-directory)
+    (make-directory target-directory)
+    (write-region "copied" nil source nil 'silent)
+    (write-region "existing" nil existing nil 'silent)
+    (setq source-buffer (dired-noselect source-directory)
+          target-buffer (dired-noselect target-directory))
+    (unwind-protect
+        (with-current-buffer source-buffer
+          ;; Reproduce a source listing whose owner and size columns are much
+          ;; wider than the destination listing's columns.
+          (setq ls-lisp-uid-s-fmt " %-19s"
+                ls-lisp-filesize-d-fmt " %20d")
+          (should (dired-goto-file source))
+          (let ((dired-do-revert-buffer nil))
+            (cl-letf (((symbol-function 'dired-mark-read-file-name)
+                       (lambda (&rest _arguments) target-directory)))
+              (dired-do-copy)))
+          (with-current-buffer target-buffer
+            (should (dired-goto-file target))
+            (should (eq (char-after (line-beginning-position)) ?C))
+            (let ((target-column (current-column)))
+              (should (dired-goto-file existing))
+              (should (= (current-column) target-column)))))
+      (dolist (buffer (list source-buffer target-buffer))
+        (when (buffer-live-p buffer)
+          (kill-buffer buffer)))
+      (delete-directory root t))))
 
 (ert-deftest yunge-dired-binds-keys ()
   (require 'yunge-dired)

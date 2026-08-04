@@ -32,6 +32,16 @@
 (defvar dired-mode-map)
 (defvar wdired-mode-map)
 
+(defconst yunge-dired--ls-lisp-format-variables
+  '(ls-lisp-uid-d-fmt
+    ls-lisp-uid-s-fmt
+    ls-lisp-gid-d-fmt
+    ls-lisp-gid-s-fmt
+    ls-lisp-filesize-d-fmt
+    ls-lisp-filesize-f-fmt
+    ls-lisp-filesize-b-fmt)
+  "ls-lisp field formats that must be isolated between Dired buffers.")
+
 (defun yunge-dired--drop-items-description (uris)
   "Return a short description of dropped file URIS."
   (if (cdr uris)
@@ -353,6 +363,13 @@ Otherwise, ignore marks and reveal only the file at point."
     (with-current-buffer buffer
       (when (derived-mode-p 'dired-mode)
         (yunge-dired--setup-dnd)))))
+
+(with-eval-after-load 'ls-lisp
+  ;; A full listing stores its field widths in these variables.  Keep those
+  ;; widths in the listing's buffer so a later single-file insertion into a
+  ;; different Dired buffer cannot inherit them.
+  (dolist (variable yunge-dired--ls-lisp-format-variables)
+    (make-variable-buffer-local variable)))
 
 (with-eval-after-load 'evil
   (with-eval-after-load 'dired
