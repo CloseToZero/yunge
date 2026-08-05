@@ -303,6 +303,29 @@
       "first"
       (fangcun--node-annotation first-candidate)))))
 
+(ert-deftest fangcun-inserts-id-link-with-node-title ()
+  (fangcun-test-with-notes
+    (fangcun-db-sync)
+    (with-temp-buffer
+      (org-mode)
+      (cl-letf
+          (((symbol-function 'completing-read)
+            (lambda (_prompt collection &rest _arguments)
+              (car
+               (seq-find
+                (lambda (item)
+                  (string-prefix-p "A theorem" (car item)))
+                collection)))))
+        (let ((node (fangcun-node-insert)))
+          (should (equal (fangcun-node-id node) "theorem"))
+          (should
+           (equal (buffer-string)
+                  "[[id:theorem][A theorem]]")))))))
+
+(ert-deftest fangcun-insert-requires-org-mode ()
+  (with-temp-buffer
+    (should-error (fangcun-node-insert) :type 'user-error)))
+
 (ert-deftest fangcun-visit-widens-narrowed-target-buffer ()
   (fangcun-test-with-notes
     (fangcun-db-sync)

@@ -287,6 +287,23 @@ RELATIVE-FILE names BUFFER's file relative to YIYU's root."
              (fangcun-node-file node))
      'face 'completions-annotations)))
 
+(defun fangcun--read-node ()
+  "Read and return a Fangcun node."
+  (let* ((nodes (fangcun-node-list))
+         (candidates
+          (mapcar
+           (lambda (node)
+             (cons (fangcun--node-candidate node) node))
+           nodes))
+         (completion-extra-properties
+          '(:category fangcun-node
+            :annotation-function fangcun--node-annotation)))
+    (unless candidates
+      (user-error "No Fangcun nodes; run `fangcun-db-sync' first"))
+    (let ((choice
+           (completing-read "Fangcun node: " candidates nil t)))
+      (cdr (assoc choice candidates)))))
+
 (defun fangcun-node-visit (node)
   "Visit the Org NODE and return it."
   (let ((file
@@ -309,21 +326,20 @@ RELATIVE-FILE names BUFFER's file relative to YIYU's root."
 (defun fangcun-node-find ()
   "Choose a Fangcun node and visit it."
   (interactive)
-  (let* ((nodes (fangcun-node-list))
-         (candidates
-          (mapcar
-           (lambda (node)
-             (cons (fangcun--node-candidate node) node))
-           nodes))
-         (completion-extra-properties
-          '(:category fangcun-node
-            :annotation-function fangcun--node-annotation)))
-    (unless candidates
-      (user-error "No Fangcun nodes; run `fangcun-db-sync' first"))
-    (let* ((choice
-            (completing-read "Fangcun node: " candidates nil t))
-           (node (cdr (assoc choice candidates))))
-      (fangcun-node-visit node))))
+  (fangcun-node-visit (fangcun--read-node)))
+
+;;;###autoload
+(defun fangcun-node-insert ()
+  "Choose a Fangcun node and insert an Org ID link to it."
+  (interactive)
+  (unless (derived-mode-p 'org-mode)
+    (user-error "Fangcun node links can only be inserted in Org buffers"))
+  (let ((node (fangcun--read-node)))
+    (insert
+     (org-link-make-string
+      (concat "id:" (fangcun-node-id node))
+      (fangcun-node-title node)))
+    node))
 
 (provide 'fangcun)
 

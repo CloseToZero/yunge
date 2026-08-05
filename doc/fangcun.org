@@ -20,4 +20,7 @@ uses its ID as its display title.
 shows its owning yiyu and relative file.  Selecting one opens its file and
 moves to the matching Org ID.
 
+=M-x fangcun-node-insert= uses the same completion to insert an =id:= link at
+point.  The selected node's title becomes the link description.
+
 The database defaults to =var/fangcun.sqlite= below =user-emacs-directory=.
