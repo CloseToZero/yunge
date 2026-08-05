@@ -8,11 +8,24 @@
 (require 'yunge-pinyin)
 
 (declare-function evil-add-command-properties "evil-common")
+(declare-function evil-ex-delete-hl "evil-search" (name))
+(declare-function evil-ex-make-search-pattern "evil-search" (regexp))
 (declare-function evil-ex-search-backward "evil-commands" (count))
 (declare-function evil-ex-search-forward "evil-commands" (count))
+(declare-function evil-ex-search-next "evil-commands" (count))
+(declare-function evil-exit-visual-state "evil-states" (&optional later buffer))
 (declare-function evil-make-intercept-map "evil-core")
+(declare-function evil-push-search-history "evil-search" (regexp forward))
 
+(defvar evil-ex-last-was-search)
+(defvar evil-ex-search-count)
+(defvar evil-ex-search-direction)
+(defvar evil-ex-search-history)
+(defvar evil-ex-search-offset)
+(defvar evil-ex-search-pattern)
+(defvar evil-ex-search-vim-style-regexp)
 (defvar evil-motion-state-map)
+(defvar evil-visual-selection)
 (defvar help-map)
 (defvar project-prefix-map)
 
@@ -46,6 +59,28 @@
            (prefix-numeric-value current-prefix-arg))))
   (let ((yunge-evil--pinyin-search t))
     (evil-ex-search-backward count)))
+
+(defun yunge-evil-visual-search-forward (beginning end)
+  "Search forward for the text selected in Visual state."
+  (interactive "r")
+  (when (eq evil-visual-selection 'block)
+    (user-error "Visual block search is not supported"))
+  (let ((regexp
+         (regexp-quote
+          (buffer-substring-no-properties beginning end))))
+    (evil-exit-visual-state)
+    (setq evil-ex-search-count 1
+          evil-ex-search-direction 'forward
+          evil-ex-search-pattern
+          (let ((evil-ex-search-vim-style-regexp nil))
+            (evil-ex-make-search-pattern regexp))
+          evil-ex-search-offset nil
+          evil-ex-last-was-search t)
+    (unless (equal regexp (car evil-ex-search-history))
+      (push regexp evil-ex-search-history))
+    (evil-push-search-history regexp t)
+    (evil-ex-delete-hl 'evil-ex-search)
+    (evil-ex-search-next 1)))
 
 (defgroup yunge nil
   "Personal Emacs configuration."
@@ -160,6 +195,9 @@
    evil-motion-state-map
    '(("/" yunge-evil-pinyin-search-forward "search forward")
      ("?" yunge-evil-pinyin-search-backward "search backward")))
+  (yunge-key-evil-define
+   'visual global-map
+   '(("*" yunge-evil-visual-search-forward "search selection")))
   (evil-add-command-properties 'yunge-evil-pinyin-search-forward
                                :jump t :type 'exclusive
                                :repeat 'evil-repeat-ex-search
@@ -167,7 +205,9 @@
   (evil-add-command-properties 'yunge-evil-pinyin-search-backward
                                :jump t
                                :repeat 'evil-repeat-ex-search
-                               :keep-visual t))
+                               :keep-visual t)
+  (evil-add-command-properties 'yunge-evil-visual-search-forward
+                               :jump t :repeat nil))
 
 (with-eval-after-load 'which-key
   (yunge-key-add-which-key-descriptions

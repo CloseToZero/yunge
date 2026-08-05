@@ -9,6 +9,8 @@
 (declare-function evil-normal-state "evil-states")
 (declare-function evil-visual-state "evil-states")
 
+(defvar evil-ex-search-direction)
+(defvar evil-ex-search-history)
 (defvar evil-ex-search-pattern)
 (defvar evil-state)
 
@@ -102,6 +104,53 @@
       (should (= (point) 7))
       (should (equal (evil-ex-pattern-regex evil-ex-search-pattern)
                      "\\_<bl\\_>")))))
+
+(ert-deftest yunge-evil-visual-star-searches-the-selected-text-literally ()
+  (yunge-test-enable-evil)
+  (with-temp-buffer
+    (insert "bl \u4fdd\u7559 bl bl")
+    (goto-char (point-min))
+    (evil-normal-state)
+    (save-window-excursion
+      (switch-to-buffer (current-buffer))
+      (execute-kbd-macro (kbd "v l *"))
+      (should (eq evil-state 'normal))
+      (should (= (point) 7))
+      (should (equal (evil-ex-pattern-regex evil-ex-search-pattern)
+                     "bl"))
+      (should (eq evil-ex-search-direction 'forward))
+      (should (equal (car evil-ex-search-history) "bl"))
+      (execute-kbd-macro (kbd "n"))
+      (should (= (point) 10))
+      (execute-kbd-macro (kbd "N"))
+      (should (= (point) 7)))))
+
+(ert-deftest yunge-evil-visual-star-quotes-regular-expression-syntax ()
+  (yunge-test-enable-evil)
+  (with-temp-buffer
+    (insert "a.b axb a.b")
+    (goto-char (point-min))
+    (evil-normal-state)
+    (save-window-excursion
+      (switch-to-buffer (current-buffer))
+      (execute-kbd-macro (kbd "v l l *"))
+      (should (= (point) 9))
+      (should (equal (evil-ex-pattern-regex evil-ex-search-pattern)
+                     "a\\.b")))))
+
+(ert-deftest yunge-evil-visual-star-rejects-block-selections ()
+  (yunge-test-enable-evil)
+  (with-temp-buffer
+    (insert "ab\ncd")
+    (goto-char (point-min))
+    (evil-normal-state)
+    (save-window-excursion
+      (switch-to-buffer (current-buffer))
+      (execute-kbd-macro (kbd "C-v l"))
+      (should-error
+       (call-interactively #'yunge-evil-visual-search-forward)
+       :type 'user-error)
+      (should (eq evil-state 'visual)))))
 
 (ert-deftest yunge-evil-opens-config-directory ()
   (yunge-test-enable-evil)
