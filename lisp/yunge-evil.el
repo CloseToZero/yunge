@@ -190,6 +190,7 @@
   (yunge-leader-mode 1))
 
 (with-eval-after-load 'evil
+  (require 'yunge-comment)
   (yunge-evil--setup-leader)
   (yunge-key-define
    evil-motion-state-map

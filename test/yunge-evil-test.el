@@ -28,7 +28,7 @@
   :keymap yunge-test-space-mode-map)
 
 (yunge-test-deftest-lazy-load yunge-evil
-  (evil project pyim pyim-cregexp))
+  (evil project pyim pyim-cregexp yunge-comment))
 
 (ert-deftest yunge-evil-configures-after-package-ready ()
   (yunge-test-run-package-config
