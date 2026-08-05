@@ -125,7 +125,15 @@
        (consult-customize
         consult-source-buffer :items #'yunge-consult--buffer-items)
        (consult-customize
-        consult-ripgrep :preview-key '(:debounce 0.4 any)))))
+        consult-ripgrep
+        :initial
+        (when (use-region-p)
+          (prog1
+              (regexp-quote
+               (buffer-substring-no-properties
+                (region-beginning) (region-end)))
+            (deactivate-mark)))
+        :preview-key '(:debounce 0.4 any)))))
 
 (provide 'yunge-consult)
 

@@ -4,11 +4,15 @@
 
 (require 'yunge-test-helper)
 
+(declare-function consult--customize-args "consult"
+                  (options &rest defaults))
 (declare-function evil-get-command-property "evil-common")
+(declare-function evil-visual-state "evil-states")
 (declare-function yunge-jump-history--track-navigation "yunge-jump-history")
 
 (defvar evil-command-line-map)
 (defvar evil-eval-map)
+(defvar evil-state)
 (defvar consult-source-buffer)
 
 (yunge-test-deftest-lazy-load yunge-consult
@@ -121,5 +125,26 @@
       (dolist (buffer (list shared current))
         (when (buffer-live-p buffer)
           (kill-buffer buffer))))))
+
+(ert-deftest yunge-consult-ripgrep-starts-from-visual-selection ()
+  (yunge-test-enable-evil)
+  (require 'consult)
+  (yunge-test-load-package-config 'yunge-consult)
+  (with-temp-buffer
+    (insert "foo.bar")
+    (set-mark (point-min))
+    (goto-char (point-max))
+    (activate-mark)
+    (evil-visual-state)
+    (let ((this-command 'consult-ripgrep))
+      (should
+       (equal
+        (plist-get (consult--customize-args nil) :initial)
+        "foo\\.bar")))
+    (should (eq evil-state 'normal))
+    (should-not (use-region-p))
+    (let ((this-command 'consult-ripgrep))
+      (should-not
+       (plist-get (consult--customize-args nil) :initial)))))
 
 ;;; yunge-consult-test.el ends here
