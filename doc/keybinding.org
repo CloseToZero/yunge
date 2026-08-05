@@ -51,6 +51,8 @@ Apply the conflict rules before overriding these bindings:
 - ~d/c/y~, ~i/a/o~, ~p~, ~r~, ~u~, and ~x~ retain their Evil meanings in
   editable buffers.
 
+Use ~C-=~ and ~C--~ to expand and contract structural selections.
+
 * Common interface semantics
 
 Use these conventions only where the action is meaningful:

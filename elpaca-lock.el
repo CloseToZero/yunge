@@ -104,6 +104,16 @@
    :files ("extensions/evil-ghostel/evil-ghostel.el")
    :source "MELPA"
    :ref "ccc371ba61213412954e785f5b472d84dbbf0d51"))
+ (expreg
+  :source "elpaca-menu-lock-file"
+  :recipe
+  (:package "expreg"
+   :repo ("https://github.com/casouri/expreg.git" . "expreg")
+   :tar "1.4.1"
+   :host gnu
+   :files ("*" (:exclude ".git"))
+   :source "GNU ELPA"
+   :ref "d3ac3703e3e0aa66dc1ac6f8110b1862206beb20"))
  (ghostel
   :source "elpaca-menu-lock-file"
   :recipe
