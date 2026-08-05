@@ -7,20 +7,45 @@
 (require 'yunge-minibuffer)
 (require 'yunge-pinyin)
 
+(declare-function evil-add-command-properties "evil-common")
+(declare-function evil-ex-search-backward "evil-commands" (count))
+(declare-function evil-ex-search-forward "evil-commands" (count))
 (declare-function evil-make-intercept-map "evil-core")
 
+(defvar evil-motion-state-map)
 (defvar help-map)
 (defvar project-prefix-map)
 
+(defvar yunge-evil--pinyin-search nil
+  "Non-nil while an Evil search command should expand Pinyin.")
+
 (defun yunge-evil--pinyin-search-pattern (function regexp)
-  "Call FUNCTION for REGEXP, expanding plain alphabetic searches as Pinyin."
+  "Call FUNCTION for REGEXP, expanding it when Pinyin search is active."
   (let ((pattern (funcall function regexp))
-        (pinyin-regexp (yunge-pinyin-regexp regexp)))
+        (pinyin-regexp
+         (when yunge-evil--pinyin-search
+           (yunge-pinyin-regexp regexp))))
     (when pinyin-regexp
       ;; Evil returns a fresh (REGEXP IGNORE-CASE WHOLE-LINE) pattern.
       ;; Replacing only its regexp preserves Vim's smart-case decision.
       (setcar pattern pinyin-regexp))
     pattern))
+
+(defun yunge-evil-pinyin-search-forward (count)
+  "Start a forward search with Pinyin expansion."
+  (interactive
+   (list (when current-prefix-arg
+           (prefix-numeric-value current-prefix-arg))))
+  (let ((yunge-evil--pinyin-search t))
+    (evil-ex-search-forward count)))
+
+(defun yunge-evil-pinyin-search-backward (count)
+  "Start a backward search with Pinyin expansion."
+  (interactive
+   (list (when current-prefix-arg
+           (prefix-numeric-value current-prefix-arg))))
+  (let ((yunge-evil--pinyin-search t))
+    (evil-ex-search-backward count)))
 
 (defgroup yunge nil
   "Personal Emacs configuration."
@@ -130,7 +155,19 @@
   (yunge-leader-mode 1))
 
 (with-eval-after-load 'evil
-  (yunge-evil--setup-leader))
+  (yunge-evil--setup-leader)
+  (yunge-key-define
+   evil-motion-state-map
+   '(("/" yunge-evil-pinyin-search-forward "search forward")
+     ("?" yunge-evil-pinyin-search-backward "search backward")))
+  (evil-add-command-properties 'yunge-evil-pinyin-search-forward
+                               :jump t :type 'exclusive
+                               :repeat 'evil-repeat-ex-search
+                               :keep-visual t)
+  (evil-add-command-properties 'yunge-evil-pinyin-search-backward
+                               :jump t
+                               :repeat 'evil-repeat-ex-search
+                               :keep-visual t))
 
 (with-eval-after-load 'which-key
   (yunge-key-add-which-key-descriptions

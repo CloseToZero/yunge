@@ -5,10 +5,11 @@
 (require 'yunge-test-helper)
 
 (declare-function evil-ex-make-search-pattern "evil-search" (regexp))
-(declare-function evil-ex-pattern-ignore-case "evil-search" (pattern))
 (declare-function evil-ex-pattern-regex "evil-search" (pattern))
+(declare-function evil-normal-state "evil-states")
 (declare-function evil-visual-state "evil-states")
 
+(defvar evil-ex-search-pattern)
 (defvar evil-state)
 
 (defvar-keymap yunge-test-localleader-map
@@ -58,20 +59,49 @@
                               'evil-ex-make-search-pattern))
       (error "Unexpected Evil configuration"))))
 
-(ert-deftest yunge-evil-search-expands-plain-pinyin-only ()
+(ert-deftest yunge-evil-search-patterns-do-not-expand-pinyin-by-default ()
   (yunge-test-enable-evil)
-  (let* ((pattern (evil-ex-make-search-pattern "bl"))
-         (regexp (evil-ex-pattern-regex pattern)))
-    (should (string-match-p regexp "保留"))
-    (should (string-match-p regexp "bl")))
-  (let* ((pattern (evil-ex-make-search-pattern "BL"))
-         (regexp (evil-ex-pattern-regex pattern)))
-    (should (string-match-p regexp "保留"))
-    (should (string-match-p regexp "BL"))
-    (should-not (evil-ex-pattern-ignore-case pattern)))
+  (should (equal (evil-ex-pattern-regex
+                  (evil-ex-make-search-pattern "bl"))
+                 "bl"))
   (should (equal (evil-ex-pattern-regex
                   (evil-ex-make-search-pattern "b.*l"))
                  "b.*l")))
+
+(ert-deftest yunge-evil-slash-search-expands-pinyin ()
+  (yunge-test-enable-evil)
+  (with-temp-buffer
+    (insert "bl \u4fdd\u7559 bl")
+    (goto-char (point-min))
+    (evil-normal-state)
+    (save-window-excursion
+      (switch-to-buffer (current-buffer))
+      (yunge-test-key "/" 'yunge-evil-pinyin-search-forward)
+      (yunge-test-key "?" 'yunge-evil-pinyin-search-backward)
+      (execute-kbd-macro (kbd "/ b l RET"))
+      (should (= (point) 4))
+      (should
+       (string-match-p
+        (evil-ex-pattern-regex evil-ex-search-pattern)
+        "\u4fdd\u7559"))
+      (execute-kbd-macro (kbd "n"))
+      (should (= (point) 7))
+      (should (equal (evil-ex-pattern-regex
+                      (evil-ex-make-search-pattern "bl"))
+                     "bl")))))
+
+(ert-deftest yunge-evil-star-searches-the-word-literally ()
+  (yunge-test-enable-evil)
+  (with-temp-buffer
+    (insert "bl \u4fdd\u7559 bl")
+    (goto-char (point-min))
+    (evil-normal-state)
+    (save-window-excursion
+      (switch-to-buffer (current-buffer))
+      (execute-kbd-macro (kbd "*"))
+      (should (= (point) 7))
+      (should (equal (evil-ex-pattern-regex evil-ex-search-pattern)
+                     "\\_<bl\\_>")))))
 
 (ert-deftest yunge-evil-opens-config-directory ()
   (yunge-test-enable-evil)
