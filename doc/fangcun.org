@@ -14,7 +14,8 @@ yiyu with an identifier, display name, and root directory:
 configured yiyu roots.  A file-level =ID= creates a file node.  A heading =ID=
 creates a heading node.  File nodes use =#+title= when present and otherwise
 use their relative file name without the extension.  A heading without text
-uses its ID as its display title.
+uses its ID as its display title.  The synchronization also indexes =id:=
+links owned by the nearest enclosing node.
 
 =M-x fangcun-node-find= completes over the indexed nodes.  Each candidate
 shows its owning yiyu and relative file.  Selecting one opens its file and
@@ -22,5 +23,9 @@ moves to the matching Org ID.
 
 =M-x fangcun-node-insert= uses the same completion to insert an =id:= link at
 point.  The selected node's title becomes the link description.
+
+=M-x fangcun-backlink-find= completes over nodes linking to the node at point.
+Each source node appears once.  Selecting one opens its first indexed link to
+the current node.
 
 The database defaults to =var/fangcun.sqlite= below =user-emacs-directory=.

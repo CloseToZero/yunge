@@ -4,9 +4,12 @@
 
 (require 'cl-lib)
 (require 'org)
+(require 'org-element)
 (require 'org-id)
+(require 'seq)
 (require 'sqlite)
 (require 'subr-x)
+(require 'yunge-jump-history)
 (require 'yunge-state)
 
 (defgroup fangcun nil
@@ -43,6 +46,15 @@ Each entry has the form (ID :name NAME :root ROOT)."
   yiyu-root
   file
   title)
+
+(cl-defstruct fangcun-link
+  source-id
+  target-id
+  position)
+
+(cl-defstruct fangcun-backlink
+  node
+  position)
 
 (defun fangcun--configured-yiyus ()
   "Return normalized entries from `fangcun-yiyus'."
@@ -95,7 +107,29 @@ Each entry has the form (ID :name NAME :root ROOT)."
     "yiyu_id TEXT NOT NULL, "
     "file TEXT NOT NULL, "
     "title TEXT NOT NULL, "
-    "FOREIGN KEY (yiyu_id) REFERENCES yiyus (id))")))
+    "FOREIGN KEY (yiyu_id) REFERENCES yiyus (id))"))
+  ;; Keep one row for every ID-link occurrence.  Backlink views may group
+  ;; rows by SOURCE_ID, but POSITION is needed to visit the chosen link.
+  ;;
+  ;; SOURCE_ID references the nearest enclosing Fangcun node because links
+  ;; without an owning node are not part of the Fangcun graph.
+  ;;
+  ;; TARGET_ID deliberately has no foreign key.  An Org ID link may be
+  ;; unresolved or point outside the configured yiyu roots.
+  (sqlite-execute
+   database
+   (concat
+    "CREATE TABLE IF NOT EXISTS links ("
+    "source_id TEXT NOT NULL, "
+    "target_id TEXT NOT NULL, "
+    "position INTEGER NOT NULL, "
+    "FOREIGN KEY (source_id) REFERENCES nodes (id) "
+    "ON DELETE CASCADE)"))
+  ;; Backlink lookup starts from TARGET_ID.  SOURCE_ID does not need another
+  ;; index until Fangcun has a query that searches links in that direction.
+  (sqlite-execute
+   database
+   "CREATE INDEX IF NOT EXISTS links_target_id ON links (target_id)"))
 
 (defun fangcun--display-title (title fallback)
   "Return a plain display TITLE, or FALLBACK when it is empty."
@@ -115,6 +149,28 @@ Each entry has the form (ID :name NAME :root ROOT)."
     (fangcun--display-title
      (and titles (string-join titles " "))
      (file-name-sans-extension relative-file))))
+
+(defun fangcun--node-id-at-point ()
+  "Return the nearest enclosing Fangcun node ID, or nil."
+  (save-excursion
+    (save-restriction
+      (widen)
+      (org-back-to-heading-or-point-min t)
+      (let ((id (org-id-get)))
+        (while (and (not id) (not (bobp)))
+          (if (org-up-heading-safe)
+              (setq id (org-id-get))
+            (goto-char (point-min))
+            (setq id (org-id-get))))
+        id))))
+
+(defun fangcun--element-owner-id (element)
+  "Return the nearest Fangcun node ID containing Org ELEMENT, or nil."
+  (seq-some
+   (lambda (ancestor)
+     (when (memq (org-element-type ancestor) '(headline org-data))
+       (org-element-property :ID ancestor)))
+   (org-element-lineage element)))
 
 (defun fangcun--collect-nodes-from-buffer
   (buffer yiyu relative-file)
@@ -154,8 +210,43 @@ RELATIVE-FILE names BUFFER's file relative to YIYU's root."
            nil nil)
           (nreverse nodes))))))
 
+(defun fangcun--collect-links-from-buffer (buffer)
+  "Return ID links owned by Fangcun nodes in Org BUFFER."
+  (with-current-buffer buffer
+    (save-excursion
+      (save-restriction
+        (widen)
+        (let (links)
+          (org-element-map (org-element-parse-buffer) 'link
+            (lambda (element)
+              (when (equal (org-element-property :type element) "id")
+                (when-let*
+                    ((source-id
+                      (fangcun--element-owner-id element)))
+                  (let ((target-id
+                         (org-element-property :path element))
+                        (position
+                         (org-element-property :begin element)))
+                    (push
+                     (make-fangcun-link
+                      :source-id source-id
+                      :target-id target-id
+                      :position position)
+                     links))))))
+          (nreverse links))))))
+
+(defun fangcun--collect-file-data-from-buffer
+    (buffer yiyu relative-file)
+  "Return nodes and links parsed from Org BUFFER.
+RELATIVE-FILE names BUFFER's file relative to YIYU's root."
+  (list :nodes
+        (fangcun--collect-nodes-from-buffer
+         buffer yiyu relative-file)
+        :links
+        (fangcun--collect-links-from-buffer buffer)))
+
 (defun fangcun--parse-file (yiyu file)
-  "Return Fangcun nodes from FILE on disk, owned by YIYU."
+  "Return Fangcun nodes and links from FILE on disk, owned by YIYU."
   (let* ((relative-file
           (file-relative-name file (fangcun-yiyu-root yiyu)))
          (buffer (find-buffer-visiting file))
@@ -166,14 +257,14 @@ RELATIVE-FILE names BUFFER's file relative to YIYU's root."
                       (not (buffer-modified-p))
                       (verify-visited-file-modtime buffer))))))
     (if reusable
-        (fangcun--collect-nodes-from-buffer
+        (fangcun--collect-file-data-from-buffer
          buffer yiyu relative-file)
       (with-temp-buffer
         (setq default-directory (file-name-directory file))
         (insert-file-contents file)
         (let ((org-inhibit-startup t))
           (delay-mode-hooks (org-mode)))
-        (fangcun--collect-nodes-from-buffer
+        (fangcun--collect-file-data-from-buffer
          (current-buffer) yiyu relative-file)))))
 
 (defun fangcun--insert-yiyu (database yiyu)
@@ -200,6 +291,19 @@ RELATIVE-FILE names BUFFER's file relative to YIYU's root."
     (fangcun-node-file node)
     (fangcun-node-title node))))
 
+(defun fangcun--insert-link (database link)
+  "Insert LINK into DATABASE."
+  (sqlite-execute
+   database
+   (concat
+    "INSERT INTO links "
+    "(source_id, target_id, position) "
+    "VALUES (?, ?, ?)")
+   (vector
+    (fangcun-link-source-id link)
+    (fangcun-link-target-id link)
+    (fangcun-link-position link))))
+
 ;;;###autoload
 (defun fangcun-db-sync ()
   "Rebuild the Fangcun database from configured yiyu roots."
@@ -216,7 +320,8 @@ RELATIVE-FILE names BUFFER's file relative to YIYU's root."
               (fangcun--initialize-database database)
               (with-sqlite-transaction database
                 (let ((file-count 0)
-                      (node-count 0))
+                      (node-count 0)
+                      (link-count 0))
                   (dolist (yiyu yiyus)
                     (unless (file-directory-p
                              (fangcun-yiyu-root yiyu))
@@ -224,21 +329,27 @@ RELATIVE-FILE names BUFFER's file relative to YIYU's root."
                        "Fangcun yiyu does not exist: %s"
                        (fangcun-yiyu-root yiyu)))
                     (fangcun--insert-yiyu database yiyu)
-                    (dolist
-                        (file
-                         (directory-files-recursively
-                          (fangcun-yiyu-root yiyu) "\\.org\\'"))
+                    (dolist (file
+                             (directory-files-recursively
+                              (fangcun-yiyu-root yiyu) "\\.org\\'"))
                       (cl-incf file-count)
-                      (dolist (node (fangcun--parse-file yiyu file))
-                        (fangcun--insert-node database node)
-                        (cl-incf node-count))))
+                      (let ((data (fangcun--parse-file yiyu file)))
+                        (dolist (node (plist-get data :nodes))
+                          (fangcun--insert-node database node)
+                          (cl-incf node-count))
+                        (dolist (link (plist-get data :links))
+                          (fangcun--insert-link database link)
+                          (cl-incf link-count)))))
                   (list :yiyus (length yiyus)
                         :files file-count
-                        :nodes node-count)))))))
-      (message "Fangcun indexed %d nodes from %d files in %d yiyu roots"
-               (plist-get result :nodes)
-               (plist-get result :files)
-               (plist-get result :yiyus))
+                        :nodes node-count
+                        :links link-count)))))))
+      (message
+       "Fangcun indexed %d nodes and %d links from %d files in %d yiyu roots"
+       (plist-get result :nodes)
+       (plist-get result :links)
+       (plist-get result :files)
+       (plist-get result :yiyus))
       result)))
 
 (defun fangcun--node-from-row (row)
@@ -266,6 +377,35 @@ RELATIVE-FILE names BUFFER's file relative to YIYU's root."
         "JOIN yiyus AS y ON y.id = n.yiyu_id "
         "ORDER BY n.title COLLATE NOCASE, y.name COLLATE NOCASE, "
         "n.file, n.id"))))))
+
+(defun fangcun--backlink-from-row (row)
+  "Return a Fangcun backlink represented by SQLite ROW."
+  (make-fangcun-backlink
+   :node (fangcun--node-from-row (cl-subseq row 0 6))
+   :position (elt row 6)))
+
+(defun fangcun-backlink-list (target-id)
+  "Return unique source nodes linking to TARGET-ID.
+When one source contains several links, retain its first occurrence."
+  (fangcun--call-with-database
+   (lambda (database)
+     (fangcun--initialize-database database)
+     (mapcar
+      #'fangcun--backlink-from-row
+      (sqlite-select
+       database
+       (concat
+        "SELECT n.id, n.yiyu_id, y.name, y.root, n.file, n.title, "
+        "first_link.position "
+        "FROM ("
+        "SELECT source_id, MIN(position) AS position "
+        "FROM links WHERE target_id = ? GROUP BY source_id"
+        ") AS first_link "
+        "JOIN nodes AS n ON n.id = first_link.source_id "
+        "JOIN yiyus AS y ON y.id = n.yiyu_id "
+        "ORDER BY n.title COLLATE NOCASE, y.name COLLATE NOCASE, "
+        "n.file, n.id")
+       (vector target-id))))))
 
 (defun fangcun--node-candidate (node)
   "Return a unique completion candidate for NODE."
@@ -304,6 +444,26 @@ RELATIVE-FILE names BUFFER's file relative to YIYU's root."
            (completing-read "Fangcun node: " candidates nil t)))
       (cdr (assoc choice candidates)))))
 
+(defun fangcun--read-backlink (target-id)
+  "Read and return a backlink to TARGET-ID."
+  (let* ((backlinks (fangcun-backlink-list target-id))
+         (candidates
+          (mapcar
+           (lambda (backlink)
+             (cons
+              (fangcun--node-candidate
+               (fangcun-backlink-node backlink))
+              backlink))
+           backlinks))
+         (completion-extra-properties
+          '(:category fangcun-node
+            :annotation-function fangcun--node-annotation)))
+    (unless candidates
+      (user-error "No backlinks to the current Fangcun node"))
+    (let ((choice
+           (completing-read "Fangcun backlink: " candidates nil t)))
+      (cdr (assoc choice candidates)))))
+
 (defun fangcun-node-visit (node)
   "Visit the Org NODE and return it."
   (let ((file
@@ -340,6 +500,24 @@ RELATIVE-FILE names BUFFER's file relative to YIYU's root."
       (concat "id:" (fangcun-node-id node))
       (fangcun-node-title node)))
     node))
+
+;;;###autoload
+(defun fangcun-backlink-find ()
+  "Choose a backlink to the current Fangcun node and visit its link."
+  (interactive)
+  (unless (derived-mode-p 'org-mode)
+    (user-error "Fangcun backlinks are only available in Org buffers"))
+  (let* ((target-id
+          (or (fangcun--node-id-at-point)
+              (user-error "Point is not inside a Fangcun node")))
+         (backlink (fangcun--read-backlink target-id)))
+    (fangcun-node-visit (fangcun-backlink-node backlink))
+    (goto-char (fangcun-backlink-position backlink))
+    (org-fold-show-context 'link-search)
+    backlink))
+
+(dolist (command '(fangcun-node-find fangcun-backlink-find))
+  (yunge-jump-history-track-command command))
 
 (provide 'fangcun)
 

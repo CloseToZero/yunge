@@ -5,6 +5,11 @@
 (require 'yunge-test-helper)
 (require 'fangcun)
 
+(declare-function yunge-jump-history--track-navigation
+                  "yunge-jump-history")
+(declare-function yunge-jump-history-backward "yunge-jump-history")
+(declare-function yunge-jump-history-forward "yunge-jump-history")
+
 (defun fangcun-test--write-file (file contents)
   "Write CONTENTS to FILE, creating its parent directory."
   (make-directory (file-name-directory file) t)
@@ -71,7 +76,7 @@
   (fangcun-test-with-notes
     (should
      (equal (fangcun-db-sync)
-            '(:yiyus 2 :files 2 :nodes 4)))
+            '(:yiyus 2 :files 2 :nodes 4 :links 1)))
     (let* ((nodes (fangcun-node-list))
            (personal (fangcun-test--node
                       "personal-file" nodes))
@@ -146,7 +151,7 @@
                   (apply original-collector arguments))))
             (should
              (equal (fangcun-db-sync)
-                    '(:yiyus 2 :files 2 :nodes 4))))
+                    '(:yiyus 2 :files 2 :nodes 4 :links 1))))
           (should reused)
           (should (= (point) saved-point))
           (should (= (point-min) saved-min))
@@ -174,7 +179,7 @@
                     (verify-visited-file-modtime buffer))))
             (should
              (equal (fangcun-db-sync)
-                    '(:yiyus 2 :files 2 :nodes 4)))
+                    '(:yiyus 2 :files 2 :nodes 4 :links 1)))
             (should-not
              (fangcun-test--node
               "fangcun-test-unsaved" (fangcun-node-list))))
@@ -206,7 +211,7 @@
               (verify-visited-file-modtime buffer))))
       (should
        (equal (fangcun-db-sync)
-              '(:yiyus 2 :files 2 :nodes 3)))
+              '(:yiyus 2 :files 2 :nodes 3 :links 0)))
       (let ((nodes (fangcun-node-list)))
         (should
          (equal
@@ -226,7 +231,7 @@
     (delete-file personal-file)
     (should
      (equal (fangcun-db-sync)
-            '(:yiyus 2 :files 1 :nodes 1)))
+            '(:yiyus 2 :files 1 :nodes 1 :links 0)))
     (should-not
      (fangcun--call-with-database
       (lambda (database)
@@ -238,6 +243,170 @@
     (should
      (equal (mapcar #'fangcun-node-id (fangcun-node-list))
             '("work-file")))))
+
+(ert-deftest fangcun-syncs-id-link-occurrences-and-owners ()
+  (fangcun-test-with-notes
+    (let ((source-file
+           (expand-file-name "references.org" personal-root))
+          (unowned-file
+           (expand-file-name "unowned.org" personal-root)))
+      (fangcun-test--write-file
+       source-file
+       (concat
+        ":PROPERTIES:\n"
+        ":ID: source-file\n"
+        ":END:\n"
+        "#+title: Source file\n\n"
+        "[[id:work-file][File link]]\n\n"
+        "* Parent\n"
+        ":PROPERTIES:\n"
+        ":ID: parent\n"
+        ":END:\n"
+        "** Child without an ID\n"
+        "[[id:work-file][First child link]]\n"
+        "[[id:work-file][Second child link]]\n"))
+      (fangcun-test--write-file
+       unowned-file
+       "* No ID\n[[id:work-file][Unowned link]]\n")
+      (should
+       (equal (fangcun-db-sync)
+              '(:yiyus 2 :files 4 :nodes 6 :links 4)))
+      (fangcun--call-with-database
+       (lambda (database)
+         (let ((rows
+                (sqlite-select
+                 database
+                 (concat
+                  "SELECT source_id, target_id, position "
+                  "FROM links WHERE target_id = 'work-file' "
+                  "ORDER BY position"))))
+           (should
+            (equal (mapcar
+                    (lambda (row)
+                      (list (elt row 0) (elt row 1)))
+                    rows)
+                   '(("source-file" "work-file")
+                     ("parent" "work-file")
+                     ("parent" "work-file"))))
+           (should
+            (equal (mapcar (lambda (row) (elt row 2)) rows)
+                   (sort
+                    (mapcar (lambda (row) (elt row 2)) rows)
+                    #'<))))
+         (should
+          (equal
+           (mapcar
+            (lambda (row)
+              (list (elt row 0) (elt row 1)))
+            (sqlite-select
+             database
+             (concat
+              "SELECT source_id, target_id FROM links "
+              "WHERE target_id = 'source'")))
+           '(("theorem" "source"))))
+         (should
+          (sqlite-select
+           database
+           (concat
+            "SELECT name FROM sqlite_master "
+            "WHERE type = 'index' AND name = 'links_target_id'"))))))))
+
+(ert-deftest fangcun-finds-a-backlink-at-its-first-occurrence ()
+  (fangcun-test-with-notes
+    (let ((source-file
+           (expand-file-name "references.org" personal-root)))
+      (fangcun-test--write-file
+       source-file
+       (concat
+        ":PROPERTIES:\n"
+        ":ID: source-file\n"
+        ":END:\n"
+        "#+title: Source file\n\n"
+        "* Parent\n"
+        ":PROPERTIES:\n"
+        ":ID: parent\n"
+        ":END:\n"
+        "[[id:work-file][First reference]]\n"
+        "[[id:work-file][Second reference]]\n"))
+      (fangcun-db-sync)
+      (let ((backlinks (fangcun-backlink-list "work-file")))
+        (should (= (length backlinks) 1))
+        (should
+         (equal
+          (fangcun-node-id
+           (fangcun-backlink-node (car backlinks)))
+          "parent")))
+      (find-file work-file)
+      (goto-char (point-max))
+      (cl-letf
+          (((symbol-function 'completing-read)
+            (lambda (_prompt collection &rest _arguments)
+              (caar collection))))
+        (let ((backlink (fangcun-backlink-find)))
+          (should
+           (equal
+            (fangcun-node-id
+             (fangcun-backlink-node backlink))
+            "parent"))
+          (should (equal (buffer-file-name) source-file))
+          (should
+           (looking-at-p
+            "\\[\\[id:work-file\\]\\[First reference\\]\\]")))))))
+
+(ert-deftest fangcun-jumps-participate-in-window-history ()
+  (dolist (command '(fangcun-node-find fangcun-backlink-find))
+    (should
+     (advice-member-p
+      #'yunge-jump-history--track-navigation command)))
+  (yunge-test-enable-evil)
+  (fangcun-test-with-notes
+    (fangcun-db-sync)
+    (let ((origin (generate-new-buffer " *fangcun-jump-origin*")))
+      (unwind-protect
+          (save-window-excursion
+            (delete-other-windows)
+            (switch-to-buffer origin)
+            (insert "0123456789")
+            (goto-char 4)
+            (set-window-parameter nil 'yunge-jump-history nil)
+
+            (let (cancelled)
+              (cl-letf
+                  (((symbol-function 'completing-read)
+                    (lambda (&rest _arguments)
+                      (signal 'quit nil))))
+                (condition-case nil
+                    (fangcun-node-find)
+                  (quit (setq cancelled t))))
+              (should cancelled))
+            (should (eq (current-buffer) origin))
+            (should (= (point) 4))
+            (should-error
+             (yunge-jump-history-backward) :type 'user-error)
+
+            (set-window-parameter nil 'yunge-jump-history nil)
+            (cl-letf
+                (((symbol-function 'completing-read)
+                  (lambda (_prompt collection &rest _arguments)
+                    (car
+                     (seq-find
+                      (lambda (item)
+                        (string-prefix-p "A theorem" (car item)))
+                      collection)))))
+              (fangcun-node-find))
+            (should (equal (buffer-file-name) personal-file))
+            (should (equal (org-id-get) "theorem"))
+
+            (yunge-jump-history-backward)
+            (should (eq (current-buffer) origin))
+            (should (= (point) 4))
+
+            (yunge-jump-history-forward)
+            (should (equal (buffer-file-name) personal-file))
+            (should (equal (org-id-get) "theorem")))
+        (when (buffer-live-p origin)
+          (kill-buffer origin))
+        (set-window-parameter nil 'yunge-jump-history nil)))))
 
 (ert-deftest fangcun-find-shows-owner-and-locates-id ()
   (fangcun-test-with-notes
