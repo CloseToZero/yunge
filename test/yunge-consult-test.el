@@ -31,7 +31,8 @@
       (when (or (keymap-lookup yunge-file-map "r")
                 (keymap-lookup yunge-jump-map "b")
                 (keymap-lookup yunge-jump-map "i")
-                (keymap-lookup yunge-search-map "b"))
+                (keymap-lookup yunge-search-map "b")
+                (keymap-lookup yunge-search-map "P"))
         (error "Consult keys were bound before its Elpaca body ran")))
    :after-ready
    '(progn
@@ -43,6 +44,8 @@
                        'consult-imenu)
                    (eq (keymap-lookup yunge-search-map "b")
                        'consult-line)
+                   (eq (keymap-lookup yunge-search-map "P")
+                       'yunge-consult-ripgrep-symbol)
                    (eq (keymap-lookup minibuffer-local-map "M-r")
                        'consult-history)
                    (eq (command-remapping 'switch-to-buffer)
@@ -65,6 +68,7 @@
      ("SPC s b" . consult-line)
      ("SPC s B" . consult-line-multi)
      ("SPC s p" . consult-ripgrep)
+     ("SPC s P" . yunge-consult-ripgrep-symbol)
      ("SPC j i" . consult-imenu)))
 
   (yunge-test-keymap-keys
@@ -92,7 +96,8 @@
    'fundamental-mode "SPC s"
    '(("b" nil "search buffer")
      ("B" nil "search project buffers")
-     ("p" nil "search project")))
+     ("p" nil "search project")
+     ("P" nil "search symbol in project")))
   (yunge-test-which-key-prefix-bindings
    'fundamental-mode "SPC j"
    '(("b" nil "jump to bookmark")
@@ -104,7 +109,12 @@
     (should-not (evil-get-command-property command :jump))
     (should-not (evil-get-command-property command :repeat t))
     (should
-     (advice-member-p #'yunge-jump-history--track-navigation command))))
+     (advice-member-p #'yunge-jump-history--track-navigation command)))
+
+  (should-not
+   (evil-get-command-property 'yunge-consult-ripgrep-symbol :jump))
+  (should-not
+   (evil-get-command-property 'yunge-consult-ripgrep-symbol :repeat t)))
 
 (ert-deftest yunge-consult-prefers-the-selected-window-history ()
   (require 'consult)
@@ -146,5 +156,38 @@
     (let ((this-command 'consult-ripgrep))
       (should-not
        (plist-get (consult--customize-args nil) :initial)))))
+
+(ert-deftest yunge-consult-ripgrep-symbol-uses-literal-symbol-at-point ()
+  (yunge-test-enable-evil)
+  (require 'consult)
+  (yunge-test-load-package-config 'yunge-consult)
+  (with-temp-buffer
+    (emacs-lisp-mode)
+    (insert "foo+bar")
+    (set-mark (point-min))
+    (goto-char (point-max))
+    (activate-mark)
+    (evil-visual-state)
+    (let (arguments)
+      (cl-letf (((symbol-function 'consult-ripgrep)
+                 (lambda (&optional directory initial)
+                   (setq arguments (list directory initial)))))
+        (yunge-consult-ripgrep-symbol))
+      (should (equal arguments
+                     (list nil (regexp-quote "foo+bar"))))
+      (should (eq evil-state 'normal))
+      (should-not (use-region-p)))))
+
+(ert-deftest yunge-consult-ripgrep-symbol-allows-an-empty-input ()
+  (require 'consult)
+  (yunge-test-load-package-config 'yunge-consult)
+  (with-temp-buffer
+    (insert " ")
+    (let ((initial 'unset))
+      (cl-letf (((symbol-function 'consult-ripgrep)
+                 (lambda (_directory value)
+                   (setq initial value))))
+        (yunge-consult-ripgrep-symbol))
+      (should-not initial))))
 
 ;;; yunge-consult-test.el ends here

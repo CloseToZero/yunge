@@ -7,11 +7,14 @@
 (require 'yunge-evil)
 
 (declare-function evil-add-command-properties "evil-common")
+(declare-function evil-exit-visual-state "evil-states" (&optional later buffer))
 (declare-function consult--buffer-pair "consult")
 (declare-function consult--buffer-query "consult")
+(declare-function consult-ripgrep "consult" (&optional dir initial))
 
 (defvar evil-command-line-map)
 (defvar evil-eval-map)
+(defvar evil-state)
 
 (defconst yunge-consult-file-bindings
   '(("r" consult-recent-file "find recent file")))
@@ -19,7 +22,8 @@
 (defconst yunge-consult-search-bindings
   '(("b" consult-line "search buffer")
     ("B" consult-line-multi "search project buffers")
-    ("p" consult-ripgrep "search project")))
+    ("p" consult-ripgrep "search project")
+    ("P" yunge-consult-ripgrep-symbol "search symbol in project")))
 
 (defconst yunge-consult-jump-bindings
   '(("b" consult-bookmark "jump to bookmark")
@@ -68,6 +72,16 @@
         (cons previous-item (delq previous-item items))
       items)))
 
+(defun yunge-consult-ripgrep-symbol ()
+  "Search the current project for the symbol at point."
+  (interactive)
+  (let ((initial (when-let* ((symbol (thing-at-point 'symbol t)))
+                   (regexp-quote symbol))))
+    (when (eq evil-state 'visual)
+      (evil-exit-visual-state))
+    (deactivate-mark)
+    (consult-ripgrep nil initial)))
+
 (defun yunge-consult--setup-keys ()
   "Set up Consult command and remap bindings."
   (yunge-key-define yunge-file-map
@@ -89,7 +103,9 @@
   "Track successful Consult navigation without making it repeatable."
   (dolist (command yunge-consult-navigation-commands)
     (evil-add-command-properties command :jump nil :repeat nil)
-    (yunge-jump-history-track-command command)))
+    (yunge-jump-history-track-command command))
+  (evil-add-command-properties
+   'yunge-consult-ripgrep-symbol :jump nil :repeat nil))
 
 (defun yunge-consult--describe-keys ()
   "Describe Consult leader bindings to Which-Key."
@@ -125,6 +141,9 @@
        (consult-customize
         consult-source-buffer :items #'yunge-consult--buffer-items)
        (consult-customize
+        consult-ripgrep yunge-consult-ripgrep-symbol
+        :preview-key '(:debounce 0.4 any))
+       (consult-customize
         consult-ripgrep
         :initial
         (when (use-region-p)
@@ -132,8 +151,7 @@
               (regexp-quote
                (buffer-substring-no-properties
                 (region-beginning) (region-end)))
-            (deactivate-mark)))
-        :preview-key '(:debounce 0.4 any)))))
+            (deactivate-mark)))))))
 
 (provide 'yunge-consult)
 
