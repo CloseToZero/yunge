@@ -3,9 +3,9 @@
 ;; SPDX-License-Identifier: MIT
 
 ;; Our Windows build adds this primitive because the upstream helper makes
-;; maximized W32 frames undecorated.  Removing both the caption and resize
-;; border leaves the existing outer rectangle unchanged, so the client area
-;; extends behind the taskbar.  This keeps the resize border.
+;; maximized W32 frames undecorated.  That removes the resize border and lets
+;; the client area extend behind the taskbar.  The custom primitive removes
+;; only the caption and constrains maximized geometry to the monitor work area.
 (declare-function w32-set-title-bar-visible "w32fns.c" (frame visible))
 (declare-function w32-shell-execute "w32fns.c"
                   (operation document &optional parameters show-flag))
