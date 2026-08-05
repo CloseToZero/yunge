@@ -72,6 +72,17 @@
      (equal (fangcun-node-id node) id))
    nodes))
 
+(ert-deftest fangcun-creates-schema-only-for-a-new-database ()
+  (let* ((root (make-temp-file "fangcun-database-test-" t))
+         (fangcun-database-file
+          (expand-file-name "state/fangcun.sqlite" root)))
+    (unwind-protect
+        (progn
+          (should-not (fangcun-node-list))
+          (should (file-exists-p fangcun-database-file))
+          (should-not (fangcun-node-list)))
+      (delete-directory root t))))
+
 (ert-deftest fangcun-syncs-multiple-yiyus ()
   (fangcun-test-with-notes
     (should

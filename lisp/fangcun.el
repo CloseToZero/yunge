@@ -76,33 +76,37 @@ Each entry has the form (ID :name NAME :root ROOT)."
    fangcun-yiyus))
 
 (defun fangcun--call-with-database (function)
-  "Call FUNCTION with an open Fangcun database."
+  "Call FUNCTION with an open, initialized Fangcun database."
   (unless (sqlite-available-p)
     (user-error "This Emacs was built without SQLite support"))
   (let* ((file (expand-file-name fangcun-database-file))
          (directory (file-name-directory file))
+         (new-database-p (not (file-exists-p file)))
          database)
-    (make-directory directory t)
+    (when new-database-p
+      (make-directory directory t))
     (setq database (sqlite-open file nil))
     (unwind-protect
         (progn
           (sqlite-execute database "PRAGMA foreign_keys = ON")
+          (when new-database-p
+            (fangcun--create-schema database))
           (funcall function database))
       (sqlite-close database))))
 
-(defun fangcun--initialize-database (database)
-  "Create the current Fangcun schema in DATABASE when needed."
+(defun fangcun--create-schema (database)
+  "Create the current Fangcun schema in a new DATABASE."
   (sqlite-execute
    database
    (concat
-    "CREATE TABLE IF NOT EXISTS yiyus ("
+    "CREATE TABLE yiyus ("
     "id TEXT PRIMARY KEY, "
     "name TEXT NOT NULL, "
     "root TEXT NOT NULL)"))
   (sqlite-execute
    database
    (concat
-    "CREATE TABLE IF NOT EXISTS nodes ("
+    "CREATE TABLE nodes ("
     "id TEXT PRIMARY KEY, "
     "yiyu_id TEXT NOT NULL, "
     "file TEXT NOT NULL, "
@@ -119,7 +123,7 @@ Each entry has the form (ID :name NAME :root ROOT)."
   (sqlite-execute
    database
    (concat
-    "CREATE TABLE IF NOT EXISTS links ("
+    "CREATE TABLE links ("
     "source_id TEXT NOT NULL, "
     "target_id TEXT NOT NULL, "
     "position INTEGER NOT NULL, "
@@ -129,7 +133,7 @@ Each entry has the form (ID :name NAME :root ROOT)."
   ;; index until Fangcun has a query that searches links in that direction.
   (sqlite-execute
    database
-   "CREATE INDEX IF NOT EXISTS links_target_id ON links (target_id)"))
+   "CREATE INDEX links_target_id ON links (target_id)"))
 
 (defun fangcun--display-title (title fallback)
   "Return a plain display TITLE, or FALLBACK when it is empty."
@@ -317,7 +321,6 @@ RELATIVE-FILE names BUFFER's file relative to YIYU's root."
     (let ((result
            (fangcun--call-with-database
             (lambda (database)
-              (fangcun--initialize-database database)
               (with-sqlite-transaction database
                 (let ((file-count 0)
                       (node-count 0)
@@ -366,7 +369,6 @@ RELATIVE-FILE names BUFFER's file relative to YIYU's root."
   "Return all nodes currently stored in the Fangcun database."
   (fangcun--call-with-database
    (lambda (database)
-     (fangcun--initialize-database database)
      (mapcar
       #'fangcun--node-from-row
       (sqlite-select
@@ -389,7 +391,6 @@ RELATIVE-FILE names BUFFER's file relative to YIYU's root."
 When one source contains several links, retain its first occurrence."
   (fangcun--call-with-database
    (lambda (database)
-     (fangcun--initialize-database database)
      (mapcar
       #'fangcun--backlink-from-row
       (sqlite-select
