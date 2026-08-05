@@ -3,6 +3,8 @@
 ;; SPDX-License-Identifier: MIT
 
 (require 'yunge-state)
+(require 'yunge-autoload)
+(yunge-autoload-load)
 (require 'yunge-server)
 (require 'yunge-history)
 (require 'yunge-autorevert)
@@ -34,7 +36,5 @@
 
 ;; Load saved Custom state before command-line files are visited.
 (load custom-file 'noerror 'nomessage)
-
-(autoload 'yunge-test "yunge-test" nil t)
 
 ;;; init.el ends here
