@@ -1,0 +1,23 @@
+#+title: 方寸（fangcun）
+
+Each 一隅（yiyu） is an independent Org note root.  Fangcun indexes ID-based
+nodes from multiple yiyu roots in a local SQLite database.  Configure each
+yiyu with an identifier, display name, and root directory:
+
+#+begin_src emacs-lisp
+(setq fangcun-yiyus
+      '((personal :name "Personal" :root "~/notes/personal")
+        (work :name "Work" :root "~/notes/work")))
+#+end_src
+
+=M-x fangcun-db-sync= rebuilds the database from all =.org= files below the
+configured yiyu roots.  A file-level =ID= creates a file node.  A heading =ID=
+creates a heading node.  File nodes use =#+title= when present and otherwise
+use their relative file name without the extension.  A heading without text
+uses its ID as its display title.
+
+=M-x fangcun-node-find= completes over the indexed nodes.  Each candidate
+shows its owning yiyu and relative file.  Selecting one opens its file and
+moves to the matching Org ID.
+
+The database defaults to =var/fangcun.sqlite= below =user-emacs-directory=.

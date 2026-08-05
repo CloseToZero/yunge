@@ -6,7 +6,7 @@
 
 (dolist (file (directory-files
                (file-name-directory load-file-name)
-               t "\\`yunge-.+-test\\.el\\'"))
+               t "\\`\\(?:fangcun\\|yunge-.+\\)-test\\.el\\'"))
   (load file nil nil t))
 
 (when noninteractive
