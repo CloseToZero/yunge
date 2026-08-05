@@ -68,8 +68,27 @@
     (loaddefs-generate
      yunge-autoload-source-directory file nil nil nil t)))
 
+(defun yunge-autoload--write-hash (file hash)
+  "Write HASH to FILE."
+  (make-directory (file-name-directory file) t)
+  (let ((coding-system-for-write 'utf-8-unix))
+    (with-temp-file file
+      (insert hash "\n"))))
+
+(defun yunge-autoload--generate-cache ()
+  "Generate the local autoload cache and return its hash."
+  (yunge-autoload--generate-file yunge-autoload-loaddefs-file)
+  (let ((hash
+         (yunge-autoload--loaddefs-hash
+          yunge-autoload-loaddefs-file)))
+    (yunge-autoload--write-hash yunge-autoload-cache-hash-file hash)
+    hash))
+
 (defun yunge-autoload-load ()
   "Load cached configuration autoloads and warn when they are stale."
+  (unless (file-exists-p yunge-autoload-loaddefs-file)
+    (yunge-autoload--generate-cache)
+    (message "Generated initial configuration autoload cache"))
   (let ((repository-hash
          (yunge-autoload--read-hash
           yunge-autoload-repository-hash-file))
@@ -94,16 +113,9 @@
 (defun yunge-autoload-generate ()
   "Generate the configuration autoload cache and update its hashes."
   (interactive)
-  (yunge-autoload--generate-file yunge-autoload-loaddefs-file)
-  (let ((hash
-         (yunge-autoload--loaddefs-hash
-          yunge-autoload-loaddefs-file)))
-    (dolist (file (list yunge-autoload-repository-hash-file
-                        yunge-autoload-cache-hash-file))
-      (make-directory (file-name-directory file) t)
-      (let ((coding-system-for-write 'utf-8-unix))
-        (with-temp-file file
-          (insert hash "\n")))))
+  (let ((hash (yunge-autoload--generate-cache)))
+    (yunge-autoload--write-hash
+     yunge-autoload-repository-hash-file hash))
   (yunge-autoload-load)
   (message "Generated configuration autoloads"))
 

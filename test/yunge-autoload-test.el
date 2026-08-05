@@ -73,6 +73,90 @@
                  (error "The fixture library was not loaded")))
            (delete-directory root t)))))))
 
+(ert-deftest yunge-autoload-bootstraps-missing-cache ()
+  (yunge-test-run-emacs
+   "--eval"
+   (prin1-to-string
+    '(progn
+       (require 'cl-lib)
+       (require 'yunge-autoload)
+       (let* ((root (make-temp-file "yunge-autoload-" t))
+              (yunge-autoload-source-directory
+               (expand-file-name "source/" root))
+              (source-file
+               (expand-file-name "fixture.el"
+                                 yunge-autoload-source-directory))
+              (yunge-autoload-cache-directory
+               (expand-file-name "autoload/" root))
+              (yunge-autoload-loaddefs-file
+               (expand-file-name "yunge-loaddefs.el"
+                                 yunge-autoload-cache-directory))
+              (yunge-autoload-repository-hash-file
+               (expand-file-name "autoloads.sha256" root))
+              (yunge-autoload-cache-hash-file
+               (expand-file-name "yunge-loaddefs.sha256"
+                                 yunge-autoload-cache-directory))
+              warning
+              writes)
+         (unwind-protect
+             (progn
+               (make-directory yunge-autoload-source-directory t)
+               (with-temp-file source-file
+                 (insert
+                  ";;; fixture.el --- Autoload fixture\n\n"
+                  ";;;###autoload\n"
+                  "(defun yunge-autoload-test-command ()\n"
+                  "  (interactive)\n"
+                  "  'loaded)\n\n"
+                  "(provide 'yunge-autoload-test-library)\n"))
+               (yunge-autoload--generate-file
+                yunge-autoload-loaddefs-file)
+               (let ((expected-hash
+                      (yunge-autoload--loaddefs-hash
+                       yunge-autoload-loaddefs-file)))
+                 (with-temp-file
+                     yunge-autoload-repository-hash-file
+                   (insert expected-hash "\n"))
+                 (delete-directory yunge-autoload-cache-directory t)
+                 (let ((write-hash
+                        (symbol-function
+                         'yunge-autoload--write-hash)))
+                   (cl-letf
+                       (((symbol-function
+                          'yunge-autoload--write-hash)
+                         (lambda (file hash)
+                           (push file writes)
+                           (funcall write-hash file hash)))
+                        ((symbol-function 'display-warning)
+                         (lambda (type message &rest _arguments)
+                           (setq warning (cons type message)))))
+                     (yunge-autoload-load)))
+                 (unless
+                     (equal writes
+                            (list yunge-autoload-cache-hash-file))
+                   (error "Bootstrap wrote unexpected hash files: %S"
+                          writes))
+                 (unless
+                     (equal expected-hash
+                            (yunge-autoload--read-hash
+                             yunge-autoload-repository-hash-file))
+                   (error "Bootstrap changed the repository hash"))
+                 (unless
+                     (equal expected-hash
+                            (yunge-autoload--read-hash
+                             yunge-autoload-cache-hash-file))
+                   (error "Bootstrap recorded the wrong cache hash")))
+               (when warning
+                 (error "Bootstrap displayed a warning: %S" warning))
+               (unless
+                   (autoloadp
+                    (symbol-function
+                     'yunge-autoload-test-command))
+                 (error "The bootstrapped command was not autoloaded"))
+               (when (featurep 'yunge-autoload-test-library)
+                 (error "Bootstrap loaded the fixture library")))
+           (delete-directory root t)))))))
+
 (ert-deftest yunge-autoload-loads-stale-cache-and-warns ()
   (yunge-test-run-emacs
    "--eval"
