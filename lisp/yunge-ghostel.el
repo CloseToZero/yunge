@@ -4,6 +4,7 @@
 
 (require 'yunge-evil)
 (require 'yunge-key)
+(require 'yunge-state)
 
 (declare-function ghostel--send-encoded
                   "ghostel" (key-name mods &optional utf8))
@@ -100,7 +101,7 @@ ARG follows the prefix conventions of `ghostel-project'."
 (elpaca evil-ghostel
   (setq ghostel-module-auto-install 'download
         ghostel-module-directory
-        (expand-file-name "var/ghostel/" user-emacs-directory)
+        (expand-file-name "ghostel/" yunge-var-directory)
         ghostel-readonly-fake-cursor nil)
   (when (eq system-type 'windows-nt)
     (setq ghostel-shell (yunge-ghostel--windows-shell-spec)))

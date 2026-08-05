@@ -2,6 +2,8 @@
 ;; SPDX-FileCopyrightText: 2026 Chen Zhexuan
 ;; SPDX-License-Identifier: MIT
 
+(require 'yunge-state)
+
 (require 'yunge-evil)
 (require 'yunge-key)
 
@@ -492,7 +494,7 @@
 
 (elpaca slime
   (let ((directory
-         (expand-file-name "var/slime/" user-emacs-directory)))
+         (expand-file-name "slime/" yunge-var-directory)))
     (make-directory directory t)
     ;; Corfu queries CAPFs automatically, including after a Lisp exits.  Keep
     ;; local filename completion then, but do not send an RPC without a Lisp.

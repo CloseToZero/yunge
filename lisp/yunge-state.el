@@ -7,11 +7,15 @@
 (defvar transient-values-file)
 (defvar server-auth-dir)
 
-(let* ((directory (expand-file-name "var/" user-emacs-directory))
-       (auto-save-directory
-        (expand-file-name "auto-save/" directory))
+(defvar yunge-var-directory
+  (file-name-as-directory
+   (expand-file-name "var/" user-emacs-directory))
+  "Directory containing mutable state for this configuration.")
+
+(let* ((auto-save-directory
+        (expand-file-name "auto-save/" yunge-var-directory))
        (tramp-auto-save-directory-path
-        (expand-file-name "tramp/auto-save/" directory)))
+        (expand-file-name "tramp/auto-save/" yunge-var-directory)))
   ;; Unlike the backup writer, auto-save does not create its destination.
   (dolist (path (list auto-save-directory
                       tramp-auto-save-directory-path))
@@ -23,31 +27,31 @@
         auto-save-list-file-prefix
         (expand-file-name "session-" auto-save-directory)
         backup-directory-alist
-        `(("." . ,(expand-file-name "backup/" directory)))
+        `(("." . ,(expand-file-name "backup/" yunge-var-directory)))
         bookmark-default-file
-        (expand-file-name "bookmark.eld" directory)
+        (expand-file-name "bookmark.eld" yunge-var-directory)
         custom-file
-        (expand-file-name "custom.el" directory)
+        (expand-file-name "custom.el" yunge-var-directory)
         project-list-file
-        (expand-file-name "project-list.eld" directory)
+        (expand-file-name "project-list.eld" yunge-var-directory)
         recentf-save-file
-        (expand-file-name "recentf.eld" directory)
+        (expand-file-name "recentf.eld" yunge-var-directory)
         save-place-file
-        (expand-file-name "save-place.eld" directory)
+        (expand-file-name "save-place.eld" yunge-var-directory)
         savehist-file
-        (expand-file-name "savehist.eld" directory)
+        (expand-file-name "savehist.eld" yunge-var-directory)
         server-auth-dir
-        (expand-file-name "server/" directory)
+        (expand-file-name "server/" yunge-var-directory)
         tramp-auto-save-directory
         tramp-auto-save-directory-path
         tramp-persistency-file-name
-        (expand-file-name "tramp/persistency.eld" directory)
+        (expand-file-name "tramp/persistency.eld" yunge-var-directory)
         transient-history-file
-        (expand-file-name "transient/history.el" directory)
+        (expand-file-name "transient/history.el" yunge-var-directory)
         transient-levels-file
-        (expand-file-name "transient/levels.el" directory)
+        (expand-file-name "transient/levels.el" yunge-var-directory)
         transient-values-file
-        (expand-file-name "transient/values.el" directory))
+        (expand-file-name "transient/values.el" yunge-var-directory))
 
   ;; We almost never edit one file from multiple Emacs instances.  Lock-file
   ;; churn is more likely to trigger pointless project-watcher automation.

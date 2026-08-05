@@ -7,6 +7,7 @@
          emacs-version))
 
 (add-to-list 'load-path (expand-file-name "lisp/" user-emacs-directory))
+(require 'yunge-state)
 
 ;; Raise the GC threshold during startup, then restore Emacs's default.
 (let ((threshold gc-cons-threshold))
@@ -39,7 +40,7 @@
 (add-to-list 'initial-frame-alist '(fullscreen . maximized))
 
 (startup-redirect-eln-cache
- (expand-file-name "var/eln-cache/" user-emacs-directory))
+ (expand-file-name "eln-cache/" yunge-var-directory))
 
 (defvar native-comp-async-report-warnings-errors)
 

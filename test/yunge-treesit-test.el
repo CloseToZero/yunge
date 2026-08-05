@@ -126,8 +126,8 @@
 
 (ert-deftest yunge-treesit-keeps-grammars-under-var ()
   (should (equal yunge-treesit-grammar-directory
-                 (file-name-as-directory
-                  (expand-file-name "var/tree-sitter/" yunge-test-root))))
+                 (expand-file-name "tree-sitter/"
+                                   yunge-var-directory)))
   (should (file-directory-p yunge-treesit-grammar-directory))
   (should (member yunge-treesit-grammar-directory
                   treesit-extra-load-path))

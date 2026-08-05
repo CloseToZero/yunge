@@ -59,13 +59,13 @@
                     '((roswell ("ros" "run"))
                       (sbcl ("sbcl"))))
              (equal slime-repl-history-file
-                    (expand-file-name "var/slime/repl-history.eld"
-                                      user-emacs-directory))
+                    (expand-file-name "slime/repl-history.eld"
+                                      yunge-var-directory))
              (= slime-repl-history-size 1000)
              (memq 'slime-lisp-mode-hook lisp-mode-hook)
              (autoloadp (symbol-function 'slime-lisp-mode-hook))
              (file-directory-p
-              (expand-file-name "var/slime/" user-emacs-directory)))
+              (expand-file-name "slime/" yunge-var-directory)))
       (error "SLIME configuration was not applied"))))
 
 (ert-deftest yunge-slime-selects-an-available-default-lisp ()

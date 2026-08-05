@@ -14,6 +14,10 @@
        (unwind-protect
            (progn
              (require 'yunge-state)
+             (unless (equal yunge-var-directory
+                            (file-name-as-directory
+                             (expand-file-name "var/" root)))
+               (error "The shared var directory was not configured"))
              (with-temp-file file
                (insert "saved"))
              (with-current-buffer (find-file-noselect file)
@@ -30,7 +34,8 @@
              (unless (file-directory-p tramp-auto-save-directory)
                (error "TRAMP auto-save directory was not created"))
              (unless (equal server-auth-dir
-                            (expand-file-name "var/server/" root))
+                            (expand-file-name "server/"
+                                              yunge-var-directory))
                (error "Server authentication was not redirected under var"))
              (unless (equal
                       (list transient-history-file
@@ -38,10 +43,10 @@
                             transient-values-file)
                       (mapcar
                        (lambda (file)
-                         (expand-file-name file root))
-                       '("var/transient/history.el"
-                         "var/transient/levels.el"
-                         "var/transient/values.el")))
+                         (expand-file-name file yunge-var-directory))
+                       '("transient/history.el"
+                         "transient/levels.el"
+                         "transient/values.el")))
                (error "Transient state was not redirected under var")))
          (delete-directory root t))))))
 

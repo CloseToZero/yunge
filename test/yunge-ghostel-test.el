@@ -53,8 +53,8 @@
       (unless (eq ghostel-module-auto-install 'download)
         (error "Ghostel module download was not configured"))
       (unless (equal ghostel-module-directory
-                     (expand-file-name "var/ghostel/"
-                                       user-emacs-directory))
+                     (expand-file-name "ghostel/"
+                                       yunge-var-directory))
         (error "Ghostel module directory was not redirected"))
       (when ghostel-readonly-fake-cursor
         (error "Ghostel read-only hint cursor was not disabled"))

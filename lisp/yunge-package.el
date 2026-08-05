@@ -2,9 +2,11 @@
 ;; SPDX-FileCopyrightText: 2026 Chen Zhexuan
 ;; SPDX-License-Identifier: MIT
 
+(require 'yunge-state)
+
 (defvar elpaca-installer-version 0.12)
 (defvar elpaca-directory
-  (expand-file-name "var/elpaca/" user-emacs-directory))
+  (expand-file-name "elpaca/" yunge-var-directory))
 (defvar elpaca-builds-directory
   (expand-file-name "build/" elpaca-directory))
 (defvar elpaca-sources-directory

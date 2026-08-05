@@ -5,8 +5,11 @@
 (defconst yunge-test-root
   (expand-file-name ".." (file-name-directory load-file-name)))
 
+(defvar yunge-var-directory
+  (expand-file-name "var/" yunge-test-root))
+
 (startup-redirect-eln-cache
- (expand-file-name "var/eln-cache/" yunge-test-root))
+ (expand-file-name "eln-cache/" yunge-var-directory))
 
 (require 'ert)
 (require 'bytecomp)
@@ -30,7 +33,7 @@
 (add-to-list 'load-path (expand-file-name "lisp" yunge-test-root))
 
 (defvar elpaca-directory
-  (expand-file-name "var/elpaca/" yunge-test-root))
+  (expand-file-name "elpaca/" yunge-var-directory))
 (defvar elpaca-cache-directory
   (expand-file-name "cache/" elpaca-directory))
 (defvar elpaca-builds-directory
@@ -52,8 +55,8 @@ Elpaca manages itself separately, so it is not recorded in its lock file."
 
 (defun yunge-test-package-directory (package)
   "Return PACKAGE's Elpaca build directory."
-  (expand-file-name (format "var/elpaca/build/%s" package)
-                    yunge-test-root))
+  (expand-file-name (format "elpaca/build/%s" package)
+                    yunge-var-directory))
 
 (defun yunge-test-package-arguments ()
   "Return command-line load path arguments for locked packages."
@@ -72,7 +75,7 @@ Elpaca manages itself separately, so it is not recorded in its lock file."
   (with-temp-buffer
     (let ((process-environment (copy-sequence process-environment))
           (test-config-home
-           (expand-file-name "var/test/" yunge-test-root))
+           (expand-file-name "test/" yunge-var-directory))
           status)
       (make-directory (expand-file-name "emacs/" test-config-home) t)
       (setenv "XDG_CONFIG_HOME" test-config-home)
