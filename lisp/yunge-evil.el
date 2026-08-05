@@ -10,6 +10,7 @@
 (declare-function evil-add-command-properties "evil-common")
 (declare-function evil-ex-delete-hl "evil-search" (name))
 (declare-function evil-ex-make-search-pattern "evil-search" (regexp))
+(declare-function evil-ex-nohighlight "evil-search" ())
 (declare-function evil-ex-search-backward "evil-commands" (count))
 (declare-function evil-ex-search-forward "evil-commands" (count))
 (declare-function evil-ex-search-next "evil-commands" (count))
@@ -31,6 +32,11 @@
 
 (defvar yunge-evil--pinyin-search nil
   "Non-nil while an Evil search command should expand Pinyin.")
+
+(defun yunge-evil--nohighlight-after-force-normal-state (&rest _arguments)
+  "Clear highlights after an interactive `evil-force-normal-state'."
+  (when (eq this-command 'evil-force-normal-state)
+    (evil-ex-nohighlight)))
 
 (defun yunge-evil--pinyin-search-pattern (function regexp)
   "Call FUNCTION for REGEXP, expanding it when Pinyin search is active."
@@ -191,6 +197,8 @@
 
 (with-eval-after-load 'evil
   (require 'yunge-comment)
+  (advice-add 'evil-force-normal-state :after
+              #'yunge-evil--nohighlight-after-force-normal-state)
   (yunge-evil--setup-leader)
   (yunge-key-define
    evil-motion-state-map

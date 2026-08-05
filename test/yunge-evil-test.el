@@ -6,12 +6,15 @@
 
 (declare-function evil-ex-make-search-pattern "evil-search" (regexp))
 (declare-function evil-ex-pattern-regex "evil-search" (pattern))
+(declare-function evil-force-normal-state "evil-states" ())
+(declare-function evil-insert-state "evil-states")
 (declare-function evil-normal-state "evil-states")
 (declare-function evil-visual-state "evil-states")
 
 (defvar evil-ex-search-direction)
 (defvar evil-ex-search-history)
 (defvar evil-ex-search-pattern)
+(defvar evil-ex-active-highlights-alist)
 (defvar evil-state)
 
 (defvar-keymap yunge-test-localleader-map
@@ -104,6 +107,27 @@
       (should (= (point) 7))
       (should (equal (evil-ex-pattern-regex evil-ex-search-pattern)
                      "\\_<bl\\_>")))))
+
+(ert-deftest yunge-evil-force-normal-clears-highlight-interactively ()
+  (yunge-test-enable-evil)
+  (with-temp-buffer
+    (insert "word word")
+    (goto-char (point-min))
+    (evil-normal-state)
+    (save-window-excursion
+      (switch-to-buffer (current-buffer))
+      (yunge-test-key "<escape>" 'evil-force-normal-state)
+      (execute-kbd-macro (kbd "*"))
+      (should (assq 'evil-ex-search evil-ex-active-highlights-alist))
+      (evil-insert-state)
+      (execute-kbd-macro (kbd "<escape>"))
+      (should (eq evil-state 'normal))
+      (should (assq 'evil-ex-search evil-ex-active-highlights-alist))
+      (evil-force-normal-state)
+      (should (assq 'evil-ex-search evil-ex-active-highlights-alist))
+      (execute-kbd-macro (kbd "<escape>"))
+      (should-not
+       (assq 'evil-ex-search evil-ex-active-highlights-alist)))))
 
 (ert-deftest yunge-evil-visual-star-searches-the-selected-text-literally ()
   (yunge-test-enable-evil)
