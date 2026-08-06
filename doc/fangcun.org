@@ -19,6 +19,8 @@ links owned by the nearest enclosing node.
 
 After a full sync, =M-x fangcun-db-update-file= replaces the indexed nodes and
 links for the current saved Org file without rebuilding the other yiyu files.
+Saving a configured yiyu file performs the same update silently.  Set
+=fangcun-db-update-on-save= to =nil= to disable automatic updates.
 
 =M-x fangcun-node-find= completes over the indexed nodes.  Each candidate
 shows its owning yiyu and relative file.  Selecting one opens its file and

@@ -340,6 +340,56 @@
      :type 'user-error)
     (should-not (file-exists-p fangcun-database-file))))
 
+(ert-deftest fangcun-save-hook-waits-for-an-initial-full-sync ()
+  (fangcun-test-with-notes
+    (let ((fangcun-db-update-on-save t)
+          (buffer (find-file-noselect personal-file)))
+      (with-current-buffer buffer
+        (should (memq #'fangcun--update-after-save after-save-hook))
+        (goto-char (point-max))
+        (insert "\nSaved before syncing.\n")
+        (save-buffer))
+      (should-not (file-exists-p fangcun-database-file)))))
+
+(ert-deftest fangcun-save-hook-updates-managed-files-silently ()
+  (fangcun-test-with-notes
+    (fangcun-db-sync)
+    (let ((fangcun-db-update-on-save t)
+          (buffer (find-file-noselect personal-file))
+          messages)
+      (with-current-buffer buffer
+        (goto-char (point-min))
+        (re-search-forward "A theorem")
+        (replace-match "Updated after saving")
+        (cl-letf
+            (((symbol-function 'message)
+              (lambda (format-string &rest arguments)
+                (push (apply #'format-message
+                             format-string arguments)
+                      messages))))
+          (save-buffer)))
+      (should-not
+       (seq-some
+        (lambda (text)
+          (string-prefix-p "Fangcun indexed" text))
+        messages))
+      (should
+       (equal
+        (fangcun-node-title
+         (fangcun-test--node "theorem" (fangcun-node-list)))
+        "Updated after saving"))
+      (let ((fangcun-db-update-on-save nil))
+        (with-current-buffer buffer
+          (goto-char (point-min))
+          (re-search-forward "Updated after saving")
+          (replace-match "Automatic updates disabled")
+          (save-buffer)))
+      (should
+       (equal
+        (fangcun-node-title
+         (fangcun-test--node "theorem" (fangcun-node-list)))
+        "Updated after saving")))))
+
 (ert-deftest fangcun-syncs-id-link-occurrences-and-owners ()
   (fangcun-test-with-notes
     (let ((source-file

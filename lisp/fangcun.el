@@ -41,6 +41,11 @@ Each entry has the form (ID :name NAME :root ROOT)."
   :set #'fangcun--set-database-file
   :group 'fangcun)
 
+(defcustom fangcun-db-update-on-save t
+  "Whether saving a Fangcun Org file updates its database entries."
+  :type 'boolean
+  :group 'fangcun)
+
 (cl-defstruct fangcun-yiyu
   id
   name
@@ -381,8 +386,9 @@ RELATIVE-FILE names BUFFER's file relative to YIYU's root."
       result)))
 
 ;;;###autoload
-(defun fangcun-db-update-file (file)
-  "Replace database entries for saved Org FILE."
+(defun fangcun-db-update-file (file &optional no-message)
+  "Replace database entries for saved Org FILE.
+When NO-MESSAGE is non-nil, do not report the indexed counts."
   (interactive
    (list
     (or buffer-file-name
@@ -433,11 +439,29 @@ RELATIVE-FILE names BUFFER's file relative to YIYU's root."
                    "WHERE yiyu_id = ? AND file = ?")
                   (vector (fangcun-yiyu-id yiyu) relative-file))
                  (fangcun--insert-file-data database data))))))
-      (message "Fangcun indexed %d nodes and %d links from %s"
-               (plist-get result :nodes)
-               (plist-get result :links)
-               (abbreviate-file-name file))
+      (unless no-message
+        (message "Fangcun indexed %d nodes and %d links from %s"
+                 (plist-get result :nodes)
+                 (plist-get result :links)
+                 (abbreviate-file-name file)))
       result)))
+
+(defun fangcun--update-after-save ()
+  "Update the current saved file when Fangcun manages it."
+  (when (and fangcun-db-update-on-save
+             buffer-file-name
+             (file-exists-p fangcun-database-file)
+             (string-match-p "\\.org\\'" buffer-file-name)
+             (fangcun--yiyu-containing-file buffer-file-name))
+    (fangcun-db-update-file buffer-file-name t)))
+
+;;;###autoload
+(defun fangcun--setup-update-on-save ()
+  "Arrange for the current Org buffer to update Fangcun after saving."
+  (add-hook 'after-save-hook #'fangcun--update-after-save nil t))
+
+;;;###autoload
+(add-hook 'org-mode-hook #'fangcun--setup-update-on-save)
 
 (defun fangcun--node-from-row (row)
   "Return a Fangcun node represented by SQLite ROW."
