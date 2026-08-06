@@ -12,6 +12,11 @@
 (require 'subr-x)
 (require 'yunge-jump-history)
 
+(declare-function evil-eolp "evil-common" ())
+
+(defvar evil-local-mode)
+(defvar evil-state)
+
 (defgroup fangcun nil
   "Org-based personal knowledge management."
   :group 'org)
@@ -769,6 +774,11 @@ When one source contains several links, retain its first occurrence."
   (unless (derived-mode-p 'org-mode)
     (user-error "Fangcun node links can only be inserted in Org buffers"))
   (let ((node (fangcun--read-node)))
+    (when (and (bound-and-true-p evil-local-mode)
+               (eq evil-state 'normal)
+               (evil-eolp)
+               (not (eolp)))
+      (forward-char))
     (insert
      (org-link-make-string
       (concat "id:" (fangcun-node-id node))
