@@ -17,7 +17,8 @@
   (should (= bookmark-save-flag 1))
   (should
    (equal bookmark-default-file
-          (expand-file-name "bookmark.eld" yunge-var-directory)))
+          (expand-file-name "bookmark/bookmarks.eld"
+                            yunge-var-directory)))
   (yunge-test-evil-normal-keys
    'fundamental-mode
    '(("SPC j B" . bookmark-bmenu-list)

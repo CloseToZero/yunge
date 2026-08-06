@@ -16,14 +16,34 @@
    (expand-file-name "var/" user-emacs-directory))
   "Directory containing mutable state for this configuration.")
 
+(defun yunge-var-subdirectory (name)
+  "Return the NAME directory below `yunge-var-directory'."
+  (file-name-as-directory
+   (expand-file-name name yunge-var-directory)))
+
+(defun yunge-var-file (owner name)
+  "Return NAME in OWNER's directory below `yunge-var-directory'."
+  (expand-file-name name (yunge-var-subdirectory owner)))
+
 (let* ((auto-save-directory
-        (expand-file-name "auto-save/" yunge-var-directory))
+        (yunge-var-subdirectory "auto-save"))
        (tramp-auto-save-directory-path
-        (expand-file-name "tramp/auto-save/" yunge-var-directory)))
-  ;; Unlike the backup writer, auto-save does not create its destination.
-  (dolist (path (list auto-save-directory
-                      tramp-auto-save-directory-path))
-    (make-directory path t))
+        (yunge-var-subdirectory "tramp/auto-save")))
+  ;; These writers require their destination directories to exist.
+  (dolist (directory
+           (list auto-save-directory
+                 tramp-auto-save-directory-path
+                 (yunge-var-subdirectory "bookmark")
+                 (yunge-var-subdirectory "custom")
+                 (yunge-var-subdirectory "org-clock")
+                 (yunge-var-subdirectory "org-id")
+                 (yunge-var-subdirectory "org-persist")
+                 (yunge-var-subdirectory "org-publish/timestamps")
+                 (yunge-var-subdirectory "project")
+                 (yunge-var-subdirectory "recentf")
+                 (yunge-var-subdirectory "save-place")
+                 (yunge-var-subdirectory "savehist")))
+    (make-directory directory t))
 
   ;; Keep state produced by common editing features out of source trees.
   (setq auto-save-file-name-transforms
@@ -31,39 +51,39 @@
         auto-save-list-file-prefix
         (expand-file-name "session-" auto-save-directory)
         backup-directory-alist
-        `(("." . ,(expand-file-name "backup/" yunge-var-directory)))
+        `(("." . ,(yunge-var-subdirectory "backup")))
         bookmark-default-file
-        (expand-file-name "bookmark.eld" yunge-var-directory)
+        (yunge-var-file "bookmark" "bookmarks.eld")
         custom-file
-        (expand-file-name "custom.el" yunge-var-directory)
+        (yunge-var-file "custom" "custom.el")
         org-clock-persist-file
-        (expand-file-name "org-clock-save.el" yunge-var-directory)
+        (yunge-var-file "org-clock" "clock-save.el")
         org-id-locations-file
-        (expand-file-name "org-id-locations.eld" yunge-var-directory)
+        (yunge-var-file "org-id" "locations.eld")
         org-persist-directory
-        (expand-file-name "org-persist/" yunge-var-directory)
+        (yunge-var-subdirectory "org-persist")
         org-publish-timestamp-directory
-        (expand-file-name "org-publish-timestamps/" yunge-var-directory)
+        (yunge-var-subdirectory "org-publish/timestamps")
         project-list-file
-        (expand-file-name "project-list.eld" yunge-var-directory)
+        (yunge-var-file "project" "projects.eld")
         recentf-save-file
-        (expand-file-name "recentf.eld" yunge-var-directory)
+        (yunge-var-file "recentf" "recentf.eld")
         save-place-file
-        (expand-file-name "save-place.eld" yunge-var-directory)
+        (yunge-var-file "save-place" "places.eld")
         savehist-file
-        (expand-file-name "savehist.eld" yunge-var-directory)
+        (yunge-var-file "savehist" "savehist.eld")
         server-auth-dir
-        (expand-file-name "server/" yunge-var-directory)
+        (yunge-var-subdirectory "server")
         tramp-auto-save-directory
         tramp-auto-save-directory-path
         tramp-persistency-file-name
-        (expand-file-name "tramp/persistency.eld" yunge-var-directory)
+        (yunge-var-file "tramp" "persistency.eld")
         transient-history-file
-        (expand-file-name "transient/history.el" yunge-var-directory)
+        (yunge-var-file "transient" "history.el")
         transient-levels-file
-        (expand-file-name "transient/levels.el" yunge-var-directory)
+        (yunge-var-file "transient" "levels.el")
         transient-values-file
-        (expand-file-name "transient/values.el" yunge-var-directory))
+        (yunge-var-file "transient" "values.el"))
 
   ;; We almost never edit one file from multiple Emacs instances.  Lock-file
   ;; churn is more likely to trigger pointless project-watcher automation.

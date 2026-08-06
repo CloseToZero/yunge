@@ -6,7 +6,7 @@
 
 (defvar elpaca-installer-version 0.12)
 (defvar elpaca-directory
-  (expand-file-name "elpaca/" yunge-var-directory))
+  (yunge-var-subdirectory "elpaca"))
 (defvar elpaca-builds-directory
   (expand-file-name "build/" elpaca-directory))
 (defvar elpaca-sources-directory

@@ -47,4 +47,5 @@ lookup.
 Each source node appears once.  Selecting one opens its first indexed link to
 the current node.
 
-The database defaults to =var/fangcun.sqlite= below =user-emacs-directory=.
+The database defaults to =var/fangcun/fangcun.sqlite= below
+=user-emacs-directory=.

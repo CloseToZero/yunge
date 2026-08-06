@@ -73,6 +73,10 @@
    nodes))
 
 (ert-deftest fangcun-database-file-requires-an-absolute-path ()
+  (should
+   (equal fangcun-database-file
+          (expand-file-name "fangcun/fangcun.sqlite"
+                            yunge-var-directory)))
   (let ((symbol (make-symbol "fangcun-test-database-file"))
         (file
          (expand-file-name "fangcun.sqlite" temporary-file-directory)))

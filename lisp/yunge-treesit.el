@@ -6,8 +6,7 @@
 (require 'yunge-state)
 
 (defconst yunge-treesit-grammar-directory
-  (file-name-as-directory
-   (expand-file-name "tree-sitter/" yunge-var-directory))
+  (yunge-var-subdirectory "tree-sitter")
   "Directory containing locally compiled tree-sitter grammars.")
 
 (make-directory yunge-treesit-grammar-directory t)

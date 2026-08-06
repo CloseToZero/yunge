@@ -33,7 +33,7 @@
       (compilation-mode))
     (let ((process-environment (copy-sequence process-environment))
           (test-config-home
-           (expand-file-name "test/" yunge-var-directory)))
+           (yunge-var-subdirectory "test")))
       ;; Keep the clean process's default native-comp cache under `var'.
       ;; Emacs only selects XDG_CONFIG_HOME when its emacs directory exists.
       (make-directory (expand-file-name "emacs/" test-config-home) t)

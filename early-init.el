@@ -40,7 +40,7 @@
 (add-to-list 'initial-frame-alist '(fullscreen . maximized))
 
 (startup-redirect-eln-cache
- (expand-file-name "eln-cache/" yunge-var-directory))
+ (yunge-var-subdirectory "eln-cache"))
 
 (defvar native-comp-async-report-warnings-errors)
 

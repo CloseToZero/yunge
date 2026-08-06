@@ -16,7 +16,7 @@
   "Directory scanned when generating configuration autoloads.")
 
 (defvar yunge-autoload-cache-directory
-  (expand-file-name "autoload/" yunge-var-directory)
+  (yunge-var-subdirectory "autoload")
   "Directory containing generated configuration autoloads.")
 
 (defvar yunge-autoload-loaddefs-file

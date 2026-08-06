@@ -18,6 +18,10 @@
                             (file-name-as-directory
                              (expand-file-name "var/" root)))
                (error "The shared var directory was not configured"))
+             (let ((unused
+                    (yunge-var-file "unused" "state.eld")))
+               (when (file-exists-p (file-name-directory unused))
+                 (error "Computing a var path created its directory")))
              (with-temp-file file
                (insert "saved"))
              (with-current-buffer (find-file-noselect file)
@@ -38,18 +42,32 @@
                                               yunge-var-directory))
                (error "Server authentication was not redirected under var"))
              (unless (equal
-                      (list org-clock-persist-file
+                      (list bookmark-default-file
+                            custom-file
+                            org-clock-persist-file
                             org-id-locations-file
                             org-persist-directory
-                            org-publish-timestamp-directory)
+                            org-publish-timestamp-directory
+                            project-list-file
+                            recentf-save-file
+                            save-place-file
+                            savehist-file
+                            tramp-persistency-file-name)
                       (mapcar
                        (lambda (file)
                          (expand-file-name file yunge-var-directory))
-                       '("org-clock-save.el"
-                         "org-id-locations.eld"
+                       '("bookmark/bookmarks.eld"
+                         "custom/custom.el"
+                         "org-clock/clock-save.el"
+                         "org-id/locations.eld"
                          "org-persist/"
-                         "org-publish-timestamps/")))
-               (error "Org state was not redirected under var"))
+                         "org-publish/timestamps/"
+                         "project/projects.eld"
+                         "recentf/recentf.eld"
+                         "save-place/places.eld"
+                         "savehist/savehist.eld"
+                         "tramp/persistency.eld")))
+               (error "Mutable files were not grouped by owner"))
              (unless (equal
                       (list transient-history-file
                             transient-levels-file

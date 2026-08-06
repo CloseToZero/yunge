@@ -35,7 +35,7 @@ Each entry has the form (ID :name NAME :root ROOT)."
   :group 'fangcun)
 
 (defcustom fangcun-database-file
-  (expand-file-name "fangcun.sqlite" yunge-var-directory)
+  (yunge-var-file "fangcun" "fangcun.sqlite")
   "Absolute file name of the SQLite database used by Fangcun."
   :type 'file
   :set #'fangcun--set-database-file

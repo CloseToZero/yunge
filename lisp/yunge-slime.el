@@ -494,7 +494,7 @@
 
 (elpaca slime
   (let ((directory
-         (expand-file-name "slime/" yunge-var-directory)))
+         (yunge-var-subdirectory "slime")))
     (make-directory directory t)
     ;; Corfu queries CAPFs automatically, including after a Lisp exits.  Keep
     ;; local filename completion then, but do not send an RPC without a Lisp.

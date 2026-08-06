@@ -101,7 +101,7 @@ ARG follows the prefix conventions of `ghostel-project'."
 (elpaca evil-ghostel
   (setq ghostel-module-auto-install 'download
         ghostel-module-directory
-        (expand-file-name "ghostel/" yunge-var-directory)
+        (yunge-var-subdirectory "ghostel")
         ghostel-readonly-fake-cursor nil)
   (when (eq system-type 'windows-nt)
     (setq ghostel-shell (yunge-ghostel--windows-shell-spec)))
