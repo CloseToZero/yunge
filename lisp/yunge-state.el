@@ -6,6 +6,10 @@
 (defvar transient-levels-file)
 (defvar transient-values-file)
 (defvar server-auth-dir)
+(defvar org-clock-persist-file)
+(defvar org-id-locations-file)
+(defvar org-persist-directory)
+(defvar org-publish-timestamp-directory)
 
 (defvar yunge-var-directory
   (file-name-as-directory
@@ -32,6 +36,14 @@
         (expand-file-name "bookmark.eld" yunge-var-directory)
         custom-file
         (expand-file-name "custom.el" yunge-var-directory)
+        org-clock-persist-file
+        (expand-file-name "org-clock-save.el" yunge-var-directory)
+        org-id-locations-file
+        (expand-file-name "org-id-locations.eld" yunge-var-directory)
+        org-persist-directory
+        (expand-file-name "org-persist/" yunge-var-directory)
+        org-publish-timestamp-directory
+        (expand-file-name "org-publish-timestamps/" yunge-var-directory)
         project-list-file
         (expand-file-name "project-list.eld" yunge-var-directory)
         recentf-save-file

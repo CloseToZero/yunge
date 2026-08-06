@@ -38,6 +38,19 @@
                                               yunge-var-directory))
                (error "Server authentication was not redirected under var"))
              (unless (equal
+                      (list org-clock-persist-file
+                            org-id-locations-file
+                            org-persist-directory
+                            org-publish-timestamp-directory)
+                      (mapcar
+                       (lambda (file)
+                         (expand-file-name file yunge-var-directory))
+                       '("org-clock-save.el"
+                         "org-id-locations.eld"
+                         "org-persist/"
+                         "org-publish-timestamps/")))
+               (error "Org state was not redirected under var"))
+             (unless (equal
                       (list transient-history-file
                             transient-levels-file
                             transient-values-file)
