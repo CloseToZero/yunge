@@ -316,10 +316,16 @@ RELATIVE-FILE names BUFFER's file relative to YIYU's root."
                 (when-let*
                     ((source-id
                       (fangcun--element-owner-id element)))
-                  (let ((target-id
-                         (org-element-property :path element))
-                        (position
-                         (org-element-property :begin element)))
+                  (let* ((path
+                          (org-element-property :path element))
+                         (target-id
+                          ;; A search suffix selects a location inside the
+                          ;; target node; the backlink belongs to the node.
+                          (if (string-match "::.*\\'" path)
+                              (substring path 0 (match-beginning 0))
+                            path))
+                         (position
+                          (org-element-property :begin element)))
                     (push
                      (make-fangcun-link
                       :source-id source-id

@@ -575,6 +575,8 @@
         ":END:\n"
         "#+title: Source file\n\n"
         "[[id:work-file][File link]]\n\n"
+        "[[id:work-file::*Status][Heading search]]\n"
+        "[[id:work-file::target][Target search]]\n\n"
         "* Parent\n"
         ":PROPERTIES:\n"
         ":ID: parent\n"
@@ -587,7 +589,7 @@
        "* No ID\n[[id:work-file][Unowned link]]\n")
       (should
        (equal (fangcun-db-sync)
-              '(:yiyus 2 :files 4 :nodes 6 :links 4)))
+              '(:yiyus 2 :files 4 :nodes 6 :links 6)))
       (fangcun--call-with-database
        (lambda (database)
          (let ((rows
@@ -603,6 +605,8 @@
                       (list (elt row 0) (elt row 1)))
                     rows)
                    '(("source-file" "work-file")
+                     ("source-file" "work-file")
+                     ("source-file" "work-file")
                      ("parent" "work-file")
                      ("parent" "work-file"))))
            (should
@@ -643,7 +647,7 @@
         ":PROPERTIES:\n"
         ":ID: parent\n"
         ":END:\n"
-        "[[id:work-file][First reference]]\n"
+        "[[id:work-file::*Status][First reference]]\n"
         "[[id:work-file][Second reference]]\n"))
       (fangcun-db-sync)
       (let ((backlinks (fangcun-backlink-list "work-file")))
@@ -668,7 +672,7 @@
           (should (equal (buffer-file-name) source-file))
           (should
            (looking-at-p
-            "\\[\\[id:work-file\\]\\[First reference\\]\\]")))))))
+            "\\[\\[id:work-file::\\*Status\\]\\[First reference\\]\\]")))))))
 
 (ert-deftest fangcun-jumps-participate-in-window-history ()
   (dolist (command '(fangcun-node-find fangcun-backlink-find))

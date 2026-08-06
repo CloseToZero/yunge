@@ -39,6 +39,10 @@ moves to the matching Org ID.
 =M-x fangcun-node-insert= uses the same completion to insert an =id:= link at
 point.  The selected node's title becomes the link description.
 
+ID links may include an Org search suffix, such as
+=id:NODE-ID::*Heading= or =id:NODE-ID::target=.  The suffix selects a location
+inside the target node, while Fangcun attributes the backlink to the node ID.
+
 Following an ordinary Org =id:= link resolves indexed Fangcun nodes through
 the Fangcun database.  IDs not stored by Fangcun continue through Org's normal
 lookup.
