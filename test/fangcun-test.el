@@ -126,10 +126,17 @@
           (target (expand-file-name "c-cpp.org" personal-root))
           (org-id-locations nil)
           (org-startup-folded 'showeverything)
+          (configured-function
+           (symbol-function 'fangcun--configured-yiyus))
+          (configured-calls 0)
           prompted-initial)
       (switch-to-buffer origin)
       (cl-letf
-          (((symbol-function 'read-string)
+          (((symbol-function 'fangcun--configured-yiyus)
+            (lambda ()
+              (cl-incf configured-calls)
+              (funcall configured-function)))
+           ((symbol-function 'read-string)
             (lambda (prompt &optional initial &rest _arguments)
               (if (string-prefix-p "Node title" prompt)
                   "C/C++"
@@ -144,6 +151,7 @@
             (lambda ()
               (ert-fail "Creating a node should not load Org ID state"))))
         (should (equal (fangcun-file-node-create) "created-node")))
+      (should (= configured-calls 1))
       (should (equal prompted-initial "C/C++.org"))
       (should (equal (buffer-file-name) target))
       (should (buffer-modified-p))
@@ -511,18 +519,26 @@
     (fangcun-db-sync)
     (let ((fangcun-db-update-on-save t)
           (buffer (find-file-noselect personal-file))
+          (configured-function
+           (symbol-function 'fangcun--configured-yiyus))
+          (configured-calls 0)
           messages)
       (with-current-buffer buffer
         (goto-char (point-min))
         (re-search-forward "A theorem")
         (replace-match "Updated after saving")
         (cl-letf
-            (((symbol-function 'message)
+            (((symbol-function 'fangcun--configured-yiyus)
+              (lambda ()
+                (cl-incf configured-calls)
+                (funcall configured-function)))
+             ((symbol-function 'message)
               (lambda (format-string &rest arguments)
                 (push (apply #'format-message
                              format-string arguments)
                       messages))))
           (save-buffer)))
+      (should (= configured-calls 1))
       (should-not
        (seq-some
         (lambda (text)

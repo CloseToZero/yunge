@@ -87,12 +87,12 @@ Each entry has the form (ID :name NAME :root ROOT)."
         :root (file-name-as-directory (expand-file-name root)))))
    fangcun-yiyus))
 
-(defun fangcun--yiyu-containing-file (file)
-  "Return the configured yiyu containing FILE, or nil."
+(defun fangcun--yiyu-containing-file (file yiyus)
+  "Return the member of YIYUS containing FILE, or nil."
   (seq-find
    (lambda (yiyu)
      (file-in-directory-p file (fangcun-yiyu-root yiyu)))
-   (fangcun--configured-yiyus)))
+   yiyus))
 
 (defun fangcun--portable-file-name-error (name)
   "Return why file NAME is not portable, or nil."
@@ -450,6 +450,57 @@ RELATIVE-FILE names BUFFER's file relative to YIYU's root."
        (plist-get result :yiyus))
       result)))
 
+(defun fangcun--db-update-file-in-yiyu (file yiyu &optional no-message)
+  "Replace database entries for saved Org FILE owned by YIYU.
+When NO-MESSAGE is non-nil, do not report the indexed counts."
+  (unless (file-regular-p file)
+    (user-error "Fangcun file does not exist: %s" file))
+  (unless (string-match-p "\\.org\\'" file)
+    (user-error "Fangcun only indexes Org files: %s" file))
+  (when-let* ((buffer (find-buffer-visiting file)))
+    (when (buffer-modified-p buffer)
+      (user-error "Save the Fangcun file before updating it")))
+  (unless (file-exists-p fangcun-database-file)
+    (user-error "Run fangcun-db-sync before updating individual files"))
+  (let* ((relative-file
+          (file-relative-name file (fangcun-yiyu-root yiyu)))
+         (data (fangcun--parse-file yiyu file))
+         (result
+          (fangcun--call-with-database
+           (lambda (database)
+             (let ((row
+                    (car
+                     (sqlite-select
+                      database
+                      (concat
+                       "SELECT name, root FROM yiyus "
+                       "WHERE id = ?")
+                      (vector (fangcun-yiyu-id yiyu))))))
+               (unless
+                   (and row
+                        (equal (elt row 0)
+                               (fangcun-yiyu-name yiyu))
+                        (file-equal-p
+                         (elt row 1) (fangcun-yiyu-root yiyu)))
+                 (user-error
+                  (concat
+                   "Fangcun yiyu configuration changed; "
+                   "run fangcun-db-sync"))))
+             (with-sqlite-transaction database
+               (sqlite-execute
+                database
+                (concat
+                 "DELETE FROM nodes "
+                 "WHERE yiyu_id = ? AND file = ?")
+                (vector (fangcun-yiyu-id yiyu) relative-file))
+               (fangcun--insert-file-data database data))))))
+    (unless no-message
+      (message "Fangcun indexed %d nodes and %d links from %s"
+               (plist-get result :nodes)
+               (plist-get result :links)
+               (abbreviate-file-name file)))
+    result))
+
 ;;;###autoload
 (defun fangcun-db-update-file (file &optional no-message)
   "Replace database entries for saved Org FILE.
@@ -459,66 +510,25 @@ When NO-MESSAGE is non-nil, do not report the indexed counts."
     (or buffer-file-name
         (user-error "The current buffer is not visiting a file"))))
   (setq file (expand-file-name file))
-  (unless (file-regular-p file)
-    (user-error "Fangcun file does not exist: %s" file))
-  (unless (string-match-p "\\.org\\'" file)
-    (user-error "Fangcun only indexes Org files: %s" file))
-  (when-let* ((buffer (find-buffer-visiting file)))
-    (when (buffer-modified-p buffer)
-      (user-error "Save the Fangcun file before updating it")))
-  (let ((yiyu (or (fangcun--yiyu-containing-file file)
-                   (user-error
-                    "File is outside the configured Fangcun yiyus: %s"
-                    file))))
-    (unless (file-exists-p fangcun-database-file)
-      (user-error "Run fangcun-db-sync before updating individual files"))
-    (let* ((relative-file
-            (file-relative-name file (fangcun-yiyu-root yiyu)))
-           (data (fangcun--parse-file yiyu file))
-           (result
-            (fangcun--call-with-database
-             (lambda (database)
-               (let ((row
-                      (car
-                       (sqlite-select
-                        database
-                        (concat
-                         "SELECT name, root FROM yiyus "
-                         "WHERE id = ?")
-                        (vector (fangcun-yiyu-id yiyu))))))
-                 (unless
-                     (and row
-                          (equal (elt row 0)
-                                 (fangcun-yiyu-name yiyu))
-                          (file-equal-p
-                           (elt row 1) (fangcun-yiyu-root yiyu)))
-                   (user-error
-                    (concat
-                     "Fangcun yiyu configuration changed; "
-                     "run fangcun-db-sync"))))
-               (with-sqlite-transaction database
-                 (sqlite-execute
-                  database
-                  (concat
-                   "DELETE FROM nodes "
-                   "WHERE yiyu_id = ? AND file = ?")
-                  (vector (fangcun-yiyu-id yiyu) relative-file))
-                 (fangcun--insert-file-data database data))))))
-      (unless no-message
-        (message "Fangcun indexed %d nodes and %d links from %s"
-                 (plist-get result :nodes)
-                 (plist-get result :links)
-                 (abbreviate-file-name file)))
-      result)))
+  (let* ((yiyus (fangcun--configured-yiyus))
+         (yiyu
+          (or (fangcun--yiyu-containing-file file yiyus)
+              (user-error
+               "File is outside the configured Fangcun yiyus: %s"
+               file))))
+    (fangcun--db-update-file-in-yiyu file yiyu no-message)))
 
 (defun fangcun--update-after-save ()
   "Update the current saved file when Fangcun manages it."
   (when (and fangcun-db-update-on-save
              buffer-file-name
              (file-exists-p fangcun-database-file)
-             (string-match-p "\\.org\\'" buffer-file-name)
-             (fangcun--yiyu-containing-file buffer-file-name))
-    (fangcun-db-update-file buffer-file-name t)))
+             (string-match-p "\\.org\\'" buffer-file-name))
+    (let* ((yiyus (fangcun--configured-yiyus))
+           (yiyu
+            (fangcun--yiyu-containing-file buffer-file-name yiyus)))
+      (when yiyu
+        (fangcun--db-update-file-in-yiyu buffer-file-name yiyu t)))))
 
 ;;;###autoload
 (defun fangcun--setup-update-on-save ()
@@ -708,7 +718,7 @@ When one source contains several links, retain its first occurrence."
   (let* ((yiyus (fangcun--configured-yiyus))
          (current-yiyu
           (and buffer-file-name
-               (fangcun--yiyu-containing-file buffer-file-name))))
+               (fangcun--yiyu-containing-file buffer-file-name yiyus))))
     (unless yiyus
       (user-error "Configure `fangcun-yiyus' before creating a node"))
     (let* ((yiyu
