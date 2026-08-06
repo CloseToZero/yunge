@@ -108,6 +108,9 @@
 (defvar-keymap yunge-jump-map
   :doc "Global jump command map.")
 
+(defvar-keymap yunge-note-map
+  :doc "Global note command map.")
+
 (defvar-keymap yunge-quit-map
   :doc "Global quit command map.")
 
@@ -153,6 +156,7 @@
     ("g" ,yunge-go-map "go")
     ("h" ,help-map "help")
     ("j" ,yunge-jump-map "jump")
+    ("n" ,yunge-note-map "note")
     ("p" ,project-prefix-map "project")
     ("q" ,yunge-quit-map "quit")
     ("s" ,yunge-search-map "search")

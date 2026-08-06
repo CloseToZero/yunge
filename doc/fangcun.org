@@ -47,5 +47,12 @@ lookup.
 Each source node appears once.  Selecting one opens its first indexed link to
 the current node.
 
+The note map provides the frequent Fangcun commands under the global leader:
+
+- =SPC n n= creates a file node.
+- =SPC n f= finds a node.
+- =SPC n i= inserts a node link.
+- =SPC n b= finds a backlink to the current node.
+
 The database defaults to =var/fangcun/fangcun.sqlite= below
 =user-emacs-directory=.

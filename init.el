@@ -16,6 +16,7 @@
 (require 'yunge-package)
 (require 'yunge-theme)
 (require 'yunge-evil)
+(require 'yunge-fangcun)
 (require 'yunge-expreg)
 (require 'yunge-tab)
 (require 'yunge-bookmark)
