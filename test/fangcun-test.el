@@ -84,6 +84,157 @@
      (eq (get 'fangcun-database-file 'custom-set)
          #'fangcun--set-database-file))))
 
+(ert-deftest fangcun-detects-nonportable-file-names ()
+  (dolist (name
+           '("colon:name.org"
+             "question?.org"
+             "back\\slash.org"
+             " leading.org"
+             "trailing.org "
+             "trailing."
+             "NUL.org"
+             "com1.notes.org"))
+    (should (fangcun--portable-file-name-error name)))
+  (should
+   (fangcun--portable-file-name-error
+    (concat "control" (string 1) ".org")))
+  (dolist (name
+           '("中文笔记.org" "C++.org" "two words.org" ".NET.org"))
+    (should-not
+     (fangcun--portable-file-name-error name))))
+
+(ert-deftest fangcun-validates-new-file-boundaries ()
+  (fangcun-test-with-notes
+    (should-not
+     (fangcun--new-file-name-error "new.org" personal-root))
+    (dolist (name
+             '("theorems.org"
+               "new.txt"
+               "missing/new.org"
+               "../outside.org"))
+      (should
+       (fangcun--new-file-name-error name personal-root)))))
+
+(ert-deftest fangcun-creates-an-unsaved-file-node ()
+  (fangcun-test-with-notes
+    (fangcun-db-sync)
+    (let ((origin (find-file-noselect personal-file))
+          (target (expand-file-name "c-cpp.org" personal-root))
+          (org-id-locations nil)
+          (org-startup-folded 'showeverything)
+          prompted-initial)
+      (switch-to-buffer origin)
+      (cl-letf
+          (((symbol-function 'read-string)
+            (lambda (prompt &optional initial &rest _arguments)
+              (if (string-prefix-p "Node title" prompt)
+                  "C/C++"
+                (setq prompted-initial initial)
+                "c-cpp.org")))
+           ((symbol-function 'completing-read)
+            (lambda (&rest _arguments)
+              (ert-fail "Current yiyu should be selected automatically")))
+           ((symbol-function 'org-id-new)
+            (lambda (&optional _prefix) "created-node"))
+           ((symbol-function 'org-id-locations-load)
+            (lambda ()
+              (ert-fail "Creating a node should not load Org ID state"))))
+        (should (equal (fangcun-file-node-create) "created-node")))
+      (should (equal prompted-initial "C/C++.org"))
+      (should (equal (buffer-file-name) target))
+      (should (buffer-modified-p))
+      (should-not (file-exists-p target))
+      (goto-char (point-min))
+      (should (equal (org-id-get) "created-node"))
+      (re-search-forward "^:ID:")
+      (should-not (org-invisible-p (match-beginning 0)))
+      (should
+       (equal (cdr (assoc "TITLE" (org-collect-keywords '("title"))))
+              '("C/C++")))
+      (save-buffer)
+      (let ((node
+             (fangcun-test--node
+              "created-node" (fangcun-node-list))))
+        (should node)
+        (should (equal (fangcun-node-title node) "C/C++"))
+        (should (equal (fangcun-node-file node) "c-cpp.org"))))))
+
+(ert-deftest fangcun-create-selects-yiyu-and-reprompts-invalid-name ()
+  (fangcun-test-with-notes
+    (let ((target (expand-file-name "status.org" work-root))
+          (answers '("status.txt" "status.org"))
+          (org-id-locations nil)
+          prompts initials created-buffer)
+      (with-temp-buffer
+        (cl-letf
+            (((symbol-function 'completing-read)
+              (lambda (_prompt collection &rest _arguments)
+                (should (assoc "Work" collection))
+                "Work"))
+             ((symbol-function 'read-string)
+              (lambda (prompt &optional initial &rest _arguments)
+                (if (string-prefix-p "Node title" prompt)
+                    "Status"
+                  (push prompt prompts)
+                  (push initial initials)
+                  (pop answers))))
+             ((symbol-function 'org-id-new)
+              (lambda (&optional _prefix) "work-status"))
+             ((symbol-function 'org-id-locations-load)
+              (lambda ()
+                (ert-fail "Creating a node should not load Org ID state"))))
+          (should (equal (fangcun-file-node-create) "work-status"))
+          (setq created-buffer (current-buffer))))
+      (should-not answers)
+      (should (equal (nreverse initials)
+                     '("Status.org" "status.txt")))
+      (should
+       (string-match-p "must end with \\.org"
+                       (car prompts)))
+      (should
+       (equal (buffer-file-name created-buffer) target))
+      (should-not (file-exists-p target)))))
+
+(ert-deftest fangcun-resolves-org-ids-through-its-database ()
+  (should (advice-member-p #'fangcun--id-find 'org-id-find))
+  (fangcun-test-with-notes
+    (fangcun-db-sync)
+    (let ((org-id-locations nil))
+      (cl-letf
+          (((symbol-function 'org-id-locations-load)
+            (lambda ()
+              (ert-fail "Fangcun IDs should not load Org ID state"))))
+        (let ((location (org-id-find "theorem")))
+          (should (file-equal-p (car location) personal-file))
+          (with-current-buffer (find-file-noselect personal-file)
+            (goto-char (cdr location))
+            (should (equal (org-id-get) "theorem"))))
+        (let ((marker (org-id-find "theorem" t)))
+          (unwind-protect
+              (progn
+                (should (markerp marker))
+                (should
+                 (file-equal-p
+                  (buffer-file-name (marker-buffer marker))
+                  personal-file))
+                (with-current-buffer (marker-buffer marker)
+                  (goto-char marker)
+                  (should (equal (org-id-get) "theorem"))))
+            (move-marker marker nil)))))))
+
+(ert-deftest fangcun-lets-org-resolve-ids-outside-its-database ()
+  (fangcun-test-with-notes
+    (let ((outside-file (expand-file-name "outside.org" root))
+          (org-id-locations (make-hash-table :test #'equal)))
+      (fangcun-test--write-file
+       outside-file
+       ":PROPERTIES:\n:ID: outside\n:END:\n")
+      (puthash "outside" outside-file org-id-locations)
+      (should-not (file-exists-p fangcun-database-file))
+      (let ((location (org-id-find "outside")))
+        (should (file-equal-p (car location) outside-file)))
+      (should-not (file-exists-p fangcun-database-file)))))
+
 (ert-deftest fangcun-creates-schema-only-for-a-new-database ()
   (let* ((root (make-temp-file "fangcun-database-test-" t))
          (fangcun-database-file

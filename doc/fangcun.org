@@ -10,6 +10,16 @@ yiyu with an identifier, display name, and root directory:
         (work :name "Work" :root "~/notes/work")))
 #+end_src
 
+=M-x fangcun-file-node-create= opens a new unsaved Org file with a file-level
+ID.  It uses the current file's yiyu and directory when possible, otherwise it
+selects a configured yiyu.  An optional title is used verbatim as the suggested
+file name, which is always shown for confirmation.
+
+The file name is checked for characters and reserved names that cannot be shared
+across the supported platforms.  Invalid input remains in the prompt for
+editing; Fangcun does not rewrite it.  The name must end with =.org= and must
+not already exist in the selected directory.
+
 =M-x fangcun-db-sync= rebuilds the database from all =.org= files below the
 configured yiyu roots.  A file-level =ID= creates a file node.  A heading =ID=
 creates a heading node.  File nodes use =#+title= when present and otherwise
@@ -28,6 +38,10 @@ moves to the matching Org ID.
 
 =M-x fangcun-node-insert= uses the same completion to insert an =id:= link at
 point.  The selected node's title becomes the link description.
+
+Following an ordinary Org =id:= link resolves indexed Fangcun nodes through
+the Fangcun database.  IDs not stored by Fangcun continue through Org's normal
+lookup.
 
 =M-x fangcun-backlink-find= completes over nodes linking to the node at point.
 Each source node appears once.  Selecting one opens its first indexed link to

@@ -3,6 +3,7 @@
 ;; SPDX-License-Identifier: MIT
 
 (require 'cl-lib)
+(require 'yunge-state)
 (require 'org)
 (require 'org-element)
 (require 'org-id)
@@ -10,7 +11,6 @@
 (require 'sqlite)
 (require 'subr-x)
 (require 'yunge-jump-history)
-(require 'yunge-state)
 
 (defgroup fangcun nil
   "Org-based personal knowledge management."
@@ -94,6 +94,69 @@ Each entry has the form (ID :name NAME :root ROOT)."
      (file-in-directory-p file (fangcun-yiyu-root yiyu)))
    (fangcun--configured-yiyus)))
 
+(defun fangcun--portable-file-name-error (name)
+  "Return why file NAME is not portable, or nil."
+  (let ((invalid
+         (delete-dups
+          (seq-filter
+           (lambda (character)
+             (or (< character 32)
+                 (memq character
+                       '(?< ?> ?: ?\" ?/ ?\\ ?| ?? ?*))))
+           (string-to-list name)))))
+    (cond
+     ((member name '("" "." ".."))
+      (format "%S is not a file name" name))
+     (invalid
+      (format
+       "File name %S contains non-portable characters: %s"
+       name
+       (mapconcat
+        (lambda (character)
+          (if (< character 32)
+              (format "U+%04X" character)
+            (char-to-string character)))
+        invalid ", ")))
+     ((or (string-prefix-p " " name)
+          (string-suffix-p " " name)
+          (string-suffix-p "." name))
+      (format
+       "File name %S starts or ends with a non-portable character"
+       name))
+     ((string-match-p
+       (concat
+        "\\`\\(?:con\\|prn\\|aux\\|nul\\|"
+        "com[1-9]\\|lpt[1-9]\\)"
+        "\\(?:\\..*\\)?\\'")
+       (downcase name))
+      (format "File name %S is reserved on Windows" name)))))
+
+(defun fangcun--new-file-name-error (name directory)
+  "Return why NAME cannot name a new file in DIRECTORY, or nil."
+  (let ((file (expand-file-name name directory)))
+    (cond
+     ((fangcun--portable-file-name-error name))
+     ((not (string-suffix-p ".org" name))
+      "Fangcun file names must end with .org")
+     ((not (file-directory-p directory))
+      (format "Fangcun directory does not exist: %s" directory))
+     ((file-exists-p file)
+      (format "File already exists: %s" file))
+     ((find-buffer-visiting file)
+      (format "A buffer is already visiting: %s" file))
+     ((let* ((name (file-name-nondirectory file))
+             (conflict
+              (seq-find
+               (lambda (entry)
+                 (and (not (equal entry name))
+                      (string-equal (downcase entry)
+                                    (downcase name))))
+               (directory-files directory nil nil t))))
+        (when conflict
+          (format
+           "File name differs only by case from existing %S"
+           conflict)))))))
+
 (defun fangcun--call-with-database (function)
   "Call FUNCTION with an open, initialized Fangcun database."
   (unless (sqlite-available-p)
@@ -122,6 +185,8 @@ Each entry has the form (ID :name NAME :root ROOT)."
     "id TEXT PRIMARY KEY, "
     "name TEXT NOT NULL, "
     "root TEXT NOT NULL)"))
+  ;; The database resolves an ID to its file.  Org searches that file for the
+  ;; entry, avoiding byte positions that become stale when a buffer changes.
   (sqlite-execute
    database
    (concat
@@ -488,6 +553,32 @@ When NO-MESSAGE is non-nil, do not report the indexed counts."
         "ORDER BY n.title COLLATE NOCASE, y.name COLLATE NOCASE, "
         "n.file, n.id"))))))
 
+(defun fangcun--id-find (id &optional markerp)
+  "Return the Fangcun location of ID, or nil to let Org continue.
+When MARKERP is non-nil, return the location as a marker."
+  (setq id
+        (cond
+         ((symbolp id) (symbol-name id))
+         ((numberp id) (number-to-string id))
+         (t id)))
+  (when (file-exists-p fangcun-database-file)
+    (when-let* ((row
+                 (car
+                  (fangcun--call-with-database
+                   (lambda (database)
+                     (sqlite-select
+                      database
+                      (concat
+                       "SELECT y.root, n.file "
+                       "FROM nodes AS n "
+                       "JOIN yiyus AS y ON y.id = n.yiyu_id "
+                       "WHERE n.id = ?")
+                      (vector id)))))))
+      (org-id-find-id-in-file
+       id (expand-file-name (elt row 1) (elt row 0)) markerp))))
+
+(advice-add 'org-id-find :before-until #'fangcun--id-find)
+
 (defun fangcun--backlink-from-row (row)
   "Return a Fangcun backlink represented by SQLite ROW."
   (make-fangcun-backlink
@@ -590,6 +681,70 @@ When one source contains several links, retain its first occurrence."
                   (fangcun-node-id node)))
     (org-fold-show-context 'link-search)
     node))
+
+(defun fangcun--read-new-file (title directory)
+  "Read a new file name suggested by TITLE in DIRECTORY."
+  (let ((initial
+         (unless (string-empty-p title)
+           (concat title ".org")))
+        (prompt "New Fangcun file name: ")
+        name error)
+    (while
+        (progn
+          (setq name (read-string prompt initial)
+                error
+                (fangcun--new-file-name-error name directory))
+          (when error
+            (setq prompt
+                  (format "New Fangcun file name [%s]: " error)
+                  initial name))
+          error))
+    (expand-file-name name directory)))
+
+;;;###autoload
+(defun fangcun-file-node-create ()
+  "Visit a new unsaved Org file with a Fangcun file node."
+  (interactive)
+  (let* ((yiyus (fangcun--configured-yiyus))
+         (current-yiyu
+          (and buffer-file-name
+               (fangcun--yiyu-containing-file buffer-file-name))))
+    (unless yiyus
+      (user-error "Configure `fangcun-yiyus' before creating a node"))
+    (let* ((yiyu
+            (or current-yiyu
+                (if (null (cdr yiyus))
+                    (car yiyus)
+                  (let* ((candidates
+                          (mapcar
+                           (lambda (entry)
+                             (cons (fangcun-yiyu-name entry) entry))
+                           yiyus))
+                         (choice
+                          (completing-read
+                           "Fangcun yiyu: " candidates nil t)))
+                    (cdr (assoc choice candidates))))))
+           (root (fangcun-yiyu-root yiyu))
+           (directory
+            (if current-yiyu
+                (file-name-directory buffer-file-name)
+              root)))
+      (unless (file-directory-p root)
+        (user-error "Fangcun yiyu does not exist: %s" root))
+      (let* ((title (read-string "Node title (empty to omit): "))
+             (file
+              (fangcun--read-new-file title directory)))
+        (find-file file)
+        (goto-char (point-min))
+        (unless (string-empty-p title)
+          (insert "#+title: " title "\n"))
+        (insert "\n")
+        (goto-char (point-min))
+        (let ((id (org-id-new)))
+          (org-entry-put (point) "ID" id)
+          (org-cycle-set-startup-visibility)
+          (goto-char (point-max))
+          id)))))
 
 ;;;###autoload
 (defun fangcun-node-find ()
