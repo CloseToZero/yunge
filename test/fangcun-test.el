@@ -72,6 +72,18 @@
      (equal (fangcun-node-id node) id))
    nodes))
 
+(ert-deftest fangcun-database-file-requires-an-absolute-path ()
+  (let ((symbol (make-symbol "fangcun-test-database-file"))
+        (file
+         (expand-file-name "fangcun.sqlite" temporary-file-directory)))
+    (should-error
+     (fangcun--set-database-file symbol "fangcun.sqlite"))
+    (fangcun--set-database-file symbol file)
+    (should (equal (default-value symbol) file))
+    (should
+     (eq (get 'fangcun-database-file 'custom-set)
+         #'fangcun--set-database-file))))
+
 (ert-deftest fangcun-creates-schema-only-for-a-new-database ()
   (let* ((root (make-temp-file "fangcun-database-test-" t))
          (fangcun-database-file
@@ -254,6 +266,79 @@
     (should
      (equal (mapcar #'fangcun-node-id (fangcun-node-list))
             '("work-file")))))
+
+(ert-deftest fangcun-updates-one-file-and-its-outgoing-links ()
+  (fangcun-test-with-notes
+    (fangcun-test--write-file
+     work-file
+     (concat
+      ":PROPERTIES:\n"
+      ":ID: work-file\n"
+      ":END:\n"
+      "[[id:theorem][Incoming link]]\n"))
+    (fangcun-db-sync)
+    (fangcun-test--write-file
+     personal-file
+     (concat
+      ":PROPERTIES:\n"
+      ":ID: personal-file\n"
+      ":END:\n"
+      "#+title: Updated Personal Notes\n\n"
+      "* Replacement\n"
+      ":PROPERTIES:\n"
+      ":ID: replacement\n"
+      ":END:\n"
+      "[[id:work-file][New outgoing link]]\n"))
+    (should
+     (equal (fangcun-db-update-file personal-file)
+            '(:nodes 2 :links 1)))
+    (let ((nodes (fangcun-node-list)))
+      (should
+       (equal
+        (sort (mapcar #'fangcun-node-id nodes) #'string-lessp)
+        '("personal-file" "replacement" "work-file")))
+      (should
+       (equal
+        (fangcun-node-title
+         (fangcun-test--node "personal-file" nodes))
+        "Updated Personal Notes")))
+    (fangcun--call-with-database
+     (lambda (database)
+       (should
+        (equal
+         (mapcar
+          (lambda (row)
+            (list (elt row 0) (elt row 1)))
+          (sqlite-select
+           database
+           (concat
+            "SELECT source_id, target_id FROM links "
+            "ORDER BY source_id, target_id")))
+         '(("replacement" "work-file")
+           ("work-file" "theorem"))))))))
+
+(ert-deftest fangcun-update-requires-a-saved-buffer ()
+  (fangcun-test-with-notes
+    (fangcun-db-sync)
+    (let ((buffer (find-file-noselect personal-file)))
+      (unwind-protect
+          (progn
+            (with-current-buffer buffer
+              (goto-char (point-max))
+              (insert "Unsaved"))
+            (should-error
+             (fangcun-db-update-file personal-file)
+             :type 'user-error)
+            (should (= (length (fangcun-node-list)) 4)))
+        (with-current-buffer buffer
+          (set-buffer-modified-p nil))))))
+
+(ert-deftest fangcun-update-requires-an-initial-full-sync ()
+  (fangcun-test-with-notes
+    (should-error
+     (fangcun-db-update-file personal-file)
+     :type 'user-error)
+    (should-not (file-exists-p fangcun-database-file))))
 
 (ert-deftest fangcun-syncs-id-link-occurrences-and-owners ()
   (fangcun-test-with-notes

@@ -16,6 +16,12 @@
   "Org-based personal knowledge management."
   :group 'org)
 
+(defun fangcun--set-database-file (symbol value)
+  "Set SYMBOL to the normalized absolute file name VALUE."
+  (unless (and (stringp value) (file-name-absolute-p value))
+    (error "%s must be an absolute file name: %S" symbol value))
+  (set-default symbol (expand-file-name value)))
+
 (defcustom fangcun-yiyus nil
   "Org note roots indexed by Fangcun.
 Each entry has the form (ID :name NAME :root ROOT)."
@@ -30,8 +36,9 @@ Each entry has the form (ID :name NAME :root ROOT)."
 
 (defcustom fangcun-database-file
   (expand-file-name "fangcun.sqlite" yunge-var-directory)
-  "SQLite database used by Fangcun."
+  "Absolute file name of the SQLite database used by Fangcun."
   :type 'file
+  :set #'fangcun--set-database-file
   :group 'fangcun)
 
 (cl-defstruct fangcun-yiyu
@@ -75,11 +82,18 @@ Each entry has the form (ID :name NAME :root ROOT)."
         :root (file-name-as-directory (expand-file-name root)))))
    fangcun-yiyus))
 
+(defun fangcun--yiyu-containing-file (file)
+  "Return the configured yiyu containing FILE, or nil."
+  (seq-find
+   (lambda (yiyu)
+     (file-in-directory-p file (fangcun-yiyu-root yiyu)))
+   (fangcun--configured-yiyus)))
+
 (defun fangcun--call-with-database (function)
   "Call FUNCTION with an open, initialized Fangcun database."
   (unless (sqlite-available-p)
     (user-error "This Emacs was built without SQLite support"))
-  (let* ((file (expand-file-name fangcun-database-file))
+  (let* ((file fangcun-database-file)
          (directory (file-name-directory file))
          (new-database-p (not (file-exists-p file)))
          database)
@@ -308,6 +322,16 @@ RELATIVE-FILE names BUFFER's file relative to YIYU's root."
     (fangcun-link-target-id link)
     (fangcun-link-position link))))
 
+(defun fangcun--insert-file-data (database data)
+  "Insert parsed Fangcun file DATA into DATABASE and return its counts."
+  (let ((nodes (plist-get data :nodes))
+        (links (plist-get data :links)))
+    (dolist (node nodes)
+      (fangcun--insert-node database node))
+    (dolist (link links)
+      (fangcun--insert-link database link))
+    (list :nodes (length nodes) :links (length links))))
+
 ;;;###autoload
 (defun fangcun-db-sync ()
   "Rebuild the Fangcun database from configured yiyu roots."
@@ -315,7 +339,7 @@ RELATIVE-FILE names BUFFER's file relative to YIYU's root."
   (let ((yiyus (fangcun--configured-yiyus)))
     (unless yiyus
       (user-error "Configure `fangcun-yiyus' before syncing"))
-    (let ((database-file (expand-file-name fangcun-database-file)))
+    (let ((database-file fangcun-database-file))
       (when (file-exists-p database-file)
         (delete-file database-file)))
     (let ((result
@@ -336,13 +360,14 @@ RELATIVE-FILE names BUFFER's file relative to YIYU's root."
                              (directory-files-recursively
                               (fangcun-yiyu-root yiyu) "\\.org\\'"))
                       (cl-incf file-count)
-                      (let ((data (fangcun--parse-file yiyu file)))
-                        (dolist (node (plist-get data :nodes))
-                          (fangcun--insert-node database node)
-                          (cl-incf node-count))
-                        (dolist (link (plist-get data :links))
-                          (fangcun--insert-link database link)
-                          (cl-incf link-count)))))
+                      (let ((counts
+                             (fangcun--insert-file-data
+                              database
+                              (fangcun--parse-file yiyu file))))
+                        (cl-incf node-count
+                                 (plist-get counts :nodes))
+                        (cl-incf link-count
+                                 (plist-get counts :links)))))
                   (list :yiyus (length yiyus)
                         :files file-count
                         :nodes node-count
@@ -353,6 +378,65 @@ RELATIVE-FILE names BUFFER's file relative to YIYU's root."
        (plist-get result :links)
        (plist-get result :files)
        (plist-get result :yiyus))
+      result)))
+
+;;;###autoload
+(defun fangcun-db-update-file (file)
+  "Replace database entries for saved Org FILE."
+  (interactive
+   (list
+    (or buffer-file-name
+        (user-error "The current buffer is not visiting a file"))))
+  (setq file (expand-file-name file))
+  (unless (file-regular-p file)
+    (user-error "Fangcun file does not exist: %s" file))
+  (unless (string-match-p "\\.org\\'" file)
+    (user-error "Fangcun only indexes Org files: %s" file))
+  (when-let* ((buffer (find-buffer-visiting file)))
+    (when (buffer-modified-p buffer)
+      (user-error "Save the Fangcun file before updating it")))
+  (let ((yiyu (or (fangcun--yiyu-containing-file file)
+                   (user-error
+                    "File is outside the configured Fangcun yiyus: %s"
+                    file))))
+    (unless (file-exists-p fangcun-database-file)
+      (user-error "Run fangcun-db-sync before updating individual files"))
+    (let* ((relative-file
+            (file-relative-name file (fangcun-yiyu-root yiyu)))
+           (data (fangcun--parse-file yiyu file))
+           (result
+            (fangcun--call-with-database
+             (lambda (database)
+               (let ((row
+                      (car
+                       (sqlite-select
+                        database
+                        (concat
+                         "SELECT name, root FROM yiyus "
+                         "WHERE id = ?")
+                        (vector (fangcun-yiyu-id yiyu))))))
+                 (unless
+                     (and row
+                          (equal (elt row 0)
+                                 (fangcun-yiyu-name yiyu))
+                          (file-equal-p
+                           (elt row 1) (fangcun-yiyu-root yiyu)))
+                   (user-error
+                    (concat
+                     "Fangcun yiyu configuration changed; "
+                     "run fangcun-db-sync"))))
+               (with-sqlite-transaction database
+                 (sqlite-execute
+                  database
+                  (concat
+                   "DELETE FROM nodes "
+                   "WHERE yiyu_id = ? AND file = ?")
+                  (vector (fangcun-yiyu-id yiyu) relative-file))
+                 (fangcun--insert-file-data database data))))))
+      (message "Fangcun indexed %d nodes and %d links from %s"
+               (plist-get result :nodes)
+               (plist-get result :links)
+               (abbreviate-file-name file))
       result)))
 
 (defun fangcun--node-from-row (row)

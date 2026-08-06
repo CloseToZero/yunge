@@ -17,6 +17,9 @@ use their relative file name without the extension.  A heading without text
 uses its ID as its display title.  The synchronization also indexes =id:=
 links owned by the nearest enclosing node.
 
+After a full sync, =M-x fangcun-db-update-file= replaces the indexed nodes and
+links for the current saved Org file without rebuilding the other yiyu files.
+
 =M-x fangcun-node-find= completes over the indexed nodes.  Each candidate
 shows its owning yiyu and relative file.  Selecting one opens its file and
 moves to the matching Org ID.
