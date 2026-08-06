@@ -54,6 +54,10 @@
 ;; Collapse every minor-mode lighter; symbols after `not' remain visible.
 (setq mode-line-collapse-minor-modes '(not))
 
+(setq mode-line-position-column-format '(" C%C")
+      mode-line-position-column-line-format '(" (%l,%C)"))
+(column-number-mode 1)
+
 (setq inhibit-startup-screen t
       inhibit-startup-message t
       initial-scratch-message nil
