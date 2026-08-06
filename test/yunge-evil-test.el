@@ -7,8 +7,10 @@
 (declare-function evil-ex-make-search-pattern "evil-search" (regexp))
 (declare-function evil-ex-pattern-regex "evil-search" (pattern))
 (declare-function evil-force-normal-state "evil-states" ())
+(declare-function evil-emacs-state "evil-states")
 (declare-function evil-insert-state "evil-states")
 (declare-function evil-normal-state "evil-states")
+(declare-function evil-replace-state "evil-states")
 (declare-function evil-visual-state "evil-states")
 
 (defvar evil-ex-search-direction)
@@ -197,6 +199,7 @@
    '(normal visual) yunge-test-space-mode-map
    '(("SPC" ignore nil)))
 
+  (keymap-set yunge-leader-map "x" #'ignore)
   (keymap-set yunge-leader-map "z" #'forward-char)
   (unwind-protect
       (with-temp-buffer
@@ -227,9 +230,25 @@
         (yunge-test-key "SPC z" 'forward-char)
         (yunge-test-key "SPC m p" 'backward-char)
 
+        (dolist (state '((evil-insert-state . insert)
+                         (evil-replace-state . replace)
+                         (evil-emacs-state . emacs)))
+          (funcall (car state))
+          (should (eq evil-state (cdr state)))
+          (yunge-test-key "M-m z" 'forward-char)
+          (yunge-test-key "M-m m p" 'backward-char))
+
+        (evil-insert-state)
+        (insert "text")
+        (let ((position (point)))
+          (call-interactively (key-binding (kbd "M-m x")))
+          (should (eq evil-state 'insert))
+          (should (= (point) position)))
+
         (let ((overriding-terminal-local-map
                (define-keymap "SPC" #'forward-line)))
           (yunge-test-key "SPC" 'forward-line)))
+    (keymap-unset yunge-leader-map "x")
     (keymap-unset yunge-leader-map "z"))
 
   (should (eq (lookup-key yunge-buffer-map (kbd "b"))

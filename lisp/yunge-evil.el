@@ -17,6 +17,7 @@
 (declare-function evil-exit-visual-state "evil-states" (&optional later buffer))
 (declare-function evil-make-intercept-map "evil-core")
 (declare-function evil-push-search-history "evil-search" (regexp forward))
+(declare-function evil-state-auxiliary-keymaps "evil-core" (state))
 
 (defvar evil-ex-last-was-search)
 (defvar evil-ex-search-count)
@@ -164,10 +165,19 @@
 (yunge-key-define yunge-file-map yunge-file-bindings)
 (yunge-key-define yunge-quit-map yunge-quit-bindings)
 
+(defun yunge-evil--normal-localleader ()
+  "Return the current mode's Normal-state local leader, or nil."
+  (catch 'binding
+    (dolist (entry (evil-state-auxiliary-keymaps 'normal))
+      (let ((binding (lookup-key (cdr entry) [localleader])))
+        (when (and binding (not (numberp binding)))
+          (throw 'binding binding))))))
+
 (defun yunge-evil--localleader-binding (_binding)
   "Return the current mode's labelled local leader binding."
   (cons "mode"
         (or (key-binding [localleader])
+            (yunge-evil--normal-localleader)
             yunge-evil--empty-localleader-map)))
 
 (keymap-set
@@ -185,14 +195,20 @@
 (defconst yunge-evil-leader-bindings
   `(("SPC" ,yunge-leader-map nil)))
 
+(defconst yunge-evil-alternate-leader-bindings
+  `(("M-m" ,yunge-leader-map nil)))
+
 (defun yunge-evil--setup-leader ()
   "Set up the leader after Evil has loaded."
   (yunge-key-evil-define '(normal visual)
                          yunge-leader-mode-map
                          yunge-evil-leader-bindings)
-  ;; Mode-specific Evil maps must not replace the global leader.
-  (evil-make-intercept-map yunge-leader-mode-map 'normal t)
-  (evil-make-intercept-map yunge-leader-mode-map 'visual t)
+  (yunge-key-evil-define '(insert replace emacs)
+                         yunge-leader-mode-map
+                         yunge-evil-alternate-leader-bindings)
+  ;; Mode-specific Evil maps must not replace either global leader.
+  (dolist (state '(normal visual insert replace emacs))
+    (evil-make-intercept-map yunge-leader-mode-map state t))
   (yunge-leader-mode 1))
 
 (with-eval-after-load 'evil
