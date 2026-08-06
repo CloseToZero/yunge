@@ -15,6 +15,7 @@
 (declare-function evil-ex-search-forward "evil-commands" (count))
 (declare-function evil-ex-search-next "evil-commands" (count))
 (declare-function evil-exit-visual-state "evil-states" (&optional later buffer))
+(declare-function evil-eolp "evil-common" ())
 (declare-function evil-make-intercept-map "evil-core")
 (declare-function evil-push-search-history "evil-search" (regexp forward))
 (declare-function evil-state-auxiliary-keymaps "evil-core" (state))
@@ -26,13 +27,36 @@
 (defvar evil-ex-search-offset)
 (defvar evil-ex-search-pattern)
 (defvar evil-ex-search-vim-style-regexp)
+(defvar evil-local-mode)
 (defvar evil-motion-state-map)
+(defvar evil-state)
 (defvar evil-visual-selection)
 (defvar help-map)
 (defvar project-prefix-map)
 
 (defvar yunge-evil--pinyin-search nil
   "Non-nil while an Evil search command should expand Pinyin.")
+
+(defun yunge-evil-call-after-normal-state-eol (function &rest arguments)
+  "Call FUNCTION with point after Evil's Normal-state EOL character.
+Restore point if FUNCTION signals an error or quit."
+  (let* ((move-after-eol
+          (and (bound-and-true-p evil-local-mode)
+               (eq evil-state 'normal)
+               (evil-eolp)
+               (not (eolp))))
+         (origin (and move-after-eol (copy-marker (point)))))
+    (when move-after-eol
+      (forward-char))
+    (condition-case error-data
+        (prog1 (apply function arguments)
+          (when origin
+            (set-marker origin nil)))
+      ((error quit)
+       (when origin
+         (goto-char origin)
+         (set-marker origin nil))
+       (signal (car error-data) (cdr error-data))))))
 
 (defun yunge-evil--nohighlight-after-force-normal-state (&rest _arguments)
   "Clear highlights after an interactive `evil-force-normal-state'."

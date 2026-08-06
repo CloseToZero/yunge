@@ -11,6 +11,9 @@
     ("i" fangcun-node-insert "insert node link")
     ("n" fangcun-file-node-create "new file node")))
 
+(advice-add 'fangcun-node-insert :around
+            #'yunge-evil-call-after-normal-state-eol)
+
 (yunge-key-define yunge-note-map yunge-fangcun-note-bindings)
 
 (with-eval-after-load 'which-key

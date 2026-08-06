@@ -812,28 +812,6 @@
            (equal (buffer-string)
                   "[[id:theorem][A theorem]]")))))))
 
-(ert-deftest fangcun-inserts-after-the-normal-state-eol-character ()
-  (fangcun-test-with-notes
-    (fangcun-db-sync)
-    (with-temp-buffer
-      (org-mode)
-      (insert "Theorem:")
-      (backward-char)
-      (cl-progv '(evil-local-mode evil-state) '(t normal)
-        (cl-letf
-            (((symbol-function 'evil-eolp) (lambda () t))
-             ((symbol-function 'completing-read)
-              (lambda (_prompt collection &rest _arguments)
-                (car
-                 (seq-find
-                  (lambda (item)
-                    (string-prefix-p "A theorem" (car item)))
-                  collection)))))
-          (fangcun-node-insert)))
-      (should
-       (equal (buffer-string)
-              "Theorem:[[id:theorem][A theorem]]")))))
-
 (ert-deftest fangcun-insert-requires-org-mode ()
   (with-temp-buffer
     (should-error (fangcun-node-insert) :type 'user-error)))

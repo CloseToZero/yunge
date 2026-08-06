@@ -25,4 +25,26 @@
      ("i" nil "insert node link")
      ("n" nil "new file node"))))
 
+(ert-deftest yunge-fangcun-inserts-after-the-normal-state-eol-character ()
+  (yunge-test-enable-evil)
+  (require 'yunge-fangcun)
+  (require 'fangcun)
+
+  (should
+   (advice-member-p #'yunge-evil-call-after-normal-state-eol
+                    'fangcun-node-insert))
+  (with-temp-buffer
+    (org-mode)
+    (insert "Theorem:")
+    (backward-char)
+    (evil-normal-state)
+    (cl-letf (((symbol-function 'fangcun--read-node)
+               (lambda ()
+                 (make-fangcun-node
+                  :id "theorem" :title "A theorem"))))
+      (fangcun-node-insert))
+    (should
+     (equal (buffer-string)
+            "Theorem:[[id:theorem][A theorem]]"))))
+
 ;;; yunge-fangcun-test.el ends here
