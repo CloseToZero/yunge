@@ -657,6 +657,12 @@
           (fangcun-node-id
            (fangcun-backlink-node (car backlinks)))
           "parent")))
+      (let ((occurrences
+             (fangcun-backlink-occurrence-list "work-file")))
+        (should (= (length occurrences) 2))
+        (should
+         (< (fangcun-backlink-position (car occurrences))
+            (fangcun-backlink-position (cadr occurrences)))))
       (find-file work-file)
       (goto-char (point-max))
       (cl-letf
@@ -674,8 +680,70 @@
            (looking-at-p
             "\\[\\[id:work-file::\\*Status\\]\\[First reference\\]\\]")))))))
 
+(ert-deftest fangcun-displays-backlink-occurrences-with-previews ()
+  (fangcun-test-with-notes
+    (let ((source-file
+           (expand-file-name "references.org" personal-root))
+          (buffer (get-buffer-create fangcun-backlinks-buffer-name)))
+      (unwind-protect
+          (progn
+            (fangcun-test--write-file
+             source-file
+             (concat
+              ":PROPERTIES:\n"
+              ":ID: source-file\n"
+              ":END:\n"
+              "#+title: Source file\n\n"
+              "* Parent\n"
+              ":PROPERTIES:\n"
+              ":ID: parent\n"
+              ":END:\n"
+              "[[id:work-file::*Status][First reference]]\n"
+              "[[id:work-file][Second reference]]\n"))
+            (fangcun-db-sync)
+            (find-file work-file)
+            (goto-char (point-max))
+            (save-window-excursion
+              (fangcun-backlinks)
+              (should (eq major-mode 'fangcun-backlinks-mode))
+              (should (equal fangcun-backlinks-target-id "work-file"))
+              (should (eq revert-buffer-function
+                          #'fangcun-backlinks-refresh))
+              (revert-buffer)
+              (should
+               (= (how-many "^Parent  Personal — references.org$"
+                            (point-min) (point-max))
+                  1))
+              (let ((first (next-button (point-min))))
+                (should first)
+                (let ((second (next-button (button-end first))))
+                  (should second)
+                  (should-not (next-button (button-end second)))
+                  (should
+                   (equal (button-label first) "First reference"))
+                  (should
+                   (equal (button-label second) "Second reference"))
+                  (goto-char (button-start second))
+                  (let ((origin (point)))
+                    (set-window-parameter nil 'yunge-jump-history nil)
+                    (call-interactively #'fangcun-backlink-visit)
+                    (should (equal (buffer-file-name) source-file))
+                    (should
+                     (looking-at-p
+                      "\\[\\[id:work-file\\]\\[Second reference\\]\\]"))
+                    (yunge-jump-history-backward)
+                    (should (eq (current-buffer) buffer))
+                    (should (= (point) origin))
+                    (yunge-jump-history-forward)
+                    (should (equal (buffer-file-name) source-file))
+                    (set-window-parameter
+                     nil 'yunge-jump-history nil))))))
+        (when (buffer-live-p buffer)
+          (kill-buffer buffer))
+        (set-window-parameter nil 'yunge-jump-history nil)))))
+
 (ert-deftest fangcun-jumps-participate-in-window-history ()
-  (dolist (command '(fangcun-node-find fangcun-backlink-find))
+  (dolist (command '(fangcun-node-find fangcun-backlink-visit))
     (should
      (advice-member-p
       #'yunge-jump-history--track-navigation command)))

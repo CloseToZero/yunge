@@ -17,13 +17,39 @@
    '(("SPC n b" . fangcun-backlink-find)
      ("SPC n f" . fangcun-node-find)
      ("SPC n i" . fangcun-node-insert)
-     ("SPC n n" . fangcun-file-node-create)))
+     ("SPC n n" . fangcun-file-node-create)
+     ("SPC n v" . fangcun-backlinks)))
   (yunge-test-which-key-prefix-bindings
    'fundamental-mode "SPC n"
    '(("b" nil "find backlink")
      ("f" nil "find node")
      ("i" nil "insert node link")
-     ("n" nil "new file node"))))
+     ("n" nil "new file node")
+     ("v" nil "view backlinks"))))
+
+(ert-deftest yunge-fangcun-integrates-the-backlinks-buffer-with-evil ()
+  (yunge-test-enable-evil)
+  (require 'yunge-fangcun)
+  (require 'fangcun)
+  (require 'which-key)
+
+  (yunge-test-evil-normal-keys
+   'fangcun-backlinks-mode
+   '(("RET" . fangcun-backlink-visit)
+     ("C-j" . forward-button)
+     ("C-k" . backward-button)
+     ("q" . quit-window)
+     ("gr" . revert-buffer)
+     ("g]" . forward-button)
+     ("g[" . backward-button)
+     ("<tab>" . forward-button)
+     ("S-TAB" . backward-button)))
+  (with-temp-buffer
+    (fangcun-backlinks-mode)
+    (yunge-test-which-key-prefix
+     "g" '(("]" nil "next button")
+           ("[" nil "previous button")
+           ("r" nil "refresh")))))
 
 (ert-deftest yunge-fangcun-inserts-after-the-normal-state-eol-character ()
   (yunge-test-enable-evil)

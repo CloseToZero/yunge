@@ -3,6 +3,7 @@
 ;; SPDX-License-Identifier: MIT
 
 (require 'cl-lib)
+(require 'button)
 (require 'yunge-state)
 (require 'org)
 (require 'org-element)
@@ -67,6 +68,19 @@ Each entry has the form (ID :name NAME :root ROOT)."
 (cl-defstruct fangcun-backlink
   node
   position)
+
+(defconst fangcun-backlinks-buffer-name "*Fangcun Backlinks*")
+
+(defvar-local fangcun-backlinks-target-id nil
+  "ID of the node shown in the current Fangcun backlinks buffer.")
+
+(defvar-keymap fangcun-backlinks-mode-map
+  :parent special-mode-map
+  "RET" #'fangcun-backlink-visit)
+
+(define-derived-mode fangcun-backlinks-mode special-mode "Fangcun Backlinks"
+  "Major mode for displaying backlinks to one Fangcun node."
+  (setq-local revert-buffer-function #'fangcun-backlinks-refresh))
 
 (defun fangcun--configured-yiyus ()
   "Return normalized entries from `fangcun-yiyus'."
@@ -554,6 +568,23 @@ When NO-MESSAGE is non-nil, do not report the indexed counts."
    :file (elt row 4)
    :title (elt row 5)))
 
+(defun fangcun-node-from-id (id)
+  "Return the Fangcun node named ID, or nil when it is not indexed."
+  (fangcun--call-with-database
+   (lambda (database)
+     (when-let* ((row
+                  (car
+                   (sqlite-select
+                    database
+                    (concat
+                     "SELECT n.id, n.yiyu_id, y.name, y.root, "
+                     "n.file, n.title "
+                     "FROM nodes AS n "
+                     "JOIN yiyus AS y ON y.id = n.yiyu_id "
+                     "WHERE n.id = ? LIMIT 1")
+                    (vector id)))))
+       (fangcun--node-from-row row)))))
+
 (defun fangcun-node-list ()
   "Return all nodes currently stored in the Fangcun database."
   (fangcun--call-with-database
@@ -623,6 +654,25 @@ When one source contains several links, retain its first occurrence."
         "n.file, n.id")
        (vector target-id))))))
 
+(defun fangcun-backlink-occurrence-list (target-id)
+  "Return every indexed backlink occurrence to TARGET-ID."
+  (fangcun--call-with-database
+   (lambda (database)
+     (mapcar
+      #'fangcun--backlink-from-row
+      (sqlite-select
+       database
+       (concat
+        "SELECT n.id, n.yiyu_id, y.name, y.root, n.file, n.title, "
+        "l.position "
+        "FROM links AS l "
+        "JOIN nodes AS n ON n.id = l.source_id "
+        "JOIN yiyus AS y ON y.id = n.yiyu_id "
+        "WHERE l.target_id = ? "
+        "ORDER BY n.title COLLATE NOCASE, y.name COLLATE NOCASE, "
+        "n.file, n.id, l.position")
+       (vector target-id))))))
+
 (defun fangcun--node-candidate (node)
   "Return a unique completion candidate for NODE."
   (let ((title (fangcun-node-title node)))
@@ -680,12 +730,15 @@ When one source contains several links, retain its first occurrence."
            (completing-read "Fangcun backlink: " candidates nil t)))
       (cdr (assoc choice candidates)))))
 
+(defun fangcun--node-absolute-file (node)
+  "Return the absolute file name containing NODE."
+  (expand-file-name
+   (fangcun-node-file node)
+   (fangcun-node-yiyu-root node)))
+
 (defun fangcun-node-visit (node)
   "Visit the Org NODE and return it."
-  (let ((file
-         (expand-file-name
-          (fangcun-node-file node)
-          (fangcun-node-yiyu-root node))))
+  (let ((file (fangcun--node-absolute-file node)))
     (unless (file-exists-p file)
       (user-error "Fangcun node file no longer exists: %s" file))
     (find-file file)
@@ -781,6 +834,22 @@ When one source contains several links, retain its first occurrence."
       (fangcun-node-title node)))
     node))
 
+(defun fangcun--backlink-at-point ()
+  "Return the Fangcun backlink represented by the button at point."
+  (when-let* ((button (button-at (point))))
+    (button-get button 'fangcun-backlink)))
+
+(defun fangcun-backlink-visit (backlink)
+  "Visit the indexed link represented by BACKLINK and return it."
+  (interactive
+   (list
+    (or (fangcun--backlink-at-point)
+        (user-error "No Fangcun backlink at point"))))
+  (fangcun-node-visit (fangcun-backlink-node backlink))
+  (goto-char (fangcun-backlink-position backlink))
+  (org-fold-show-context 'link-search)
+  backlink)
+
 ;;;###autoload
 (defun fangcun-backlink-find ()
   "Choose a backlink to the current Fangcun node and visit its link."
@@ -791,12 +860,104 @@ When one source contains several links, retain its first occurrence."
           (or (fangcun--node-id-at-point)
               (user-error "Point is not inside a Fangcun node")))
          (backlink (fangcun--read-backlink target-id)))
-    (fangcun-node-visit (fangcun-backlink-node backlink))
-    (goto-char (fangcun-backlink-position backlink))
-    (org-fold-show-context 'link-search)
-    backlink))
+    (fangcun-backlink-visit backlink)))
 
-(dolist (command '(fangcun-node-find fangcun-backlink-find))
+(defun fangcun--backlink-preview (backlink)
+  "Return a one-line preview of BACKLINK."
+  (let ((file
+         (fangcun--node-absolute-file
+          (fangcun-backlink-node backlink)))
+        (position (fangcun-backlink-position backlink)))
+    (cond
+     ((not (file-readable-p file))
+      "[Source file is unavailable]")
+     (t
+      (with-temp-buffer
+        (insert-file-contents file)
+        (if (> position (point-max))
+            "[Link position is stale; synchronize Fangcun]"
+          (goto-char position)
+          (string-trim
+           (substring-no-properties
+            (org-link-display-format
+             (buffer-substring
+              (line-beginning-position)
+              (line-end-position)))))))))))
+
+(defun fangcun--backlink-button-action (button)
+  "Visit the Fangcun backlink represented by BUTTON."
+  (fangcun-backlink-visit
+   (button-get button 'fangcun-backlink)))
+
+(define-button-type 'fangcun-backlink-button
+  'action #'fangcun--backlink-button-action
+  'face 'link
+  'follow-link t
+  'help-echo "Visit this backlink")
+
+(defun fangcun-backlinks-refresh (&optional _ignore-auto _noconfirm)
+  "Refresh the current Fangcun backlinks buffer."
+  (interactive)
+  (unless (derived-mode-p 'fangcun-backlinks-mode)
+    (user-error "This is not a Fangcun backlinks buffer"))
+  (let* ((target-id fangcun-backlinks-target-id)
+         (target
+          (or (fangcun-node-from-id target-id)
+              (user-error "Fangcun node is no longer indexed: %s"
+                          target-id)))
+         (backlinks (fangcun-backlink-occurrence-list target-id))
+         (inhibit-read-only t)
+         previous-source-id)
+    (erase-buffer)
+    (insert (propertize
+             (format "Backlinks to %s" (fangcun-node-title target))
+             'face 'bold)
+            "\n\n")
+    (if (null backlinks)
+        (insert "No backlinks.\n")
+      (dolist (backlink backlinks)
+        (let* ((source (fangcun-backlink-node backlink))
+               (source-id (fangcun-node-id source)))
+          (unless (equal source-id previous-source-id)
+            (when previous-source-id
+              (insert "\n"))
+            (insert (propertize (fangcun-node-title source) 'face 'bold)
+                    (propertize
+                     (format "  %s — %s"
+                             (fangcun-node-yiyu-name source)
+                             (fangcun-node-file source))
+                     'face 'shadow)
+                    "\n")
+            (setq previous-source-id source-id))
+          (insert "  ")
+          (insert-text-button
+           (fangcun--backlink-preview backlink)
+           :type 'fangcun-backlink-button
+           'fangcun-backlink backlink)
+          (insert "\n"))))
+    (set-buffer-modified-p nil)
+    (goto-char (point-min))
+    (when-let* ((button (next-button (point))))
+      (goto-char (button-start button)))))
+
+;;;###autoload
+(defun fangcun-backlinks ()
+  "Display every backlink occurrence to the Fangcun node at point."
+  (interactive)
+  (unless (derived-mode-p 'org-mode)
+    (user-error "Fangcun backlinks are only available in Org buffers"))
+  (let ((target-id
+         (or (fangcun--node-id-at-point)
+             (user-error "Point is not inside a Fangcun node")))
+        (buffer (get-buffer-create fangcun-backlinks-buffer-name)))
+    (with-current-buffer buffer
+      (fangcun-backlinks-mode)
+      (setq fangcun-backlinks-target-id target-id)
+      (fangcun-backlinks-refresh))
+    (pop-to-buffer buffer)
+    buffer))
+
+(dolist (command '(fangcun-node-find fangcun-backlink-visit))
   (yunge-jump-history-track-command command))
 
 (provide 'fangcun)
