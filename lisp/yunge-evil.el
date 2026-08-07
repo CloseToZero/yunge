@@ -37,6 +37,9 @@
 (defvar yunge-evil--pinyin-search nil
   "Non-nil while an Evil search command should expand Pinyin.")
 
+(defconst yunge-evil--regexp-search-prefix ":re:"
+  "Prefix that selects regexp matching during Pinyin search.")
+
 (defun yunge-evil-call-after-normal-state-eol (function &rest arguments)
   "Call FUNCTION with point after Evil's Normal-state EOL character.
 Restore point if FUNCTION signals an error or quit."
@@ -64,16 +67,20 @@ Restore point if FUNCTION signals an error or quit."
     (evil-ex-nohighlight)))
 
 (defun yunge-evil--pinyin-search-pattern (function regexp)
-  "Call FUNCTION for REGEXP, expanding it when Pinyin search is active."
-  (let ((pattern (funcall function regexp))
-        (pinyin-regexp
-         (when yunge-evil--pinyin-search
-           (yunge-pinyin-regexp regexp))))
-    (when pinyin-regexp
+  "Call FUNCTION for REGEXP using the active search syntax."
+  (cond
+   ((not yunge-evil--pinyin-search)
+    (funcall function regexp))
+   ((string-prefix-p yunge-evil--regexp-search-prefix regexp)
+    (funcall function
+             (substring regexp
+                        (length yunge-evil--regexp-search-prefix))))
+   (t
+    (let ((pattern (funcall function regexp)))
       ;; Evil returns a fresh (REGEXP IGNORE-CASE WHOLE-LINE) pattern.
       ;; Replacing only its regexp preserves Vim's smart-case decision.
-      (setcar pattern pinyin-regexp))
-    pattern))
+      (setcar pattern (yunge-pinyin-regexp regexp))
+      pattern))))
 
 (defun yunge-evil-pinyin-search-forward (count)
   "Start a forward search with Pinyin expansion."

@@ -1,4 +1,4 @@
-;;; yunge-pinyin-test.el --- Shared Pinyin regexp tests -*- lexical-binding: t; -*-
+;;; yunge-pinyin-test.el --- Pinyin regexp tests -*- lexical-binding: t; -*-
 ;; SPDX-FileCopyrightText: 2026 Chen Zhexuan
 ;; SPDX-License-Identifier: MIT
 
@@ -14,13 +14,23 @@
       (should (string-match-p regexp "保留"))
       (should (string-match-p regexp query)))))
 
-(ert-deftest yunge-pinyin-preserves-case-and-declines-regexps ()
+(ert-deftest yunge-pinyin-expands-letter-runs-in-literal-text ()
+  (yunge-test-load-package-config 'yunge-pinyin)
+  (let ((regexp (yunge-pinyin-regexp "zhongwen3")))
+    (should (string-match-p regexp "中文3"))
+    (should (string-match-p regexp "zhongwen3"))
+    (should-not (string-match-p regexp "中文2")))
+  (let ((regexp (yunge-pinyin-regexp "b.*l")))
+    (should (string-match-p regexp "b.*l"))
+    (should-not (string-match-p regexp "bXXl"))))
+
+(ert-deftest yunge-pinyin-preserves-case-and-quotes-non-pinyin-text ()
   (yunge-test-load-package-config 'yunge-pinyin)
   (let ((regexp (yunge-pinyin-regexp "BL")))
     (should (string-match-p regexp "保留"))
     (should (string-match-p regexp "BL")))
-  (should-not (yunge-pinyin-regexp "b.*l"))
-  (should-not (yunge-pinyin-regexp "保留"))
-  (should-not (yunge-pinyin-regexp "'")))
+  (should (equal (yunge-pinyin-regexp "保留") "保留"))
+  (should (equal (yunge-pinyin-regexp "'") "'"))
+  (should-not (yunge-pinyin-regexp "")))
 
 ;;; yunge-pinyin-test.el ends here

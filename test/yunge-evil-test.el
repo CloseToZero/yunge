@@ -18,6 +18,7 @@
 (defvar evil-ex-search-pattern)
 (defvar evil-ex-active-highlights-alist)
 (defvar evil-state)
+(defvar yunge-evil--pinyin-search)
 
 (defvar-keymap yunge-test-localleader-map
   "p" #'backward-char)
@@ -96,6 +97,20 @@
       (should (equal (evil-ex-pattern-regex
                       (evil-ex-make-search-pattern "bl"))
                      "bl")))))
+
+(ert-deftest yunge-evil-pinyin-search-requires-a-regexp-prefix ()
+  (yunge-test-enable-evil)
+  (let ((yunge-evil--pinyin-search t))
+    (let ((regexp
+           (evil-ex-pattern-regex
+            (evil-ex-make-search-pattern "a.b"))))
+      (should (string-match-p regexp "a.b"))
+      (should-not (string-match-p regexp "axb")))
+    (should
+     (equal
+      (evil-ex-pattern-regex
+       (evil-ex-make-search-pattern ":re:a.b"))
+      "a.b"))))
 
 (ert-deftest yunge-evil-star-searches-the-word-literally ()
   (yunge-test-enable-evil)

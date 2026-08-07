@@ -5,7 +5,7 @@
 (require 'yunge-test-helper)
 
 (yunge-test-deftest-lazy-load yunge-orderless
-  (orderless pyim pyim-cregexp))
+  (orderless orderless-kwd pyim pyim-cregexp))
 
 (ert-deftest yunge-orderless-configures-completion ()
   (yunge-test-run-package-config
@@ -44,8 +44,7 @@
            '((orderless basic)
              ((file (styles partial-completion)))
              t
-             (orderless-literal orderless-regexp
-                                yunge-orderless-pinyin)))
+             (yunge-orderless-pinyin)))
         (error "Unexpected Orderless configuration"))
       (unless (equal completion-category-defaults
                      yunge-test-category-defaults)
@@ -64,6 +63,12 @@
           (error "Unexpected Orderless matches: %S" matches)))
       (unless (featurep 'orderless)
         (error "Orderless was not autoloaded by completion"))
+      (unless (and
+               (eq (car orderless-style-dispatchers)
+                   'orderless-kwd-dispatch)
+               (eq (car (alist-get 're orderless-kwd-alist))
+                   'orderless-regexp))
+        (error "Orderless keyword dispatch was not configured"))
       (let* ((chinese (string #x4fdd #x7559))
              (matches
               (completion-all-completions
@@ -78,6 +83,17 @@
           (error "Unexpected Pinyin matches: %S" matches)))
       (when (completion-all-completions
              "=bl" (list (string #x4fdd #x7559)) nil 3)
-        (error "Literal Orderless dispatch unexpectedly used Pinyin")))))
+        (error "Literal Orderless dispatch unexpectedly used Pinyin"))
+      (let* ((query "zhongwen3")
+             (candidate (concat (string #x4e2d #x6587) "3")))
+        (unless (completion-all-completions
+                 query (list candidate) nil (length query))
+          (error "Joined Pinyin and digits did not match")))
+      (when (completion-all-completions
+             "a.b" '("axb") nil 3)
+        (error "Default Orderless matching interpreted a regexp"))
+      (unless (completion-all-completions
+               ":re:a.b" '("axb") nil 7)
+        (error "Explicit Orderless regexp did not match")))))
 
 ;;; yunge-orderless-test.el ends here
