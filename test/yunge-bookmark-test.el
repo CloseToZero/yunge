@@ -21,12 +21,16 @@
                             yunge-var-directory)))
   (yunge-test-evil-normal-keys
    'fundamental-mode
-   '(("SPC j B" . bookmark-bmenu-list)
-     ("SPC j m" . bookmark-set)))
+   '(("SPC j b l" . bookmark-bmenu-list)
+     ("SPC j b s" . bookmark-set)))
   (yunge-test-which-key-prefix-bindings
    'fundamental-mode "SPC j"
-   '(("B" nil "manage bookmarks")
-     ("m" nil "set bookmark")))
+   '(("b" nil "+bookmark")
+     ("m" nil "+marker")))
+  (yunge-test-which-key-prefix-bindings
+   'fundamental-mode "SPC j b"
+   '(("l" nil "list bookmarks")
+     ("s" nil "set bookmark")))
 
   (require 'bookmark)
   (yunge-test-evil-normal-keys

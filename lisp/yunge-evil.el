@@ -139,6 +139,17 @@ Restore point if FUNCTION signals an error or quit."
 (defvar-keymap yunge-jump-map
   :doc "Global jump command map.")
 
+(defvar-keymap yunge-marker-map
+  :doc "Global Evil marker command map.")
+
+(defconst yunge-marker-bindings
+  '(("s" evil-set-marker "set marker")
+    ("j" evil-goto-mark "jump to marker")
+    ("l" evil-goto-mark-line "jump to marker line")))
+
+(defconst yunge-jump-bindings
+  `(("m" ,yunge-marker-map "marker")))
+
 (defvar-keymap yunge-note-map
   :doc "Global note command map.")
 
@@ -250,6 +261,8 @@ Restore point if FUNCTION signals an error or quit."
   (require 'yunge-comment)
   (advice-add 'evil-force-normal-state :after
               #'yunge-evil--nohighlight-after-force-normal-state)
+  (yunge-key-define yunge-marker-map yunge-marker-bindings)
+  (yunge-key-define yunge-jump-map yunge-jump-bindings)
   (yunge-evil--setup-leader)
   (yunge-key-define
    evil-motion-state-map
@@ -276,6 +289,10 @@ Restore point if FUNCTION signals an error or quit."
    yunge-buffer-map yunge-buffer-bindings)
   (yunge-key-add-which-key-descriptions
    yunge-file-map yunge-file-bindings)
+  (yunge-key-add-which-key-descriptions
+   yunge-jump-map yunge-jump-bindings)
+  (yunge-key-add-which-key-descriptions
+   yunge-marker-map yunge-marker-bindings)
   (yunge-key-add-which-key-descriptions
    yunge-quit-map yunge-quit-bindings))
 

@@ -33,6 +33,11 @@
   "Bind Space in an ordinary Evil mode map."
   :keymap yunge-test-space-mode-map)
 
+(defvar-keymap yunge-test-marker-mode-map)
+
+(define-derived-mode yunge-test-marker-mode fundamental-mode
+  "Yunge marker test")
+
 (yunge-test-deftest-lazy-load yunge-evil
   (evil project pyim pyim-cregexp yunge-comment))
 
@@ -203,6 +208,30 @@
       (call-interactively #'yunge-open-config-directory))
     (should (equal opened-directory user-emacs-directory))))
 
+(ert-deftest yunge-evil-leader-exposes-overridden-marker-command ()
+  (yunge-test-enable-evil)
+  (yunge-key-evil-define
+   'normal yunge-test-marker-mode-map
+   '(("m" ignore nil)))
+  (with-temp-buffer
+    (yunge-test-marker-mode)
+    (insert "one\ntwo\n")
+    (goto-char (point-min))
+    (yunge-test-key "m" 'ignore)
+    (yunge-test-key "SPC j m s" 'evil-set-marker)
+    (yunge-test-key "SPC j m j" 'evil-goto-mark)
+    (yunge-test-key "SPC j m l" 'evil-goto-mark-line)
+    (save-window-excursion
+      (switch-to-buffer (current-buffer))
+      (goto-char (1+ (point-min)))
+      (execute-kbd-macro (kbd "SPC j m s a"))
+      (forward-line)
+      (execute-kbd-macro (kbd "SPC j m j a"))
+      (should (= (point) (1+ (point-min))))
+      (forward-line)
+      (execute-kbd-macro (kbd "SPC j m l a"))
+      (should (= (point) (point-min))))))
+
 (ert-deftest yunge-evil-routes-leader-keys ()
   (yunge-test-enable-evil)
   (require 'which-key)
@@ -298,6 +327,16 @@
      ("d" nil "open directory")
      ("f" nil "find file")
      ("s" nil "save file")))
+
+  (yunge-test-which-key-prefix-bindings
+   'yunge-test-buffer-mode "SPC j"
+   '(("m" nil "+marker")))
+
+  (yunge-test-which-key-prefix-bindings
+   'yunge-test-buffer-mode "SPC j m"
+   '(("j" nil "jump to marker")
+     ("l" nil "jump to marker line")
+     ("s" nil "set marker")))
 
   (yunge-test-which-key-prefix-bindings
    'yunge-test-buffer-mode "SPC q"

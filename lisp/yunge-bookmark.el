@@ -8,9 +8,17 @@
 (defvar bookmark-bmenu-mode-map)
 (defvar bookmark-save-flag)
 
+(defconst yunge-bookmark-bindings
+  '(("l" bookmark-bmenu-list "list bookmarks")
+    ("s" bookmark-set "set bookmark")))
+
+(defvar-keymap yunge-bookmark-map
+  :doc "Global bookmark command map.")
+
+(yunge-key-define yunge-bookmark-map yunge-bookmark-bindings)
+
 (defconst yunge-bookmark-jump-bindings
-  '(("B" bookmark-bmenu-list "manage bookmarks")
-    ("m" bookmark-set "set bookmark")))
+  `(("b" ,yunge-bookmark-map "bookmark")))
 
 (defconst yunge-bookmark-bmenu-normal-bindings
   '(("RET" bookmark-bmenu-this-window "jump")
@@ -43,7 +51,9 @@
 
 (with-eval-after-load 'which-key
   (yunge-key-add-which-key-descriptions
-   yunge-jump-map yunge-bookmark-jump-bindings))
+   yunge-jump-map yunge-bookmark-jump-bindings)
+  (yunge-key-add-which-key-descriptions
+   yunge-bookmark-map yunge-bookmark-bindings))
 
 (provide 'yunge-bookmark)
 
