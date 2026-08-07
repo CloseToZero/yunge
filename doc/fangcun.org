@@ -24,20 +24,31 @@ not already exist in the selected directory.
 configured yiyu roots.  A file-level =ID= creates a file node.  A heading =ID=
 creates a heading node.  File nodes use =#+title= when present and otherwise
 use their relative file name without the extension.  A heading without text
-uses its ID as its display title.  The synchronization also indexes =id:=
-links owned by the nearest enclosing node.
+uses its ID as its display title.  The =ALIASES= property assigns alternative
+names to either kind of node.  Separate aliases with spaces and quote an alias
+that contains spaces:
+
+#+begin_src org
+:PROPERTIES:
+:ID:       42
+:ALIASES:  AI "Artificial Intelligence" 人工智能
+:END:
+#+end_src
+
+The synchronization also indexes =id:= links owned by the nearest enclosing
+node.
 
 After a full sync, =M-x fangcun-db-update-file= replaces the indexed nodes and
 links for the current saved Org file without rebuilding the other yiyu files.
 Saving a configured yiyu file performs the same update silently.  Set
 =fangcun-db-update-on-save= to =nil= to disable automatic updates.
 
-=M-x fangcun-node-find= completes over the indexed nodes.  Each candidate
-shows its owning yiyu and relative file.  Selecting one opens its file and
-moves to the matching Org ID.
+=M-x fangcun-node-find= completes over the titles and aliases of indexed nodes.
+Each candidate shows its owning yiyu and relative file.  Selecting one opens
+its file and moves to the matching Org ID.
 
 =M-x fangcun-node-insert= uses the same completion to insert an =id:= link at
-point.  The selected node's title becomes the link description.
+point.  The selected title or alias becomes the link description.
 
 ID links may include an Org search suffix, such as
 =id:NODE-ID::*Heading= or =id:NODE-ID::target=.  The suffix selects a location

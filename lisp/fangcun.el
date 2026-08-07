@@ -58,7 +58,8 @@ Each entry has the form (ID :name NAME :root ROOT)."
   yiyu-name
   yiyu-root
   file
-  title)
+  title
+  aliases)
 
 (cl-defstruct fangcun-link
   source-id
@@ -210,6 +211,20 @@ Each entry has the form (ID :name NAME :root ROOT)."
     "file TEXT NOT NULL, "
     "title TEXT NOT NULL, "
     "FOREIGN KEY (yiyu_id) REFERENCES yiyus (id))"))
+  ;; Store aliases as rows instead of serializing them into NODES because each
+  ;; alias is an independent completion name.  The composite primary key also
+  ;; prevents duplicate names for one node and supports cascading node deletes.
+  ;; The same alias may belong to different nodes; completion disambiguates
+  ;; those nodes by their yiyu and file.
+  (sqlite-execute
+   database
+   (concat
+    "CREATE TABLE aliases ("
+    "node_id TEXT NOT NULL, "
+    "alias TEXT NOT NULL, "
+    "PRIMARY KEY (node_id, alias), "
+    "FOREIGN KEY (node_id) REFERENCES nodes (id) "
+    "ON DELETE CASCADE)"))
   ;; Keep one row for every ID-link occurrence.  Backlink views may group
   ;; rows by SOURCE_ID, but POSITION is needed to visit the chosen link.
   ;;
@@ -252,6 +267,11 @@ Each entry has the form (ID :name NAME :root ROOT)."
      (and titles (string-join titles " "))
      (file-name-sans-extension relative-file))))
 
+(defun fangcun--aliases-at-point ()
+  "Return the aliases assigned to the current Org entry."
+  (when-let* ((value (org-entry-get (point) "ALIASES")))
+    (delete-dups (split-string-and-unquote value))))
+
 (defun fangcun--node-id-at-point ()
   "Return the nearest enclosing Fangcun node ID, or nil."
   (save-excursion
@@ -285,16 +305,20 @@ RELATIVE-FILE names BUFFER's file relative to YIYU's root."
         (let ((file-title (fangcun--file-title relative-file))
               nodes)
           (goto-char (point-min))
-          (when-let* ((id (org-id-get)))
-            (push
-             (make-fangcun-node
-              :id id
-              :yiyu-id (fangcun-yiyu-id yiyu)
-              :yiyu-name (fangcun-yiyu-name yiyu)
-              :yiyu-root (fangcun-yiyu-root yiyu)
-              :file relative-file
-              :title file-title)
-             nodes))
+          ;; Point may already be on the first heading.  Without this check,
+          ;; its ID would be collected here and again by `org-map-entries'.
+          (when (= (org-outline-level) 0)
+            (when-let* ((id (org-id-get)))
+              (push
+               (make-fangcun-node
+                :id id
+                :yiyu-id (fangcun-yiyu-id yiyu)
+                :yiyu-name (fangcun-yiyu-name yiyu)
+                :yiyu-root (fangcun-yiyu-root yiyu)
+                :file relative-file
+                :title file-title
+                :aliases (fangcun--aliases-at-point))
+               nodes)))
           (org-map-entries
            (lambda ()
              (when-let* ((id (org-id-get)))
@@ -307,7 +331,8 @@ RELATIVE-FILE names BUFFER's file relative to YIYU's root."
                  :file relative-file
                  :title
                  (fangcun--display-title
-                  (org-get-heading t t t) id))
+                  (org-get-heading t t t) id)
+                 :aliases (fangcun--aliases-at-point))
                 nodes)))
            nil nil)
           (nreverse nodes))))))
@@ -397,7 +422,12 @@ RELATIVE-FILE names BUFFER's file relative to YIYU's root."
     (fangcun-node-id node)
     (fangcun-node-yiyu-id node)
     (fangcun-node-file node)
-    (fangcun-node-title node))))
+    (fangcun-node-title node)))
+  (dolist (alias (fangcun-node-aliases node))
+    (sqlite-execute
+     database
+     "INSERT INTO aliases (node_id, alias) VALUES (?, ?)"
+     (vector (fangcun-node-id node) alias))))
 
 (defun fangcun--insert-link (database link)
   "Insert LINK into DATABASE."
@@ -420,7 +450,12 @@ RELATIVE-FILE names BUFFER's file relative to YIYU's root."
       (fangcun--insert-node database node))
     (dolist (link links)
       (fangcun--insert-link database link))
-    (list :nodes (length nodes) :links (length links))))
+    (list :nodes (length nodes)
+          :aliases (apply #'+ (mapcar
+                               (lambda (node)
+                                 (length (fangcun-node-aliases node)))
+                               nodes))
+          :links (length links))))
 
 ;;;###autoload
 (defun fangcun-db-sync ()
@@ -438,6 +473,7 @@ RELATIVE-FILE names BUFFER's file relative to YIYU's root."
               (with-sqlite-transaction database
                 (let ((file-count 0)
                       (node-count 0)
+                      (alias-count 0)
                       (link-count 0))
                   (dolist (yiyu yiyus)
                     (unless (file-directory-p
@@ -456,15 +492,21 @@ RELATIVE-FILE names BUFFER's file relative to YIYU's root."
                               (fangcun--parse-file yiyu file))))
                         (cl-incf node-count
                                  (plist-get counts :nodes))
+                        (cl-incf alias-count
+                                 (plist-get counts :aliases))
                         (cl-incf link-count
                                  (plist-get counts :links)))))
                   (list :yiyus (length yiyus)
                         :files file-count
                         :nodes node-count
+                        :aliases alias-count
                         :links link-count)))))))
       (message
-       "Fangcun indexed %d nodes and %d links from %d files in %d yiyu roots"
+       (concat
+        "Fangcun indexed %d nodes, %d aliases, and %d links "
+        "from %d files in %d yiyu roots")
        (plist-get result :nodes)
+       (plist-get result :aliases)
        (plist-get result :links)
        (plist-get result :files)
        (plist-get result :yiyus))
@@ -515,8 +557,9 @@ When NO-MESSAGE is non-nil, do not report the indexed counts."
                 (vector (fangcun-yiyu-id yiyu) relative-file))
                (fangcun--insert-file-data database data))))))
     (unless no-message
-      (message "Fangcun indexed %d nodes and %d links from %s"
+      (message "Fangcun indexed %d nodes, %d aliases, and %d links from %s"
                (plist-get result :nodes)
+               (plist-get result :aliases)
                (plist-get result :links)
                (abbreviate-file-name file)))
     result))
@@ -568,6 +611,20 @@ When NO-MESSAGE is non-nil, do not report the indexed counts."
    :file (elt row 4)
    :title (elt row 5)))
 
+(defun fangcun--attach-aliases (nodes rows)
+  "Attach aliases from SQLite ROWS to NODES and return NODES.
+Each row contains a node ID followed by one alias."
+  (let ((nodes-by-id (make-hash-table :test #'equal)))
+    (dolist (node nodes)
+      (push node (gethash (fangcun-node-id node) nodes-by-id)))
+    (dolist (row rows)
+      (dolist (node (gethash (elt row 0) nodes-by-id))
+        (push (elt row 1) (fangcun-node-aliases node))))
+    (dolist (node nodes)
+      (setf (fangcun-node-aliases node)
+            (nreverse (fangcun-node-aliases node))))
+    nodes))
+
 (defun fangcun-node-from-id (id)
   "Return the Fangcun node named ID, or nil when it is not indexed."
   (fangcun--call-with-database
@@ -582,23 +639,41 @@ When NO-MESSAGE is non-nil, do not report the indexed counts."
                      "FROM nodes AS n "
                      "JOIN yiyus AS y ON y.id = n.yiyu_id "
                      "WHERE n.id = ? LIMIT 1")
-                    (vector id)))))
-       (fangcun--node-from-row row)))))
+                    (vector id))))
+                 (node (fangcun--node-from-row row)))
+       (fangcun--attach-aliases
+        (list node)
+        (sqlite-select
+         database
+         (concat
+          "SELECT node_id, alias FROM aliases "
+          "WHERE node_id = ? ORDER BY alias COLLATE NOCASE")
+         (vector id)))
+       node))))
 
 (defun fangcun-node-list ()
   "Return all nodes currently stored in the Fangcun database."
   (fangcun--call-with-database
    (lambda (database)
-     (mapcar
-      #'fangcun--node-from-row
-      (sqlite-select
-       database
-       (concat
-        "SELECT n.id, n.yiyu_id, y.name, y.root, n.file, n.title "
-        "FROM nodes AS n "
-        "JOIN yiyus AS y ON y.id = n.yiyu_id "
-        "ORDER BY n.title COLLATE NOCASE, y.name COLLATE NOCASE, "
-        "n.file, n.id"))))))
+     (let ((nodes
+            (mapcar
+             #'fangcun--node-from-row
+             (sqlite-select
+              database
+              (concat
+               "SELECT n.id, n.yiyu_id, y.name, y.root, "
+               "n.file, n.title "
+               "FROM nodes AS n "
+               "JOIN yiyus AS y ON y.id = n.yiyu_id "
+               "ORDER BY n.title COLLATE NOCASE, "
+               "y.name COLLATE NOCASE, n.file, n.id")))))
+       (fangcun--attach-aliases
+        nodes
+        (sqlite-select
+         database
+         (concat
+          "SELECT node_id, alias FROM aliases "
+          "ORDER BY node_id, alias COLLATE NOCASE")))))))
 
 (defun fangcun--id-find (id &optional markerp)
   "Return the Fangcun location of ID, or nil to let Org continue.
@@ -632,46 +707,68 @@ When MARKERP is non-nil, return the location as a marker."
    :node (fangcun--node-from-row (cl-subseq row 0 6))
    :position (elt row 6)))
 
+(defun fangcun--attach-backlink-aliases
+    (database backlinks target-id)
+  "Attach aliases to BACKLINKS targeting TARGET-ID in DATABASE."
+  (fangcun--attach-aliases
+   (mapcar #'fangcun-backlink-node backlinks)
+   (sqlite-select
+    database
+    (concat
+     "SELECT DISTINCT a.node_id, a.alias "
+     "FROM aliases AS a "
+     "JOIN links AS l ON l.source_id = a.node_id "
+     "WHERE l.target_id = ? "
+     "ORDER BY a.node_id, a.alias COLLATE NOCASE")
+    (vector target-id)))
+  backlinks)
+
 (defun fangcun-backlink-list (target-id)
   "Return unique source nodes linking to TARGET-ID.
 When one source contains several links, retain its first occurrence."
   (fangcun--call-with-database
    (lambda (database)
-     (mapcar
-      #'fangcun--backlink-from-row
-      (sqlite-select
-       database
-       (concat
-        "SELECT n.id, n.yiyu_id, y.name, y.root, n.file, n.title, "
-        "first_link.position "
-        "FROM ("
-        "SELECT source_id, MIN(position) AS position "
-        "FROM links WHERE target_id = ? GROUP BY source_id"
-        ") AS first_link "
-        "JOIN nodes AS n ON n.id = first_link.source_id "
-        "JOIN yiyus AS y ON y.id = n.yiyu_id "
-        "ORDER BY n.title COLLATE NOCASE, y.name COLLATE NOCASE, "
-        "n.file, n.id")
-       (vector target-id))))))
+     (fangcun--attach-backlink-aliases
+      database
+      (mapcar
+       #'fangcun--backlink-from-row
+       (sqlite-select
+        database
+        (concat
+         "SELECT n.id, n.yiyu_id, y.name, y.root, "
+         "n.file, n.title, first_link.position "
+         "FROM ("
+         "SELECT source_id, MIN(position) AS position "
+         "FROM links WHERE target_id = ? GROUP BY source_id"
+         ") AS first_link "
+         "JOIN nodes AS n ON n.id = first_link.source_id "
+         "JOIN yiyus AS y ON y.id = n.yiyu_id "
+         "ORDER BY n.title COLLATE NOCASE, "
+         "y.name COLLATE NOCASE, n.file, n.id")
+        (vector target-id)))
+      target-id))))
 
 (defun fangcun-backlink-occurrence-list (target-id)
   "Return every indexed backlink occurrence to TARGET-ID."
   (fangcun--call-with-database
    (lambda (database)
-     (mapcar
-      #'fangcun--backlink-from-row
-      (sqlite-select
-       database
-       (concat
-        "SELECT n.id, n.yiyu_id, y.name, y.root, n.file, n.title, "
-        "l.position "
-        "FROM links AS l "
-        "JOIN nodes AS n ON n.id = l.source_id "
-        "JOIN yiyus AS y ON y.id = n.yiyu_id "
-        "WHERE l.target_id = ? "
-        "ORDER BY n.title COLLATE NOCASE, y.name COLLATE NOCASE, "
-        "n.file, n.id, l.position")
-       (vector target-id))))))
+     (fangcun--attach-backlink-aliases
+      database
+      (mapcar
+       #'fangcun--backlink-from-row
+       (sqlite-select
+        database
+        (concat
+         "SELECT n.id, n.yiyu_id, y.name, y.root, "
+         "n.file, n.title, l.position "
+         "FROM links AS l "
+         "JOIN nodes AS n ON n.id = l.source_id "
+         "JOIN yiyus AS y ON y.id = n.yiyu_id "
+         "WHERE l.target_id = ? "
+         "ORDER BY n.title COLLATE NOCASE, "
+         "y.name COLLATE NOCASE, n.file, n.id, l.position")
+        (vector target-id)))
+      target-id))))
 
 (defun fangcun--node-candidate (node)
   "Return a unique completion candidate for NODE."
@@ -683,6 +780,18 @@ When one source contains several links, retain its first occurrence."
        (concat "\u2063" (fangcun-node-id node))
        'invisible t))
      'fangcun-node node)))
+
+(defun fangcun--node-candidates (node)
+  "Return completion pairs for NODE's title and aliases."
+  (mapcar
+   (lambda (title)
+     (let ((candidate-node (copy-fangcun-node node)))
+       (setf (fangcun-node-title candidate-node) title)
+       (cons (fangcun--node-candidate candidate-node)
+             candidate-node)))
+   (delete-dups
+    (cons (fangcun-node-title node)
+          (copy-sequence (fangcun-node-aliases node))))))
 
 (defun fangcun--node-annotation (candidate)
   "Return the location annotation for CANDIDATE."
@@ -696,11 +805,8 @@ When one source contains several links, retain its first occurrence."
 (defun fangcun--read-node ()
   "Read and return a Fangcun node."
   (let* ((nodes (fangcun-node-list))
-         (candidates
-          (mapcar
-           (lambda (node)
-             (cons (fangcun--node-candidate node) node))
-           nodes))
+          (candidates
+           (mapcan #'fangcun--node-candidates nodes))
          (completion-extra-properties
           '(:category fangcun-node
             :annotation-function fangcun--node-annotation)))
@@ -714,13 +820,19 @@ When one source contains several links, retain its first occurrence."
   "Read and return a backlink to TARGET-ID."
   (let* ((backlinks (fangcun-backlink-list target-id))
          (candidates
-          (mapcar
-           (lambda (backlink)
-             (cons
-              (fangcun--node-candidate
-               (fangcun-backlink-node backlink))
-              backlink))
-           backlinks))
+           (mapcan
+            (lambda (backlink)
+              (mapcar
+               (lambda (candidate)
+                 (let ((candidate-backlink
+                        (copy-fangcun-backlink backlink)))
+                   (setf
+                    (fangcun-backlink-node candidate-backlink)
+                    (cdr candidate))
+                   (cons (car candidate) candidate-backlink)))
+               (fangcun--node-candidates
+                (fangcun-backlink-node backlink))))
+            backlinks))
          (completion-extra-properties
           '(:category fangcun-node
             :annotation-function fangcun--node-annotation)))
@@ -817,13 +929,14 @@ When one source contains several links, retain its first occurrence."
 
 ;;;###autoload
 (defun fangcun-node-find ()
-  "Choose a Fangcun node and visit it."
+  "Choose a Fangcun node by title or alias and visit it."
   (interactive)
   (fangcun-node-visit (fangcun--read-node)))
 
 ;;;###autoload
 (defun fangcun-node-insert ()
-  "Choose a Fangcun node and insert an Org ID link to it."
+  "Choose a Fangcun node and insert an Org ID link to it.
+The chosen title or alias becomes the link description."
   (interactive)
   (unless (derived-mode-p 'org-mode)
     (user-error "Fangcun node links can only be inserted in Org buffers"))

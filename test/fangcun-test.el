@@ -262,7 +262,7 @@
   (fangcun-test-with-notes
     (should
      (equal (fangcun-db-sync)
-            '(:yiyus 2 :files 2 :nodes 4 :links 1)))
+            '(:yiyus 2 :files 2 :nodes 4 :aliases 0 :links 1)))
     (let* ((nodes (fangcun-node-list))
            (personal (fangcun-test--node
                       "personal-file" nodes))
@@ -283,6 +283,50 @@
         (fangcun-node-title work)
         (file-name-sans-extension
          (file-relative-name work-file work-root)))))))
+
+(ert-deftest fangcun-indexes-and-replaces-node-aliases ()
+  (fangcun-test-with-notes
+    (fangcun-test--write-file
+     personal-file
+     (concat
+      ":PROPERTIES:\n"
+      ":ID: personal-file\n"
+      ":ALIASES: PN \"Personal knowledge\" PN\n"
+      ":END:\n"
+      "#+title: Personal Notes\n\n"
+      "* Fixed-point theorem\n"
+      ":PROPERTIES:\n"
+      ":ID: theorem\n"
+      ":ALIASES: FPT \"Fixed point theorem\"\n"
+      ":END:\n"))
+    (should
+     (equal (fangcun-db-sync)
+            '(:yiyus 2 :files 2 :nodes 3 :aliases 4 :links 0)))
+    (let ((personal
+           (fangcun-test--node "personal-file" (fangcun-node-list))))
+      (should
+       (equal (fangcun-node-aliases personal)
+              '("Personal knowledge" "PN"))))
+    (should
+     (equal
+      (fangcun-node-aliases (fangcun-node-from-id "theorem"))
+      '("Fixed point theorem" "FPT")))
+    (fangcun-test--write-file
+     personal-file
+     (concat
+      ":PROPERTIES:\n"
+      ":ID: personal-file\n"
+      ":ALIASES: \"Current name\"\n"
+      ":END:\n"
+      "#+title: Personal Notes\n"))
+    (should
+     (equal (fangcun-db-update-file personal-file)
+            '(:nodes 1 :aliases 1 :links 0)))
+    (should
+     (equal
+      (fangcun-node-aliases (fangcun-node-from-id "personal-file"))
+      '("Current name")))
+    (should-not (fangcun-node-from-id "theorem"))))
 
 (ert-deftest fangcun-parsing-inhibits-org-startup ()
   (fangcun-test-with-notes
@@ -337,7 +381,8 @@
                   (apply original-collector arguments))))
             (should
              (equal (fangcun-db-sync)
-                    '(:yiyus 2 :files 2 :nodes 4 :links 1))))
+                     '(:yiyus 2 :files 2 :nodes 4 :aliases 0
+                       :links 1))))
           (should reused)
           (should (= (point) saved-point))
           (should (= (point-min) saved-min))
@@ -365,7 +410,8 @@
                     (verify-visited-file-modtime buffer))))
             (should
              (equal (fangcun-db-sync)
-                    '(:yiyus 2 :files 2 :nodes 4 :links 1)))
+                     '(:yiyus 2 :files 2 :nodes 4 :aliases 0
+                       :links 1)))
             (should-not
              (fangcun-test--node
               "fangcun-test-unsaved" (fangcun-node-list))))
@@ -397,7 +443,7 @@
               (verify-visited-file-modtime buffer))))
       (should
        (equal (fangcun-db-sync)
-              '(:yiyus 2 :files 2 :nodes 3 :links 0)))
+               '(:yiyus 2 :files 2 :nodes 3 :aliases 0 :links 0)))
       (let ((nodes (fangcun-node-list)))
         (should
          (equal
@@ -417,7 +463,7 @@
     (delete-file personal-file)
     (should
      (equal (fangcun-db-sync)
-            '(:yiyus 2 :files 1 :nodes 1 :links 0)))
+             '(:yiyus 2 :files 1 :nodes 1 :aliases 0 :links 0)))
     (should-not
      (fangcun--call-with-database
       (lambda (database)
@@ -454,7 +500,7 @@
       "[[id:work-file][New outgoing link]]\n"))
     (should
      (equal (fangcun-db-update-file personal-file)
-            '(:nodes 2 :links 1)))
+             '(:nodes 2 :aliases 0 :links 1)))
     (let ((nodes (fangcun-node-list)))
       (should
        (equal
@@ -589,7 +635,7 @@
        "* No ID\n[[id:work-file][Unowned link]]\n")
       (should
        (equal (fangcun-db-sync)
-              '(:yiyus 2 :files 4 :nodes 6 :links 6)))
+               '(:yiyus 2 :files 4 :nodes 6 :aliases 0 :links 6)))
       (fangcun--call-with-database
        (lambda (database)
          (let ((rows
@@ -879,6 +925,35 @@
           (should
            (equal (buffer-string)
                   "[[id:theorem][A theorem]]")))))))
+
+(ert-deftest fangcun-inserts-id-link-with-selected-alias ()
+  (fangcun-test-with-notes
+    (fangcun-test--write-file
+     personal-file
+     (concat
+      "* Fixed-point theorem\n"
+      ":PROPERTIES:\n"
+      ":ID: theorem\n"
+      ":ALIASES: FPT \"Fixed point theorem\"\n"
+      ":END:\n"))
+    (fangcun-db-sync)
+    (with-temp-buffer
+      (org-mode)
+      (cl-letf
+          (((symbol-function 'completing-read)
+            (lambda (_prompt collection &rest _arguments)
+              (car
+               (seq-find
+                (lambda (item)
+                  (string-prefix-p "Fixed point theorem" (car item)))
+                collection)))))
+        (let ((node (fangcun-node-insert)))
+          (should (equal (fangcun-node-id node) "theorem"))
+          (should (equal (fangcun-node-title node)
+                         "Fixed point theorem"))
+          (should
+           (equal (buffer-string)
+                  "[[id:theorem][Fixed point theorem]]")))))))
 
 (ert-deftest fangcun-insert-requires-org-mode ()
   (with-temp-buffer
