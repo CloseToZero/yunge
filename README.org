@@ -5,4 +5,4 @@
 * Documentation
 
 - [[file:doc/fangcun.org][Fangcun]]
-- [[file:doc/keybinding.org][Keybinding design principles]]
+- [[file:doc/keybinding.org][Keybinding conventions and workflows]]
