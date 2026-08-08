@@ -4,14 +4,23 @@
 
 (require 'yunge-test-helper)
 
+(defvar yunge-test-eglot-elpaca-orders nil)
+
 (cl-letf (((symbol-function 'elpaca)
-           (cons 'macro (lambda (&rest _body) nil))))
+           (cons 'macro
+                 (lambda (order &rest _body)
+                   (push order yunge-test-eglot-elpaca-orders)
+                   nil))))
   (require 'yunge-eglot))
 
 (declare-function eglot--lookup-mode "eglot" (mode))
 
 (yunge-test-deftest-lazy-load yunge-eglot
   (eglot eldoc-box project))
+
+(ert-deftest yunge-eglot-downloads-the-gnu-elpa-tarball ()
+  (should (member '(eglot :type tar)
+                  yunge-test-eglot-elpaca-orders)))
 
 (ert-deftest yunge-eglot-loads-the-locked-package ()
   (require 'eglot)

@@ -82,16 +82,13 @@
   :source "elpaca-menu-lock-file"
   :recipe
   (:package "eglot"
-   :repo ("https://github.com/emacs-mirror/emacs" . "eglot")
+   :type tar
+   :url "https://elpa.gnu.org/packages/eglot-1.24.tar"
    :tar "1.24"
    :host gnu
-   :branch "master"
-   :files
-   ("lisp/progmodes/eglot.el" "doc/emacs/doclicense.texi"
-    "doc/emacs/docstyle.texi" "doc/misc/eglot.texi"
-    "etc/EGLOT-NEWS" (:exclude ".git"))
+   :files (:defaults)
    :source "GNU ELPA"
-   :ref "b157d8e96a26e7509136bf93fad2c7ec49c0ee88"))
+   :ref "1.24"))
  (embark
   :source "elpaca-menu-lock-file"
   :recipe

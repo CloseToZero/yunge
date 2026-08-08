@@ -368,7 +368,7 @@ Offer PREFERRED first when it still names a compilation database."
   (yunge-key-add-which-key-descriptions
    yunge-eglot-command-map yunge-eglot-command-bindings))
 
-(elpaca eglot)
+(elpaca (eglot :type tar))
 (elpaca eldoc-box)
 
 (provide 'yunge-eglot)
