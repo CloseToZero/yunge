@@ -6,6 +6,7 @@
 
 (declare-function elpaca-ui-visit "elpaca-ui")
 (declare-function evil-define-key* "evil-core")
+(declare-function evil-set-initial-state "evil-core" (mode state))
 
 (defvar elpaca-info-mode-map)
 (defvar elpaca-log-mode-map)
@@ -34,7 +35,9 @@
     ("u" elpaca-ui-unmark "unmark")))
 
 (defconst yunge-elpaca-ui-normal-bindings
-  '(("RET" elpaca-ui-info "package info")
+  '(("j" evil-next-line "next line")
+    ("k" evil-previous-line "previous line")
+    ("RET" elpaca-ui-info "package info")
     ("q" quit-window "quit")
     ("x" elpaca-ui-execute-marks "execute marks")
     ("gr" elpaca-ui-search-refresh "refresh")
@@ -63,6 +66,11 @@
                          yunge-elpaca-ui-normal-bindings))
 
 (with-eval-after-load 'evil
+  (dolist (mode '(elpaca-info-mode
+                  elpaca-log-mode
+                  elpaca-manager-mode))
+    (evil-set-initial-state mode 'normal))
+
   (with-eval-after-load 'elpaca-manager
     (yunge-elpaca--bind-ui-keys elpaca-manager-mode-map))
 

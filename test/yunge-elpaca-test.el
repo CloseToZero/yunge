@@ -25,7 +25,9 @@
   (let ((elpaca-menu-functions nil))
     (yunge-test-evil-normal-keys
      'elpaca-manager-mode
-     '(("RET" . elpaca-ui-info)
+     '(("j" . evil-next-line)
+       ("k" . evil-previous-line)
+       ("RET" . elpaca-ui-info)
        ("q" . quit-window)
        ("d" . elpaca-ui-mark-delete)
        ("u" . elpaca-ui-unmark)
@@ -51,7 +53,9 @@
 
   (yunge-test-evil-normal-keys
    'elpaca-log-mode
-   '(("d" . elpaca-ui-mark-delete)
+   '(("j" . evil-next-line)
+     ("k" . evil-previous-line)
+     ("d" . elpaca-ui-mark-delete)
      ("gd" . elpaca-log-view-diff)))
 
   (yunge-test-evil-normal-keys
