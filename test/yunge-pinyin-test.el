@@ -33,4 +33,21 @@
   (should (equal (yunge-pinyin-regexp "'") "'"))
   (should-not (yunge-pinyin-regexp "")))
 
+(ert-deftest yunge-pinyin-keeps-ambiguous-long-queries-searchable ()
+  (yunge-test-load-package-config 'yunge-pinyin)
+  (let ((query "readable_record"))
+    (dotimes (index (length query))
+      (let ((regexp
+             (yunge-pinyin-regexp (substring query 0 (1+ index)))))
+        (should (yunge-pinyin--valid-regexp-p regexp))))
+    (let ((regexp (yunge-pinyin-regexp query)))
+      (should (> (length regexp) (length query)))
+      (should (string-match-p regexp query)))))
+
+(ert-deftest yunge-pinyin-falls-back-when-expansion-is-invalid ()
+  (yunge-test-load-package-config 'yunge-pinyin)
+  (cl-letf (((symbol-function 'pyim-cregexp-build)
+             (lambda (&rest _arguments) "\\(")))
+    (should (equal (yunge-pinyin-regexp "literal") "literal"))))
+
 ;;; yunge-pinyin-test.el ends here
