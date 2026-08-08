@@ -144,6 +144,18 @@ theme.  These commands keep an already-fullscreen frame fullscreen.  Use
 ~SPC t i q~ to leave fullscreen and restore the theme active before entry.
 Use ~SPC t t~ to open a terminal in the current directory.  Under the
 project map, ~SPC p t~ opens a terminal at the current project root.
+Use ~SPC l e~ to enable Eglot for the current language in the current
+project, and ~SPC l d~ to disable it.
+
+While Eglot manages a buffer, use ~g D~ for declarations and ~g r~ for
+references.  Use ~g a~ to switch between a source and header with clangd.
+Use ~SPC l a~ for code actions, ~SPC l f~ to format, ~SPC l o~ to organize
+imports, and ~SPC l r~ to rename.  Code actions and formatting also operate
+on Visual selections.  Automatic ElDoc feedback stays on one echo-area line.
+Use ~K~, or ~SPC l h~, to show complete documentation in a child frame;
+documentation never opens a child frame automatically.  The ~SPC l~ editing
+entries, ~K~, and the ~g~ bindings disappear when Eglot stops managing the
+buffer; ~SPC l e/d~ remain available.
 
 Window commands under ~SPC w~ execute once.  Use ~SPC w SPC~ to enter an
 explicit persistent window control map when several operations are needed.

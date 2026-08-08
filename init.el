@@ -16,6 +16,7 @@
 (require 'yunge-package)
 (require 'yunge-theme)
 (require 'yunge-evil)
+(require 'yunge-eglot)
 (require 'yunge-org)
 (require 'yunge-fangcun)
 (require 'yunge-expreg)

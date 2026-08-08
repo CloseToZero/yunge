@@ -69,6 +69,29 @@
    :files (:defaults "extensions/corfu-*.el")
    :fetcher github
    :ref "f6306d8c5ba540e75c208c8069b3b677de48a183"))
+ (eldoc-box
+  :source "elpaca-menu-lock-file"
+  :recipe
+  (:package "eldoc-box"
+   :repo "casouri/eldoc-box"
+   :fetcher github
+   :files (:defaults)
+   :source "MELPA"
+   :ref "e458cefba4013785ef6099c6245463689a50dd7d"))
+ (eglot
+  :source "elpaca-menu-lock-file"
+  :recipe
+  (:package "eglot"
+   :repo ("https://github.com/emacs-mirror/emacs" . "eglot")
+   :tar "1.24"
+   :host gnu
+   :branch "master"
+   :files
+   ("lisp/progmodes/eglot.el" "doc/emacs/doclicense.texi"
+    "doc/emacs/docstyle.texi" "doc/misc/eglot.texi"
+    "etc/EGLOT-NEWS" (:exclude ".git"))
+   :source "GNU ELPA"
+   :ref "b157d8e96a26e7509136bf93fad2c7ec49c0ee88"))
  (embark
   :source "elpaca-menu-lock-file"
   :recipe
