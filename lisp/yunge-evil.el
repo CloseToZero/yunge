@@ -27,6 +27,7 @@
 (defvar evil-ex-search-offset)
 (defvar evil-ex-search-pattern)
 (defvar evil-ex-search-vim-style-regexp)
+(defvar evil-command-line-map)
 (defvar evil-local-mode)
 (defvar evil-motion-state-map)
 (defvar evil-state)
@@ -268,6 +269,10 @@ Restore point if FUNCTION signals an error or quit."
    evil-motion-state-map
    '(("/" yunge-evil-pinyin-search-forward "search forward")
      ("?" yunge-evil-pinyin-search-backward "search backward")))
+  (yunge-key-define
+   evil-command-line-map
+   '(("M-n" next-history-element "next history")
+     ("M-p" previous-history-element "previous history")))
   (yunge-key-evil-define
    'visual global-map
    '(("*" yunge-evil-visual-search-forward "search selection")))

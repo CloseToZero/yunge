@@ -17,6 +17,7 @@
 (defvar evil-ex-search-history)
 (defvar evil-ex-search-pattern)
 (defvar evil-ex-active-highlights-alist)
+(defvar evil-command-line-map)
 (defvar evil-state)
 (defvar yunge-evil--pinyin-search)
 
@@ -102,6 +103,22 @@
       (should (equal (evil-ex-pattern-regex
                       (evil-ex-make-search-pattern "bl"))
                      "bl")))))
+
+(ert-deftest yunge-evil-command-line-navigates-history-with-meta-keys ()
+  (yunge-test-enable-evil)
+  (should (eq (keymap-lookup evil-command-line-map "M-n")
+              'next-history-element))
+  (should (eq (keymap-lookup evil-command-line-map "M-p")
+              'previous-history-element))
+  (with-temp-buffer
+    (insert "older target")
+    (goto-char (point-min))
+    (evil-normal-state)
+    (let ((evil-ex-search-history '("target" "older")))
+      (save-window-excursion
+        (switch-to-buffer (current-buffer))
+        (execute-kbd-macro (kbd "/ M-p M-p M-n RET"))
+        (should (= (point) 7))))))
 
 (ert-deftest yunge-evil-pinyin-search-requires-a-regexp-prefix ()
   (yunge-test-enable-evil)
