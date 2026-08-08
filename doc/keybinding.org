@@ -84,6 +84,11 @@ Structured read-only views may use ~y~ as a prefix for copying item
 identifiers, paths, or other semantic values.  Keep Visual ~y~ for copying
 selected text.
 
+In Xref results, ~j/k~ move by display line and ~C-j/C-k~ move between
+references while showing their source.  Use ~[[/]]~ to move between result
+groups, ~RET~ to visit a result, and ~gf~ to show its source without leaving
+the list.  Editing and query replacement remain under ~SPC m~.
+
 * Completion interfaces
 
 While a completion interface is active:
