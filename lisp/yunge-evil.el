@@ -83,6 +83,16 @@ Restore point if FUNCTION signals an error or quit."
       (setcar pattern (yunge-pinyin-regexp regexp))
       pattern))))
 
+(defun yunge-evil--split-pinyin-search-pattern
+    (function pattern direction)
+  "Split PATTERN for DIRECTION using the active search syntax.
+Pinyin search is literal, so its `/` and `?` remain part of PATTERN."
+  (if (and yunge-evil--pinyin-search
+           (not (string-prefix-p yunge-evil--regexp-search-prefix
+                                 pattern)))
+      (list pattern nil nil)
+    (funcall function pattern direction)))
+
 (defun yunge-evil-pinyin-search-forward (count)
   "Start a forward search with Pinyin expansion."
   (interactive
@@ -316,6 +326,8 @@ Restore point if FUNCTION signals an error or quit."
         evil-want-keybinding nil)
   (advice-add 'evil-ex-make-search-pattern
               :around #'yunge-evil--pinyin-search-pattern)
+  (advice-add 'evil-ex-split-search-pattern
+              :around #'yunge-evil--split-pinyin-search-pattern)
   (evil-mode 1))
 
 (provide 'yunge-evil)

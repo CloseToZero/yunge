@@ -6,6 +6,8 @@
 
 (declare-function evil-ex-make-search-pattern "evil-search" (regexp))
 (declare-function evil-ex-pattern-regex "evil-search" (pattern))
+(declare-function evil-ex-split-search-pattern "evil-search"
+                  (pattern direction))
 (declare-function evil-force-normal-state "evil-states" ())
 (declare-function evil-emacs-state "evil-states")
 (declare-function evil-insert-state "evil-states")
@@ -70,7 +72,9 @@
               '(nil nil nil t evil-search t undo-redo
                     t t t t nil))
              (advice-member-p #'yunge-evil--pinyin-search-pattern
-                              'evil-ex-make-search-pattern))
+                              'evil-ex-make-search-pattern)
+             (advice-member-p #'yunge-evil--split-pinyin-search-pattern
+                              'evil-ex-split-search-pattern))
       (error "Unexpected Evil configuration"))))
 
 (ert-deftest yunge-evil-search-patterns-do-not-expand-pinyin-by-default ()
@@ -104,6 +108,20 @@
                       (evil-ex-make-search-pattern "bl"))
                      "bl")))))
 
+(ert-deftest yunge-evil-pinyin-search-treats-slash-literally ()
+  (yunge-test-enable-evil)
+  (with-temp-buffer
+    (insert "x font_test font/src")
+    (goto-char (point-min))
+    (evil-normal-state)
+    (save-window-excursion
+      (switch-to-buffer (current-buffer))
+      (execute-kbd-macro (kbd "/ f o n t / RET"))
+      (should (= (point) 13))
+      (let ((regexp (evil-ex-pattern-regex evil-ex-search-pattern)))
+        (should (string-match-p regexp "font/src"))
+        (should-not (string-match-p regexp "font_test"))))))
+
 (ert-deftest yunge-evil-command-line-navigates-history-with-meta-keys ()
   (yunge-test-enable-evil)
   (should (eq (keymap-lookup evil-command-line-map "M-n")
@@ -132,7 +150,10 @@
      (equal
       (evil-ex-pattern-regex
        (evil-ex-make-search-pattern ":re:a.b"))
-      "a.b"))))
+      "a.b"))
+    (should
+     (equal (evil-ex-split-search-pattern ":re:font/" 'forward)
+            '(":re:font" "" nil)))))
 
 (ert-deftest yunge-evil-star-searches-the-word-literally ()
   (yunge-test-enable-evil)
