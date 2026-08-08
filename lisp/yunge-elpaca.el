@@ -7,10 +7,29 @@
 (declare-function elpaca-ui-visit "elpaca-ui")
 (declare-function evil-define-key* "evil-core")
 (declare-function evil-set-initial-state "evil-core" (mode state))
+(declare-function tabulated-list-get-id "tabulated-list" (&optional pos))
 
 (defvar elpaca-info-mode-map)
 (defvar elpaca-log-mode-map)
 (defvar elpaca-manager-mode-map)
+
+(defun yunge-elpaca--move-entry-line (count)
+  "Move COUNT physical lines when the destination is an Elpaca entry."
+  (let ((origin (point)))
+    (forward-line count)
+    (if (tabulated-list-get-id)
+        (back-to-indentation)
+      (goto-char origin))))
+
+(defun yunge-elpaca-next-line (count)
+  "Move COUNT Elpaca entries forward."
+  (interactive "p")
+  (yunge-elpaca--move-entry-line count))
+
+(defun yunge-elpaca-previous-line (count)
+  "Move COUNT Elpaca entries backward."
+  (interactive "p")
+  (yunge-elpaca--move-entry-line (- count)))
 
 (defun yunge-elpaca-visit-build ()
   "Visit the build directory of the package at point."
@@ -35,8 +54,8 @@
     ("u" elpaca-ui-unmark "unmark")))
 
 (defconst yunge-elpaca-ui-normal-bindings
-  '(("j" evil-next-line "next line")
-    ("k" evil-previous-line "previous line")
+  '(("j" yunge-elpaca-next-line "next line")
+    ("k" yunge-elpaca-previous-line "previous line")
     ("RET" elpaca-ui-info "package info")
     ("q" quit-window "quit")
     ("x" elpaca-ui-execute-marks "execute marks")

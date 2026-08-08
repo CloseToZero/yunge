@@ -14,6 +14,22 @@
     ("r" nil "mark rebuild")
     ("s" nil "filter")))
 
+(ert-deftest yunge-elpaca-log-moves-from-the-header-to-an-entry ()
+  (require 'yunge-elpaca)
+  (yunge-test-enable-evil)
+  (require 'elpaca-log)
+
+  (with-temp-buffer
+    (elpaca-log-mode)
+    (setq tabulated-list-entries
+          (list
+           (list 'elpaca
+                 (vector "elpaca" "finished" "Built" "Now"))))
+    (tabulated-list-print)
+    (goto-char (point-min))
+    (call-interactively (key-binding (kbd "j")))
+    (should (eq (tabulated-list-get-id) 'elpaca))))
+
 (ert-deftest yunge-elpaca-binds-keys ()
   (require 'yunge-elpaca)
   (yunge-test-enable-evil)
@@ -25,8 +41,8 @@
   (let ((elpaca-menu-functions nil))
     (yunge-test-evil-normal-keys
      'elpaca-manager-mode
-     '(("j" . evil-next-line)
-       ("k" . evil-previous-line)
+     '(("j" . yunge-elpaca-next-line)
+       ("k" . yunge-elpaca-previous-line)
        ("RET" . elpaca-ui-info)
        ("q" . quit-window)
        ("d" . elpaca-ui-mark-delete)
@@ -53,8 +69,8 @@
 
   (yunge-test-evil-normal-keys
    'elpaca-log-mode
-   '(("j" . evil-next-line)
-     ("k" . evil-previous-line)
+   '(("j" . yunge-elpaca-next-line)
+     ("k" . yunge-elpaca-previous-line)
      ("d" . elpaca-ui-mark-delete)
      ("gd" . elpaca-log-view-diff)))
 
