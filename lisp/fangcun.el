@@ -551,19 +551,21 @@ RELATIVE-FILE names BUFFER's file relative to YIYU's root."
 
 (defun fangcun--database-yiyus-match-p (database yiyus)
   "Return whether DATABASE contains exactly YIYUS."
-  (equal
-   (sqlite-select
-    database
-    "SELECT id, name, root FROM yiyus ORDER BY id")
-   (sort
-    (mapcar
-     (lambda (yiyu)
-       (list (fangcun-yiyu-id yiyu)
-             (fangcun-yiyu-name yiyu)
-             (fangcun-yiyu-root yiyu)))
-     yiyus)
-    (lambda (left right)
-      (string-lessp (car left) (car right))))))
+  (let ((lessp
+         (lambda (left right)
+           (string-lessp (car left) (car right)))))
+    (equal
+     (sort
+      (sqlite-select database "SELECT id, name, root FROM yiyus")
+      lessp)
+     (sort
+      (mapcar
+       (lambda (yiyu)
+         (list (fangcun-yiyu-id yiyu)
+               (fangcun-yiyu-name yiyu)
+               (fangcun-yiyu-root yiyu)))
+       yiyus)
+      lessp))))
 
 (defun fangcun--database-file-states (database)
   "Return the indexed file states in DATABASE, keyed by yiyu and file."

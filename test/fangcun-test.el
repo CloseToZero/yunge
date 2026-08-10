@@ -258,6 +258,20 @@
           (should-not (fangcun-node-list)))
       (delete-directory root t))))
 
+(ert-deftest fangcun-compares-yiyus-with-one-ordering ()
+  (let ((yiyus
+         (list
+          (make-fangcun-yiyu
+           :id "personal" :name "Personal" :root "personal/")
+          (make-fangcun-yiyu
+           :id "work" :name "Work" :root "work/"))))
+    (cl-letf
+        (((symbol-function 'sqlite-select)
+          (lambda (_database _query)
+            '(("work" "Work" "work/")
+              ("personal" "Personal" "personal/")))))
+      (should (fangcun--database-yiyus-match-p nil yiyus)))))
+
 (ert-deftest fangcun-syncs-multiple-yiyus ()
   (fangcun-test-with-notes
     (should
