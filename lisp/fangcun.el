@@ -378,18 +378,21 @@ RELATIVE-FILE names BUFFER's file relative to YIYU's root."
         :links
         (fangcun--collect-links-from-buffer buffer)))
 
+(defun fangcun--reusable-file-buffer (file)
+  "Return FILE's visited Org buffer when it still matches the file on disk."
+  (when-let* ((buffer (find-buffer-visiting file)))
+    (when (with-current-buffer buffer
+            (and (derived-mode-p 'org-mode)
+                 (not (buffer-modified-p))
+                 (verify-visited-file-modtime buffer)))
+      buffer)))
+
 (defun fangcun--parse-file (yiyu file)
   "Return Fangcun nodes and links from FILE on disk, owned by YIYU."
   (let* ((relative-file
           (file-relative-name file (fangcun-yiyu-root yiyu)))
-         (buffer (find-buffer-visiting file))
-         (reusable
-          (and buffer
-               (with-current-buffer buffer
-                 (and (derived-mode-p 'org-mode)
-                      (not (buffer-modified-p))
-                      (verify-visited-file-modtime buffer))))))
-    (if reusable
+         (buffer (fangcun--reusable-file-buffer file)))
+    (if buffer
         (fangcun--collect-file-data-from-buffer
          buffer yiyu relative-file)
       (with-temp-buffer
@@ -975,27 +978,57 @@ The chosen title or alias becomes the link description."
          (backlink (fangcun--read-backlink target-id)))
     (fangcun-backlink-visit backlink)))
 
-(defun fangcun--backlink-preview (backlink)
-  "Return a one-line preview of BACKLINK."
-  (let ((file
-         (fangcun--node-absolute-file
-          (fangcun-backlink-node backlink)))
-        (position (fangcun-backlink-position backlink)))
-    (cond
-     ((not (file-readable-p file))
-      "[Source file is unavailable]")
-     (t
-      (with-temp-buffer
-        (insert-file-contents file)
-        (if (> position (point-max))
-            "[Link position is stale; synchronize Fangcun]"
-          (goto-char position)
-          (string-trim
-           (substring-no-properties
-            (org-link-display-format
-             (buffer-substring
-              (line-beginning-position)
-              (line-end-position)))))))))))
+(defun fangcun--backlink-preview (backlink buffer)
+  "Return a one-line preview of BACKLINK from BUFFER."
+  (let ((position (fangcun-backlink-position backlink)))
+    (with-current-buffer buffer
+      (save-excursion
+        (save-restriction
+          (widen)
+          (if (> position (point-max))
+              "[Link position is stale; synchronize Fangcun]"
+            (goto-char position)
+            (string-trim
+             (substring-no-properties
+              (org-link-display-format
+               (buffer-substring
+                (line-beginning-position)
+                (line-end-position)))))))))))
+
+(defun fangcun--backlink-previews (backlinks)
+  "Return an eq table mapping BACKLINKS to one-line previews.
+Each source file is read from disk at most once."
+  (let ((backlinks-by-file (make-hash-table :test #'equal))
+        (previews (make-hash-table :test #'eq)))
+    (dolist (backlink backlinks)
+      (let ((file
+             (fangcun--node-absolute-file
+              (fangcun-backlink-node backlink))))
+        (puthash file
+                 (cons backlink (gethash file backlinks-by-file))
+                 backlinks-by-file)))
+    (cl-labels
+        ((record-previews
+          (file-backlinks buffer)
+          (dolist (backlink file-backlinks)
+            (puthash backlink
+                     (fangcun--backlink-preview backlink buffer)
+                     previews))))
+      (maphash
+       (lambda (file file-backlinks)
+         (if (not (file-readable-p file))
+             (dolist (backlink file-backlinks)
+               (puthash backlink
+                        "[Source file is unavailable]"
+                        previews))
+           (if-let* ((buffer (fangcun--reusable-file-buffer file)))
+               (record-previews file-backlinks buffer)
+             (with-temp-buffer
+               (insert-file-contents file)
+               (record-previews
+                file-backlinks (current-buffer))))))
+       backlinks-by-file))
+    previews))
 
 (defun fangcun--backlink-button-action (button)
   "Visit the Fangcun backlink represented by BUTTON."
@@ -1019,6 +1052,7 @@ The chosen title or alias becomes the link description."
               (user-error "Fangcun node is no longer indexed: %s"
                           target-id)))
          (backlinks (fangcun-backlink-occurrence-list target-id))
+         (previews (fangcun--backlink-previews backlinks))
          (inhibit-read-only t)
          previous-source-id)
     (erase-buffer)
@@ -1044,7 +1078,7 @@ The chosen title or alias becomes the link description."
             (setq previous-source-id source-id))
           (insert "  ")
           (insert-text-button
-           (fangcun--backlink-preview backlink)
+           (gethash backlink previews)
            :type 'fangcun-backlink-button
            'fangcun-backlink backlink)
           (insert "\n"))))

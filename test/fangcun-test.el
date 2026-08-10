@@ -788,6 +788,90 @@
           (kill-buffer buffer))
         (set-window-parameter nil 'yunge-jump-history nil)))))
 
+(ert-deftest fangcun-backlink-previews-read-each-source-once ()
+  (fangcun-test-with-notes
+    (let ((source-file
+           (expand-file-name "references.org" personal-root))
+          (buffer (get-buffer-create fangcun-backlinks-buffer-name)))
+      (unwind-protect
+          (progn
+            (fangcun-test--write-file
+             source-file
+             (concat
+              ":PROPERTIES:\n"
+              ":ID: source-file\n"
+              ":END:\n"
+              "#+title: Source file\n\n"
+              "[[id:work-file][First reference]]\n"
+              "[[id:work-file][Second reference]]\n"))
+            (fangcun-db-sync)
+            (let ((original (symbol-function 'insert-file-contents))
+                  (reads 0))
+              (cl-letf
+                  (((symbol-function 'insert-file-contents)
+                    (lambda (file &rest arguments)
+                      (when (file-equal-p file source-file)
+                        (cl-incf reads))
+                      (apply original file arguments))))
+                (with-current-buffer buffer
+                  (fangcun-backlinks-mode)
+                  (setq fangcun-backlinks-target-id "work-file")
+                  (fangcun-backlinks-refresh)))
+              (should (= reads 1))))
+        (when (buffer-live-p buffer)
+          (kill-buffer buffer))))))
+
+(ert-deftest fangcun-backlink-previews-reuse-only-matching-buffer ()
+  (fangcun-test-with-notes
+    (let* ((source-file
+            (expand-file-name "references.org" personal-root))
+           (backlinks-buffer
+            (get-buffer-create fangcun-backlinks-buffer-name))
+           source-buffer)
+      (unwind-protect
+          (progn
+            (fangcun-test--write-file
+             source-file
+             (concat
+              ":PROPERTIES:\n"
+              ":ID: source-file\n"
+              ":END:\n"
+              "#+title: Source file\n\n"
+              "[[id:work-file][Saved reference]]\n"))
+            (fangcun-db-sync)
+            (setq source-buffer (find-file-noselect source-file))
+            (let ((original (symbol-function 'insert-file-contents))
+                  (reads 0))
+              (cl-letf
+                  (((symbol-function 'insert-file-contents)
+                    (lambda (file &rest arguments)
+                      (when (file-equal-p file source-file)
+                        (cl-incf reads))
+                      (apply original file arguments))))
+                (with-current-buffer backlinks-buffer
+                  (fangcun-backlinks-mode)
+                  (setq fangcun-backlinks-target-id "work-file")
+                  (fangcun-backlinks-refresh)
+                  (should (search-forward "Saved reference" nil t)))
+                (should (= reads 0))
+                (with-current-buffer source-buffer
+                  (goto-char (point-min))
+                  (search-forward "Saved reference")
+                  (replace-match "Unsaved reference"))
+                (with-current-buffer backlinks-buffer
+                  (fangcun-backlinks-refresh)
+                  (goto-char (point-min))
+                  (should (search-forward "Saved reference" nil t))
+                  (goto-char (point-min))
+                  (should-not
+                   (search-forward "Unsaved reference" nil t)))
+                (should (= reads 1)))))
+        (when (buffer-live-p source-buffer)
+          (with-current-buffer source-buffer
+            (set-buffer-modified-p nil)))
+        (when (buffer-live-p backlinks-buffer)
+          (kill-buffer backlinks-buffer))))))
+
 (ert-deftest fangcun-jumps-participate-in-window-history ()
   (dolist (command '(fangcun-node-find fangcun-backlink-visit))
     (should
