@@ -157,13 +157,13 @@
       (should-not
        (plist-get (consult--customize-args nil) :initial)))))
 
-(ert-deftest yunge-consult-ripgrep-symbol-uses-literal-symbol-at-point ()
+(ert-deftest yunge-consult-ripgrep-symbol-prefers-visual-selection ()
   (yunge-test-enable-evil)
   (require 'consult)
   (yunge-test-load-package-config 'yunge-consult)
   (with-temp-buffer
-    (emacs-lisp-mode)
-    (insert "foo+bar")
+    (c++-mode)
+    (insert "glyph_data_format()")
     (set-mark (point-min))
     (goto-char (point-max))
     (activate-mark)
@@ -174,9 +174,24 @@
                    (setq arguments (list directory initial)))))
         (yunge-consult-ripgrep-symbol))
       (should (equal arguments
-                     (list nil (regexp-quote "foo+bar"))))
+                     (list nil
+                           (regexp-quote "glyph_data_format()"))))
       (should (eq evil-state 'normal))
       (should-not (use-region-p)))))
+
+(ert-deftest yunge-consult-ripgrep-symbol-uses-literal-symbol-at-point ()
+  (require 'consult)
+  (yunge-test-load-package-config 'yunge-consult)
+  (with-temp-buffer
+    (emacs-lisp-mode)
+    (insert "foo+bar")
+    (goto-char (point-min))
+    (let (initial)
+      (cl-letf (((symbol-function 'consult-ripgrep)
+                 (lambda (_directory value)
+                   (setq initial value))))
+        (yunge-consult-ripgrep-symbol))
+      (should (equal initial (regexp-quote "foo+bar"))))))
 
 (ert-deftest yunge-consult-ripgrep-symbol-allows-an-empty-input ()
   (require 'consult)

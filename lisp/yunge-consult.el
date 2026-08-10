@@ -73,10 +73,14 @@
       items)))
 
 (defun yunge-consult-ripgrep-symbol ()
-  "Search the current project for the symbol at point."
+  "Search the current project for the selection or symbol at point."
   (interactive)
-  (let ((initial (when-let* ((symbol (thing-at-point 'symbol t)))
-                   (regexp-quote symbol))))
+  (let* ((text
+          (if (use-region-p)
+              (buffer-substring-no-properties
+               (region-beginning) (region-end))
+            (thing-at-point 'symbol t)))
+         (initial (and text (regexp-quote text))))
     (when (eq evil-state 'visual)
       (evil-exit-visual-state))
     (deactivate-mark)
