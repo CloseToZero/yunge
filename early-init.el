@@ -8,6 +8,7 @@
 
 (add-to-list 'load-path (expand-file-name "lisp/" user-emacs-directory))
 (require 'yunge-state)
+(require 'yunge-encoding)
 
 ;; Raise the GC threshold during startup, then restore Emacs's default.
 (let ((threshold gc-cons-threshold))
@@ -15,9 +16,6 @@
   (add-hook 'emacs-startup-hook
             (lambda ()
               (setq gc-cons-threshold threshold))))
-
-;; Keep text portable without overriding the Windows clipboard encoding.
-(prefer-coding-system 'utf-8-unix)
 
 ;; This configuration owns defaults and does not use platform resources.
 (setq inhibit-default-init t
