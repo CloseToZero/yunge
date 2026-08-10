@@ -303,10 +303,12 @@ RELATIVE-FILE names BUFFER's file relative to YIYU's root."
       (save-restriction
         (widen)
         (let ((file-title (fangcun--file-title relative-file))
+              (case-fold-search t)
+              (id-property-re (org-re-property "ID"))
               nodes)
           (goto-char (point-min))
           ;; Point may already be on the first heading.  Without this check,
-          ;; its ID would be collected here and again by `org-map-entries'.
+          ;; its ID would be collected here and again below.
           (when (= (org-outline-level) 0)
             (when-let* ((id (org-id-get)))
               (push
@@ -319,22 +321,28 @@ RELATIVE-FILE names BUFFER's file relative to YIYU's root."
                 :title file-title
                 :aliases (fangcun--aliases-at-point))
                nodes)))
-          (org-map-entries
-           (lambda ()
-             (when-let* ((id (org-id-get)))
-               (push
-                (make-fangcun-node
-                 :id id
-                 :yiyu-id (fangcun-yiyu-id yiyu)
-                 :yiyu-name (fangcun-yiyu-name yiyu)
-                 :yiyu-root (fangcun-yiyu-root yiyu)
-                 :file relative-file
-                 :title
-                 (fangcun--display-title
-                  (org-get-heading t t t) id)
-                 :aliases (fangcun--aliases-at-point))
-                nodes)))
-           nil nil)
+          ;; Fangcun nodes are sparse among Org headings.  Search possible ID
+          ;; properties directly, then let Org reject lookalikes outside a
+          ;; property drawer.
+          (goto-char (point-min))
+          (while (re-search-forward id-property-re nil t)
+            (let ((id (match-string-no-properties 3)))
+              (when (org-at-property-p)
+                (save-excursion
+                  (org-back-to-heading-or-point-min t)
+                  (unless (= (org-outline-level) 0)
+                    (push
+                     (make-fangcun-node
+                      :id id
+                      :yiyu-id (fangcun-yiyu-id yiyu)
+                      :yiyu-name (fangcun-yiyu-name yiyu)
+                      :yiyu-root (fangcun-yiyu-root yiyu)
+                      :file relative-file
+                      :title
+                      (fangcun--display-title
+                       (org-get-heading t t t) id)
+                      :aliases (fangcun--aliases-at-point))
+                     nodes))))))
           (nreverse nodes))))))
 
 (defun fangcun--collect-links-from-buffer (buffer)

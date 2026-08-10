@@ -328,6 +328,63 @@
       '("Current name")))
     (should-not (fangcun-node-from-id "theorem"))))
 
+(ert-deftest fangcun-indexes-only-ids-in-property-drawers ()
+  (with-temp-buffer
+    (insert
+     (concat
+      ":PROPERTIES:\n"
+      ":ID: file-node\n"
+      ":ALIASES: File \"File alias\"\n"
+      ":END:\n"
+      "#+title: Edge\n\n"
+      "* Normal\n"
+      ":PROPERTIES:\n"
+      ":ID: normal\n"
+      ":ALIASES: One \"Two words\"\n"
+      ":END:\n"
+      "* Lowercase\n"
+      ":properties:\n"
+      ":id: lowercase\n"
+      ":end:\n"
+      "* Planning\n"
+      "SCHEDULED: <2026-08-10 Mon>\n"
+      ":PROPERTIES:\n"
+      ":ID: planned\n"
+      ":END:\n"
+      "* Plain text\n"
+      ":ID: ignored-plain\n"
+      "* Other drawer\n"
+      ":LOGBOOK:\n"
+      ":ID: ignored-drawer\n"
+      ":END:\n"
+      "* Source block\n"
+      "#+begin_src text\n"
+      ":ID: ignored-source\n"
+      "#+end_src\n"
+      "* Comment block\n"
+      "#+begin_comment\n"
+      ":ID: ignored-comment\n"
+      "#+end_comment\n"))
+    (org-mode)
+    (let* ((yiyu
+            (make-fangcun-yiyu
+             :id 'test :name "Test" :root default-directory))
+           (nodes
+            (fangcun--collect-nodes-from-buffer
+             (current-buffer) yiyu "edge.org")))
+      (should
+       (equal
+        (mapcar
+         (lambda (node)
+           (list (fangcun-node-id node)
+                 (fangcun-node-title node)
+                 (fangcun-node-aliases node)))
+         nodes)
+        '(("file-node" "Edge" ("File" "File alias"))
+          ("normal" "Normal" ("One" "Two words"))
+          ("lowercase" "Lowercase" nil)
+          ("planned" "Planning" nil)))))))
+
 (ert-deftest fangcun-parsing-inhibits-org-startup ()
   (fangcun-test-with-notes
     (let ((original-org-mode (symbol-function 'org-mode))
