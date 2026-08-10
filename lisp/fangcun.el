@@ -200,8 +200,25 @@ Each entry has the form (ID :name NAME :root ROOT)."
     "id TEXT PRIMARY KEY, "
     "name TEXT NOT NULL, "
     "root TEXT NOT NULL)"))
+  ;; FILES is the synchronization boundary.  It records every indexed Org
+  ;; file, including files without nodes, and owns the graph data parsed from
+  ;; that file.  MTIME and SIZE are cheap change detectors rather than a
+  ;; content identity; a full rebuild remains the fallback for rare misses.
+  (sqlite-execute
+   database
+   (concat
+    "CREATE TABLE files ("
+    "yiyu_id TEXT NOT NULL, "
+    "file TEXT NOT NULL, "
+    "mtime REAL NOT NULL, "
+    "size INTEGER NOT NULL, "
+    "PRIMARY KEY (yiyu_id, file), "
+    "FOREIGN KEY (yiyu_id) REFERENCES yiyus (id) "
+    "ON DELETE CASCADE)"))
   ;; The database resolves an ID to its file.  Org searches that file for the
   ;; entry, avoiding byte positions that become stale when a buffer changes.
+  ;; File ownership also lets one file-row deletion remove its nodes and,
+  ;; through their foreign keys, their aliases and outgoing links.
   (sqlite-execute
    database
    (concat
@@ -210,7 +227,8 @@ Each entry has the form (ID :name NAME :root ROOT)."
     "yiyu_id TEXT NOT NULL, "
     "file TEXT NOT NULL, "
     "title TEXT NOT NULL, "
-    "FOREIGN KEY (yiyu_id) REFERENCES yiyus (id))"))
+    "FOREIGN KEY (yiyu_id, file) "
+    "REFERENCES files (yiyu_id, file) ON DELETE CASCADE)"))
   ;; Store aliases as rows instead of serializing them into NODES because each
   ;; alias is an independent completion name.  The composite primary key also
   ;; prevents duplicate names for one node and supports cascading node deletes.
@@ -429,6 +447,22 @@ RELATIVE-FILE names BUFFER's file relative to YIYU's root."
     (fangcun-yiyu-name yiyu)
     (fangcun-yiyu-root yiyu))))
 
+(defun fangcun--insert-file
+    (database yiyu relative-file attributes)
+  "Insert RELATIVE-FILE owned by YIYU into DATABASE.
+ATTRIBUTES are the value returned by `file-attributes'."
+  (sqlite-execute
+   database
+   (concat
+    "INSERT INTO files "
+    "(yiyu_id, file, mtime, size) "
+    "VALUES (?, ?, ?, ?)")
+   (vector
+    (fangcun-yiyu-id yiyu)
+    relative-file
+    (float-time (file-attribute-modification-time attributes))
+    (file-attribute-size attributes))))
+
 (defun fangcun--insert-node (database node)
   "Insert NODE into DATABASE."
   (sqlite-execute
@@ -505,16 +539,21 @@ RELATIVE-FILE names BUFFER's file relative to YIYU's root."
                              (directory-files-recursively
                               (fangcun-yiyu-root yiyu) "\\.org\\'"))
                       (cl-incf file-count)
-                      (let ((counts
-                             (fangcun--insert-file-data
-                              database
-                              (fangcun--parse-file yiyu file))))
-                        (cl-incf node-count
-                                 (plist-get counts :nodes))
-                        (cl-incf alias-count
-                                 (plist-get counts :aliases))
-                        (cl-incf link-count
-                                 (plist-get counts :links)))))
+                      (let* ((relative-file
+                              (file-relative-name
+                               file (fangcun-yiyu-root yiyu)))
+                             (attributes (file-attributes file 'string))
+                             (data (fangcun--parse-file yiyu file)))
+                        (fangcun--insert-file
+                         database yiyu relative-file attributes)
+                        (let ((counts
+                               (fangcun--insert-file-data database data)))
+                          (cl-incf node-count
+                                   (plist-get counts :nodes))
+                          (cl-incf alias-count
+                                   (plist-get counts :aliases))
+                          (cl-incf link-count
+                                   (plist-get counts :links))))))
                   (list :yiyus (length yiyus)
                         :files file-count
                         :nodes node-count
@@ -545,6 +584,7 @@ When NO-MESSAGE is non-nil, do not report the indexed counts."
     (user-error "Run fangcun-db-sync before updating individual files"))
   (let* ((relative-file
           (file-relative-name file (fangcun-yiyu-root yiyu)))
+         (attributes (file-attributes file 'string))
          (data (fangcun--parse-file yiyu file))
          (result
           (fangcun--call-with-database
@@ -571,9 +611,11 @@ When NO-MESSAGE is non-nil, do not report the indexed counts."
                (sqlite-execute
                 database
                 (concat
-                 "DELETE FROM nodes "
+                 "DELETE FROM files "
                  "WHERE yiyu_id = ? AND file = ?")
                 (vector (fangcun-yiyu-id yiyu) relative-file))
+               (fangcun--insert-file
+                database yiyu relative-file attributes)
                (fangcun--insert-file-data database data))))))
     (unless no-message
       (message "Fangcun indexed %d nodes, %d aliases, and %d links from %s"

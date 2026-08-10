@@ -284,6 +284,72 @@
         (file-name-sans-extension
          (file-relative-name work-file work-root)))))))
 
+(ert-deftest fangcun-records-files-without-nodes ()
+  (fangcun-test-with-notes
+    (let ((empty-file
+           (expand-file-name "empty.org" personal-root)))
+      (fangcun-test--write-file empty-file "")
+      (should
+       (equal (fangcun-db-sync)
+              '(:yiyus 2 :files 3 :nodes 4 :aliases 0 :links 1)))
+      (fangcun--call-with-database
+       (lambda (database)
+         (let ((rows
+                (sqlite-select
+                 database
+                 (concat
+                  "SELECT yiyu_id, file, mtime, size FROM files "
+                  "ORDER BY yiyu_id, file"))))
+           (should (= (length rows) 3))
+           (let ((row
+                  (seq-find
+                   (lambda (candidate)
+                     (equal (elt candidate 1) "empty.org"))
+                   rows)))
+             (should (equal (elt row 0) "personal"))
+             (should (numberp (elt row 2)))
+             (should (= (elt row 3) 0)))))))))
+
+(ert-deftest fangcun-file-owns-nodes-aliases-and-outgoing-links ()
+  (fangcun-test-with-notes
+    (fangcun-test--write-file
+     personal-file
+     (concat
+      ":PROPERTIES:\n"
+      ":ID: personal-file\n"
+      ":ALIASES: Personal\n"
+      ":END:\n"
+      "[[id:work-file][Outgoing]]\n"))
+    (fangcun-test--write-file
+     work-file
+     (concat
+      ":PROPERTIES:\n"
+      ":ID: work-file\n"
+      ":END:\n"
+      "[[id:personal-file][Incoming]]\n"))
+    (should
+     (equal (fangcun-db-sync)
+            '(:yiyus 2 :files 2 :nodes 2 :aliases 1 :links 2)))
+    (fangcun--call-with-database
+     (lambda (database)
+       (sqlite-execute
+        database
+        (concat
+         "DELETE FROM files "
+         "WHERE yiyu_id = ? AND file = ?")
+        (vector "personal" "theorems.org"))
+       (should
+        (equal
+         (sqlite-select database "SELECT id FROM nodes")
+         '(("work-file"))))
+       (should-not (sqlite-select database "SELECT alias FROM aliases"))
+       (should
+        (equal
+         (sqlite-select
+          database
+          "SELECT source_id, target_id FROM links")
+         '(("work-file" "personal-file"))))))))
+
 (ert-deftest fangcun-indexes-and-replaces-node-aliases ()
   (fangcun-test-with-notes
     (fangcun-test--write-file
