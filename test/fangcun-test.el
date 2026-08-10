@@ -577,7 +577,7 @@
          (fangcun-test--node "fangcun-test-disk-node" nodes))
         (should-not (fangcun-test--node "theorem" nodes))))))
 
-(ert-deftest fangcun-sync-rebuilds-database ()
+(ert-deftest fangcun-rebuild-replaces-database ()
   (fangcun-test-with-notes
     (fangcun-db-sync)
     (fangcun--call-with-database
@@ -585,7 +585,7 @@
        (sqlite-execute database "CREATE TABLE obsolete (value)")))
     (delete-file personal-file)
     (should
-     (equal (fangcun-db-sync)
+     (equal (fangcun-db-rebuild)
              '(:yiyus 2 :files 1 :nodes 1 :aliases 0 :links 0)))
     (should-not
      (fangcun--call-with-database
@@ -598,6 +598,94 @@
     (should
      (equal (mapcar #'fangcun-node-id (fangcun-node-list))
             '("work-file")))))
+
+(ert-deftest fangcun-sync-skips-unchanged-files ()
+  (fangcun-test-with-notes
+    (fangcun-db-sync)
+    (cl-letf
+        (((symbol-function 'fangcun--parse-file)
+          (lambda (&rest _arguments)
+            (ert-fail "An unchanged file was parsed"))))
+      (should
+       (equal (fangcun-db-sync)
+              '(:yiyus 2 :files 2 :nodes 4 :aliases 0 :links 1))))))
+
+(ert-deftest fangcun-syncs-added-changed-and-deleted-files ()
+  (fangcun-test-with-notes
+    (fangcun-db-sync)
+    (delete-file work-file)
+    (fangcun-test--write-file
+     personal-file
+     (concat
+      ":PROPERTIES:\n"
+      ":ID: personal-file\n"
+      ":END:\n"
+      "* Replacement\n"
+      ":PROPERTIES:\n"
+      ":ID: replacement\n"
+      ":END:\n"))
+    (let ((new-file (expand-file-name "new.org" personal-root))
+          (original-parser (symbol-function 'fangcun--parse-file))
+          parsed)
+      (fangcun-test--write-file
+       new-file
+       ":PROPERTIES:\n:ID: new-file\n:END:\n")
+      (cl-letf
+          (((symbol-function 'fangcun--parse-file)
+            (lambda (yiyu file)
+              (push (file-name-nondirectory file) parsed)
+              (funcall original-parser yiyu file))))
+        (should
+         (equal (fangcun-db-sync)
+                '(:yiyus 2 :files 2 :nodes 3 :aliases 0 :links 0))))
+      (should
+       (equal (sort parsed #'string-lessp)
+              '("new.org" "theorems.org")))
+      (should
+       (equal
+        (sort (mapcar #'fangcun-node-id (fangcun-node-list))
+              #'string-lessp)
+        '("new-file" "personal-file" "replacement"))))))
+
+(ert-deftest fangcun-sync-rolls-back-a-failed-update ()
+  (fangcun-test-with-notes
+    (fangcun-db-sync)
+    (fangcun-test--write-file
+     personal-file
+     (concat
+      ":PROPERTIES:\n"
+      ":ID: personal-file\n"
+      ":END:\n"
+      "* Duplicate\n"
+      ":PROPERTIES:\n"
+      ":ID: work-file\n"
+      ":END:\n"))
+    (should-error (fangcun-db-sync))
+    (should
+     (equal
+      (sort (mapcar #'fangcun-node-id (fangcun-node-list))
+            #'string-lessp)
+      '("personal-file" "theorem" "untitled-heading" "work-file")))))
+
+(ert-deftest fangcun-sync-keeps-an-unavailable-yiyu ()
+  (fangcun-test-with-notes
+    (fangcun-db-sync)
+    (delete-directory work-root t)
+    (should-error (fangcun-db-sync) :type 'user-error)
+    (should (fangcun-node-from-id "work-file"))))
+
+(ert-deftest fangcun-sync-rebuilds-after-yiyu-configuration-changes ()
+  (fangcun-test-with-notes
+    (fangcun-db-sync)
+    (let ((fangcun-yiyus
+           `((personal :name "Renamed" :root ,personal-root)
+             (work :name "Work" :root ,work-root))))
+      (fangcun-db-sync)
+      (should
+       (equal
+        (fangcun-node-yiyu-name
+         (fangcun-node-from-id "personal-file"))
+        "Renamed")))))
 
 (ert-deftest fangcun-updates-one-file-and-its-outgoing-links ()
   (fangcun-test-with-notes

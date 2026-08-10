@@ -66,6 +66,13 @@ Each entry has the form (ID :name NAME :root ROOT)."
   target-id
   position)
 
+(cl-defstruct fangcun-file-state
+  yiyu
+  relative-file
+  absolute-file
+  mtime
+  size)
+
 (cl-defstruct fangcun-backlink
   node
   position)
@@ -437,6 +444,34 @@ RELATIVE-FILE names BUFFER's file relative to YIYU's root."
         (fangcun--collect-file-data-from-buffer
          (current-buffer) yiyu relative-file)))))
 
+(defun fangcun--read-file-state (yiyu file)
+  "Return the synchronization state of FILE owned by YIYU."
+  (let ((attributes (file-attributes file 'string)))
+    (make-fangcun-file-state
+     :yiyu yiyu
+     :relative-file
+     (file-relative-name file (fangcun-yiyu-root yiyu))
+     :absolute-file file
+     :mtime
+     (float-time (file-attribute-modification-time attributes))
+     :size (file-attribute-size attributes))))
+
+(defun fangcun--scan-file-states (yiyus)
+  "Return the current Org file states below YIYUS."
+  ;; Validate every root before a missing root could be mistaken for an empty
+  ;; root and cause its indexed files to be removed.
+  (dolist (yiyu yiyus)
+    (unless (file-directory-p (fangcun-yiyu-root yiyu))
+      (user-error "Fangcun yiyu does not exist: %s"
+                  (fangcun-yiyu-root yiyu))))
+  (let (states)
+    (dolist (yiyu yiyus)
+      (dolist (file
+               (directory-files-recursively
+                (fangcun-yiyu-root yiyu) "\\.org\\'"))
+        (push (fangcun--read-file-state yiyu file) states)))
+    (nreverse states)))
+
 (defun fangcun--insert-yiyu (database yiyu)
   "Insert YIYU into DATABASE."
   (sqlite-execute
@@ -447,10 +482,8 @@ RELATIVE-FILE names BUFFER's file relative to YIYU's root."
     (fangcun-yiyu-name yiyu)
     (fangcun-yiyu-root yiyu))))
 
-(defun fangcun--insert-file
-    (database yiyu relative-file attributes)
-  "Insert RELATIVE-FILE owned by YIYU into DATABASE.
-ATTRIBUTES are the value returned by `file-attributes'."
+(defun fangcun--insert-file (database state)
+  "Insert Fangcun file STATE into DATABASE."
   (sqlite-execute
    database
    (concat
@@ -458,10 +491,10 @@ ATTRIBUTES are the value returned by `file-attributes'."
     "(yiyu_id, file, mtime, size) "
     "VALUES (?, ?, ?, ?)")
    (vector
-    (fangcun-yiyu-id yiyu)
-    relative-file
-    (float-time (file-attribute-modification-time attributes))
-    (file-attribute-size attributes))))
+    (fangcun-yiyu-id (fangcun-file-state-yiyu state))
+    (fangcun-file-state-relative-file state)
+    (fangcun-file-state-mtime state)
+    (fangcun-file-state-size state))))
 
 (defun fangcun--insert-node (database node)
   "Insert NODE into DATABASE."
@@ -510,55 +543,82 @@ ATTRIBUTES are the value returned by `file-attributes'."
                                nodes))
           :links (length links))))
 
-;;;###autoload
-(defun fangcun-db-sync ()
-  "Rebuild the Fangcun database from configured yiyu roots."
-  (interactive)
-  (let ((yiyus (fangcun--configured-yiyus)))
-    (unless yiyus
-      (user-error "Configure `fangcun-yiyus' before syncing"))
-    (let ((database-file fangcun-database-file))
-      (when (file-exists-p database-file)
-        (delete-file database-file)))
+(defun fangcun--file-state-key (state)
+  "Return the database key for Fangcun file STATE."
+  (cons
+   (fangcun-yiyu-id (fangcun-file-state-yiyu state))
+   (fangcun-file-state-relative-file state)))
+
+(defun fangcun--database-yiyus-match-p (database yiyus)
+  "Return whether DATABASE contains exactly YIYUS."
+  (equal
+   (sqlite-select
+    database
+    "SELECT id, name, root FROM yiyus ORDER BY id")
+   (sort
+    (mapcar
+     (lambda (yiyu)
+       (list (fangcun-yiyu-id yiyu)
+             (fangcun-yiyu-name yiyu)
+             (fangcun-yiyu-root yiyu)))
+     yiyus)
+    (lambda (left right)
+      (string-lessp (car left) (car right))))))
+
+(defun fangcun--database-file-states (database)
+  "Return the indexed file states in DATABASE, keyed by yiyu and file."
+  (let ((states (make-hash-table :test #'equal)))
+    (dolist (row
+             (sqlite-select
+              database
+              "SELECT yiyu_id, file, mtime, size FROM files"))
+      (puthash (cons (elt row 0) (elt row 1))
+               (cons (elt row 2) (elt row 3))
+               states))
+    states))
+
+(defun fangcun--database-counts (database)
+  "Return the current Fangcun row counts in DATABASE."
+  (let ((row
+         (car
+          (sqlite-select
+           database
+           (concat
+            "SELECT "
+            "(SELECT COUNT(*) FROM yiyus), "
+            "(SELECT COUNT(*) FROM files), "
+            "(SELECT COUNT(*) FROM nodes), "
+            "(SELECT COUNT(*) FROM aliases), "
+            "(SELECT COUNT(*) FROM links)")))))
+    (list :yiyus (elt row 0)
+          :files (elt row 1)
+          :nodes (elt row 2)
+          :aliases (elt row 3)
+          :links (elt row 4))))
+
+(defun fangcun--rebuild-database (yiyus states)
+  "Replace the Fangcun database with YIYUS and file STATES."
+  (let ((parsed
+         (mapcar
+          (lambda (state)
+            (cons
+             state
+             (fangcun--parse-file
+              (fangcun-file-state-yiyu state)
+              (fangcun-file-state-absolute-file state))))
+          states)))
+    (when (file-exists-p fangcun-database-file)
+      (delete-file fangcun-database-file))
     (let ((result
            (fangcun--call-with-database
             (lambda (database)
               (with-sqlite-transaction database
-                (let ((file-count 0)
-                      (node-count 0)
-                      (alias-count 0)
-                      (link-count 0))
-                  (dolist (yiyu yiyus)
-                    (unless (file-directory-p
-                             (fangcun-yiyu-root yiyu))
-                      (user-error
-                       "Fangcun yiyu does not exist: %s"
-                       (fangcun-yiyu-root yiyu)))
-                    (fangcun--insert-yiyu database yiyu)
-                    (dolist (file
-                             (directory-files-recursively
-                              (fangcun-yiyu-root yiyu) "\\.org\\'"))
-                      (cl-incf file-count)
-                      (let* ((relative-file
-                              (file-relative-name
-                               file (fangcun-yiyu-root yiyu)))
-                             (attributes (file-attributes file 'string))
-                             (data (fangcun--parse-file yiyu file)))
-                        (fangcun--insert-file
-                         database yiyu relative-file attributes)
-                        (let ((counts
-                               (fangcun--insert-file-data database data)))
-                          (cl-incf node-count
-                                   (plist-get counts :nodes))
-                          (cl-incf alias-count
-                                   (plist-get counts :aliases))
-                          (cl-incf link-count
-                                   (plist-get counts :links))))))
-                  (list :yiyus (length yiyus)
-                        :files file-count
-                        :nodes node-count
-                        :aliases alias-count
-                        :links link-count)))))))
+                (dolist (yiyu yiyus)
+                  (fangcun--insert-yiyu database yiyu))
+                (dolist (entry parsed)
+                  (fangcun--insert-file database (car entry))
+                  (fangcun--insert-file-data database (cdr entry)))
+                (fangcun--database-counts database))))))
       (message
        (concat
         "Fangcun indexed %d nodes, %d aliases, and %d links "
@@ -569,6 +629,91 @@ ATTRIBUTES are the value returned by `file-attributes'."
        (plist-get result :files)
        (plist-get result :yiyus))
       result)))
+
+(defun fangcun--sync-database (states)
+  "Synchronize an existing Fangcun database with file STATES."
+  (fangcun--call-with-database
+   (lambda (database)
+     (let ((database-states
+            (fangcun--database-file-states database))
+           (current-keys (make-hash-table :test #'equal))
+           (missing (make-symbol "missing"))
+           changed deleted
+           (added-count 0)
+           (updated-count 0))
+       (dolist (state states)
+         (let* ((key (fangcun--file-state-key state))
+                (current
+                 (cons (fangcun-file-state-mtime state)
+                       (fangcun-file-state-size state)))
+                (stored (gethash key database-states missing)))
+           (puthash key t current-keys)
+           (unless (equal stored current)
+             (if (eq stored missing)
+                 (cl-incf added-count)
+               (cl-incf updated-count))
+             (push state changed))))
+       (maphash
+        (lambda (key _state)
+          (unless (gethash key current-keys)
+            (push key deleted)))
+        database-states)
+       (setq changed (nreverse changed)
+             deleted (nreverse deleted))
+       ;; Parse before changing the database.  A parse error therefore leaves
+       ;; the last successful index untouched.
+       (let ((parsed
+              (mapcar
+               (lambda (state)
+                 (cons
+                  state
+                  (fangcun--parse-file
+                   (fangcun-file-state-yiyu state)
+                   (fangcun-file-state-absolute-file state))))
+               changed)))
+         (with-sqlite-transaction database
+           (dolist (key
+                    (append deleted
+                            (mapcar #'fangcun--file-state-key changed)))
+             (sqlite-execute
+              database
+              (concat
+               "DELETE FROM files "
+               "WHERE yiyu_id = ? AND file = ?")
+              (vector (car key) (cdr key))))
+           (dolist (entry parsed)
+             (fangcun--insert-file database (car entry))
+             (fangcun--insert-file-data database (cdr entry))))
+         (message
+          "Fangcun synchronized files: %d added, %d updated, %d removed"
+          added-count updated-count (length deleted))
+         (fangcun--database-counts database))))))
+
+;;;###autoload
+(defun fangcun-db-rebuild ()
+  "Rebuild the Fangcun database from every configured yiyu file."
+  (interactive)
+  (let ((yiyus (fangcun--configured-yiyus)))
+    (unless yiyus
+      (user-error "Configure `fangcun-yiyus' before syncing"))
+    (fangcun--rebuild-database
+     yiyus (fangcun--scan-file-states yiyus))))
+
+;;;###autoload
+(defun fangcun-db-sync ()
+  "Synchronize the Fangcun database with configured yiyu files."
+  (interactive)
+  (let ((yiyus (fangcun--configured-yiyus)))
+    (unless yiyus
+      (user-error "Configure `fangcun-yiyus' before syncing"))
+    (let ((states (fangcun--scan-file-states yiyus)))
+      (if (and
+           (file-exists-p fangcun-database-file)
+           (fangcun--call-with-database
+            (lambda (database)
+              (fangcun--database-yiyus-match-p database yiyus))))
+          (fangcun--sync-database states)
+        (fangcun--rebuild-database yiyus states)))))
 
 (defun fangcun--db-update-file-in-yiyu (file yiyu &optional no-message)
   "Replace database entries for saved Org FILE owned by YIYU.
@@ -582,9 +727,8 @@ When NO-MESSAGE is non-nil, do not report the indexed counts."
       (user-error "Save the Fangcun file before updating it")))
   (unless (file-exists-p fangcun-database-file)
     (user-error "Run fangcun-db-sync before updating individual files"))
-  (let* ((relative-file
-          (file-relative-name file (fangcun-yiyu-root yiyu)))
-         (attributes (file-attributes file 'string))
+  (let* ((state (fangcun--read-file-state yiyu file))
+         (relative-file (fangcun-file-state-relative-file state))
          (data (fangcun--parse-file yiyu file))
          (result
           (fangcun--call-with-database
@@ -614,8 +758,7 @@ When NO-MESSAGE is non-nil, do not report the indexed counts."
                  "DELETE FROM files "
                  "WHERE yiyu_id = ? AND file = ?")
                 (vector (fangcun-yiyu-id yiyu) relative-file))
-               (fangcun--insert-file
-                database yiyu relative-file attributes)
+               (fangcun--insert-file database state)
                (fangcun--insert-file-data database data))))))
     (unless no-message
       (message "Fangcun indexed %d nodes, %d aliases, and %d links from %s"
