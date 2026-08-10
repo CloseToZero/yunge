@@ -620,13 +620,22 @@
         ":ID: source-file\n"
         ":END:\n"
         "#+title: Source file\n\n"
+        "#+caption: [[id:ignored-keyword][Keyword link]]\n\n"
         "[[id:work-file][File link]]\n\n"
         "[[id:work-file::*Status][Heading search]]\n"
         "[[id:work-file::target][Target search]]\n\n"
         "* Parent\n"
         ":PROPERTIES:\n"
         ":ID: parent\n"
+        ":IGNORED: [[id:ignored-property][Property link]]\n"
         ":END:\n"
+        "#+begin_src text\n"
+        "[[id:ignored-source][Source block link]]\n"
+        "#+end_src\n"
+        "#+begin_comment\n"
+        "[[id:ignored-comment][Comment block link]]\n"
+        "#+end_comment\n"
+        "# [[id:ignored-line-comment][Comment line link]]\n"
         "** Child without an ID\n"
         "[[id:work-file][First child link]]\n"
         "[[id:work-file][Second child link]]\n"))
@@ -676,7 +685,13 @@
            database
            (concat
             "SELECT name FROM sqlite_master "
-            "WHERE type = 'index' AND name = 'links_target_id'"))))))))
+            "WHERE type = 'index' AND name = 'links_target_id'")))
+         (should-not
+          (sqlite-select
+           database
+           (concat
+            "SELECT target_id FROM links "
+            "WHERE target_id LIKE 'ignored-%'"))))))))
 
 (ert-deftest fangcun-finds-a-backlink-at-its-first-occurrence ()
   (fangcun-test-with-notes

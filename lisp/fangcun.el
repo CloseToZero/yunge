@@ -343,10 +343,18 @@ RELATIVE-FILE names BUFFER's file relative to YIYU's root."
     (save-excursion
       (save-restriction
         (widen)
+        (goto-char (point-min))
         (let (links)
-          (org-element-map (org-element-parse-buffer) 'link
-            (lambda (element)
-              (when (equal (org-element-property :type element) "id")
+          (while (re-search-forward org-link-any-re nil t)
+            ;; The search leaves point after the link.  Move onto it so Org
+            ;; can reject matches in source blocks, comments, properties, and
+            ;; keywords.
+            (backward-char)
+            (let ((element (org-element-context)))
+              (when (and (eq (org-element-type element) 'link)
+                         (equal
+                          (org-element-property :type element)
+                          "id"))
                 (when-let*
                     ((source-id
                       (fangcun--element-owner-id element)))
