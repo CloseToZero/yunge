@@ -5,12 +5,27 @@
 (require 'yunge-evil)
 (require 'yunge-key)
 
+(declare-function evil-append-line "evil-commands" (count))
+(declare-function evil-insert "evil-commands" (count))
+(declare-function evil-insert-line "evil-commands" (count))
+(declare-function evil-open-above "evil-commands" (count))
+(declare-function evil-open-below "evil-commands" (count))
+(declare-function org-at-heading-or-item-p "org" ())
+(declare-function org-at-heading-p "org" (&optional _ignored))
+(declare-function org-at-item-checkbox-p "org-list" ())
+(declare-function org-at-item-p "org-list" ())
+(declare-function org-at-table-p "org-table" (&optional table-type))
 (declare-function org-back-to-heading "org" (&optional invisible-ok))
+(declare-function org-beginning-of-line "org" (&optional n))
+(declare-function org-end-of-line "org" (&optional n))
 (declare-function org-fold-hide-subtree "org-fold")
 (declare-function org-fold-show-children "org-fold" (&optional level))
 (declare-function org-fold-show-entry "org-fold" (&optional hide-drawers))
 (declare-function org-in-regexp "org" (regexp &optional nlines visually))
+(declare-function org-insert-item "org-list" (&optional checkbox))
+(declare-function org-move-item-down "org-list" ())
 (declare-function org-region-active-p "org" ())
+(declare-function org-table-insert-row "org-table" (&optional arg))
 (declare-function yunge-jump-history-track-command
                   "yunge-jump-history" (command))
 
@@ -37,6 +52,10 @@
 
 (defconst yunge-org-normal-bindings
   '(("RET" org-open-at-point "open at point")
+    ("I" yunge-org-insert-line "insert at content start")
+    ("A" yunge-org-append-line "append to content")
+    ("o" yunge-org-open-below "open below")
+    ("O" yunge-org-open-above "open above")
     ("C-j" org-next-visible-heading "next heading")
     ("C-k" org-previous-visible-heading "previous heading")
     ("gf" org-open-at-point "open at point")
@@ -50,6 +69,61 @@
 (defconst yunge-org-note-bindings
   '(("l" org-insert-link "insert link")
     ("s" org-store-link "store link")))
+
+(defun yunge-org-insert-line (count)
+  "Enter Insert state at Org content start with repeat COUNT.
+On headings and list items, skip their structural prefix."
+  (interactive "p")
+  (if (org-at-heading-or-item-p)
+      (progn
+        (beginning-of-line)
+        (let ((org-special-ctrl-a/e t))
+          (org-beginning-of-line))
+        (evil-insert count))
+    (evil-insert-line count)))
+
+(defun yunge-org-append-line (count)
+  "Enter Insert state at Org content end with repeat COUNT.
+On headings, stay before trailing tags and fold ellipses."
+  (interactive "p")
+  (if (org-at-heading-p)
+      (progn
+        (end-of-line)
+        (let ((org-special-ctrl-a/e t))
+          (org-end-of-line))
+        (evil-insert count))
+    (evil-append-line count)))
+
+(defun yunge-org-open-below (count)
+  "Open an Org row or list item below, otherwise call Evil with COUNT."
+  (interactive "p")
+  (cond
+   ((org-at-table-p)
+    (org-table-insert-row '(4))
+    (evil-insert 1))
+   ((org-at-item-p)
+    (let ((checkbox (org-at-item-checkbox-p)))
+      (beginning-of-line)
+      (org-insert-item checkbox)
+      (org-move-item-down))
+    (evil-insert 1))
+   (t
+    (evil-open-below count))))
+
+(defun yunge-org-open-above (count)
+  "Open an Org row or list item above, otherwise call Evil with COUNT."
+  (interactive "p")
+  (cond
+   ((org-at-table-p)
+    (org-table-insert-row)
+    (evil-insert 1))
+   ((org-at-item-p)
+    (let ((checkbox (org-at-item-checkbox-p)))
+      (beginning-of-line)
+      (org-insert-item checkbox))
+    (evil-insert 1))
+   (t
+    (evil-open-above count))))
 
 (defun yunge-org--insert-link-at-normal-state-eol
     (function &rest arguments)

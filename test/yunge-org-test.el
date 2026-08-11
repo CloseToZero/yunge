@@ -20,6 +20,10 @@
     (yunge-test-evil-keys
      'normal
      '(("RET" . org-open-at-point)
+       ("I" . yunge-org-insert-line)
+       ("A" . yunge-org-append-line)
+       ("o" . yunge-org-open-below)
+       ("O" . yunge-org-open-above)
        ("C-j" . org-next-visible-heading)
        ("C-k" . org-previous-visible-heading)
        ("gf" . org-open-at-point)
@@ -51,6 +55,115 @@
        ("M-l" . org-metaright)
        ("M-H" . org-shiftmetaleft)
        ("M-L" . org-shiftmetaright)))))
+
+(ert-deftest yunge-org-inserts-within-heading-structure ()
+  (yunge-org-test--load-config)
+  (with-temp-buffer
+    (org-mode)
+    (insert "* TODO [#A] Heading :tag:\n")
+    (goto-char (point-min))
+    (evil-normal-state)
+    (yunge-org-insert-line 1)
+    (should (eq evil-state 'insert))
+    (should (looking-at-p "Heading"))
+    (evil-normal-state)
+    (yunge-org-append-line 1)
+    (should (eq evil-state 'insert))
+    (should (looking-at-p " :tag:"))))
+
+(ert-deftest yunge-org-inserts-after-a-list-item-prefix ()
+  (yunge-org-test--load-config)
+  (with-temp-buffer
+    (org-mode)
+    (insert "- [ ] Item\n")
+    (goto-char (point-min))
+    (evil-normal-state)
+    (yunge-org-insert-line 1)
+    (should (eq evil-state 'insert))
+    (should (looking-at-p "Item"))))
+
+(ert-deftest yunge-org-appends-before-a-folded-subtree ()
+  (yunge-org-test--load-config)
+  (with-temp-buffer
+    (org-mode)
+    (insert "* Heading\nBody\n")
+    (goto-char (point-min))
+    (org-fold-hide-subtree)
+    (evil-normal-state)
+    (yunge-org-append-line 1)
+    (should (eq evil-state 'insert))
+    (should (= (point) (line-end-position)))
+    (insert " tail")
+    (should (equal (buffer-string) "* Heading tail\nBody\n"))
+    (should (org-invisible-p
+             (save-excursion
+               (forward-line 1)
+               (point))))))
+
+(ert-deftest yunge-org-opens-checkbox-items-structurally ()
+  (yunge-org-test--load-config)
+  (with-temp-buffer
+    (org-mode)
+    (insert "- [ ] First\n- [ ] Last\n")
+    (goto-char (point-min))
+    (evil-normal-state)
+    (yunge-org-open-below 1)
+    (should (eq evil-state 'insert))
+    (should
+     (equal (buffer-string)
+            "- [ ] First\n- [ ] \n- [ ] Last\n"))
+    (evil-normal-state)
+    (goto-char (point-min))
+    (yunge-org-open-above 1)
+    (should
+     (equal (buffer-string)
+            "- [ ] \n- [ ] First\n- [ ] \n- [ ] Last\n"))))
+
+(ert-deftest yunge-org-opens-after-the-current-list-item-tree ()
+  (yunge-org-test--load-config)
+  (dolist (case
+           '(("- Parent\n  - Child\n- Last\n"
+              "- Parent\n  - Child\n- \n- Last\n")
+             ("- Term :: description\n  - Child\n- Last :: final\n"
+              "- Term :: description\n  - Child\n- :: \n- Last :: final\n")))
+    (with-temp-buffer
+      (org-mode)
+      (insert (car case))
+      (goto-char (point-min))
+      (evil-normal-state)
+      (yunge-org-open-below 1)
+      (should (eq evil-state 'insert))
+      (should (equal (buffer-string) (cadr case))))))
+
+(ert-deftest yunge-org-opens-table-rows-structurally ()
+  (yunge-org-test--load-config)
+  (with-temp-buffer
+    (org-mode)
+    (insert "| First |\n| Last  |\n")
+    (goto-char (point-min))
+    (evil-normal-state)
+    (yunge-org-open-below 1)
+    (should (eq evil-state 'insert))
+    (should
+     (equal (buffer-string)
+            "| First |\n|       |\n| Last  |\n"))
+    (evil-normal-state)
+    (goto-char (point-min))
+    (yunge-org-open-above 1)
+    (should
+     (equal (buffer-string)
+            "|       |\n| First |\n|       |\n| Last  |\n"))))
+
+(ert-deftest yunge-org-keeps-evil-open-outside-structures ()
+  (yunge-org-test--load-config)
+  (with-temp-buffer
+    (org-mode)
+    (insert "Body")
+    (goto-char (point-min))
+    (evil-normal-state)
+    (yunge-org-open-below 1)
+    (should (eq evil-state 'insert))
+    (should (equal (buffer-string) "Body\n"))))
 
 (ert-deftest yunge-org-controls-fold-depth-explicitly ()
   (yunge-org-test--load-config)
