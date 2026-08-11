@@ -68,6 +68,10 @@
 (defconst yunge-org-motion-bindings
   '(("0" yunge-org-beginning-of-line "beginning of content")
     ("$" yunge-org-end-of-line "end of content")
+    ("gh" org-up-element "parent element")
+    ("gl" org-down-element "inner element")
+    ("[E" org-backward-element "previous element")
+    ("]E" org-forward-element "next element")
     ("[h" org-backward-heading-same-level
      "previous same-level heading")
     ("]h" org-forward-heading-same-level

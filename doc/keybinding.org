@@ -221,6 +221,8 @@ Navigation and structural movement:
   line start when invoked again.  On headings, ~$~ similarly stops before
   trailing tags first and moves past them when invoked again.
 - ~C-j/C-k~ move to the next or previous visible heading.
+- ~[E/]E~ move to the previous or next Org element.  ~gh/gl~ move to its
+  parent or into its contents.
 - ~[h/]h~ move to the previous or next heading at the same level.
 - ~[l/]l~ move to the previous or next link.
 - ~[c/]c~ move to the previous or next source block.
