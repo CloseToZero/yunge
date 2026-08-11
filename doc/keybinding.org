@@ -226,6 +226,8 @@ Editing:
 - In tables and headings, ~x/X~ use Org's character deletion so columns and
   tags remain aligned.  Elsewhere, and in Visual state, they retain Evil's
   ordinary deletion behavior.
+- ~</>~ promote or demote selected headings and indent or outdent selected
+  list items.  In other contexts they retain Evil's ordinary shifting.
 
 Opening and visibility:
 

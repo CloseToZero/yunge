@@ -223,6 +223,7 @@ Keep point unchanged when FUNCTION is editing a region or existing link."
 (with-eval-after-load 'evil
   (with-eval-after-load 'org
     (require 'yunge-org-delete)
+    (require 'yunge-org-shift)
     (require 'yunge-org-text-object)
     (dolist (binding yunge-org-motion-bindings)
       (evil-declare-motion (nth 1 binding)))
