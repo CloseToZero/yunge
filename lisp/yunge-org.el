@@ -5,6 +5,7 @@
 (require 'yunge-evil)
 (require 'yunge-key)
 
+(declare-function evil-declare-motion "evil-common" (command))
 (declare-function evil-append-line "evil-commands" (count))
 (declare-function evil-insert "evil-commands" (count))
 (declare-function evil-insert-line "evil-commands" (count))
@@ -49,6 +50,16 @@
     ("M-l" org-metaright "demote structure")
     ("M-H" org-shiftmetaleft "promote subtree")
     ("M-L" org-shiftmetaright "demote subtree")))
+
+(defconst yunge-org-motion-bindings
+  '(("[h" org-backward-heading-same-level
+     "previous same-level heading")
+    ("]h" org-forward-heading-same-level
+     "next same-level heading")
+    ("[l" org-previous-link "previous link")
+    ("]l" org-next-link "next link")
+    ("[c" org-babel-previous-src-block "previous source block")
+    ("]c" org-babel-next-src-block "next source block")))
 
 (defconst yunge-org-normal-bindings
   '(("RET" org-open-at-point "open at point")
@@ -166,6 +177,10 @@ Keep point unchanged when FUNCTION is editing a region or existing link."
 
 (with-eval-after-load 'evil
   (with-eval-after-load 'org
+    (dolist (binding yunge-org-motion-bindings)
+      (evil-declare-motion (nth 1 binding)))
+    (yunge-key-evil-define 'motion org-mode-map
+                           yunge-org-motion-bindings)
     (yunge-key-evil-define '(normal visual) org-mode-map
                            yunge-org-normal-visual-bindings)
     (yunge-key-evil-define 'normal org-mode-map
