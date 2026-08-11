@@ -19,7 +19,9 @@
     (evil-normal-state)
     (yunge-test-evil-keys
      'normal
-     '(("RET" . org-open-at-point)
+     '(("0" . yunge-org-beginning-of-line)
+       ("$" . yunge-org-end-of-line)
+       ("RET" . org-open-at-point)
        ("I" . yunge-org-insert-line)
        ("A" . yunge-org-append-line)
        ("o" . yunge-org-open-below)
@@ -55,7 +57,9 @@
                 #'yunge-jump-history-forward))
     (evil-visual-state)
     (yunge-test-keys
-     '(("M-h" . org-metaleft)
+     '(("0" . yunge-org-beginning-of-line)
+       ("$" . yunge-org-end-of-line)
+       ("M-h" . org-metaleft)
        ("M-j" . org-metadown)
        ("M-k" . org-metaup)
        ("M-l" . org-metaright)
@@ -75,6 +79,100 @@
       (should (evil-get-command-property command :keep-visual))
       (should (eq (evil-get-command-property command :repeat)
                   'motion)))))
+
+(ert-deftest yunge-org-configures-line-boundaries-as-evil-motions ()
+  (yunge-org-test--load-config)
+  (should (eq (evil-get-command-property
+               'yunge-org-beginning-of-line :type)
+              'exclusive))
+  (should (eq (evil-get-command-property
+               'yunge-org-end-of-line :type)
+              'inclusive)))
+
+(ert-deftest yunge-org-moves-between-structural-line-boundaries ()
+  (yunge-org-test--load-config)
+  (with-temp-buffer
+    (org-mode)
+    (insert "* TODO [#A] Heading :tag:\n- [ ] Item\nBody\n")
+    (goto-char (point-min))
+    (evil-normal-state)
+    (yunge-org-beginning-of-line)
+    (should (looking-at-p "Heading"))
+    (yunge-org-beginning-of-line)
+    (should (= (point) (line-beginning-position)))
+    (forward-line 1)
+    (end-of-line)
+    (backward-char)
+    (yunge-org-beginning-of-line)
+    (should (looking-at-p "Item"))
+    (yunge-org-beginning-of-line)
+    (should (= (point) (line-beginning-position)))
+    (forward-line 1)
+    (end-of-line)
+    (backward-char)
+    (yunge-org-beginning-of-line)
+    (should (= (point) (line-beginning-position)))))
+
+(ert-deftest yunge-org-moves-before-and-after-heading-tags ()
+  (yunge-org-test--load-config)
+  (with-temp-buffer
+    (org-mode)
+    (insert "* Heading :tag:\n")
+    (goto-char (point-min))
+    (evil-normal-state)
+    (yunge-org-end-of-line 1)
+    (should (eq (char-after) ?g))
+    (yunge-org-end-of-line 1)
+    (should (eq (char-after) ?:))
+    (should (= (1+ (point)) (line-end-position)))))
+
+(ert-deftest yunge-org-keeps-heading-syntax-outside-evil-operators ()
+  (yunge-org-test--load-config)
+  (dolist (case '(("d $" beginning "*  :tag:\n")
+                  ("d 0" end "* g :tag:\n")))
+    (with-temp-buffer
+      (org-mode)
+      (insert "* Heading :tag:\n")
+      (goto-char (point-min))
+      (search-forward "Heading")
+      (goto-char
+       (if (eq (nth 1 case) 'beginning)
+           (match-beginning 0)
+         (1- (match-end 0))))
+      (evil-normal-state)
+      (save-window-excursion
+        (switch-to-buffer (current-buffer))
+        (execute-kbd-macro (kbd (car case)))
+        (should (equal (buffer-string) (nth 2 case)))))))
+
+(ert-deftest yunge-org-stops-at-a-folded-heading-end ()
+  (yunge-org-test--load-config)
+  (with-temp-buffer
+    (org-mode)
+    (insert "* Heading\nBody\n")
+    (goto-char (point-min))
+    (org-fold-hide-subtree)
+    (evil-normal-state)
+    (yunge-org-end-of-line 1)
+    (should (eq (char-after) ?g))
+    (should
+     (org-invisible-p
+      (save-excursion
+        (forward-line 1)
+        (point))))))
+
+(ert-deftest yunge-org-keeps-ordinary-end-of-line-semantics ()
+  (yunge-org-test--load-config)
+  (with-temp-buffer
+    (org-mode)
+    (insert "Body\n\n")
+    (goto-char (point-min))
+    (evil-normal-state)
+    (yunge-org-end-of-line 1)
+    (should (eq (char-after) ?y))
+    (forward-line 1)
+    (yunge-org-end-of-line 1)
+    (should (eq evil-this-type 'exclusive))))
 
 (ert-deftest yunge-org-inserts-within-heading-structure ()
   (yunge-org-test--load-config)
