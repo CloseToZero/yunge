@@ -248,6 +248,9 @@ select inside or around the structure:
 
 Use ~SPC n l~ to insert an Org link and ~SPC n s~ to store one.
 
+In an Org source edit buffer, ~ZZ~, ~:wq~, and ~:x~ apply the edit; ~ZQ~ and
+~:q~ abort it.
+
 * List buffers
 
 Lists retain Evil movement, search, scrolling, and visual selection.  Commands

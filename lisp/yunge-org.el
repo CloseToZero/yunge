@@ -32,6 +32,8 @@
 (declare-function org-move-item-down "org-list" ())
 (declare-function org-region-active-p "org" ())
 (declare-function org-table-insert-row "org-table" (&optional arg))
+(declare-function org-edit-src-abort "org-src" ())
+(declare-function org-edit-src-exit "org-src" ())
 (declare-function yunge-jump-history-track-command
                   "yunge-jump-history" (command))
 
@@ -41,6 +43,7 @@
 (defvar org-link-bracket-re)
 (defvar org-link-plain-re)
 (defvar org-mode-map)
+(defvar org-src-mode-map)
 (defvar evil-move-beyond-eol)
 (defvar evil-respect-visual-line-mode)
 
@@ -237,6 +240,15 @@ Keep point unchanged when FUNCTION is editing a region or existing link."
                            yunge-org-normal-visual-bindings)
     (yunge-key-evil-define 'normal org-mode-map
                            yunge-org-normal-bindings)))
+
+(with-eval-after-load 'evil
+  (with-eval-after-load 'org-src
+    (define-key org-src-mode-map [remap evil-save-and-close]
+                #'org-edit-src-exit)
+    (define-key org-src-mode-map [remap evil-save-modified-and-close]
+                #'org-edit-src-exit)
+    (define-key org-src-mode-map [remap evil-quit]
+                #'org-edit-src-abort)))
 
 (provide 'yunge-org)
 
