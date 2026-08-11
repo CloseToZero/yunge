@@ -389,7 +389,6 @@
     (require 'eglot)
     (require 'which-key)
     (setq-local eglot--managed-mode t)
-    (run-hooks 'eglot-managed-mode-hook)
     (yunge-test-evil-keys
      'normal
      '(("g D" . eglot-find-declaration)
@@ -415,7 +414,6 @@
        ("SPC l f" . eglot-format)))
     (evil-normal-state)
     (setq-local eglot--managed-mode nil)
-    (run-hooks 'eglot-managed-mode-hook)
     (should-not (key-binding (kbd "g D")))
     (should-not (key-binding (kbd "g r")))
     (should (eq (key-binding (kbd "g a"))

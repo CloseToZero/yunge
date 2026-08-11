@@ -8,7 +8,6 @@
 (require 'yunge-key)
 
 (declare-function evil-add-command-properties "evil-common")
-(declare-function evil-normalize-keymaps "evil-core")
 (declare-function evil-set-initial-state "evil-core")
 (declare-function slime "slime")
 (declare-function slime-c-p-c-completion-at-point "slime-c-p-c")
@@ -29,10 +28,8 @@
 (defvar slime-apropos-mode-map)
 (defvar slime-inspector-mode-map)
 (defvar slime-lisp-implementations)
-(defvar slime-macroexpansion-minor-mode-map)
 (defvar slime-repl-history-file)
 (defvar slime-repl-history-size)
-(defvar slime-popup-buffer-mode-map)
 (defvar slime-thread-control-mode-map)
 (defvar slime-trace-dialog--detail-mode-map)
 (defvar slime-trace-dialog-mode-map)
@@ -425,19 +422,18 @@
                          yunge-slime-xref-normal-bindings)
   (yunge-key-evil-define 'normal sldb-mode-map
                          yunge-slime-debugger-normal-bindings)
-  (yunge-key-evil-define 'normal slime-popup-buffer-mode-map
-                         yunge-slime-popup-normal-bindings)
-  (yunge-key-evil-define 'normal slime-macroexpansion-minor-mode-map
-                         yunge-slime-macroexpansion-normal-bindings)
+  (yunge-key-evil-define-minor-mode
+   'normal 'slime-popup-buffer-mode
+   yunge-slime-popup-normal-bindings)
+  (yunge-key-evil-define-minor-mode
+   'normal 'slime-macroexpansion-minor-mode
+   yunge-slime-macroexpansion-normal-bindings)
   (yunge-key-evil-define 'normal slime-thread-control-mode-map
                          yunge-slime-thread-normal-bindings)
   (yunge-key-evil-define 'visual slime-thread-control-mode-map
                          yunge-slime-thread-visual-bindings)
   (yunge-key-evil-define 'normal slime-connection-list-mode-map
-                         yunge-slime-connection-normal-bindings)
-  ;; SLIME enables this minor mode after creating each popup buffer, so Evil
-  ;; must rebuild the active auxiliary maps at that point.
-  (add-hook 'slime-popup-buffer-mode-hook #'evil-normalize-keymaps))
+                         yunge-slime-connection-normal-bindings))
 
 (defun yunge-slime--setup-trace-keys ()
   "Set up Evil bindings in SLIME trace views."

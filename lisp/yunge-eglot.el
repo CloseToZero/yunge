@@ -20,7 +20,6 @@
 (declare-function eldoc-box-help-at-point "eldoc-box" ())
 (declare-function evil-add-command-properties "evil-common"
                   (command &rest properties))
-(declare-function evil-normalize-keymaps "evil-core" ())
 (declare-function jsonrpc-request "jsonrpc"
                   (connection method params &rest args))
 (declare-function project-current "project"
@@ -361,8 +360,7 @@ Offer PREFERRED first when it still names a compilation database."
     (dolist (command '(eglot-find-declaration
                        xref-find-references
                        yunge-eglot-switch-source-header))
-      (evil-add-command-properties command :jump t))
-    (add-hook 'eglot-managed-mode-hook #'evil-normalize-keymaps)))
+      (evil-add-command-properties command :jump t))))
 
 (with-eval-after-load 'which-key
   (yunge-key-add-which-key-descriptions
