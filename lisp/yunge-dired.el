@@ -358,11 +358,7 @@ Otherwise, ignore marks and reveal only the file at point."
               #'yunge-dired-handle-file-drop)
       (define-key dired-mode-map event nil)))
   (add-hook 'dired-mode-hook #'yunge-dired--remember-project)
-  (add-hook 'dired-mode-hook #'yunge-dired--setup-dnd)
-  (dolist (buffer (buffer-list))
-    (with-current-buffer buffer
-      (when (derived-mode-p 'dired-mode)
-        (yunge-dired--setup-dnd)))))
+  (add-hook 'dired-mode-hook #'yunge-dired--setup-dnd))
 
 (with-eval-after-load 'ls-lisp
   ;; A full listing stores its field widths in these variables.  Keep those
