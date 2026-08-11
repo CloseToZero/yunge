@@ -22,6 +22,8 @@
      '(("0" . yunge-org-beginning-of-line)
        ("$" . yunge-org-end-of-line)
        ("RET" . org-open-at-point)
+       ("<C-return>" . yunge-org-insert-heading-below)
+       ("<C-S-return>" . yunge-org-insert-todo-heading-below)
        ("I" . yunge-org-insert-line)
        ("A" . yunge-org-append-line)
        ("o" . yunge-org-open-below)
@@ -198,6 +200,28 @@
     (yunge-org-append-line 1)
     (should (eq evil-state 'insert))
     (should (looking-at-p " :tag:"))))
+
+(ert-deftest yunge-org-inserts-headings-after-the-current-contents ()
+  (yunge-org-test--load-config)
+  (dolist (case
+           '((yunge-org-insert-heading-below . "* ")
+             (yunge-org-insert-todo-heading-below . "* TODO ")))
+    (with-temp-buffer
+      (org-mode)
+      (insert "* Current\nBody\n** Child\nChild body\n* Next\n")
+      (goto-char (point-min))
+      (search-forward "Curr")
+      (evil-normal-state)
+      (call-interactively (car case))
+      (should (eq evil-state 'insert))
+      (should (looking-back (regexp-quote (cdr case))
+                            (line-beginning-position)))
+      (should
+       (equal
+        (buffer-substring-no-properties
+         (line-beginning-position)
+         (point-max))
+        (concat (cdr case) "\n* Next\n"))))))
 
 (ert-deftest yunge-org-inserts-after-a-list-item-prefix ()
   (yunge-org-test--load-config)

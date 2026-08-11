@@ -28,7 +28,11 @@
 (declare-function org-fold-show-children "org-fold" (&optional level))
 (declare-function org-fold-show-entry "org-fold" (&optional hide-drawers))
 (declare-function org-in-regexp "org" (regexp &optional nlines visually))
+(declare-function org-insert-heading-respect-content
+                  "org" (&optional invisible-ok))
 (declare-function org-insert-item "org-list" (&optional checkbox))
+(declare-function org-insert-todo-heading-respect-content
+                  "org" (&optional arg))
 (declare-function org-move-item-down "org-list" ())
 (declare-function org-region-active-p "org" ())
 (declare-function org-table-insert-row "org-table" (&optional arg))
@@ -75,6 +79,10 @@
 
 (defconst yunge-org-normal-bindings
   '(("RET" org-open-at-point "open at point")
+    ("<C-return>" yunge-org-insert-heading-below
+     "insert heading below")
+    ("<C-S-return>" yunge-org-insert-todo-heading-below
+     "insert TODO heading below")
     ("I" yunge-org-insert-line "insert at content start")
     ("A" yunge-org-append-line "append to content")
     ("o" yunge-org-open-below "open below")
@@ -183,6 +191,24 @@ On headings, stay before trailing tags and fold ellipses."
     (evil-insert 1))
    (t
     (evil-open-above count))))
+
+(defun yunge-org--insert-heading-below (command)
+  "Call heading insertion COMMAND at visible line end and enter Insert state."
+  (end-of-visible-line)
+  (call-interactively command)
+  (evil-insert nil))
+
+(defun yunge-org-insert-heading-below ()
+  "Insert a heading after the current Org contents and enter Insert state."
+  (interactive)
+  (yunge-org--insert-heading-below
+   #'org-insert-heading-respect-content))
+
+(defun yunge-org-insert-todo-heading-below ()
+  "Insert a TODO heading after the current Org contents and enter Insert state."
+  (interactive)
+  (yunge-org--insert-heading-below
+   #'org-insert-todo-heading-respect-content))
 
 (defun yunge-org--insert-link-at-normal-state-eol
     (function &rest arguments)

@@ -234,6 +234,8 @@ Editing:
   stays before trailing tags and fold ellipses.
 - ~o/O~ create an Org row or list item when point is in that structure, and
   otherwise retain Evil's ordinary open-line behavior.
+- ~C-RET/C-S-RET~ insert a heading or TODO heading after the current Org
+  contents and enter Insert state.
 - ~d~ retains Evil's operator, register, count, and repeat behavior, then
   repairs affected lists and heading-tag alignment.
 - In tables and headings, ~x/X~ use Org's character deletion so columns and
