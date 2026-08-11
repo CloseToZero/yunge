@@ -76,6 +76,23 @@ its file and moves to the matching Org ID.
 =M-x fangcun-node-insert= uses the same completion to insert an =id:= link at
 point.  The selected title or alias becomes the link description.
 
+=M-x fangcun-node-set-tags= edits the local tags of the node at point.  File
+nodes use =#+filetags=; heading nodes use heading tags.  Fangcun indexes each
+node's effective Org tags, including tags inherited according to Org's current
+settings.  Completion candidates display these as =#tag= tokens, so node find
+and insert can search by one or more tags.  Fangcun rejects names outside
+Org's tag syntax instead of rewriting them.
+
+Org controls which tags heading nodes inherit.  For example, the following
+keeps type tags on a file node while allowing its other file tags to propagate
+to heading nodes:
+
+#+begin_src emacs-lisp
+(setq org-use-tag-inheritance t
+      org-tags-exclude-from-inheritance
+      '("project" "person" "reference"))
+#+end_src
+
 ID links may include an Org search suffix, such as
 =id:NODE-ID::*Heading= or =id:NODE-ID::target=.  The suffix selects a location
 inside the target node, while Fangcun attributes the backlink to the node ID.
@@ -98,6 +115,7 @@ The note map provides the frequent Fangcun commands under the global leader:
 - =SPC n n= creates a file node.
 - =SPC n f= finds a node.
 - =SPC n i= inserts a node link.
+- =SPC n t= sets the current node's local tags.
 - =SPC n b= finds a backlink to the current node.
 - =SPC n v= displays backlinks to the current node.
 

@@ -12,6 +12,7 @@
     ("f" fangcun-node-find "find node")
     ("i" fangcun-node-insert "insert node link")
     ("n" fangcun-file-node-create "new file node")
+    ("t" fangcun-node-set-tags "set node tags")
     ("v" fangcun-backlinks "view backlinks")))
 
 (defconst yunge-fangcun-backlinks-normal-bindings

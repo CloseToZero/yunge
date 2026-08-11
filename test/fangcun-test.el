@@ -285,7 +285,7 @@
   (fangcun-test-with-notes
     (should
      (equal (fangcun-db-sync)
-            '(:yiyus 2 :files 2 :nodes 4 :aliases 0 :links 1)))
+            '(:yiyus 2 :files 2 :nodes 4 :aliases 0 :tags 0 :links 1)))
     (let* ((nodes (fangcun-node-list))
            (personal (fangcun-test--node
                       "personal-file" nodes))
@@ -319,7 +319,7 @@
       (fangcun-test--write-file empty-file "")
       (should
        (equal (fangcun-db-sync)
-              '(:yiyus 2 :files 3 :nodes 4 :aliases 0 :links 1)))
+              '(:yiyus 2 :files 3 :nodes 4 :aliases 0 :tags 0 :links 1)))
       (fangcun--call-with-database
        (lambda (database)
          (let ((rows
@@ -338,7 +338,7 @@
              (should (numberp (elt row 2)))
              (should (= (elt row 3) 0)))))))))
 
-(ert-deftest fangcun-file-owns-nodes-aliases-and-outgoing-links ()
+(ert-deftest fangcun-file-owns-nodes-aliases-tags-and-outgoing-links ()
   (fangcun-test-with-notes
     (fangcun-test--write-file
      personal-file
@@ -347,6 +347,7 @@
       ":ID: personal-file\n"
       ":ALIASES: Personal\n"
       ":END:\n"
+      "#+filetags: :personal:\n"
       "[[id:work-file][Outgoing]]\n"))
     (fangcun-test--write-file
      work-file
@@ -354,10 +355,11 @@
       ":PROPERTIES:\n"
       ":ID: work-file\n"
       ":END:\n"
+      "#+filetags: :work:\n"
       "[[id:personal-file][Incoming]]\n"))
     (should
      (equal (fangcun-db-sync)
-            '(:yiyus 2 :files 2 :nodes 2 :aliases 1 :links 2)))
+            '(:yiyus 2 :files 2 :nodes 2 :aliases 1 :tags 2 :links 2)))
     (fangcun--call-with-database
      (lambda (database)
        (sqlite-execute
@@ -371,6 +373,9 @@
          (sqlite-select database "SELECT id FROM nodes")
          '(("work-file"))))
        (should-not (sqlite-select database "SELECT alias FROM aliases"))
+       (should
+        (equal (sqlite-select database "SELECT tag FROM tags")
+               '(("work"))))
        (should
         (equal
          (sqlite-select
@@ -395,7 +400,7 @@
       ":END:\n"))
     (should
      (equal (fangcun-db-sync)
-            '(:yiyus 2 :files 2 :nodes 3 :aliases 4 :links 0)))
+            '(:yiyus 2 :files 2 :nodes 3 :aliases 4 :tags 0 :links 0)))
     (let ((personal
            (fangcun-test--node "personal-file" (fangcun-node-list))))
       (should
@@ -415,12 +420,101 @@
       "#+title: Personal Notes\n"))
     (should
      (equal (fangcun-db-update-file personal-file)
-            '(:nodes 1 :aliases 1 :links 0)))
+            '(:nodes 1 :aliases 1 :tags 0 :links 0)))
     (should
      (equal
       (fangcun-node-aliases (fangcun-node-from-id "personal-file"))
       '("Current name")))
     (should-not (fangcun-node-from-id "theorem"))))
+
+(ert-deftest fangcun-indexes-effective-node-tags ()
+  (fangcun-test-with-notes
+    (fangcun-test--write-file
+     personal-file
+     (concat
+      ":PROPERTIES:\n"
+      ":ID: personal-file\n"
+      ":END:\n"
+      "#+filetags: :notes:shared:\n\n"
+      "* Parent :math:\n"
+      ":PROPERTIES:\n"
+      ":ID: parent\n"
+      ":END:\n"
+      "** Child :proof:\n"
+      ":PROPERTIES:\n"
+      ":ID: child\n"
+      ":END:\n"))
+    (let ((org-use-tag-inheritance t))
+      (should
+       (equal (fangcun-db-sync)
+              '(:yiyus 2 :files 2 :nodes 4 :aliases 0 :tags 9
+                       :links 0))))
+    (let ((nodes (fangcun-node-list)))
+      (should
+       (equal (fangcun-node-tags
+               (fangcun-test--node "personal-file" nodes))
+              '("notes" "shared")))
+      (should
+       (equal (fangcun-node-tags
+               (fangcun-test--node "parent" nodes))
+              '("math" "notes" "shared")))
+      (should
+       (equal (fangcun-node-tags
+               (fangcun-test--node "child" nodes))
+              '("math" "notes" "proof" "shared"))))))
+
+(ert-deftest fangcun-sets-file-and-heading-tags ()
+  (with-temp-buffer
+    (insert
+     (concat
+      ":PROPERTIES:\n"
+      ":ID: file-node\n"
+      ":END:\n"
+      "#+title: Notes\n\n"
+      "* Child\n"
+      ":PROPERTIES:\n"
+      ":ID: child\n"
+      ":END:\n"))
+    (org-mode)
+    (cl-letf (((symbol-function 'fangcun--ensure-session) #'ignore))
+      (goto-char (point-min))
+      (fangcun-node-set-tags '("notes" "中文"))
+      (should
+       (equal org-file-tags '("notes" "中文")))
+      (should
+       (equal
+        (buffer-substring-no-properties
+         (point-min)
+         (save-excursion
+           (goto-char (point-min))
+           (re-search-forward "^#\\+title:")
+           (line-beginning-position)))
+        (concat
+         ":PROPERTIES:\n"
+         ":ID: file-node\n"
+         ":END:\n"
+         "#+filetags: :notes:中文:\n")))
+      (re-search-forward "^\\* Child")
+      (fangcun-node-set-tags '("proof"))
+      (should (equal (org-get-tags nil t) '("proof")))
+      (should-error
+       (fangcun-node-set-tags '("not-valid"))
+       :type 'user-error))))
+
+(ert-deftest fangcun-tag-input-reprompts-after-invalid-input ()
+  (let ((answers '(("not-valid") ("notes" "中文")))
+        prompts)
+    (cl-letf
+        (((symbol-function 'fangcun--tag-completions) #'ignore)
+         ((symbol-function 'completing-read-multiple)
+          (lambda (prompt &rest _arguments)
+            (push prompt prompts)
+            (pop answers))))
+      (should
+       (equal (fangcun--read-tags '("old"))
+              '("notes" "中文")))
+      (should (= (length prompts) 2))
+      (should (string-match-p "invalid" (car prompts))))))
 
 (ert-deftest fangcun-indexes-only-ids-in-property-drawers ()
   (with-temp-buffer
@@ -532,8 +626,8 @@
                   (apply original-collector arguments))))
             (should
              (equal (fangcun-db-sync)
-                     '(:yiyus 2 :files 2 :nodes 4 :aliases 0
-                       :links 1))))
+                    '(:yiyus 2 :files 2 :nodes 4 :aliases 0 :tags 0
+                             :links 1))))
           (should reused)
           (should (= (point) saved-point))
           (should (= (point-min) saved-min))
@@ -561,8 +655,8 @@
                     (verify-visited-file-modtime buffer))))
             (should
              (equal (fangcun-db-sync)
-                     '(:yiyus 2 :files 2 :nodes 4 :aliases 0
-                       :links 1)))
+                    '(:yiyus 2 :files 2 :nodes 4 :aliases 0 :tags 0
+                             :links 1)))
             (should-not
              (fangcun-test--node
               "fangcun-test-unsaved" (fangcun-node-list))))
@@ -594,7 +688,7 @@
               (verify-visited-file-modtime buffer))))
       (should
        (equal (fangcun-db-sync)
-               '(:yiyus 2 :files 2 :nodes 3 :aliases 0 :links 0)))
+              '(:yiyus 2 :files 2 :nodes 3 :aliases 0 :tags 0 :links 0)))
       (let ((nodes (fangcun-node-list)))
         (should
          (equal
@@ -614,7 +708,7 @@
     (delete-file personal-file)
     (should
      (equal (fangcun-db-rebuild)
-             '(:yiyus 2 :files 1 :nodes 1 :aliases 0 :links 0)))
+            '(:yiyus 2 :files 1 :nodes 1 :aliases 0 :tags 0 :links 0)))
     (should-not
      (fangcun--call-with-database
       (lambda (database)
@@ -636,7 +730,7 @@
             (ert-fail "An unchanged file was parsed"))))
       (should
        (equal (fangcun-db-sync)
-              '(:yiyus 2 :files 2 :nodes 4 :aliases 0 :links 1))))))
+              '(:yiyus 2 :files 2 :nodes 4 :aliases 0 :tags 0 :links 1))))))
 
 (ert-deftest fangcun-syncs-added-changed-and-deleted-files ()
   (fangcun-test-with-notes
@@ -665,7 +759,7 @@
               (funcall original-parser yiyu file))))
         (should
          (equal (fangcun-db-sync)
-                '(:yiyus 2 :files 2 :nodes 3 :aliases 0 :links 0))))
+                '(:yiyus 2 :files 2 :nodes 3 :aliases 0 :tags 0 :links 0))))
       (should
        (equal (sort parsed #'string-lessp)
               '("new.org" "theorems.org")))
@@ -740,7 +834,7 @@
       "[[id:work-file][New outgoing link]]\n"))
     (should
      (equal (fangcun-db-update-file personal-file)
-             '(:nodes 2 :aliases 0 :links 1)))
+            '(:nodes 2 :aliases 0 :tags 0 :links 1)))
     (let ((nodes (fangcun-node-list)))
       (should
        (equal
@@ -1008,7 +1102,7 @@
        (equal
         (fangcun-node-title
          (fangcun-test--node "theorem" (fangcun-node-list)))
-         "Updated after saving")))))
+        "Updated after saving")))))
 
 (ert-deftest fangcun-revert-hook-updates-managed-files ()
   (fangcun-test-with-notes
@@ -1067,7 +1161,7 @@
        "* No ID\n[[id:work-file][Unowned link]]\n")
       (should
        (equal (fangcun-db-sync)
-               '(:yiyus 2 :files 4 :nodes 6 :aliases 0 :links 6)))
+              '(:yiyus 2 :files 4 :nodes 6 :aliases 0 :tags 0 :links 6)))
       (fangcun--call-with-database
        (lambda (database)
          (let ((rows
@@ -1428,6 +1522,21 @@
      (string-match-p
       "first"
       (fangcun--node-annotation first-candidate)))))
+
+(ert-deftest fangcun-candidates-display-searchable-tags ()
+  (let* ((node
+          (make-fangcun-node
+           :id "theorem"
+           :title "A theorem"
+           :tags '("math" "中文")))
+         (candidate (fangcun--node-candidate node))
+         (visible "A theorem  #math #中文"))
+    (should
+     (equal (substring-no-properties candidate 0 (length visible))
+            visible))
+    (should (eq (get-text-property 12 'face candidate) 'org-tag))
+    (should
+     (get-text-property (length visible) 'invisible candidate))))
 
 (ert-deftest fangcun-inserts-id-link-with-node-title ()
   (fangcun-test-with-notes

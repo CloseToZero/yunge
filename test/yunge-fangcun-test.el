@@ -18,6 +18,7 @@
      ("SPC n f" . fangcun-node-find)
      ("SPC n i" . fangcun-node-insert)
      ("SPC n n" . fangcun-file-node-create)
+     ("SPC n t" . fangcun-node-set-tags)
      ("SPC n v" . fangcun-backlinks)))
   (yunge-test-which-key-prefix-bindings
    'fundamental-mode "SPC n"
@@ -25,6 +26,7 @@
      ("f" nil "find node")
      ("i" nil "insert node link")
      ("n" nil "new file node")
+     ("t" nil "set node tags")
      ("v" nil "view backlinks"))))
 
 (ert-deftest yunge-fangcun-integrates-the-backlinks-buffer-with-evil ()

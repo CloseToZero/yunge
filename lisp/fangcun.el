@@ -4,6 +4,7 @@
 
 (require 'cl-lib)
 (require 'button)
+(require 'crm)
 (require 'json)
 (require 'yunge-state)
 (require 'org)
@@ -66,7 +67,8 @@ When the helper is unavailable, synchronization falls back to Emacs."
   yiyu-root
   file
   title
-  aliases)
+  aliases
+  tags)
 
 (cl-defstruct fangcun-link
   source-id
@@ -296,7 +298,7 @@ When the helper is unavailable, synchronization falls back to Emacs."
   ;; The database resolves an ID to its file.  Org searches that file for the
   ;; entry, avoiding byte positions that become stale when a buffer changes.
   ;; File ownership also lets one file-row deletion remove its nodes and,
-  ;; through their foreign keys, their aliases and outgoing links.
+  ;; through their foreign keys, their aliases, tags, and outgoing links.
   (sqlite-execute
    database
    (concat
@@ -319,6 +321,19 @@ When the helper is unavailable, synchronization falls back to Emacs."
     "node_id TEXT NOT NULL, "
     "alias TEXT NOT NULL, "
     "PRIMARY KEY (node_id, alias), "
+    "FOREIGN KEY (node_id) REFERENCES nodes (id) "
+    "ON DELETE CASCADE)"))
+  ;; Store the effective Org tags of each node as individual rows.  This keeps
+  ;; inherited and file tags searchable without duplicating node records.  The
+  ;; composite primary key removes duplicates, and deleting a node removes its
+  ;; tags.  No tag index is needed until a query filters by tag directly.
+  (sqlite-execute
+   database
+   (concat
+    "CREATE TABLE tags ("
+    "node_id TEXT NOT NULL, "
+    "tag TEXT NOT NULL, "
+    "PRIMARY KEY (node_id, tag), "
     "FOREIGN KEY (node_id) REFERENCES nodes (id) "
     "ON DELETE CASCADE)"))
   ;; Keep one row for every ID-link occurrence.  Backlink views may group
@@ -368,19 +383,32 @@ When the helper is unavailable, synchronization falls back to Emacs."
   (when-let* ((value (org-entry-get (point) "ALIASES")))
     (delete-dups (split-string-and-unquote value))))
 
+(defun fangcun--goto-node-at-point ()
+  "Move to the nearest enclosing Fangcun node and return its ID, or nil."
+  (org-back-to-heading-or-point-min t)
+  (let ((id (org-id-get)))
+    (while (and (not id) (not (bobp)))
+      (if (org-up-heading-safe)
+          (setq id (org-id-get))
+        (goto-char (point-min))
+        (setq id (org-id-get))))
+    id))
+
 (defun fangcun--node-id-at-point ()
   "Return the nearest enclosing Fangcun node ID, or nil."
   (save-excursion
     (save-restriction
       (widen)
-      (org-back-to-heading-or-point-min t)
-      (let ((id (org-id-get)))
-        (while (and (not id) (not (bobp)))
-          (if (org-up-heading-safe)
-              (setq id (org-id-get))
-            (goto-char (point-min))
-            (setq id (org-id-get))))
-        id))))
+      (fangcun--goto-node-at-point))))
+
+(defun fangcun--effective-tags-at-point ()
+  "Return the effective Org tags of the node at point."
+  (delete-dups
+   (mapcar
+    #'substring-no-properties
+    (if (= (org-outline-level) 0)
+        org-file-tags
+      (org-get-tags)))))
 
 (defun fangcun--element-owner-id (element)
   "Return the nearest Fangcun node ID containing Org ELEMENT, or nil."
@@ -398,6 +426,9 @@ RELATIVE-FILE names BUFFER's file relative to YIYU's root."
     (save-excursion
       (save-restriction
         (widen)
+        ;; A reused Org buffer may have stale file-tag options after an
+        ;; external edit.  Refresh them before collecting effective tags.
+        (org-set-regexps-and-options 'tags-only)
         (let ((file-title (fangcun--file-title relative-file))
               (case-fold-search t)
               (id-property-re (org-re-property "ID"))
@@ -415,7 +446,8 @@ RELATIVE-FILE names BUFFER's file relative to YIYU's root."
                 :yiyu-root (fangcun-yiyu-root yiyu)
                 :file relative-file
                 :title file-title
-                :aliases (fangcun--aliases-at-point))
+                :aliases (fangcun--aliases-at-point)
+                :tags (fangcun--effective-tags-at-point))
                nodes)))
           ;; Fangcun nodes are sparse among Org headings.  Search possible ID
           ;; properties directly, then let Org reject lookalikes outside a
@@ -437,7 +469,8 @@ RELATIVE-FILE names BUFFER's file relative to YIYU's root."
                       :title
                       (fangcun--display-title
                        (org-get-heading t t t) id)
-                      :aliases (fangcun--aliases-at-point))
+                      :aliases (fangcun--aliases-at-point)
+                      :tags (fangcun--effective-tags-at-point))
                      nodes))))))
           (nreverse nodes))))))
 
@@ -708,7 +741,12 @@ RELATIVE-FILE names BUFFER's file relative to YIYU's root."
     (sqlite-execute
      database
      "INSERT INTO aliases (node_id, alias) VALUES (?, ?)"
-     (vector (fangcun-node-id node) alias))))
+     (vector (fangcun-node-id node) alias)))
+  (dolist (tag (fangcun-node-tags node))
+    (sqlite-execute
+     database
+     "INSERT INTO tags (node_id, tag) VALUES (?, ?)"
+     (vector (fangcun-node-id node) tag))))
 
 (defun fangcun--insert-link (database link)
   "Insert LINK into DATABASE."
@@ -736,6 +774,10 @@ RELATIVE-FILE names BUFFER's file relative to YIYU's root."
                                (lambda (node)
                                  (length (fangcun-node-aliases node)))
                                nodes))
+          :tags (apply #'+ (mapcar
+                            (lambda (node)
+                              (length (fangcun-node-tags node)))
+                            nodes))
           :links (length links))))
 
 (defun fangcun--file-state-key (state)
@@ -786,12 +828,14 @@ RELATIVE-FILE names BUFFER's file relative to YIYU's root."
             "(SELECT COUNT(*) FROM files), "
             "(SELECT COUNT(*) FROM nodes), "
             "(SELECT COUNT(*) FROM aliases), "
+            "(SELECT COUNT(*) FROM tags), "
             "(SELECT COUNT(*) FROM links)")))))
     (list :yiyus (elt row 0)
           :files (elt row 1)
           :nodes (elt row 2)
           :aliases (elt row 3)
-          :links (elt row 4))))
+          :tags (elt row 4)
+          :links (elt row 5))))
 
 (defun fangcun--rebuild-database (yiyus states &optional no-message)
   "Replace the Fangcun database with YIYUS and file STATES.
@@ -820,10 +864,11 @@ When NO-MESSAGE is non-nil, do not report the indexed counts."
       (unless no-message
         (message
          (concat
-          "Fangcun indexed %d nodes, %d aliases, and %d links "
+          "Fangcun indexed %d nodes, %d aliases, %d tags, and %d links "
           "from %d files in %d yiyu roots")
          (plist-get result :nodes)
          (plist-get result :aliases)
+         (plist-get result :tags)
          (plist-get result :links)
          (plist-get result :files)
          (plist-get result :yiyus)))
@@ -1233,11 +1278,15 @@ When READ-DISK is non-nil, ignore an unsaved visiting buffer."
                (fangcun--insert-file database state)
                (fangcun--insert-file-data database data))))))
     (unless no-message
-      (message "Fangcun indexed %d nodes, %d aliases, and %d links from %s"
-               (plist-get result :nodes)
-               (plist-get result :aliases)
-               (plist-get result :links)
-               (abbreviate-file-name file)))
+      (message
+       (concat
+        "Fangcun indexed %d nodes, %d aliases, %d tags, and %d links "
+        "from %s")
+       (plist-get result :nodes)
+       (plist-get result :aliases)
+       (plist-get result :tags)
+       (plist-get result :links)
+       (abbreviate-file-name file)))
     result))
 
 (defun fangcun--database-file-state (database yiyu relative-file)
@@ -1440,6 +1489,20 @@ Each row contains a node ID followed by one alias."
             (nreverse (fangcun-node-aliases node))))
     nodes))
 
+(defun fangcun--attach-tags (nodes rows)
+  "Attach tags from SQLite ROWS to NODES and return NODES.
+Each row contains a node ID followed by one tag."
+  (let ((nodes-by-id (make-hash-table :test #'equal)))
+    (dolist (node nodes)
+      (push node (gethash (fangcun-node-id node) nodes-by-id)))
+    (dolist (row rows)
+      (dolist (node (gethash (elt row 0) nodes-by-id))
+        (push (elt row 1) (fangcun-node-tags node))))
+    (dolist (node nodes)
+      (setf (fangcun-node-tags node)
+            (nreverse (fangcun-node-tags node))))
+    nodes))
+
 (defun fangcun-node-from-id (id)
   "Return the Fangcun node named ID, or nil when it is not indexed."
   (fangcun--call-with-database
@@ -1456,13 +1519,20 @@ Each row contains a node ID followed by one alias."
                      "WHERE n.id = ? LIMIT 1")
                     (vector id))))
                  (node (fangcun--node-from-row row)))
-       (fangcun--attach-aliases
-        (list node)
+       (fangcun--attach-tags
+        (fangcun--attach-aliases
+         (list node)
+         (sqlite-select
+          database
+          (concat
+           "SELECT node_id, alias FROM aliases "
+           "WHERE node_id = ? ORDER BY alias COLLATE NOCASE")
+          (vector id)))
         (sqlite-select
          database
          (concat
-          "SELECT node_id, alias FROM aliases "
-          "WHERE node_id = ? ORDER BY alias COLLATE NOCASE")
+          "SELECT node_id, tag FROM tags "
+          "WHERE node_id = ? ORDER BY tag COLLATE NOCASE")
          (vector id)))
        node))))
 
@@ -1482,13 +1552,19 @@ Each row contains a node ID followed by one alias."
                "JOIN yiyus AS y ON y.id = n.yiyu_id "
                "ORDER BY n.title COLLATE NOCASE, "
                "y.name COLLATE NOCASE, n.file, n.id")))))
-       (fangcun--attach-aliases
-        nodes
+       (fangcun--attach-tags
+        (fangcun--attach-aliases
+         nodes
+         (sqlite-select
+          database
+          (concat
+           "SELECT node_id, alias FROM aliases "
+           "ORDER BY node_id, alias COLLATE NOCASE")))
         (sqlite-select
          database
          (concat
-          "SELECT node_id, alias FROM aliases "
-          "ORDER BY node_id, alias COLLATE NOCASE")))))))
+          "SELECT node_id, tag FROM tags "
+          "ORDER BY node_id, tag COLLATE NOCASE")))))))
 
 (defun fangcun--id-find (id &optional markerp)
   "Return the Fangcun location of ID, or nil to let Org continue.
@@ -1522,20 +1598,32 @@ When MARKERP is non-nil, return the location as a marker."
    :node (fangcun--node-from-row (cl-subseq row 0 6))
    :position (elt row 6)))
 
-(defun fangcun--attach-backlink-aliases
+(defun fangcun--attach-backlink-node-data
     (database backlinks target-id)
-  "Attach aliases to BACKLINKS targeting TARGET-ID in DATABASE."
-  (fangcun--attach-aliases
-   (mapcar #'fangcun-backlink-node backlinks)
-   (sqlite-select
-    database
-    (concat
-     "SELECT DISTINCT a.node_id, a.alias "
-     "FROM aliases AS a "
-     "JOIN links AS l ON l.source_id = a.node_id "
-     "WHERE l.target_id = ? "
-     "ORDER BY a.node_id, a.alias COLLATE NOCASE")
-    (vector target-id)))
+  "Attach aliases and tags to BACKLINKS targeting TARGET-ID in DATABASE."
+  (let ((nodes (mapcar #'fangcun-backlink-node backlinks)))
+    (fangcun--attach-aliases
+     nodes
+     (sqlite-select
+      database
+      (concat
+       "SELECT DISTINCT a.node_id, a.alias "
+       "FROM aliases AS a "
+       "JOIN links AS l ON l.source_id = a.node_id "
+       "WHERE l.target_id = ? "
+       "ORDER BY a.node_id, a.alias COLLATE NOCASE")
+      (vector target-id)))
+    (fangcun--attach-tags
+     nodes
+     (sqlite-select
+      database
+      (concat
+       "SELECT DISTINCT t.node_id, t.tag "
+       "FROM tags AS t "
+       "JOIN links AS l ON l.source_id = t.node_id "
+       "WHERE l.target_id = ? "
+       "ORDER BY t.node_id, t.tag COLLATE NOCASE")
+      (vector target-id))))
   backlinks)
 
 (defun fangcun-backlink-list (target-id)
@@ -1543,7 +1631,7 @@ When MARKERP is non-nil, return the location as a marker."
 When one source contains several links, retain its first occurrence."
   (fangcun--call-with-database
    (lambda (database)
-     (fangcun--attach-backlink-aliases
+     (fangcun--attach-backlink-node-data
       database
       (mapcar
        #'fangcun--backlink-from-row
@@ -1567,7 +1655,7 @@ When one source contains several links, retain its first occurrence."
   "Return every indexed backlink occurrence to TARGET-ID."
   (fangcun--call-with-database
    (lambda (database)
-     (fangcun--attach-backlink-aliases
+     (fangcun--attach-backlink-node-data
       database
       (mapcar
        #'fangcun--backlink-from-row
@@ -1587,10 +1675,15 @@ When one source contains several links, retain its first occurrence."
 
 (defun fangcun--node-candidate (node)
   "Return a unique completion candidate for NODE."
-  (let ((title (fangcun-node-title node)))
+  (let ((title (fangcun-node-title node))
+        (tags (fangcun-node-tags node)))
     (propertize
      (concat
       title
+      (when tags
+        (propertize
+         (concat "  #" (string-join tags " #"))
+         'face 'org-tag))
       (propertize
        (concat "\u2063" (fangcun-node-id node))
        'invisible t))
@@ -1630,6 +1723,131 @@ When one source contains several links, retain its first occurrence."
     (let ((choice
            (completing-read "Fangcun node: " candidates nil t)))
       (cdr (assoc choice candidates)))))
+
+(defun fangcun--valid-tag-p (tag)
+  "Return non-nil when TAG is a valid Org tag name."
+  (and (stringp tag)
+       (string-match-p (concat "\\`\\(?:" org-tag-re "\\)\\'") tag)))
+
+(defun fangcun--validate-tags (tags)
+  "Return validated TAGS without text properties or duplicates."
+  (setq tags
+        (delete-dups
+         (mapcar #'substring-no-properties tags)))
+  (dolist (tag tags)
+    (unless (fangcun--valid-tag-p tag)
+      (user-error
+       (concat
+        "Invalid Org tag %S; use letters, numbers, _, @, #, or %%")
+       tag)))
+  tags)
+
+(defun fangcun--tag-completions ()
+  "Return known Org and Fangcun tags for completion."
+  (let (tags)
+    (dolist (entry
+             (append org-current-tag-alist
+                     org-tag-persistent-alist
+                     org-tag-alist
+                     (org-get-buffer-tags)))
+      (when-let* ((tag
+                   (cond
+                    ((stringp entry) entry)
+                    ((and (consp entry) (stringp (car entry)))
+                     (car entry)))))
+        (when (fangcun--valid-tag-p tag)
+          (push (substring-no-properties tag) tags))))
+    (dolist (row
+             (fangcun--call-with-database
+              (lambda (database)
+                (sqlite-select
+                 database
+                 "SELECT DISTINCT tag FROM tags ORDER BY tag COLLATE NOCASE"))))
+      (push (elt row 0) tags))
+    (sort (delete-dups tags) #'string-lessp)))
+
+(defun fangcun--read-tags (current-tags)
+  "Read node tags, initially offering CURRENT-TAGS."
+  (let ((crm-separator "[ \t]*:[ \t]*")
+        (completion-extra-properties '(:category org-tag))
+        (prompt "Node tags: ")
+        (initial (org-make-tag-string current-tags))
+        tags invalid)
+    (while
+        (progn
+          (setq tags
+                (delete
+                 ""
+                 (mapcar
+                  #'string-trim
+                  (completing-read-multiple
+                   prompt (fangcun--tag-completions)
+                   nil nil initial 'org-tags-history)))
+                invalid
+                (seq-find
+                 (lambda (tag)
+                   (not (fangcun--valid-tag-p tag)))
+                 tags))
+          (when invalid
+            (setq prompt (format "Node tags [invalid %S]: " invalid)
+                  initial (org-make-tag-string tags)))
+          invalid))
+    (fangcun--validate-tags tags)))
+
+(defun fangcun--local-tags-at-point ()
+  "Return the local Org tags of the node at point."
+  (mapcar
+   #'substring-no-properties
+   (if (= (org-outline-level) 0)
+       org-file-tags
+     (org-get-tags nil t))))
+
+(defun fangcun--set-file-tags (tags)
+  "Replace the current file node's FILETAGS keywords with TAGS."
+  (let ((case-fold-search t)
+        (value (org-make-tag-string tags))
+        (limit
+         (save-excursion
+           (goto-char (point-min))
+           (if (re-search-forward org-outline-regexp-bol nil t)
+               (line-beginning-position)
+             (point-max))))
+        ranges)
+    (goto-char (point-min))
+    (while (re-search-forward "^#\\+filetags:[ \t]*.*$" limit t)
+      (push (cons (line-beginning-position)
+                  (line-end-position))
+            ranges))
+    (setq ranges (nreverse ranges))
+    (cond
+     ((and tags ranges)
+      (dolist (range (reverse (cdr ranges)))
+        (delete-region
+         (car range)
+         (min (point-max) (1+ (cdr range)))))
+      (goto-char (caar ranges))
+      (delete-region (caar ranges) (cdar ranges))
+      (insert "#+filetags: " value))
+     (tags
+      (goto-char
+       (or (cdr (org-get-property-block (point-min)))
+           (user-error "The Fangcun file node has no property drawer")))
+      (forward-line)
+      (insert "#+filetags: " value "\n"))
+     (t
+      (dolist (range (reverse ranges))
+        (delete-region
+         (car range)
+         (min (point-max) (1+ (cdr range)))))))
+    (org-set-regexps-and-options 'tags-only)))
+
+(defun fangcun--set-local-tags-at-point (tags)
+  "Replace the local Org tags of the node at point with TAGS."
+  ;; `org-set-tags' only supports headlines, so file nodes need to update
+  ;; FILETAGS separately.
+  (if (= (org-outline-level) 0)
+      (fangcun--set-file-tags tags)
+    (org-set-tags tags)))
 
 (defun fangcun--read-backlink (target-id)
   "Read and return a backlink to TARGET-ID."
@@ -1764,6 +1982,28 @@ The chosen title or alias becomes the link description."
       (concat "id:" (fangcun-node-id node))
       (fangcun-node-title node)))
     node))
+
+;;;###autoload
+(defun fangcun-node-set-tags (&optional tags)
+  "Set local TAGS on the nearest enclosing Fangcun node.
+Interactively, edit the current local tags with completion."
+  (interactive)
+  (unless (derived-mode-p 'org-mode)
+    (user-error "Fangcun node tags are only available in Org buffers"))
+  (fangcun--ensure-session)
+  (save-excursion
+    (save-restriction
+      (widen)
+      (org-set-regexps-and-options 'tags-only)
+      (unless (fangcun--goto-node-at-point)
+        (user-error "Point is not inside a Fangcun node"))
+      (when (called-interactively-p 'interactive)
+        (setq tags
+              (fangcun--read-tags
+               (fangcun--local-tags-at-point))))
+      (setq tags (fangcun--validate-tags tags))
+      (fangcun--set-local-tags-at-point tags)
+      tags)))
 
 (defun fangcun--backlink-at-point ()
   "Return the Fangcun backlink represented by the button at point."
