@@ -77,21 +77,6 @@ Use these conventions only where the action is meaningful:
 In editable buffers, Evil's ~q~ remains the default.  ~RET~ keeps its Evil
 meaning unless a mode below gives it a primary object action.
 
-* Org buffers
-
-Org buffers retain Evil's line movement, visual-line movement, marks, search,
-and editing operators.  The following bindings add Org structure operations
-without replacing those general editing semantics.
-
-- ~C-j/C-k~ move to the next or previous visible heading.
-- ~M-h/M-l~ promote or demote the current heading, list item, or table column.
-- ~M-j/M-k~ move the current Org structure down or up.
-- ~M-H/M-L~ promote or demote an entire subtree.
-- ~RET~ and ~gf~ open the Org object at point.
-- ~<tab>~ and ~za~ cycle local visibility; ~S-TAB~ and ~zA~ cycle the buffer.
-- ~zc/zo~ close or open the current fold.  ~zC~ closes the child folds while
-  retaining their headings, and ~zO~ opens the complete subtree.
-
 Closing a buffer, window, tab, or menu dismisses an interface object; it does
 not delete the underlying domain data.  These actions therefore use ~q~, not
 ~d~ or ~x~.
@@ -211,6 +196,53 @@ Use ~SPC m SPC~ for a mode's primary command dispatcher when it provides one.
 
 Before assigning an uppercase letter, check its Evil meaning.  Keys such as
 ~B~, ~F~, ~M~, and ~V~ are already bound.
+
+* Org buffers
+
+Org buffers use Evil's general editing model while making common motions,
+edits, and text objects aware of Org structure.
+
+Navigation and structural movement:
+
+- On structured lines, ~0~ moves to the content start first and to the physical
+  line start when invoked again.  On headings, ~$~ similarly stops before
+  trailing tags first and moves past them when invoked again.
+- ~C-j/C-k~ move to the next or previous visible heading.
+- ~[h/]h~ move to the previous or next heading at the same level.
+- ~[l/]l~ move to the previous or next link.
+- ~[c/]c~ move to the previous or next source block.
+- ~M-h/M-l~ promote or demote the current heading, list item, or table column.
+- ~M-j/M-k~ move the current Org structure down or up.
+- ~M-H/M-L~ promote or demote an entire subtree.
+
+Editing:
+
+- ~I/A~ enter Insert state at the Org content boundaries.  On headings, ~A~
+  stays before trailing tags and fold ellipses.
+- ~o/O~ create an Org row or list item when point is in that structure, and
+  otherwise retain Evil's ordinary open-line behavior.
+- ~d~ retains Evil's operator, register, count, and repeat behavior, then
+  repairs affected lists and heading-tag alignment.
+- In tables and headings, ~x/X~ use Org's character deletion so columns and
+  tags remain aligned.  Elsewhere, and in Visual state, they retain Evil's
+  ordinary deletion behavior.
+
+Opening and visibility:
+
+- ~RET~ and ~gf~ open the Org object at point.
+- ~<tab>~ and ~za~ cycle local visibility; ~S-TAB~ and ~zA~ cycle the buffer.
+- ~zc/zo~ close or open the current fold.  ~zC~ closes the child folds while
+  retaining their headings, and ~zO~ opens the complete subtree.
+
+Text objects work with operators and Visual selections.  Lowercase ~i/a~
+select inside or around the structure:
+
+- ~ie/ae~ select the Org context at point, whether it is an object or element.
+- ~iE/aE~ select the current Org element.
+- ~ic/ac~ select the enclosing container.
+- ~ih/ah~ select the enclosing subtree.
+
+Use ~SPC n l~ to insert an Org link and ~SPC n s~ to store one.
 
 * List buffers
 
