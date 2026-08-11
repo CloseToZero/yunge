@@ -90,6 +90,19 @@ references while showing their source.  Use ~[[/]]~ to move between result
 groups, ~RET~ to visit a result, and ~gf~ to show its source without leaving
 the list.  Editing and query replacement remain under ~SPC m~.
 
+* Edit sessions
+
+An edit session is a temporary editing state with mode-specific finish and
+abort actions.  Use those actions instead of treating its buffer as an
+ordinary file.
+
+- ~ZZ~, ~:wq~, and ~:x~ apply the edit and leave the session.
+- ~ZQ~ and ~:q~ abort the edit and leave the session.
+
+Implement these semantics through command remapping so every Evil entry point
+uses the mode's lifecycle.  This convention applies to Org source edit
+buffers, Wdired, and the With-Editor buffers used by Magit.
+
 * Completion interfaces
 
 While a completion interface is active:
@@ -248,9 +261,6 @@ select inside or around the structure:
 
 Use ~SPC n l~ to insert an Org link and ~SPC n s~ to store one.
 
-In an Org source edit buffer, ~ZZ~, ~:wq~, and ~:x~ apply the edit; ~ZQ~ and
-~:q~ abort it.
-
 * List buffers
 
 Lists retain Evil movement, search, scrolling, and visual selection.  Commands
@@ -264,9 +274,6 @@ Do not extend deferred ~d~ semantics to immediate destructive commands or
 interface dismissal.  A command menu can use ~x~ to delete, discard, drop, or
 remove its current semantic object while retaining ~d~ for another established
 contextual action such as diff.
-
-In Wdired, ~ZZ~, ~:wq~, and ~:x~ apply filename edits; ~ZQ~ and ~:q~ discard
-them.
 
 * Documentation and help buffers
 
