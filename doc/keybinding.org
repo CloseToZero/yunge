@@ -222,7 +222,8 @@ Navigation and structural movement:
   trailing tags first and moves past them when invoked again.
 - ~C-j/C-k~ move to the next or previous visible heading.
 - ~[E/]E~ move to the previous or next Org element.  ~gh/gl~ move to its
-  parent or into its contents.
+  parent or into its contents, and ~gH~ moves to the outermost containing
+  heading.
 - ~[h/]h~ move to the previous or next heading at the same level.
 - ~[l/]l~ move to the previous or next link.
 - ~[c/]c~ move to the previous or next source block.
@@ -264,6 +265,7 @@ select inside or around the structure:
 - ~ih/ah~ select the enclosing subtree.
 
 Use ~SPC n l~ to insert an Org link and ~SPC n s~ to store one.
+Use ~SPC m t~ to change the current heading's TODO state.
 
 * List buffers
 

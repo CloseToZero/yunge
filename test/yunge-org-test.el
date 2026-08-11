@@ -35,6 +35,7 @@
        ("gf" . org-open-at-point)
        ("gh" . org-up-element)
        ("gl" . org-down-element)
+       ("gH" . yunge-org-top-heading)
        ("gj" . evil-next-visual-line)
        ("gk" . evil-previous-visual-line)
        ("[E" . org-backward-element)
@@ -77,6 +78,7 @@
        (">" . yunge-org-shift-right)
        ("gh" . org-up-element)
        ("gl" . org-down-element)
+       ("gH" . yunge-org-top-heading)
        ("[E" . org-backward-element)
        ("]E" . org-forward-element)
        ("[h" . org-backward-heading-same-level)
@@ -90,13 +92,34 @@
      '(("C-d" . yunge-org-shift-left-line)
        ("C-t" . yunge-org-shift-right-line)))))
 
+(ert-deftest yunge-org-configures-local-todo-command ()
+  (yunge-org-test--load-config)
+  (with-temp-buffer
+    (org-mode)
+    (evil-normal-state)
+    (yunge-test-evil-keys
+     'normal
+     '(("SPC m t" . org-todo)))))
+
+(ert-deftest yunge-org-moves-to-the-outermost-heading ()
+  (yunge-org-test--load-config)
+  (with-temp-buffer
+    (org-mode)
+    (insert "* Parent\n** Child\n*** Grandchild\nBody\n")
+    (goto-char (point-max))
+    (forward-line -1)
+    (yunge-org-top-heading)
+    (should (= (line-number-at-pos) 1))
+    (should (looking-at-p "\\* Parent"))))
+
 (ert-deftest yunge-org-registers-structural-navigation-as-motion ()
   (yunge-org-test--load-config)
   (dolist (binding yunge-org-motion-bindings)
     (let ((command (nth 1 binding)))
       (should (evil-get-command-property command :keep-visual))
       (should (eq (evil-get-command-property command :repeat)
-                  'motion)))))
+                  'motion))))
+  (should (evil-get-command-property 'yunge-org-top-heading :jump)))
 
 (ert-deftest yunge-org-configures-line-boundaries-as-evil-motions ()
   (yunge-org-test--load-config)

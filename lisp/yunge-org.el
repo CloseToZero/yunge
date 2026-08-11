@@ -36,6 +36,7 @@
 (declare-function org-move-item-down "org-list" ())
 (declare-function org-region-active-p "org" ())
 (declare-function org-table-insert-row "org-table" (&optional arg))
+(declare-function org-up-heading-safe "org" ())
 (declare-function org-edit-src-abort "org-src" ())
 (declare-function org-edit-src-exit "org-src" ())
 (declare-function yunge-jump-history-track-command
@@ -54,6 +55,14 @@
 (setq org-id-link-consider-parent-id t
       org-id-link-to-org-use-id 'create-if-interactive)
 
+(defconst yunge-org-command-bindings
+  '(("t" org-todo "change TODO state")))
+
+(defvar-keymap yunge-org-command-map
+  :doc "Keymap for Org commands.")
+
+(yunge-key-define yunge-org-command-map yunge-org-command-bindings)
+
 (defconst yunge-org-normal-visual-bindings
   '(("<tab>" org-cycle "cycle visibility")
     ("S-TAB" org-shifttab "cycle global visibility")
@@ -70,6 +79,7 @@
     ("$" yunge-org-end-of-line "end of content")
     ("gh" org-up-element "parent element")
     ("gl" org-down-element "inner element")
+    ("gH" yunge-org-top-heading "outermost heading")
     ("[E" org-backward-element "previous element")
     ("]E" org-forward-element "next element")
     ("[h" org-backward-heading-same-level
@@ -82,7 +92,7 @@
     ("]c" org-babel-next-src-block "next source block")))
 
 (defconst yunge-org-normal-bindings
-  '(("RET" org-open-at-point "open at point")
+  `(("RET" org-open-at-point "open at point")
     ("<C-return>" yunge-org-insert-heading-below
      "insert heading below")
     ("<C-S-return>" yunge-org-insert-todo-heading-below
@@ -99,7 +109,8 @@
     ("zc" org-fold-hide-subtree "close fold")
     ("zC" yunge-org-close-child-folds "close child folds")
     ("zo" yunge-org-open-fold "open fold")
-    ("zO" org-fold-show-subtree "open child folds")))
+    ("zO" org-fold-show-subtree "open child folds")
+    ([localleader] ,yunge-org-command-map nil)))
 
 (defconst yunge-org-note-bindings
   '(("l" org-insert-link "insert link")
@@ -113,6 +124,11 @@ From the content start, move to the physical beginning of line."
         (visual-line-mode
          (and evil-respect-visual-line-mode visual-line-mode)))
     (org-beginning-of-line)))
+
+(defun yunge-org-top-heading ()
+  "Move to the outermost heading containing point."
+  (interactive)
+  (while (org-up-heading-safe)))
 
 (defun yunge-org-end-of-line (count)
   "Move to the Org content end on the COUNTth line.
@@ -264,6 +280,7 @@ Keep point unchanged when FUNCTION is editing a region or existing link."
                                  :type 'exclusive)
     (evil-add-command-properties 'yunge-org-end-of-line
                                  :type 'inclusive)
+    (evil-add-command-properties 'yunge-org-top-heading :jump t)
     (yunge-key-evil-define 'motion org-mode-map
                            yunge-org-motion-bindings)
     (yunge-key-evil-define '(normal visual) org-mode-map
@@ -279,6 +296,10 @@ Keep point unchanged when FUNCTION is editing a region or existing link."
                 #'org-edit-src-exit)
     (define-key org-src-mode-map [remap evil-quit]
                 #'org-edit-src-abort)))
+
+(with-eval-after-load 'which-key
+  (yunge-key-add-which-key-descriptions
+   yunge-org-command-map yunge-org-command-bindings))
 
 (provide 'yunge-org)
 
