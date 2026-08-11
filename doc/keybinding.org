@@ -265,6 +265,9 @@ interface dismissal.  A command menu can use ~x~ to delete, discard, drop, or
 remove its current semantic object while retaining ~d~ for another established
 contextual action such as diff.
 
+In Wdired, ~ZZ~, ~:wq~, and ~:x~ apply filename edits; ~ZQ~ and ~:q~ discard
+them.
+
 * Documentation and help buffers
 
 Document-oriented buffers retain Evil movement and text search and use the

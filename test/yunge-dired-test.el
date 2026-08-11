@@ -12,6 +12,7 @@
 (declare-function dired-dwim-target-recent "dired-aux")
 (declare-function project-known-project-roots "project")
 (declare-function wdired-abort-changes "wdired")
+(declare-function wdired-finish-edit "wdired")
 (declare-function yunge-dired--files-to-reveal "yunge-dired")
 (declare-function yunge-dired--perform-file-drop
                   "yunge-dired" (window uris action))
@@ -380,6 +381,15 @@
            '(("i" . evil-insert)
              ("ZQ" . wdired-abort-changes)
              ("ZZ" . wdired-finish-edit)))
+          (should
+           (eq (command-remapping #'evil-save-and-close)
+               #'wdired-finish-edit))
+          (should
+           (eq (command-remapping #'evil-save-modified-and-close)
+               #'wdired-finish-edit))
+          (should
+           (eq (command-remapping #'evil-quit)
+               #'wdired-abort-changes))
           (wdired-abort-changes))
       (when (buffer-live-p buffer)
         (kill-buffer buffer))

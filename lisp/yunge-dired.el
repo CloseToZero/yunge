@@ -23,6 +23,8 @@
 (declare-function url-encode-url "url-util" (url))
 (declare-function w32-shell-execute "w32fns.c"
                   (operation document &optional parameters show-flag))
+(declare-function wdired-abort-changes "wdired" ())
+(declare-function wdired-finish-edit "wdired" ())
 (declare-function x-popup-menu "menu.c" (position menu))
 
 (defvar dnd-protocol-alist)
@@ -344,7 +346,13 @@ Otherwise, ignore marks and reveal only the file at point."
 (defun yunge-dired--setup-wdired-keys ()
   "Set up Evil bindings for Wdired."
   (yunge-key-evil-define 'normal wdired-mode-map
-                         yunge-wdired-normal-bindings))
+                         yunge-wdired-normal-bindings)
+  (define-key wdired-mode-map [remap evil-save-and-close]
+              #'wdired-finish-edit)
+  (define-key wdired-mode-map [remap evil-save-modified-and-close]
+              #'wdired-finish-edit)
+  (define-key wdired-mode-map [remap evil-quit]
+              #'wdired-abort-changes))
 
 (with-eval-after-load 'dired
   (require 'dnd)
