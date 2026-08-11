@@ -67,7 +67,8 @@
     (cl-letf (((symbol-function 'fangcun--read-node)
                (lambda ()
                  (make-fangcun-node
-                  :id "theorem" :title "A theorem"))))
+                  :id "theorem" :title "A theorem")))
+              ((symbol-function 'fangcun--ensure-session) #'ignore))
       (fangcun-node-insert))
     (should
      (equal (buffer-string)

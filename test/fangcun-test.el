@@ -36,6 +36,15 @@
           (fangcun-yiyus
            `((personal :name "Personal" :root ,personal-root)
              (work :name "Work" :root ,work-root)))
+          (fangcun-native-helper-enabled nil)
+          (fangcun--session-active-p nil)
+          (fangcun--session-yiyus nil)
+          (fangcun--native-build-process nil)
+          (fangcun--native-watch-process nil)
+          (fangcun--native-event-timer nil)
+          (fangcun--native-pending-files
+           (make-hash-table :test #'equal))
+          (fangcun--native-pending-full-sync-p nil)
           (fangcun-database-file
            (expand-file-name "fangcun.sqlite" root)))
      (unwind-protect
@@ -297,6 +306,11 @@
         (fangcun-node-title work)
         (file-name-sans-extension
          (file-relative-name work-file work-root)))))))
+
+(ert-deftest fangcun-rejects-remote-yiyu-roots ()
+  (let ((fangcun-yiyus
+         '((remote :name "Remote" :root "/ssh:host:/notes"))))
+    (should-error (fangcun--configured-yiyus) :type 'user-error)))
 
 (ert-deftest fangcun-records-files-without-nodes ()
   (fangcun-test-with-notes
@@ -684,7 +698,8 @@
 (ert-deftest fangcun-sync-keeps-an-unavailable-yiyu ()
   (fangcun-test-with-notes
     (fangcun-db-sync)
-    (delete-directory work-root t)
+    (rename-file work-root
+                 (expand-file-name "work-unavailable" root))
     (should-error (fangcun-db-sync) :type 'user-error)
     (should (fangcun-node-from-id "work-file"))))
 
@@ -767,12 +782,119 @@
         (with-current-buffer buffer
           (set-buffer-modified-p nil))))))
 
-(ert-deftest fangcun-update-requires-an-initial-full-sync ()
+(ert-deftest fangcun-rename-file-updates-the-index ()
   (fangcun-test-with-notes
+    (fangcun-db-sync)
+    (let ((renamed
+           (expand-file-name "renamed.org" personal-root)))
+      (rename-file personal-file renamed)
+      (let ((node (fangcun-node-from-id "personal-file")))
+        (should node)
+        (should (equal (fangcun-node-file node) "renamed.org"))))))
+
+(ert-deftest fangcun-delete-file-removes-its-indexed-data ()
+  (fangcun-test-with-notes
+    (fangcun-db-sync)
+    (delete-file work-file)
+    (should-not (fangcun-node-from-id "work-file"))))
+
+(ert-deftest fangcun-reconcile-skips-an-unchanged-file ()
+  (fangcun-test-with-notes
+    (fangcun-db-sync)
+    (cl-letf (((symbol-function 'fangcun--db-update-file-in-yiyu)
+               (lambda (&rest _arguments)
+                 (ert-fail "An unchanged file was parsed again"))))
+      (fangcun--reconcile-file personal-file))))
+
+(ert-deftest fangcun-native-scan-decodes-file-states ()
+  (fangcun-test-with-notes
+    (let* ((yiyus (fangcun--configured-yiyus))
+           (native-file
+            (expand-file-name "native.org" personal-root))
+           command)
+      (cl-letf (((symbol-function 'process-file)
+                 (lambda (program _input _destination _display
+                                  &rest arguments)
+                   (setq command (cons program arguments))
+                   (insert
+                    (json-serialize
+                     '((kind . "ready")
+                       (build-id . "test-build")))
+                    "\n"
+                    (json-serialize
+                     `((kind . "state")
+                       (yiyu . "personal")
+                       (file . ,native-file)
+                       (mtime . 42.5)
+                       (size . 17)))
+                    "\n")
+                   0))
+                ((symbol-function
+                  'fangcun--native-helper-build-id)
+                 (lambda () "test-build")))
+        (let ((states
+               (fangcun--native-scan-file-states yiyus)))
+          (should (= (length states) 1))
+          (let ((state (car states)))
+            (should
+             (equal
+              (fangcun-yiyu-id (fangcun-file-state-yiyu state))
+              "personal"))
+            (should
+             (equal (fangcun-file-state-relative-file state)
+                    "native.org"))
+            (should (= (fangcun-file-state-mtime state) 42.5))
+            (should (= (fangcun-file-state-size state) 17))))
+        (should
+         (equal
+          (cdr command)
+          (list "scan"
+                "personal" personal-root
+                "work" work-root)))))))
+
+(ert-deftest fangcun-native-ready-validates-the-source-build-id ()
+  (cl-letf (((symbol-function 'fangcun--native-helper-build-id)
+             (lambda () "expected")))
+    (should-not
+     (fangcun--validate-native-ready-message
+      '((kind . "ready") (build-id . "expected"))))
     (should-error
-     (fangcun-db-update-file personal-file)
-     :type 'user-error)
-    (should-not (file-exists-p fangcun-database-file))))
+     (fangcun--validate-native-ready-message
+      '((kind . "ready") (build-id . "old")))
+     :type 'fangcun-native-helper-outdated)
+    (should-error
+     (fangcun--validate-native-ready-message
+      '((kind . "state")))
+     :type 'fangcun-native-helper-outdated)))
+
+(ert-deftest fangcun-native-mismatch-builds-and-falls-back-to-emacs ()
+  (let ((fangcun-native-helper-enabled t)
+        (yiyus
+         (list
+          (make-fangcun-yiyu
+           :id "test" :name "Test" :root default-directory)))
+        built)
+    (cl-letf (((symbol-function 'fangcun--native-helper-available-p)
+               (lambda () t))
+              ((symbol-function 'fangcun--native-scan-file-states)
+               (lambda (_yiyus)
+                 (signal 'fangcun-native-helper-outdated '("old"))))
+              ((symbol-function 'fangcun--build-native-helper)
+               (lambda ()
+                 (setq built t)))
+              ((symbol-function 'fangcun--elisp-scan-file-states)
+               (lambda (scan-yiyus)
+                 (when scan-yiyus
+                   '(fallback)))))
+      (should (equal (fangcun--scan-file-states yiyus) '(fallback)))
+      (should built))))
+
+(ert-deftest fangcun-update-starts-the-fangcun-session ()
+  (fangcun-test-with-notes
+    (fangcun-db-update-file personal-file t)
+    (should (file-exists-p fangcun-database-file))
+    (should fangcun--session-active-p)
+    (should (= (length (fangcun-node-list)) 4))))
 
 (ert-deftest fangcun-save-hook-waits-for-an-initial-full-sync ()
   (fangcun-test-with-notes
@@ -784,6 +906,62 @@
         (insert "\nSaved before syncing.\n")
         (save-buffer))
       (should-not (file-exists-p fangcun-database-file)))))
+
+(ert-deftest fangcun-native-events-debounce-idle-work ()
+  (let ((fangcun--native-event-timer nil)
+        (fangcun--native-pending-files
+         (make-hash-table :test #'equal))
+        (fangcun--native-pending-full-sync-p nil)
+        scheduled
+        cancelled)
+    (cl-letf (((symbol-function 'run-with-idle-timer)
+               (lambda (seconds repeat function &rest arguments)
+                 (let ((timer (list 'timer (length scheduled))))
+                   (push (list seconds repeat function arguments timer)
+                         scheduled)
+                   timer)))
+              ((symbol-function 'timerp) #'consp)
+              ((symbol-function 'cancel-timer)
+               (lambda (timer)
+                 (push timer cancelled))))
+      (fangcun--queue-native-files '("C:/notes/one.org"))
+      (let ((first fangcun--native-event-timer))
+        (fangcun--queue-native-files '("C:/notes/two.org"))
+        (should (equal cancelled (list first))))
+      (should (= (length scheduled) 2))
+      (should
+       (equal
+        (cddr (car scheduled))
+        (list #'fangcun--process-native-events nil
+              fangcun--native-event-timer)))
+      (should (= (hash-table-count
+                  fangcun--native-pending-files)
+                 2)))))
+
+(ert-deftest fangcun-first-use-synchronizes-once ()
+  (fangcun-test-with-notes
+    (fangcun-db-sync)
+    (setq fangcun--session-active-p nil)
+    (with-temp-buffer
+      (insert-file-contents personal-file)
+      (goto-char (point-min))
+      (re-search-forward "A theorem")
+      (replace-match "Changed between sessions")
+      (write-region nil nil personal-file nil 'silent))
+    (let ((sync-function (symbol-function 'fangcun--sync-yiyus))
+          (sync-calls 0))
+      (cl-letf (((symbol-function 'fangcun--sync-yiyus)
+                 (lambda (yiyus no-message)
+                   (cl-incf sync-calls)
+                   (funcall sync-function yiyus no-message))))
+        (fangcun--ensure-session)
+        (fangcun--ensure-session))
+      (should (= sync-calls 1)))
+    (should
+     (equal
+      (fangcun-node-title
+       (fangcun-test--node "theorem" (fangcun-node-list)))
+      "Changed between sessions"))))
 
 (ert-deftest fangcun-save-hook-updates-managed-files-silently ()
   (fangcun-test-with-notes
@@ -830,7 +1008,27 @@
        (equal
         (fangcun-node-title
          (fangcun-test--node "theorem" (fangcun-node-list)))
-        "Updated after saving")))))
+         "Updated after saving")))))
+
+(ert-deftest fangcun-revert-hook-updates-managed-files ()
+  (fangcun-test-with-notes
+    (fangcun-db-sync)
+    (let ((buffer (find-file-noselect personal-file)))
+      (with-current-buffer buffer
+        (should (memq #'fangcun--update-after-revert after-revert-hook)))
+      (with-temp-buffer
+        (insert-file-contents personal-file)
+        (goto-char (point-min))
+        (re-search-forward "A theorem")
+        (replace-match "Updated after reverting")
+        (write-region nil nil personal-file nil 'silent))
+      (with-current-buffer buffer
+        (revert-buffer t t))
+      (should
+       (equal
+        (fangcun-node-title
+         (fangcun-test--node "theorem" (fangcun-node-list)))
+        "Updated after reverting")))))
 
 (ert-deftest fangcun-syncs-id-link-occurrences-and-owners ()
   (fangcun-test-with-notes

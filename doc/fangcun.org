@@ -26,6 +26,24 @@ that no longer exist.  The first synchronization and a change to the yiyu
 configuration rebuild the database.  =M-x fangcun-db-rebuild= always indexes
 every file again.
 
+The first Fangcun command in an Emacs session performs an incremental sync
+before reading the database.  This reconciles changes made while Emacs was not
+running without doing any Fangcun work in sessions that never use it.
+
+Fangcun uses a Rust helper to enumerate files and recursively monitor their
+directories.  File events are combined and processed when Emacs is idle.  The
+helper reports its source build ID when it starts.  If it is missing or does
+not match the tracked build ID, Fangcun continues the current sync with Emacs
+file operations and asks Cargo to build the helper asynchronously.  The build
+output is available in =*Fangcun Helper Build*=.  A missing Cargo or a failed
+helper disables live external-change monitoring, but saving, reverting, manual
+synchronization, and complete rebuilding continue to work.
+
+=M-x fangcun-native-build= rebuilds the helper after changing its Rust sources.
+Cargo refreshes the tracked source build ID during every build.
+The command-line and JSON interface is documented in the
+[[file:../native/fangcun-watch/README.org][native helper protocol]].
+
 A file-level =ID= creates a file node.  A heading =ID= creates a heading node.
 File nodes use =#+title= when present and otherwise use their relative file
 name without the extension.  A heading without text uses its ID as its display
@@ -45,8 +63,11 @@ node.
 After the database is initialized, =M-x fangcun-db-update-file= replaces the
 indexed nodes and links for the current saved Org file without processing the
 other yiyu files.  Saving a configured yiyu file performs the same update
-silently.  Set =fangcun-db-update-on-save= to =nil= to disable automatic
-updates.
+silently.  Reverting a visited yiyu file also updates it from disk.  Renaming or
+deleting a file through Emacs updates the database immediately.  These exact
+updates remain active while native monitoring is running; duplicate native
+events are discarded by comparing the indexed file state.  Set
+=fangcun-db-update-on-save= to =nil= to disable updates after saving.
 
 =M-x fangcun-node-find= completes over the titles and aliases of indexed nodes.
 Each candidate shows its owning yiyu and relative file.  Selecting one opens

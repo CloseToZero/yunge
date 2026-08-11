@@ -4,6 +4,7 @@
 
 (require 'cl-lib)
 (require 'button)
+(require 'json)
 (require 'yunge-state)
 (require 'org)
 (require 'org-element)
@@ -47,6 +48,12 @@ Each entry has the form (ID :name NAME :root ROOT)."
   :type 'boolean
   :group 'fangcun)
 
+(defcustom fangcun-native-helper-enabled t
+  "Whether Fangcun may use its native scanner and directory monitor.
+When the helper is unavailable, synchronization falls back to Emacs."
+  :type 'boolean
+  :group 'fangcun)
+
 (cl-defstruct fangcun-yiyu
   id
   name
@@ -82,6 +89,65 @@ Each entry has the form (ID :name NAME :root ROOT)."
 (defvar-local fangcun-backlinks-target-id nil
   "ID of the node shown in the current Fangcun backlinks buffer.")
 
+(defconst fangcun--native-event-idle-delay 1
+  "Idle seconds before Fangcun processes native file events.")
+
+(defconst fangcun--source-directory
+  (file-name-directory
+   (or load-file-name
+       (locate-library "fangcun")
+       (error "Cannot locate the Fangcun library")))
+  "Directory containing the loaded Fangcun library.")
+
+(defconst fangcun--native-helper-manifest
+  (expand-file-name
+   "../native/fangcun-watch/Cargo.toml"
+   fangcun--source-directory)
+  "Cargo manifest of the Fangcun native helper.")
+
+(defconst fangcun--native-helper-source-hash-file
+  (expand-file-name
+   "source.sha256"
+   (file-name-directory fangcun--native-helper-manifest))
+  "Tracked source hash embedded in the Fangcun native helper.")
+
+(define-error 'fangcun-native-helper-outdated
+  "Fangcun native helper is outdated")
+
+(defvar fangcun--session-active-p nil
+  "Whether this Emacs session has synchronized Fangcun once.")
+
+(defvar fangcun--session-yiyus nil
+  "Normalized yiyus used by the active Fangcun session.")
+
+(defvar fangcun--native-build-process nil
+  "Process building the Fangcun native helper, or nil.")
+
+(defvar fangcun--native-watch-process nil
+  "Process monitoring Fangcun yiyus, or nil.")
+
+(defvar fangcun--native-watch-output ""
+  "Incomplete output from the Fangcun native monitor.")
+
+(defvar fangcun--native-watch-yiyus nil
+  "Signature of yiyus watched by the native monitor.")
+
+(defvar fangcun--native-restart-count 0
+  "Number of native monitor restarts attempted this session.")
+
+(defvar fangcun--native-event-timer nil
+  "Timer for pending native file events.")
+
+(defvar fangcun--native-pending-files
+  (make-hash-table :test #'equal)
+  "Files awaiting reconciliation after native events.")
+
+(defvar fangcun--native-pending-full-sync-p nil
+  "Whether native events require a complete incremental sync.")
+
+(defvar fangcun--native-warning-shown-p nil
+  "Whether helper degradation was already reported this session.")
+
 (defvar-keymap fangcun-backlinks-mode-map
   :parent special-mode-map
   "RET" #'fangcun-backlink-visit)
@@ -103,10 +169,15 @@ Each entry has the form (ID :name NAME :root ROOT)."
                     (stringp root)
                     (not (string-empty-p root)))
          (user-error "Invalid Fangcun yiyu: %S" entry))
+       (setq root
+             (file-name-as-directory (expand-file-name root)))
+       (when (file-remote-p root)
+         (user-error "Remote Fangcun yiyus are not supported: %s"
+                     root))
        (make-fangcun-yiyu
         :id (symbol-name id)
         :name name
-        :root (file-name-as-directory (expand-file-name root)))))
+        :root root)))
    fangcun-yiyus))
 
 (defun fangcun--yiyu-containing-file (file yiyus)
@@ -456,6 +527,122 @@ RELATIVE-FILE names BUFFER's file relative to YIYU's root."
      (float-time (file-attribute-modification-time attributes))
      :size (file-attribute-size attributes))))
 
+(defun fangcun--cargo-target-directory ()
+  "Return the Cargo target directory for Fangcun native packages."
+  (yunge-var-subdirectory "fangcun/cargo-target"))
+
+(defun fangcun--native-helper-program ()
+  "Return the expected Fangcun helper executable."
+  (expand-file-name
+   (concat "release/fangcun-watch"
+           (when (eq system-type 'windows-nt) ".exe"))
+   (fangcun--cargo-target-directory)))
+
+(defun fangcun--native-helper-build-id ()
+  "Return the expected Fangcun native helper build ID, or nil."
+  (when (file-readable-p fangcun--native-helper-source-hash-file)
+    (with-temp-buffer
+      (insert-file-contents fangcun--native-helper-source-hash-file)
+      (let ((build-id (string-trim (buffer-string))))
+        (unless (string-empty-p build-id)
+          build-id)))))
+
+(defun fangcun--native-helper-available-p ()
+  "Return whether the Fangcun native helper can be started."
+  (and fangcun-native-helper-enabled
+       (file-executable-p (fangcun--native-helper-program))))
+
+(defun fangcun--validate-native-ready-message (message)
+  "Validate native helper ready MESSAGE against the tracked build ID."
+  (let ((expected (fangcun--native-helper-build-id))
+        (actual (alist-get 'build-id message)))
+    (unless expected
+      (error "Fangcun native helper source hash is unavailable"))
+    (unless (and (equal (alist-get 'kind message) "ready")
+                 (equal actual expected))
+      (signal
+       'fangcun-native-helper-outdated
+       (list
+        (format "Expected build %s, got %s"
+                expected (or actual "an unversioned helper")))))))
+
+(defun fangcun--elisp-scan-file-states (yiyus)
+  "Return Org file states below YIYUS using Emacs file operations."
+  (let (states)
+    (dolist (yiyu yiyus)
+      (dolist (file
+               (directory-files-recursively
+                (fangcun-yiyu-root yiyu) "\\.org\\'"))
+        (push (fangcun--read-file-state yiyu file) states)))
+    (nreverse states)))
+
+(defun fangcun--native-command-arguments (command yiyus)
+  "Return helper arguments for COMMAND and YIYUS."
+  ;; The helper receives no stdin.  Its argv is COMMAND followed by repeated
+  ;; YIYU-ID ROOT pairs, and its stdout is the NDJSON protocol documented in
+  ;; native/fangcun-watch/README.org.
+  (cons
+   command
+   (mapcan
+    (lambda (yiyu)
+      (list (fangcun-yiyu-id yiyu)
+            (fangcun-yiyu-root yiyu)))
+    yiyus)))
+
+(defun fangcun--native-scan-file-states (yiyus)
+  "Return Org file states below YIYUS using the native helper."
+  (let ((program (fangcun--native-helper-program))
+        (yiyus-by-id (make-hash-table :test #'equal))
+        ready
+        states)
+    (dolist (yiyu yiyus)
+      (puthash (fangcun-yiyu-id yiyu) yiyu yiyus-by-id))
+    (with-temp-buffer
+      (let ((status
+             (apply
+              #'process-file program nil t nil
+              (fangcun--native-command-arguments "scan" yiyus))))
+        (unless (zerop status)
+          (error "Native Fangcun scan failed: %s"
+                 (string-trim (buffer-string)))))
+      (goto-char (point-min))
+      (while (not (eobp))
+        (let* ((message
+                (json-parse-string
+                 (buffer-substring-no-properties
+                  (line-beginning-position) (line-end-position))
+                 :object-type 'alist))
+               (kind (alist-get 'kind message)))
+          (if ready
+              (progn
+                (unless (equal kind "state")
+                  (error "Unexpected native Fangcun scan message: %S"
+                         message))
+                (let* ((id (alist-get 'yiyu message))
+                       (yiyu (gethash id yiyus-by-id))
+                       (file
+                        (expand-file-name (alist-get 'file message))))
+                  (unless yiyu
+                    (error
+                     "Native Fangcun scan returned unknown yiyu: %s"
+                     id))
+                  (push
+                   (make-fangcun-file-state
+                    :yiyu yiyu
+                    :relative-file
+                    (file-relative-name file
+                                        (fangcun-yiyu-root yiyu))
+                    :absolute-file file
+                    :mtime (alist-get 'mtime message)
+                    :size (alist-get 'size message))
+                   states)))
+            (fangcun--validate-native-ready-message message)
+            (setq ready t)))
+        (forward-line 1)))
+    (unless ready
+      (error "Native Fangcun scan returned no ready message"))
+    (nreverse states)))
+
 (defun fangcun--scan-file-states (yiyus)
   "Return the current Org file states below YIYUS."
   ;; Validate every root before a missing root could be mistaken for an empty
@@ -464,13 +651,21 @@ RELATIVE-FILE names BUFFER's file relative to YIYU's root."
     (unless (file-directory-p (fangcun-yiyu-root yiyu))
       (user-error "Fangcun yiyu does not exist: %s"
                   (fangcun-yiyu-root yiyu))))
-  (let (states)
-    (dolist (yiyu yiyus)
-      (dolist (file
-               (directory-files-recursively
-                (fangcun-yiyu-root yiyu) "\\.org\\'"))
-        (push (fangcun--read-file-state yiyu file) states)))
-    (nreverse states)))
+  (if (and yiyus (fangcun--native-helper-available-p))
+      (condition-case error-data
+          (fangcun--native-scan-file-states yiyus)
+        (fangcun-native-helper-outdated
+         (fangcun--build-native-helper)
+         (fangcun--elisp-scan-file-states yiyus))
+        (error
+         (display-warning
+          'fangcun
+          (concat
+           (error-message-string error-data)
+           "; falling back to Emacs")
+          :warning)
+         (fangcun--elisp-scan-file-states yiyus)))
+    (fangcun--elisp-scan-file-states yiyus)))
 
 (defun fangcun--insert-yiyu (database yiyu)
   "Insert YIYU into DATABASE."
@@ -598,8 +793,9 @@ RELATIVE-FILE names BUFFER's file relative to YIYU's root."
           :aliases (elt row 3)
           :links (elt row 4))))
 
-(defun fangcun--rebuild-database (yiyus states)
-  "Replace the Fangcun database with YIYUS and file STATES."
+(defun fangcun--rebuild-database (yiyus states &optional no-message)
+  "Replace the Fangcun database with YIYUS and file STATES.
+When NO-MESSAGE is non-nil, do not report the indexed counts."
   (let ((parsed
          (mapcar
           (lambda (state)
@@ -621,19 +817,21 @@ RELATIVE-FILE names BUFFER's file relative to YIYU's root."
                   (fangcun--insert-file database (car entry))
                   (fangcun--insert-file-data database (cdr entry)))
                 (fangcun--database-counts database))))))
-      (message
-       (concat
-        "Fangcun indexed %d nodes, %d aliases, and %d links "
-        "from %d files in %d yiyu roots")
-       (plist-get result :nodes)
-       (plist-get result :aliases)
-       (plist-get result :links)
-       (plist-get result :files)
-       (plist-get result :yiyus))
+      (unless no-message
+        (message
+         (concat
+          "Fangcun indexed %d nodes, %d aliases, and %d links "
+          "from %d files in %d yiyu roots")
+         (plist-get result :nodes)
+         (plist-get result :aliases)
+         (plist-get result :links)
+         (plist-get result :files)
+         (plist-get result :yiyus)))
       result)))
 
-(defun fangcun--sync-database (states)
-  "Synchronize an existing Fangcun database with file STATES."
+(defun fangcun--sync-database (states &optional no-message)
+  "Synchronize an existing Fangcun database with file STATES.
+When NO-MESSAGE is non-nil, do not report the changed file counts."
   (fangcun--call-with-database
    (lambda (database)
      (let ((database-states
@@ -686,9 +884,10 @@ RELATIVE-FILE names BUFFER's file relative to YIYU's root."
            (dolist (entry parsed)
              (fangcun--insert-file database (car entry))
              (fangcun--insert-file-data database (cdr entry))))
-         (message
-          "Fangcun synchronized files: %d added, %d updated, %d removed"
-          added-count updated-count (length deleted))
+         (unless no-message
+           (message
+            "Fangcun synchronized files: %d added, %d updated, %d removed"
+            added-count updated-count (length deleted)))
          (fangcun--database-counts database))))))
 
 ;;;###autoload
@@ -698,34 +897,305 @@ RELATIVE-FILE names BUFFER's file relative to YIYU's root."
   (let ((yiyus (fangcun--configured-yiyus)))
     (unless yiyus
       (user-error "Configure `fangcun-yiyus' before syncing"))
-    (fangcun--rebuild-database
-     yiyus (fangcun--scan-file-states yiyus))))
+    (prog1
+        (fangcun--rebuild-database
+         yiyus (fangcun--scan-file-states yiyus))
+      (fangcun--activate-session yiyus))))
+
+(defun fangcun--sync-yiyus (yiyus no-message)
+  "Synchronize YIYUS, suppressing results when NO-MESSAGE is non-nil."
+  (let ((states (fangcun--scan-file-states yiyus)))
+    (if (and
+         (file-exists-p fangcun-database-file)
+         (fangcun--call-with-database
+          (lambda (database)
+            (fangcun--database-yiyus-match-p database yiyus))))
+        (fangcun--sync-database states no-message)
+      (fangcun--rebuild-database yiyus states no-message))))
 
 ;;;###autoload
-(defun fangcun-db-sync ()
-  "Synchronize the Fangcun database with configured yiyu files."
+(defun fangcun-db-sync (&optional no-message)
+  "Synchronize the Fangcun database with configured yiyu files.
+When NO-MESSAGE is non-nil, do not report synchronization results."
   (interactive)
   (let ((yiyus (fangcun--configured-yiyus)))
     (unless yiyus
       (user-error "Configure `fangcun-yiyus' before syncing"))
-    (let ((states (fangcun--scan-file-states yiyus)))
-      (if (and
-           (file-exists-p fangcun-database-file)
-           (fangcun--call-with-database
-            (lambda (database)
-              (fangcun--database-yiyus-match-p database yiyus))))
-          (fangcun--sync-database states)
-        (fangcun--rebuild-database yiyus states)))))
+    (prog1 (fangcun--sync-yiyus yiyus no-message)
+      (fangcun--activate-session yiyus))))
 
-(defun fangcun--db-update-file-in-yiyu (file yiyu &optional no-message)
+(defun fangcun--native-yiyu-signature (yiyus)
+  "Return the monitor-relevant signature of YIYUS."
+  (mapcar
+   (lambda (yiyu)
+     (cons (fangcun-yiyu-id yiyu)
+           (fangcun-yiyu-root yiyu)))
+   yiyus))
+
+(defun fangcun--native-warning (format-string &rest arguments)
+  "Report one native helper warning using FORMAT-STRING and ARGUMENTS."
+  (unless fangcun--native-warning-shown-p
+    (setq fangcun--native-warning-shown-p t)
+    (display-warning
+     'fangcun
+     (apply #'format format-string arguments)
+     :warning)))
+
+(defun fangcun--stop-native-watch ()
+  "Stop the Fangcun native monitor intentionally."
+  (when (process-live-p fangcun--native-watch-process)
+    (process-put fangcun--native-watch-process
+                 'fangcun-intentional-stop t)
+    (delete-process fangcun--native-watch-process))
+  (setq fangcun--native-watch-process nil
+        fangcun--native-watch-output ""
+        fangcun--native-watch-yiyus nil))
+
+(defun fangcun--schedule-native-events ()
+  "Schedule processing of queued native monitor events."
+  (when (timerp fangcun--native-event-timer)
+    (cancel-timer fangcun--native-event-timer))
+  (setq fangcun--native-event-timer
+        (run-with-idle-timer
+         fangcun--native-event-idle-delay nil
+         #'fangcun--process-native-events)))
+
+(defun fangcun--queue-native-full-sync ()
+  "Request a complete incremental sync after Emacs becomes idle."
+  (setq fangcun--native-pending-full-sync-p t)
+  (clrhash fangcun--native-pending-files)
+  (fangcun--schedule-native-events))
+
+(defun fangcun--queue-native-files (files)
+  "Queue absolute FILES for reconciliation after Emacs becomes idle."
+  (unless fangcun--native-pending-full-sync-p
+    (dolist (file files)
+      (puthash (expand-file-name file) t
+               fangcun--native-pending-files)))
+  (fangcun--schedule-native-events))
+
+(defun fangcun--handle-native-message (process line)
+  "Handle one NDJSON LINE from native monitor PROCESS."
+  (let* ((message
+          (json-parse-string line
+                             :object-type 'alist
+                             :array-type 'list))
+          (kind (alist-get 'kind message)))
+    (if (process-get process 'fangcun-ready)
+        (pcase kind
+          ("event"
+           (fangcun--queue-native-files (alist-get 'paths message)))
+          ((or "rescan" "error")
+           (when (equal kind "error")
+             (display-warning
+              'fangcun
+              (format "Native monitor reported: %s"
+                      (alist-get 'message message))
+              :warning))
+           (fangcun--queue-native-full-sync))
+          (_
+           (error "Unexpected native Fangcun monitor message: %S"
+                  message)))
+      (fangcun--validate-native-ready-message message)
+      (process-put process 'fangcun-ready t)
+      ;; A full scan closes the gap before the monitor became ready.
+      (fangcun--queue-native-full-sync))))
+
+(defun fangcun--native-watch-filter (process output)
+  "Collect and handle complete NDJSON lines in native monitor OUTPUT."
+  (setq fangcun--native-watch-output
+        (concat fangcun--native-watch-output output))
+  (let (newline)
+    (while (setq newline
+                 (string-match "\n" fangcun--native-watch-output))
+      (let ((line
+             (string-trim-right
+              (substring fangcun--native-watch-output 0 newline)
+              "\r")))
+        (setq fangcun--native-watch-output
+              (substring fangcun--native-watch-output (1+ newline)))
+        (unless (string-empty-p line)
+          (condition-case error-data
+              (fangcun--handle-native-message process line)
+            (fangcun-native-helper-outdated
+             (when (eq process fangcun--native-watch-process)
+               (fangcun--stop-native-watch)
+               (fangcun--build-native-helper)))
+            (error
+             (display-warning
+              'fangcun
+              (format "Invalid native monitor output: %s"
+                      (error-message-string error-data))
+              :warning)
+             (fangcun--queue-native-full-sync))))))))
+
+(defun fangcun--native-watch-sentinel (process _event)
+  "Recover when native monitor PROCESS exits unexpectedly."
+  (when (and (memq (process-status process) '(exit signal failed))
+             (eq process fangcun--native-watch-process))
+    (setq fangcun--native-watch-process nil
+          fangcun--native-watch-output "")
+    (unless (process-get process 'fangcun-intentional-stop)
+      (if (and fangcun--session-active-p
+               (< fangcun--native-restart-count 1))
+          (progn
+            (cl-incf fangcun--native-restart-count)
+            (fangcun--start-native-watch fangcun--session-yiyus))
+        (fangcun--native-warning
+         (concat
+          "Fangcun native monitoring stopped; external changes require "
+          "`fangcun-db-sync'"))))))
+
+(defun fangcun--start-native-watch (yiyus)
+  "Start recursively monitoring YIYUS."
+  (let ((signature (fangcun--native-yiyu-signature yiyus)))
+    (when (and yiyus (fangcun--native-helper-available-p))
+      (unless (and (process-live-p fangcun--native-watch-process)
+                   (equal signature fangcun--native-watch-yiyus))
+        (fangcun--stop-native-watch)
+        (setq fangcun--native-watch-output ""
+              fangcun--native-watch-yiyus signature)
+        (condition-case error-data
+            (setq fangcun--native-watch-process
+                  (make-process
+                   :name "fangcun-watch"
+                   :command
+                   (cons
+                     (fangcun--native-helper-program)
+                     (fangcun--native-command-arguments
+                      "watch" yiyus))
+                   :coding 'utf-8-unix
+                   :connection-type 'pipe
+                   :noquery t
+                   :filter #'fangcun--native-watch-filter
+                   :sentinel #'fangcun--native-watch-sentinel))
+          (error
+           (setq fangcun--native-watch-process nil
+                 fangcun--native-watch-yiyus nil)
+           (fangcun--native-warning
+            "Cannot start Fangcun native monitoring: %s"
+            (error-message-string error-data))))))))
+
+(defun fangcun--native-build-sentinel (process _event)
+  "Start native monitoring when helper build PROCESS succeeds."
+  (when (memq (process-status process) '(exit signal failed))
+    (when (eq process fangcun--native-build-process)
+      (setq fangcun--native-build-process nil))
+    (if (and (zerop (process-exit-status process))
+              (fangcun--native-helper-available-p))
+        (when fangcun--session-active-p
+          (message "Built Fangcun native helper")
+          (fangcun--start-native-watch fangcun--session-yiyus))
+      (fangcun--native-warning
+       (concat
+        "Fangcun native helper build failed; external changes require "
+        "`fangcun-db-sync'.  See %s")
+       (buffer-name (process-buffer process))))))
+
+(defun fangcun--build-native-helper ()
+  "Build the Fangcun native helper asynchronously when possible."
+  (unless (process-live-p fangcun--native-build-process)
+    (if-let* ((cargo (executable-find "cargo")))
+        (let ((buffer (get-buffer-create "*Fangcun Helper Build*"))
+              (target (fangcun--cargo-target-directory)))
+          (fangcun--stop-native-watch)
+          (make-directory target t)
+          (with-current-buffer buffer
+            (erase-buffer))
+          (setq fangcun--native-build-process
+                (make-process
+                 :name "fangcun-helper-build"
+                 :buffer buffer
+                 :command
+                 (list cargo "build" "--release" "--locked"
+                       "--manifest-path"
+                       fangcun--native-helper-manifest
+                       "--target-dir" target)
+                 :noquery t
+                 :sentinel #'fangcun--native-build-sentinel))
+          (message "Building Fangcun native helper..."))
+      (fangcun--native-warning
+       (concat
+        "Cargo is unavailable; Fangcun external changes require "
+        "`fangcun-db-sync'")))))
+
+(defun fangcun--ensure-native-helper (yiyus)
+  "Start or build the native helper for YIYUS when enabled."
+  (when (and fangcun-native-helper-enabled
+             yiyus)
+    (cond
+     ((process-live-p fangcun--native-build-process))
+     ((fangcun--native-helper-available-p)
+      (fangcun--start-native-watch yiyus))
+     (t
+      (fangcun--build-native-helper)))))
+
+;;;###autoload
+(defun fangcun-native-build ()
+  "Build the Fangcun native helper asynchronously."
+  (interactive)
+  (fangcun--build-native-helper))
+
+(defun fangcun--install-operation-advice ()
+  "Install exact file operation synchronization once."
+  ;; These operations are infrequent and give immediate database state.  Keep
+  ;; them active with the monitor; its duplicate event will compare unchanged.
+  (unless (advice-member-p #'fangcun--around-rename-file
+                           'rename-file)
+    (advice-add 'rename-file :around #'fangcun--around-rename-file))
+  (unless (advice-member-p #'fangcun--around-delete-file
+                           'delete-file)
+    (advice-add 'delete-file :around #'fangcun--around-delete-file))
+  (unless (advice-member-p #'fangcun--around-vc-delete-file
+                           'vc-delete-file)
+    (advice-add 'vc-delete-file :around
+                #'fangcun--around-vc-delete-file)))
+
+(defun fangcun--activate-session (yiyus)
+  "Activate synchronization for the current Fangcun session and YIYUS."
+  (setq fangcun--session-active-p t
+        fangcun--session-yiyus yiyus)
+  (fangcun--install-operation-advice)
+  (fangcun--ensure-native-helper yiyus))
+
+(defun fangcun--shutdown-native-helper ()
+  "Stop Fangcun helper processes and pending work before Emacs exits."
+  (setq fangcun--session-active-p nil)
+  (fangcun--stop-native-watch)
+  (when (timerp fangcun--native-event-timer)
+    (cancel-timer fangcun--native-event-timer))
+  (setq fangcun--native-event-timer nil)
+  (when (process-live-p fangcun--native-build-process)
+    (set-process-sentinel fangcun--native-build-process #'ignore)
+    (delete-process fangcun--native-build-process))
+  (setq fangcun--native-build-process nil))
+
+(add-hook 'kill-emacs-hook #'fangcun--shutdown-native-helper)
+
+(defun fangcun--ensure-session (&optional yiyus)
+  "Synchronize Fangcun on its first use in this Emacs session.
+Return the normalized configured YIYUS, obtaining them when omitted."
+  (setq yiyus (or yiyus (fangcun--configured-yiyus)))
+  (unless yiyus
+    (user-error "Configure `fangcun-yiyus' before using Fangcun"))
+  (unless (and fangcun--session-active-p
+               (file-exists-p fangcun-database-file))
+    (fangcun--sync-yiyus yiyus t)
+    (fangcun--activate-session yiyus))
+  yiyus)
+
+(defun fangcun--db-update-file-in-yiyu
+    (file yiyu &optional no-message read-disk)
   "Replace database entries for saved Org FILE owned by YIYU.
-When NO-MESSAGE is non-nil, do not report the indexed counts."
+When NO-MESSAGE is non-nil, do not report the indexed counts.
+When READ-DISK is non-nil, ignore an unsaved visiting buffer."
   (unless (file-regular-p file)
     (user-error "Fangcun file does not exist: %s" file))
   (unless (string-match-p "\\.org\\'" file)
     (user-error "Fangcun only indexes Org files: %s" file))
   (when-let* ((buffer (find-buffer-visiting file)))
-    (when (buffer-modified-p buffer)
+    (when (and (not read-disk)
+               (buffer-modified-p buffer))
       (user-error "Save the Fangcun file before updating it")))
   (unless (file-exists-p fangcun-database-file)
     (user-error "Run fangcun-db-sync before updating individual files"))
@@ -770,6 +1240,136 @@ When NO-MESSAGE is non-nil, do not report the indexed counts."
                (abbreviate-file-name file)))
     result))
 
+(defun fangcun--database-file-state (database yiyu relative-file)
+  "Return DATABASE state for RELATIVE-FILE in YIYU, or nil."
+  (when-let* ((row
+               (car
+                (sqlite-select
+                 database
+                 (concat
+                  "SELECT mtime, size FROM files "
+                  "WHERE yiyu_id = ? AND file = ?")
+                 (vector (fangcun-yiyu-id yiyu)
+                         relative-file)))))
+    (cons (elt row 0) (elt row 1))))
+
+(defun fangcun--forget-file-in-yiyu (file yiyu)
+  "Remove indexed data for FILE owned by YIYU."
+  (let ((relative-file
+         (file-relative-name file (fangcun-yiyu-root yiyu))))
+    (fangcun--call-with-database
+     (lambda (database)
+       (sqlite-execute
+        database
+        (concat
+         "DELETE FROM files "
+         "WHERE yiyu_id = ? AND file = ?")
+        (vector (fangcun-yiyu-id yiyu) relative-file))))))
+
+(defun fangcun--reconcile-file (file)
+  "Reconcile one absolute FILE with the active Fangcun database."
+  (when (and fangcun--session-active-p
+             (file-exists-p fangcun-database-file)
+             (string-match-p "\\.org\\'" file))
+    (when-let* ((yiyu
+                 (fangcun--yiyu-containing-file
+                  file fangcun--session-yiyus)))
+      (if (file-regular-p file)
+          (let* ((state (fangcun--read-file-state yiyu file))
+                 (relative-file
+                  (fangcun-file-state-relative-file state))
+                 (current
+                  (cons (fangcun-file-state-mtime state)
+                        (fangcun-file-state-size state)))
+                 (stored
+                  (fangcun--call-with-database
+                   (lambda (database)
+                     (fangcun--database-file-state
+                      database yiyu relative-file)))))
+            (unless (equal stored current)
+              (fangcun--db-update-file-in-yiyu
+               file yiyu t t)))
+        (fangcun--forget-file-in-yiyu file yiyu)))))
+
+(defun fangcun--process-native-events ()
+  "Reconcile file events queued by the native monitor."
+  (setq fangcun--native-event-timer nil)
+  (let ((full-sync fangcun--native-pending-full-sync-p)
+        files)
+    (setq fangcun--native-pending-full-sync-p nil)
+    (maphash
+     (lambda (file _value)
+       (push file files))
+     fangcun--native-pending-files)
+    (clrhash fangcun--native-pending-files)
+    (when (and fangcun--session-active-p
+               (file-exists-p fangcun-database-file))
+      (condition-case error-data
+          (if full-sync
+              (fangcun--sync-yiyus fangcun--session-yiyus t)
+            (dolist (file files)
+              (fangcun--reconcile-file file)))
+        (error
+         (display-warning
+          'fangcun
+          (format "Automatic database reconciliation failed: %s"
+                  (error-message-string error-data))
+          :warning))))))
+
+(defun fangcun--reconcile-file-operation (old-files &optional new-file)
+  "Reconcile OLD-FILES and optional NEW-FILE after an operation."
+  (when (and fangcun--session-active-p
+             (file-exists-p fangcun-database-file))
+    (condition-case error-data
+        (progn
+          (dolist (file old-files)
+            (when (string-match-p "\\.org\\'" file)
+              (when-let* ((yiyu
+                           (fangcun--yiyu-containing-file
+                            file fangcun--session-yiyus)))
+                (fangcun--forget-file-in-yiyu file yiyu))))
+          (when new-file
+            (fangcun--reconcile-file new-file)))
+      (error
+       (display-warning
+        'fangcun
+        (format "File operation database update failed: %s"
+                (error-message-string error-data))
+        :warning)))))
+
+(defun fangcun--rename-destination (file new-name)
+  "Return the final destination when FILE is renamed to NEW-NAME."
+  (let ((file (expand-file-name file))
+        (new-name (expand-file-name new-name)))
+    (if (file-directory-p new-name)
+        (expand-file-name (file-name-nondirectory file) new-name)
+      new-name)))
+
+(defun fangcun--around-rename-file
+    (function file new-name &rest arguments)
+  "Call FUNCTION to rename FILE to NEW-NAME, then reconcile Fangcun."
+  (let ((old-file (expand-file-name file))
+        (new-file (fangcun--rename-destination file new-name)))
+    (prog1 (apply function file new-name arguments)
+      (fangcun--reconcile-file-operation
+       (list old-file) new-file))))
+
+(defun fangcun--around-delete-file (function file &rest arguments)
+  "Call FUNCTION to delete FILE, then reconcile Fangcun."
+  (let ((absolute-file (expand-file-name file)))
+    (prog1 (apply function file arguments)
+      (fangcun--reconcile-file-operation
+       (list absolute-file)))))
+
+(defun fangcun--around-vc-delete-file
+    (function file-or-files &rest arguments)
+  "Call FUNCTION to delete FILE-OR-FILES, then reconcile Fangcun."
+  (let ((files
+         (mapcar #'expand-file-name
+                 (ensure-list file-or-files))))
+    (prog1 (apply function file-or-files arguments)
+      (fangcun--reconcile-file-operation files))))
+
 ;;;###autoload
 (defun fangcun-db-update-file (file &optional no-message)
   "Replace database entries for saved Org FILE.
@@ -779,7 +1379,7 @@ When NO-MESSAGE is non-nil, do not report the indexed counts."
     (or buffer-file-name
         (user-error "The current buffer is not visiting a file"))))
   (setq file (expand-file-name file))
-  (let* ((yiyus (fangcun--configured-yiyus))
+  (let* ((yiyus (fangcun--ensure-session))
          (yiyu
           (or (fangcun--yiyu-containing-file file yiyus)
               (user-error
@@ -787,10 +1387,9 @@ When NO-MESSAGE is non-nil, do not report the indexed counts."
                file))))
     (fangcun--db-update-file-in-yiyu file yiyu no-message)))
 
-(defun fangcun--update-after-save ()
-  "Update the current saved file when Fangcun manages it."
-  (when (and fangcun-db-update-on-save
-             buffer-file-name
+(defun fangcun--update-current-file ()
+  "Update the current unmodified file when Fangcun manages it."
+  (when (and buffer-file-name
              (file-exists-p fangcun-database-file)
              (string-match-p "\\.org\\'" buffer-file-name))
     (let* ((yiyus (fangcun--configured-yiyus))
@@ -799,13 +1398,23 @@ When NO-MESSAGE is non-nil, do not report the indexed counts."
       (when yiyu
         (fangcun--db-update-file-in-yiyu buffer-file-name yiyu t)))))
 
-;;;###autoload
-(defun fangcun--setup-update-on-save ()
-  "Arrange for the current Org buffer to update Fangcun after saving."
-  (add-hook 'after-save-hook #'fangcun--update-after-save nil t))
+(defun fangcun--update-after-save ()
+  "Update the current Fangcun file after saving it."
+  (when fangcun-db-update-on-save
+    (fangcun--update-current-file)))
+
+(defun fangcun--update-after-revert ()
+  "Update the current Fangcun file after reverting it from disk."
+  (fangcun--update-current-file))
 
 ;;;###autoload
-(add-hook 'org-mode-hook #'fangcun--setup-update-on-save)
+(defun fangcun--setup-file-updates ()
+  "Arrange for the current Org buffer to update Fangcun from disk."
+  (add-hook 'after-save-hook #'fangcun--update-after-save nil t)
+  (add-hook 'after-revert-hook #'fangcun--update-after-revert nil t))
+
+;;;###autoload
+(add-hook 'org-mode-hook #'fangcun--setup-file-updates)
 
 (defun fangcun--node-from-row (row)
   "Return a Fangcun node represented by SQLite ROW."
@@ -1098,6 +1707,7 @@ When one source contains several links, retain its first occurrence."
                (fangcun--yiyu-containing-file buffer-file-name yiyus))))
     (unless yiyus
       (user-error "Configure `fangcun-yiyus' before creating a node"))
+    (fangcun--ensure-session yiyus)
     (let* ((yiyu
             (or current-yiyu
                 (if (null (cdr yiyus))
@@ -1137,6 +1747,7 @@ When one source contains several links, retain its first occurrence."
 (defun fangcun-node-find ()
   "Choose a Fangcun node by title or alias and visit it."
   (interactive)
+  (fangcun--ensure-session)
   (fangcun-node-visit (fangcun--read-node)))
 
 ;;;###autoload
@@ -1146,6 +1757,7 @@ The chosen title or alias becomes the link description."
   (interactive)
   (unless (derived-mode-p 'org-mode)
     (user-error "Fangcun node links can only be inserted in Org buffers"))
+  (fangcun--ensure-session)
   (let ((node (fangcun--read-node)))
     (insert
      (org-link-make-string
@@ -1175,11 +1787,12 @@ The chosen title or alias becomes the link description."
   (interactive)
   (unless (derived-mode-p 'org-mode)
     (user-error "Fangcun backlinks are only available in Org buffers"))
-  (let* ((target-id
-          (or (fangcun--node-id-at-point)
-              (user-error "Point is not inside a Fangcun node")))
-         (backlink (fangcun--read-backlink target-id)))
-    (fangcun-backlink-visit backlink)))
+  (let ((target-id
+         (or (fangcun--node-id-at-point)
+             (user-error "Point is not inside a Fangcun node"))))
+    (fangcun--ensure-session)
+    (let ((backlink (fangcun--read-backlink target-id)))
+      (fangcun-backlink-visit backlink))))
 
 (defun fangcun--backlink-preview (backlink buffer)
   "Return a one-line preview of BACKLINK from BUFFER."
@@ -1300,6 +1913,7 @@ Each source file is read from disk at most once."
          (or (fangcun--node-id-at-point)
              (user-error "Point is not inside a Fangcun node")))
         (buffer (get-buffer-create fangcun-backlinks-buffer-name)))
+    (fangcun--ensure-session)
     (with-current-buffer buffer
       (fangcun-backlinks-mode)
       (setq fangcun-backlinks-target-id target-id)

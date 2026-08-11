@@ -1,0 +1,17 @@
+# SPDX-FileCopyrightText: 2026 Chen Zhexuan
+# SPDX-License-Identifier: MIT
+
+[package]
+name = "fangcun-watch"
+version = "0.1.0"
+edition = "2021"
+publish = false
+license = "MIT"
+
+[dependencies]
+notify = "=8.2.0"
+serde = { version = "=1.0.219", features = ["derive"] }
+serde_json = "=1.0.143"
+
+[build-dependencies]
+sha2 = "=0.10.9"

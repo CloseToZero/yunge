@@ -1,0 +1,69 @@
+#+title: Fangcun native helper protocol
+
+The helper has a one-way subprocess protocol.  Emacs supplies a command and
+one or more yiyu roots as process arguments.  The helper does not read stdin.
+
+* Invocation
+
+#+begin_src text
+fangcun-watch scan YIYU ROOT [YIYU ROOT ...]
+fangcun-watch watch YIYU ROOT [YIYU ROOT ...]
+#+end_src
+
+Each =YIYU= is the configured identifier of the following =ROOT=.  Each value
+is a separate process argument, so a root may contain spaces.
+
+The =scan= command enumerates every =.org= file below the roots and then exits.
+The =watch= command recursively monitors the roots and remains running.
+
+* Output
+
+Standard output contains UTF-8 newline-delimited JSON (NDJSON).  Every line is
+one complete JSON object and is flushed immediately.  Standard output is
+reserved for these messages.
+
+The first message from either command must be:
+
+#+begin_src json
+{"kind":"ready","build-id":"HASH"}
+#+end_src
+
+=build-id= identifies the exact helper source used by Cargo.  Emacs accepts the
+process only when it matches the tracked =source.sha256= value.  This handshake
+also prevents Emacs from using a helper built for an older protocol.
+
+** Scan messages
+
+After =ready=, =scan= emits one state for each discovered Org file:
+
+#+begin_src json
+{"kind":"state","yiyu":"work","file":"/n/a.org","mtime":1.5,"size":7}
+#+end_src
+
+=yiyu= is the identifier supplied with the owning root.  =file= is the full
+path.  =mtime= is seconds since the Unix epoch, and =size= is bytes.  A
+successful scan exits with status zero after its last state.
+
+If scanning fails, the helper emits an =error= and exits nonzero.  Emacs checks
+the exit status before consuming states, so it never uses a partial scan.
+
+** Watch messages
+
+After installing recursive watches, =watch= emits =ready= and then any of:
+
+#+begin_src json
+{"kind":"event","paths":["/n/a.org"]}
+{"kind":"rescan"}
+{"kind":"error","message":"DETAIL"}
+#+end_src
+
+=event= identifies the Org files affected by an unambiguous filesystem event.
+Emacs reconciles those files after it becomes idle.  =rescan= means that the
+event cannot be represented safely as file paths, such as an ambiguous
+directory change; Emacs schedules a full incremental sync instead.
+
+An =error= from the watch backend also schedules a full incremental sync.  A
+fatal process error emits the same message when possible and exits nonzero.
+
+After accepting =ready=, Emacs schedules one full incremental sync.  It covers
+changes made before recursive monitoring was established.
