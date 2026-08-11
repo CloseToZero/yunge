@@ -128,8 +128,8 @@
 
 (ert-deftest yunge-org-keeps-heading-syntax-outside-evil-operators ()
   (yunge-org-test--load-config)
-  (dolist (case '(("d $" beginning "*  :tag:\n")
-                  ("d 0" end "* g :tag:\n")))
+  (dolist (case '(("d $" beginning "")
+                  ("d 0" end "g")))
     (with-temp-buffer
       (org-mode)
       (insert "* Heading :tag:\n")
@@ -143,7 +143,9 @@
       (save-window-excursion
         (switch-to-buffer (current-buffer))
         (execute-kbd-macro (kbd (car case)))
-        (should (equal (buffer-string) (nth 2 case)))))))
+        (goto-char (point-min))
+        (should (equal (org-get-heading t t t t) (nth 2 case)))
+        (should (equal (org-get-tags nil t) '("tag")))))))
 
 (ert-deftest yunge-org-stops-at-a-folded-heading-end ()
   (yunge-org-test--load-config)
