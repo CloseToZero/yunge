@@ -323,7 +323,8 @@ Offer PREFERRED first when it still names a compilation database."
 
 (defun yunge-eglot--maybe-ensure ()
   "Start Eglot when this file's project and language are enabled."
-  (when (and buffer-file-name
+  (when (and (fboundp 'eglot-ensure)
+             buffer-file-name
              (cl-find-if
               (lambda (entry)
                 (and (file-in-directory-p
@@ -332,6 +333,12 @@ Offer PREFERRED first when it still names a compilation database."
                       major-mode (plist-get entry :modes))))
               yunge-eglot-projects))
     (eglot-ensure)))
+
+(defun yunge-eglot--ensure-existing-buffers ()
+  "Start Eglot where existing file buffers match saved projects."
+  (dolist (buffer (buffer-list))
+    (with-current-buffer buffer
+      (yunge-eglot--maybe-ensure))))
 
 (setq eldoc-echo-area-use-multiline-p nil
       message-truncate-lines t
@@ -366,7 +373,8 @@ Offer PREFERRED first when it still names a compilation database."
   (yunge-key-add-which-key-descriptions
    yunge-eglot-command-map yunge-eglot-command-bindings))
 
-(elpaca (eglot :type tar))
+(elpaca (eglot :type tar)
+  (yunge-eglot--ensure-existing-buffers))
 (elpaca eldoc-box)
 
 (provide 'yunge-eglot)

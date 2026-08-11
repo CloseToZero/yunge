@@ -115,8 +115,7 @@ Elpaca manages itself separately, so it is not recorded in its lock file."
   "Test the Elpaca lifecycle of LIBRARY's PACKAGE configuration.
 Evaluate SETUP before loading LIBRARY, BEFORE-READY after loading it, and
 AFTER-READY after activating PACKAGE and executing its deferred configuration.
-PACKAGE must be the final Elpaca declaration; declarations from required
-configuration libraries remain deferred."
+Other Elpaca declarations remain deferred."
   (let ((autoloads (intern (format "%s-autoloads" package))))
     (yunge-test-run-emacs
      "--eval"
@@ -135,10 +134,15 @@ configuration libraries remain deferred."
      (prin1-to-string
       `(let* ((declarations
                (reverse yunge-test-elpaca-declarations))
-              (declaration (car (last declarations))))
-         (unless (eq (car declaration) ',package)
-           (error "Expected final declaration for %S: %S"
-                  ',package declarations))
+              (declaration
+               (seq-find
+                (lambda (candidate)
+                  (let ((order (car candidate)))
+                    (eq (if (consp order) (car order) order)
+                        ',package)))
+                declarations)))
+         (unless declaration
+           (error "No declaration for %S: %S" ',package declarations))
          ,before-ready
          (require ',autoloads)
          (eval (cons 'progn (cadr declaration)) t)

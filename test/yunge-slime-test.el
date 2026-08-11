@@ -68,6 +68,25 @@
               (expand-file-name "slime/" yunge-var-directory)))
       (error "SLIME configuration was not applied"))))
 
+(ert-deftest yunge-slime-enables-existing-buffers-after-package-ready ()
+  (yunge-test-run-package-config
+   'yunge-slime 'slime
+   :setup
+   '(progn
+      (setq lisp-mode-hook nil
+            yunge-slime-test-buffer
+            (generate-new-buffer " *yunge-slime-existing*"))
+      (with-current-buffer yunge-slime-test-buffer
+        (lisp-mode)))
+   :before-ready
+   '(with-current-buffer yunge-slime-test-buffer
+      (when (bound-and-true-p slime-mode)
+        (error "SLIME was enabled before package readiness")))
+   :after-ready
+   '(with-current-buffer yunge-slime-test-buffer
+      (unless (bound-and-true-p slime-mode)
+        (error "Existing Lisp buffer did not enable SLIME")))))
+
 (ert-deftest yunge-slime-selects-an-available-default-lisp ()
   (yunge-test-load-package-config 'yunge-slime)
   (let (available)

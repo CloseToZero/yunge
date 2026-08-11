@@ -6,6 +6,7 @@
 (require 'yunge-key)
 (require 'yunge-state)
 
+(declare-function evil-ghostel-mode "evil-ghostel" (&optional arg))
 (declare-function ghostel--send-encoded
                   "ghostel" (key-name mods &optional utf8))
 (declare-function ghostel--send-event "ghostel" ())
@@ -96,9 +97,14 @@ ARG follows the prefix conventions of `ghostel-project'."
                          evil-ghostel-mode-map
                          yunge-ghostel-mouse-bindings))
 
-(elpaca ghostel)
+(defun yunge-ghostel--enable-evil-in-existing-buffers ()
+  "Enable Evil Ghostel integration in existing terminal buffers."
+  (dolist (buffer (buffer-list))
+    (with-current-buffer buffer
+      (when (eq major-mode 'ghostel-mode)
+        (evil-ghostel-mode 1)))))
 
-(elpaca evil-ghostel
+(elpaca ghostel
   (setq ghostel-module-auto-install 'download
         ghostel-module-directory
         (yunge-var-subdirectory "ghostel")
@@ -110,14 +116,17 @@ ARG follows the prefix conventions of `ghostel-project'."
   (with-eval-after-load 'project
     (add-to-list 'project-switch-commands
                  '(yunge-ghostel-project "Ghostel") t))
-  (add-hook 'ghostel-mode-hook #'evil-ghostel-mode)
-  (with-eval-after-load 'evil-ghostel
-    (yunge-ghostel--setup-keys))
   (with-eval-after-load 'which-key
     (yunge-key-add-which-key-descriptions
      yunge-toggle-map yunge-ghostel-terminal-bindings)
     (yunge-key-add-which-key-descriptions
      project-prefix-map yunge-ghostel-project-bindings)))
+
+(elpaca evil-ghostel
+  (add-hook 'ghostel-mode-hook #'evil-ghostel-mode)
+  (with-eval-after-load 'evil-ghostel
+    (yunge-ghostel--setup-keys))
+  (yunge-ghostel--enable-evil-in-existing-buffers))
 
 (provide 'yunge-ghostel)
 

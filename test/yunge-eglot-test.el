@@ -331,7 +331,40 @@
             (setq buffer-file-name (expand-file-name "README.org" root)
                   major-mode 'org-mode)
             (yunge-eglot--maybe-ensure)
-            (should-not ensured)))
+            (should-not ensured))
+          (cl-letf (((symbol-function 'eglot-ensure) nil))
+            (with-temp-buffer
+              (setq buffer-file-name
+                    (expand-file-name "src/early.cpp" root)
+                    major-mode 'c++-mode)
+              (should-not (yunge-eglot--maybe-ensure)))))
+      (delete-directory root t))))
+
+(ert-deftest yunge-eglot-catches-up-existing-project-buffers ()
+  (let* ((root (file-name-as-directory
+                (make-temp-file "yunge-eglot-project-" t)))
+         (yunge-eglot-projects
+          (list (list :root root :modes '(c++-mode))))
+         (matching (generate-new-buffer " *yunge-eglot-matching*"))
+         (other (generate-new-buffer " *yunge-eglot-other*"))
+         ensured)
+    (unwind-protect
+        (progn
+          (with-current-buffer matching
+            (setq buffer-file-name
+                  (expand-file-name "src/main.cpp" root)
+                  major-mode 'c++-mode))
+          (with-current-buffer other
+            (setq buffer-file-name
+                  (expand-file-name "README.org" root)
+                  major-mode 'org-mode))
+          (cl-letf (((symbol-function 'eglot-ensure)
+                     (lambda () (push (current-buffer) ensured))))
+            (yunge-eglot--ensure-existing-buffers))
+          (should (equal ensured (list matching))))
+      (dolist (buffer (list matching other))
+        (when (buffer-live-p buffer)
+          (kill-buffer buffer)))
       (delete-directory root t))))
 
 (ert-deftest yunge-eglot-switches-between-source-and-header-with-clangd ()

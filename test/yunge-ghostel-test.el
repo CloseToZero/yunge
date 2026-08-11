@@ -36,7 +36,7 @@
 
 (ert-deftest yunge-ghostel-configures-after-package-ready ()
   (yunge-test-run-package-config
-   'yunge-ghostel 'evil-ghostel
+   'yunge-ghostel 'ghostel
    :before-ready
    '(progn
       (when (keymap-lookup yunge-toggle-map "t")
@@ -58,8 +58,6 @@
         (error "Ghostel module directory was not redirected"))
       (when ghostel-readonly-fake-cursor
         (error "Ghostel read-only hint cursor was not disabled"))
-      (unless (memq 'evil-ghostel-mode ghostel-mode-hook)
-        (error "Evil Ghostel integration was not enabled"))
       (when (featurep 'project)
         (error "Project was loaded by the Ghostel configuration"))
       (require 'project)
@@ -67,9 +65,30 @@
                       project-switch-commands)
         (error "Ghostel project action was not added"))
       (when (featurep 'ghostel)
-        (error "Ghostel was loaded by its configuration"))
-      (when (featurep 'evil-ghostel)
-        (error "Evil Ghostel was loaded by its configuration")))))
+        (error "Ghostel was loaded by its configuration")))))
+
+(ert-deftest yunge-ghostel-enables-existing-buffers-after-package-ready ()
+  (yunge-test-run-package-config
+   'yunge-ghostel 'evil-ghostel
+   :setup
+   '(progn
+      (require 'ghostel)
+      (setq ghostel-mode-hook nil
+            yunge-ghostel-test-buffer
+            (generate-new-buffer " *yunge-ghostel-existing*"))
+      (with-current-buffer yunge-ghostel-test-buffer
+        (ghostel-mode)))
+   :before-ready
+   '(with-current-buffer yunge-ghostel-test-buffer
+      (when (bound-and-true-p evil-ghostel-mode)
+        (error "Evil Ghostel was enabled before package readiness")))
+   :after-ready
+   '(progn
+      (unless (memq 'evil-ghostel-mode ghostel-mode-hook)
+        (error "Evil Ghostel hook was not installed"))
+      (with-current-buffer yunge-ghostel-test-buffer
+        (unless (bound-and-true-p evil-ghostel-mode)
+          (error "Existing Ghostel buffer missed Evil integration"))))))
 
 (ert-deftest yunge-ghostel-binds-entry-points ()
   (yunge-ghostel-test--load-config)

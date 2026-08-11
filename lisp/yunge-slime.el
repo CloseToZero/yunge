@@ -165,6 +165,13 @@
    ((executable-find "ros") 'roswell)
    ((executable-find "sbcl") 'sbcl)))
 
+(defun yunge-slime--enable-existing-lisp-buffers ()
+  "Enable SLIME in existing Common Lisp buffers."
+  (dolist (buffer (buffer-list))
+    (with-current-buffer buffer
+      (when (eq major-mode 'lisp-mode)
+        (slime-lisp-mode-hook)))))
+
 (defun yunge-slime-repl ()
   "Open the SLIME REPL, starting the configured Lisp when necessary."
   (interactive)
@@ -507,7 +514,8 @@
     ;; SLIME's hand-written autoload file adds this hook, but Elpaca regenerates
     ;; that file from cookies and omits the uncookied hook registration.
     (autoload 'slime-lisp-mode-hook "slime")
-    (add-hook 'lisp-mode-hook #'slime-lisp-mode-hook)))
+    (add-hook 'lisp-mode-hook #'slime-lisp-mode-hook)
+    (yunge-slime--enable-existing-lisp-buffers)))
 
 (provide 'yunge-slime)
 
