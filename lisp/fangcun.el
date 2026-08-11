@@ -5,6 +5,7 @@
 (require 'cl-lib)
 (require 'button)
 (require 'crm)
+(require 'fangcun-loader)
 (require 'json)
 (require 'yunge-state)
 (require 'org)
@@ -15,27 +16,11 @@
 (require 'subr-x)
 (require 'yunge-jump-history)
 
-(defgroup fangcun nil
-  "Org-based personal knowledge management."
-  :group 'org)
-
 (defun fangcun--set-database-file (symbol value)
   "Set SYMBOL to the normalized absolute file name VALUE."
   (unless (and (stringp value) (file-name-absolute-p value))
     (error "%s must be an absolute file name: %S" symbol value))
   (set-default symbol (expand-file-name value)))
-
-(defcustom fangcun-yiyus nil
-  "Org note roots indexed by Fangcun.
-Each entry has the form (ID :name NAME :root ROOT)."
-  :type '(repeat
-          (list :tag "Yiyu"
-                (symbol :tag "ID")
-                (const :name)
-                (string :tag "Display name")
-                (const :root)
-                (directory :tag "Root")))
-  :group 'fangcun)
 
 (defcustom fangcun-database-file
   (yunge-var-file "fangcun" "fangcun.sqlite")
@@ -1456,14 +1441,10 @@ When NO-MESSAGE is non-nil, do not report the indexed counts."
   "Update the current Fangcun file after reverting it from disk."
   (fangcun--update-current-file))
 
-;;;###autoload
 (defun fangcun--setup-file-updates ()
   "Arrange for the current Org buffer to update Fangcun from disk."
   (add-hook 'after-save-hook #'fangcun--update-after-save nil t)
   (add-hook 'after-revert-hook #'fangcun--update-after-revert nil t))
-
-;;;###autoload
-(add-hook 'org-mode-hook #'fangcun--setup-file-updates)
 
 (defun fangcun--node-from-row (row)
   "Return a Fangcun node represented by SQLite ROW."
@@ -1566,6 +1547,7 @@ Each row contains a node ID followed by one tag."
           "SELECT node_id, tag FROM tags "
           "ORDER BY node_id, tag COLLATE NOCASE")))))))
 
+;;;###autoload
 (defun fangcun--id-find (id &optional markerp)
   "Return the Fangcun location of ID, or nil to let Org continue.
 When MARKERP is non-nil, return the location as a marker."
@@ -1589,8 +1571,6 @@ When MARKERP is non-nil, return the location as a marker."
                       (vector id)))))))
       (org-id-find-id-in-file
        id (expand-file-name (elt row 1) (elt row 0)) markerp))))
-
-(advice-add 'org-id-find :before-until #'fangcun--id-find)
 
 (defun fangcun--backlink-from-row (row)
   "Return a Fangcun backlink represented by SQLite ROW."

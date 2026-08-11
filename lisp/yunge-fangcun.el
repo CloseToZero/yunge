@@ -3,6 +3,7 @@
 ;; SPDX-License-Identifier: MIT
 
 (require 'yunge-evil)
+(require 'fangcun-loader)
 (require 'yunge-key)
 
 (defvar fangcun-backlinks-mode-map)

@@ -7,6 +7,59 @@
 (yunge-test-deftest-lazy-load yunge-fangcun
   (fangcun org which-key))
 
+(ert-deftest yunge-fangcun-loads-on-the-first-org-id-lookup ()
+  (yunge-test-run-emacs
+   "--eval"
+   (prin1-to-string
+    '(progn
+       (defmacro elpaca (&rest _body) nil)
+       (require 'org-id)
+       (require 'yunge-fangcun)
+       (when (featurep 'fangcun)
+         (error "Fangcun loaded before an ID lookup"))
+       (unless (autoloadp (symbol-function 'fangcun--id-find))
+         (error "The Fangcun ID resolver is not autoloaded"))
+       (let ((org-id-locations (make-hash-table :test #'equal)))
+         (org-id-find "not-a-fangcun-id"))
+       (unless (featurep 'fangcun)
+         (error "The first ID lookup did not load Fangcun"))))))
+
+(ert-deftest yunge-fangcun-loads-for-yiyu-but-not-ordinary-org-files ()
+  (yunge-test-run-emacs
+   "--eval"
+   (prin1-to-string
+    '(progn
+       (defmacro elpaca (&rest _body) nil)
+       (require 'yunge-fangcun)
+       (let* ((root (make-temp-file "fangcun-loader-test-" t))
+              (note (expand-file-name "note.org" root))
+              (outside (make-temp-file "outside-yiyu-" nil ".org"))
+              (fangcun-yiyus
+               `((notes :name "Notes" :root ,root))))
+         (unwind-protect
+             (progn
+               (with-temp-buffer
+                 (setq buffer-file-name outside)
+                 (org-mode)
+                 (when (featurep 'fangcun)
+                   (error "An ordinary Org file loaded Fangcun")))
+               (with-temp-buffer
+                 (setq buffer-file-name note)
+                 (org-mode)
+                 (unless (featurep 'fangcun)
+                   (error "A yiyu Org file did not load Fangcun"))
+                 (unless (memq #'fangcun--update-after-save
+                               after-save-hook)
+                   (error "The first yiyu buffer lacks save updates")))
+               (with-temp-buffer
+                 (setq buffer-file-name outside)
+                 (org-mode)
+                 (when (memq #'fangcun--update-after-save
+                             after-save-hook)
+                   (error "An ordinary Org file has Fangcun updates"))))
+           (delete-file outside)
+           (delete-directory root t)))))))
+
 (ert-deftest yunge-fangcun-binds-note-entry-points ()
   (yunge-test-enable-evil)
   (require 'yunge-fangcun)

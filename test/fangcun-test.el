@@ -243,6 +243,24 @@
                   (should (equal (org-id-get) "theorem"))))
             (move-marker marker nil)))))))
 
+(ert-deftest fangcun-follows-org-id-links-through-its-database ()
+  (fangcun-test-with-notes
+    (fangcun-db-sync)
+    (let ((org-id-locations (make-hash-table :test #'equal)))
+      (with-temp-buffer
+        (org-mode)
+        (insert "[[id:theorem][A theorem]]")
+        (goto-char (point-min))
+        (search-forward "A theorem")
+        (backward-char)
+        (cl-letf (((symbol-function 'org-id-locations-load)
+                   (lambda ()
+                     (ert-fail
+                      "Following a Fangcun link loaded Org ID state"))))
+          (org-open-at-point))
+        (should (file-equal-p (buffer-file-name) personal-file))
+        (should (equal (org-id-get) "theorem"))))))
+
 (ert-deftest fangcun-lets-org-resolve-ids-outside-its-database ()
   (fangcun-test-with-notes
     (let ((outside-file (expand-file-name "outside.org" root))
