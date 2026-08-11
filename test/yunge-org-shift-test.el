@@ -48,6 +48,15 @@
     (should (eq (key-binding (kbd "<")) #'yunge-org-shift-left))
     (should (eq (key-binding (kbd ">")) #'yunge-org-shift-right))))
 
+(ert-deftest yunge-org-binds-structure-aware-insert-shifts ()
+  (yunge-org-shift-test--load-config)
+  (with-temp-buffer
+    (org-mode)
+    (evil-insert-state)
+    (yunge-test-keys
+     '(("C-d" . yunge-org-shift-left-line)
+       ("C-t" . yunge-org-shift-right-line)))))
+
 (ert-deftest yunge-org-shift-operators-remain-linewise ()
   (yunge-org-shift-test--load-config)
   (should (eq (evil-get-command-property
@@ -184,5 +193,61 @@
     (yunge-org-shift-test--with-keys "> >")
     (should (string-match-p "| A | B |" (buffer-string)))
     (should (> (current-indentation) 0))))
+
+(ert-deftest yunge-org-insert-shift-demotes-and-promotes-a-heading ()
+  (yunge-org-shift-test--load-config)
+  (with-temp-buffer
+    (org-mode)
+    (insert "* Heading\n")
+    (goto-char (point-min))
+    (search-forward "Heading")
+    (evil-insert-state)
+    (yunge-org-shift-test--with-keys "C-t")
+    (should (equal (buffer-string) "** Heading\n"))
+    (yunge-org-shift-test--with-keys "C-d")
+    (should (equal (buffer-string) "* Heading\n"))))
+
+(ert-deftest yunge-org-insert-shift-indents-a-list-item ()
+  (yunge-org-shift-test--load-config)
+  (with-temp-buffer
+    (org-mode)
+    (insert "- First\n- Parent\n  - Child\n")
+    (goto-char (point-min))
+    (forward-line 1)
+    (end-of-line)
+    (evil-insert-state)
+    (yunge-org-shift-test--with-keys "C-t")
+    (should
+     (equal
+      (buffer-string)
+      "- First\n  - Parent\n  - Child\n"))
+    (yunge-org-shift-test--with-keys "C-d")
+    (should
+     (equal
+      (buffer-string)
+      "- First\n- Parent\n  - Child\n"))))
+
+(ert-deftest yunge-org-insert-shift-moves-a-table-column ()
+  (yunge-org-shift-test--load-config)
+  (with-temp-buffer
+    (org-mode)
+    (insert "| A | B |\n")
+    (goto-char (point-min))
+    (search-forward "A")
+    (evil-insert-state)
+    (yunge-org-shift-test--with-keys "C-t")
+    (should (equal (buffer-string) "| B | A |\n"))))
+
+(ert-deftest yunge-org-insert-shift-keeps-evil-line-indentation ()
+  (yunge-org-shift-test--load-config)
+  (with-temp-buffer
+    (org-mode)
+    (insert "Body\n")
+    (goto-char (point-min))
+    (evil-insert-state)
+    (yunge-org-shift-test--with-keys "C-t")
+    (should (> (current-indentation) 0))
+    (yunge-org-shift-test--with-keys "C-d")
+    (should (equal (buffer-string) "Body\n"))))
 
 ;;; yunge-org-shift-test.el ends here

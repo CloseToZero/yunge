@@ -228,6 +228,8 @@ Editing:
   ordinary deletion behavior.
 - ~</>~ promote or demote selected headings and indent or outdent selected
   list items.  In other contexts they retain Evil's ordinary shifting.
+- In Insert state, ~C-t/C-d~ demote or promote the current heading or list
+  item and move the current table column.  Elsewhere they shift the line.
 
 Opening and visibility:
 

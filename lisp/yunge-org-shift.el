@@ -11,6 +11,10 @@
   '(("<" yunge-org-shift-left "promote or shift left")
     (">" yunge-org-shift-right "demote or shift right")))
 
+(defconst yunge-org-insert-shift-bindings
+  '(("C-d" yunge-org-shift-left-line "promote or shift line left")
+    ("C-t" yunge-org-shift-right-line "demote or shift line right")))
+
 (defun yunge-org--shift-headings (beginning end count command)
   "Apply heading COMMAND COUNT times between BEGINNING and END."
   (org-map-region
@@ -90,8 +94,34 @@ DIRECTION is positive for right and negative for left."
   (interactive "<r><vc>")
   (yunge-org--shift beginning end count -1))
 
+(defun yunge-org--shift-line (count direction)
+  "Shift the current line COUNT times in DIRECTION.
+Use Org's horizontal structure command on headings, items, and tables."
+  (if (or (org-at-heading-or-item-p)
+          (org-at-table-p))
+      (dotimes (_ count)
+        (funcall
+         (if (> direction 0) #'org-metaright #'org-metaleft)))
+    (funcall
+     (if (> direction 0)
+         #'evil-shift-right-line
+       #'evil-shift-left-line)
+     count)))
+
+(defun yunge-org-shift-right-line (count)
+  "Demote an Org structure or shift the current line right COUNT times."
+  (interactive "p")
+  (yunge-org--shift-line count 1))
+
+(defun yunge-org-shift-left-line (count)
+  "Promote an Org structure or shift the current line left COUNT times."
+  (interactive "p")
+  (yunge-org--shift-line count -1))
+
 (yunge-key-evil-define '(normal visual) org-mode-map
                        yunge-org-shift-bindings)
+(yunge-key-evil-define 'insert org-mode-map
+                       yunge-org-insert-shift-bindings)
 
 (provide 'yunge-org-shift)
 

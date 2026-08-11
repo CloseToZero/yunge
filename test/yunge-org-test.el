@@ -74,7 +74,11 @@
        ("[l" . org-previous-link)
        ("]l" . org-next-link)
        ("[c" . org-babel-previous-src-block)
-       ("]c" . org-babel-next-src-block)))))
+       ("]c" . org-babel-next-src-block)))
+    (evil-insert-state)
+    (yunge-test-keys
+     '(("C-d" . yunge-org-shift-left-line)
+       ("C-t" . yunge-org-shift-right-line)))))
 
 (ert-deftest yunge-org-registers-structural-navigation-as-motion ()
   (yunge-org-test--load-config)
