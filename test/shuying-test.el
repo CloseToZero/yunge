@@ -55,6 +55,8 @@
                (with-temp-file
                    (shuying-backend-request-output-file request)
                  (insert "artifact"))
+               (setf (shuying-backend-request-metadata request)
+                     '(:height 1.2 :depth 0.2))
                (funcall complete request nil))))
           (let ((specification (shuying-test--spec)))
             (shuying-render
@@ -70,7 +72,11 @@
           (should (= calls 1))
           (should (= (length artifacts) 2))
           (should (equal (car artifacts) (cadr artifacts)))
-          (should (file-exists-p (car artifacts))))
+          (should
+           (file-exists-p (shuying-artifact-path (car artifacts))))
+          (should
+           (equal (shuying-artifact-metadata (car artifacts))
+                  '(:height 1.2 :depth 0.2))))
       (delete-directory root t))))
 
 (ert-deftest shuying-coalesces-pending-render-requests ()
@@ -106,11 +112,14 @@
           (should-not callbacks)
           (with-temp-file output-file
             (insert "artifact"))
+          (setf (shuying-backend-request-metadata backend-request)
+                '(:height 1.2 :depth 0.2))
           (funcall completion backend-request nil)
           (should (= (length callbacks) 2))
           (should (seq-every-p
                    (lambda (result)
-                     (and (file-exists-p (car result))
+                     (and (file-exists-p
+                           (shuying-artifact-path (car result)))
                           (null (cdr result))))
                    callbacks)))
       (delete-directory root t))))
@@ -142,6 +151,8 @@
                (with-temp-file
                    (shuying-backend-request-output-file request)
                  (insert "artifact"))
+               (setf (shuying-backend-request-metadata request)
+                     '(:height 1.2 :depth 0.2))
                (funcall complete request nil)))
            #'shuying-render-spec-preamble)
           (shuying-render-batch
@@ -157,7 +168,11 @@
            (equal (nreverse batches)
                   '(("$x$" "$y$") ("$z$"))))
           (should (= (length artifacts) 3))
-          (should (seq-every-p #'file-exists-p artifacts)))
+          (should
+           (seq-every-p
+            (lambda (artifact)
+              (file-exists-p (shuying-artifact-path artifact)))
+            artifacts)))
       (delete-directory root t))))
 
 (ert-deftest shuying-limits-render-batches-and-preserves-fifo-order ()
@@ -388,6 +403,8 @@
                (with-temp-file
                    (shuying-backend-request-output-file first)
                  (insert "artifact"))
+               (setf (shuying-backend-request-metadata first)
+                     '(:height 1.2 :depth 0.2))
                (funcall complete first nil))
              (error "Batch failed")))
           (shuying-render-batch
@@ -407,7 +424,9 @@
           (should (= (length results) 2))
           (let ((first (assoc "$x$" results))
                 (second (assoc "$y$" results)))
-            (should (file-exists-p (cadr first)))
+            (should
+             (file-exists-p
+              (shuying-artifact-path (cadr first))))
             (should-not (caddr first))
             (should-not (cadr second))
             (should (equal (caddr second) '(error "Batch failed"))))

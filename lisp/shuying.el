@@ -30,6 +30,11 @@ A batch retains its slot until all of its requests complete."
 (defconst shuying-cache-format-version 1
   "Version included in Shuying render specification hashes.")
 
+(cl-defstruct shuying-artifact
+  "A rendered file and the metadata needed to display it."
+  path
+  metadata)
+
 (cl-defstruct shuying-render-spec
   source
   preamble
@@ -47,8 +52,11 @@ A batch retains its slot until all of its requests complete."
 (cl-defstruct shuying--job
   key
   specification
-  artifact
+  artifact-file
+  metadata-file
   temporary-file
+  temporary-metadata-file
+  metadata
   callbacks)
 
 (cl-defstruct shuying--backend
@@ -61,7 +69,8 @@ A batch retains its slot until all of its requests complete."
 
 (cl-defstruct shuying-backend-request
   specification
-  output-file)
+  output-file
+  metadata)
 
 (defvar shuying-backends nil
   "Alist mapping backend names to registered backend definitions.")
@@ -84,7 +93,9 @@ A batch retains its slot until all of its requests complete."
 FUNCTION receives a list of `shuying-backend-request' objects and a
 completion function.  It calls the completion function exactly once for
 each request, with nil on success or an error value on failure.  If FUNCTION
-signals, Shuying completes every unfinished request with that error.
+signals, Shuying completes every unfinished request with that error.  A
+successful backend may store display metadata in the request before calling
+the completion function.
 
 When BATCH-KEY-FUNCTION is non-nil, it receives a render specification.
 Only specifications for which it returns equal keys share a backend call."
@@ -122,6 +133,31 @@ Only specifications for which it returns equal keys share a backend call."
            (shuying-render-spec-output-format specification))
    shuying-cache-directory))
 
+(defun shuying--artifact-metadata-file (artifact-file)
+  "Return the metadata sidecar belonging to ARTIFACT-FILE."
+  (concat artifact-file ".eld"))
+
+(defun shuying--read-artifact (artifact-file metadata-file)
+  "Return the cached artifact described by ARTIFACT-FILE and METADATA-FILE."
+  (when (and (file-exists-p artifact-file)
+             (file-exists-p metadata-file))
+    (condition-case nil
+        (with-temp-buffer
+          (insert-file-contents metadata-file)
+          (make-shuying-artifact
+           :path artifact-file
+           :metadata (read (current-buffer))))
+      (error nil))))
+
+(defun shuying--write-job-metadata (job)
+  "Write JOB's display metadata to its temporary sidecar."
+  (let ((coding-system-for-write 'utf-8-unix)
+        (print-circle t)
+        (print-length nil)
+        (print-level nil))
+    (with-temp-file (shuying--job-temporary-metadata-file job)
+      (prin1 (shuying--job-metadata job) (current-buffer)))))
+
 (defun shuying--notify-callbacks (callbacks artifact error-data)
   "Notify CALLBACKS that ARTIFACT completed with ERROR-DATA."
   (dolist (callback callbacks)
@@ -129,15 +165,34 @@ Only specifications for which it returns equal keys share a backend call."
 
 (defun shuying--complete-job (job error-data)
   "Complete JOB with ERROR-DATA."
-  (let ((temporary-file (shuying--job-temporary-file job)))
+  (let ((temporary-file (shuying--job-temporary-file job))
+        (temporary-metadata-file
+         (shuying--job-temporary-metadata-file job))
+        artifact)
     (remhash (shuying--job-key job) shuying--pending-jobs)
-    (if error-data
-        (when (file-exists-p temporary-file)
-          (delete-file temporary-file))
-      (rename-file temporary-file (shuying--job-artifact job) t))
+    (condition-case publish-error
+        (if error-data
+            (dolist (file (list temporary-file temporary-metadata-file))
+              (when (file-exists-p file)
+                (delete-file file)))
+          (shuying--write-job-metadata job)
+          (rename-file temporary-file (shuying--job-artifact-file job) t)
+          (rename-file temporary-metadata-file
+                       (shuying--job-metadata-file job) t)
+          (setq artifact
+                (make-shuying-artifact
+                 :path (shuying--job-artifact-file job)
+                 :metadata (shuying--job-metadata job))))
+      (error
+       (setq error-data publish-error)
+       (dolist (file (list temporary-file temporary-metadata-file
+                           (shuying--job-artifact-file job)
+                           (shuying--job-metadata-file job)))
+         (when (file-exists-p file)
+           (delete-file file)))))
     (shuying--notify-callbacks
      (nreverse (shuying--job-callbacks job))
-     (and (not error-data) (shuying--job-artifact job))
+     artifact
      error-data)))
 
 (defun shuying--backend-for (specification)
@@ -208,6 +263,9 @@ Only specifications for which it returns equal keys share a backend call."
          (lambda (request backend-error)
            (setq completion-running t)
            (let ((job (gethash request request-jobs)))
+             (unless backend-error
+               (setf (shuying--job-metadata job)
+                     (shuying-backend-request-metadata request)))
              (shuying--finish-batch-job
               batch job backend-error))
            (setq completion-running nil)))
@@ -247,17 +305,21 @@ Only specifications for which it returns equal keys share a backend call."
 (defun shuying-render-batch (requests)
   "Render REQUESTS through compatible backend batches.
 Each element of REQUESTS has the form (SPECIFICATION . CALLBACK).
-CALLBACK receives the completed artifact and an error value.  Cache hits
-complete immediately, while identical pending specifications share a job."
+CALLBACK receives a `shuying-artifact' and an error value.  Cache hits complete
+immediately, while identical pending specifications share a job."
   (let (jobs)
     (dolist (request requests)
       (let* ((specification (car request))
              (callback (cdr request))
              (key (shuying-render-spec-hash specification))
-             (artifact (shuying-artifact-file specification))
+             (artifact-file (shuying-artifact-file specification))
+             (metadata-file
+              (shuying--artifact-metadata-file artifact-file))
+             (artifact
+              (shuying--read-artifact artifact-file metadata-file))
              (pending (gethash key shuying--pending-jobs)))
         (cond
-         ((file-exists-p artifact)
+         (artifact
           (funcall callback artifact nil))
          (pending
           (push callback (shuying--job-callbacks pending)))
@@ -268,7 +330,8 @@ complete immediately, while identical pending specifications share a job."
                  (make-shuying--job
                   :key key
                   :specification specification
-                  :artifact artifact
+                  :artifact-file artifact-file
+                  :metadata-file metadata-file
                   :temporary-file
                   (make-temp-file
                    (expand-file-name ".render-"
@@ -277,6 +340,11 @@ complete immediately, while identical pending specifications share a job."
                    (format ".%s"
                            (shuying-render-spec-output-format
                             specification)))
+                  :temporary-metadata-file
+                  (make-temp-file
+                   (expand-file-name ".metadata-"
+                                     shuying-cache-directory)
+                   nil ".eld")
                   :callbacks (list callback))))
             (puthash key job shuying--pending-jobs)
             (push job jobs))))))
@@ -284,7 +352,7 @@ complete immediately, while identical pending specifications share a job."
      (shuying--group-jobs (nreverse jobs)))))
 
 (defun shuying-render (specification callback)
-  "Render SPECIFICATION and call CALLBACK with its artifact and error.
+  "Render SPECIFICATION and call CALLBACK with a Shuying artifact and error.
 Identical pending requests share one backend job.  Cached artifacts call
 CALLBACK immediately."
   (shuying-render-batch (list (cons specification callback))))

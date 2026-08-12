@@ -20,6 +20,9 @@ The Org integration has one small interaction boundary:
   starts from the final visible range after scrolling settles.
 - Saving an Org buffer or changing the active theme rechecks visible previews.
   Only formulas whose rendering inputs changed request new artifacts.
+- Inline previews use the height and depth reported by =dvisvgm= to follow the
+  surrounding text baseline.  Their display height is expressed in =em=, so
+  buffer-local font scaling resizes cached SVGs without rerunning LaTeX.
 
 The Org adapter keeps a buffer-local catalog of fragment bounds and source
 text.  It builds the catalog with Org's parser, reuses it while the text is
@@ -64,7 +67,9 @@ A render specification contains every input that can change an artifact:
 
 The hash of the complete render specification is the cache key.  A cache hit
 therefore means that all rendering inputs match, not merely that the source
-text matches.
+text matches.  Each cached image has a small sidecar containing backend
+metadata such as width, height, and depth.  The renderer owns that metadata;
+front ends decide how to apply it to their display system.
 
 An Org fragment also has independent display and work state:
 
@@ -101,9 +106,10 @@ The direct =latex= and =dvisvgm= backend uses this pipeline:
 2. Collect misses with compatible preambles and rendering options.
 3. Reuse or asynchronously build one precompiled format for the preamble.
 4. Compile each compatible batch in one temporary TeX document.
-5. Convert every page to SVG and map it back to its request.
-6. Publish each artifact atomically after conversion finishes.
-7. Check the request generation before changing a buffer display.
+5. Convert every page to SVG and collect its =dvisvgm= geometry.
+6. Map each SVG and its metadata back to the originating request.
+7. Publish each artifact and metadata sidecar atomically.
+8. Check the request generation before changing a buffer display.
 
 LaTeX and dvisvgm run as a nonblocking process chain.  A batch uses an isolated
 working directory below =var/shuying/work/=.  Successful work is removed after

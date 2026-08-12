@@ -54,6 +54,28 @@
      (equal (shuying-latex--format-key first engine)
             (shuying-latex--format-key first '("other-latex"))))))
 
+(ert-deftest shuying-latex-extracts-unscaled-geometry-in-em-units ()
+  (with-temp-buffer
+    (insert
+     "  width=11.9pt, height=8.16pt, depth=.85pt\n"
+     "  width=19.04pt, height=14.79pt, depth=7.48pt\n")
+    (let ((geometries
+           (shuying-latex--page-geometries
+            (current-buffer) 10.0 1.7)))
+      (should (= (length geometries) 2))
+      (should (< (abs (- (plist-get (car geometries) :width) 0.7))
+                 0.0001))
+      (should (< (abs (- (plist-get (car geometries) :height) 0.53))
+                 0.0001))
+      (should (< (abs (- (plist-get (car geometries) :depth) 0.05))
+                 0.0001))
+      (should (< (abs (- (plist-get (cadr geometries) :width) 1.12))
+                 0.0001))
+      (should (< (abs (- (plist-get (cadr geometries) :height) 1.31))
+                 0.0001))
+      (should (< (abs (- (plist-get (cadr geometries) :depth) 0.44))
+                 0.0001)))))
+
 (ert-deftest shuying-latex-shares-a-pending-format-build ()
   (let* ((root (make-temp-file "shuying-latex-test-" t))
          (shuying-work-directory (expand-file-name "work" root))
@@ -309,12 +331,19 @@
             (should-not results)
             (let* ((converter-invocation (car invocations))
                    (converter-arguments (cdr converter-invocation))
+                   (converter-buffer
+                    (plist-get converter-arguments :buffer))
                    (converter-sentinel
                     (plist-get converter-arguments :sentinel)))
               (with-temp-file (expand-file-name "page-1.svg" directory)
                 (insert "first"))
               (with-temp-file (expand-file-name "page-2.svg" directory)
                 (insert "second"))
+              (with-current-buffer converter-buffer
+                (insert
+                 "Preview: Fontsize 10pt\n"
+                 "  width=10pt, height=8pt, depth=2pt\n"
+                 "  width=20pt, height=9pt, depth=3pt\n"))
               (funcall converter-sentinel
                        (car converter-invocation) "finished\n")
               (should (= (length results) 2))
@@ -386,9 +415,15 @@
           (should (= process-count 2))
           (should (seq-every-p #'null (mapcar #'cdr results)))
           (dolist (result results)
-            (should (file-exists-p (car result)))
+            (should
+             (file-exists-p
+              (shuying-artifact-path (car result))))
+            (should (plist-get
+                     (shuying-artifact-metadata (car result))
+                     :height))
             (with-temp-buffer
-              (insert-file-contents (car result))
+              (insert-file-contents
+               (shuying-artifact-path (car result)))
               (should (search-forward "<svg" nil t)))))
       (delete-directory root t))))
 
@@ -437,7 +472,8 @@
                  (mapcar
                   (lambda (result)
                     (with-temp-buffer
-                      (insert-file-contents (cadr result))
+                      (insert-file-contents
+                       (shuying-artifact-path (cadr result)))
                       (cons
                        (car result)
                        (replace-regexp-in-string

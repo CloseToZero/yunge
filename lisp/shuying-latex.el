@@ -33,8 +33,12 @@ preamble with each batch instead."
   :group 'shuying)
 
 (defconst shuying-latex--preview-package
-  "\\usepackage[active,tightpage]{preview}\n"
-  "LaTeX setup that turns each preview environment into one page.")
+  "\\usepackage[active,tightpage,auctex]{preview}\n"
+  "LaTeX setup that emits one page and geometry for each preview.")
+
+(defconst shuying-latex--number-regexp
+  "[-+]?\\(?:[0-9]+\\(?:\\.[0-9]*\\)?\\|\\.[0-9]+\\)"
+  "Regexp matching a decimal number in renderer output.")
 
 (cl-defstruct shuying-latex--batch
   requests
@@ -154,6 +158,44 @@ Load FORMAT-FILE instead of writing the full preamble when it is non-nil."
    'shuying-latex-error
    (format "%s exited with status %d; see %s"
            stage (process-exit-status process) (buffer-name buffer))))
+
+(defun shuying-latex--font-size (buffer)
+  "Return the preview font size reported in BUFFER."
+  (with-current-buffer buffer
+    (save-excursion
+      (goto-char (point-min))
+      (when (re-search-forward
+             (concat "^Preview: Fontsize \\("
+                     shuying-latex--number-regexp
+                     "\\)pt$")
+             nil t)
+        (string-to-number (match-string 1))))))
+
+(defun shuying-latex--page-geometries (buffer font-size scale)
+  "Return page geometry from dvisvgm output in BUFFER.
+FONT-SIZE and SCALE recover the unscaled dimensions in em units."
+  (with-current-buffer buffer
+    (save-excursion
+      (goto-char (point-min))
+      (let ((regexp
+             (concat
+              "^  width=\\(" shuying-latex--number-regexp
+              "\\)pt, height=\\(" shuying-latex--number-regexp
+              "\\)pt, depth=\\(" shuying-latex--number-regexp
+              "\\)pt$"))
+            geometries)
+        (while (re-search-forward regexp nil t)
+          (let* ((divisor (* font-size scale))
+                 (width (string-to-number (match-string 1)))
+                 (above (string-to-number (match-string 2)))
+                 (depth (string-to-number (match-string 3)))
+                 (height (+ above depth)))
+            (push
+             (list :width (/ width divisor)
+                   :height (/ height divisor)
+                   :depth (/ depth divisor))
+             geometries)))
+        (nreverse geometries)))))
 
 (defun shuying-latex--format-key (specification engine)
   "Return the precompiled format key for SPECIFICATION and ENGINE."
@@ -341,26 +383,39 @@ dvisvgm zero-pads page numbers to the width of the final page number."
          (page-count (length requests))
          (complete (shuying-latex--batch-complete batch))
          (log-buffer (shuying-latex--batch-log-buffer batch))
+         (specification
+          (shuying-backend-request-specification (car requests)))
+         (scale (or (shuying-render-spec-scale specification) 1.0))
          (process-error
           (unless (and (eq (process-status process) 'exit)
                        (= (process-exit-status process) 0))
             (shuying-latex--process-error
              "dvisvgm" process
              (shuying-latex--batch-log-buffer batch))))
+         (font-size
+          (and (not process-error)
+               (shuying-latex--font-size log-buffer)))
+         (geometries
+          (and font-size
+               (shuying-latex--page-geometries
+                log-buffer font-size scale)))
          failed)
     (unwind-protect
         (cl-loop
          for request in requests
          for page from 1
+         for geometry = (nth (1- page) geometries)
          for page-file = (shuying-latex--page-file
                           directory page page-count)
          do
-         (if (file-exists-p page-file)
+         (if (and (file-exists-p page-file) geometry)
              (condition-case error-data
                  (progn
                    (copy-file
                     page-file
                     (shuying-backend-request-output-file request) t)
+                   (setf (shuying-backend-request-metadata request)
+                         geometry)
                    (funcall complete request nil))
                (error
                 (setq failed t)
@@ -371,8 +426,9 @@ dvisvgm zero-pads page numbers to the width of the final page number."
             (or process-error
                 (list
                  'shuying-latex-error
-                 (format "dvisvgm did not produce page %d; see %s"
-                         page (buffer-name log-buffer)))))))
+                 (format
+                  "dvisvgm did not produce page %d with geometry; see %s"
+                  page (buffer-name log-buffer)))))))
       (shuying-latex--cleanup batch (or failed process-error)))))
 
 (defun shuying-latex--conversion-sentinel (batch process _event)
@@ -402,6 +458,7 @@ dvisvgm zero-pads page numbers to the width of the final page number."
             "--page=1-"
             "--bbox=preview"
             "--no-fonts"
+            "--verbosity=7"
             (format "--scale=%s" scale)
             (concat "--output=" output-pattern)
             (shuying-latex--batch-dvi-file batch)))))

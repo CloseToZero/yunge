@@ -288,6 +288,22 @@ EQUATION-NUMBER is the next automatic number at the fragment's start."
   (when-let* ((image (overlay-get overlay 'shuying-org-image)))
     (overlay-put overlay 'display image)))
 
+(defun shuying-org--image (artifact)
+  "Return an image display for ARTIFACT aligned to the text baseline."
+  (let* ((metadata (shuying-artifact-metadata artifact))
+         (height (plist-get metadata :height))
+         (depth (plist-get metadata :depth))
+         (ascent
+          (and height depth
+               (round
+                (* 100
+                   (- 1 (/ (max 0.0 (min depth height))
+                           height)))))))
+    (create-image
+     (shuying-artifact-path artifact) nil nil
+     :height (and height (cons height 'em))
+     :ascent (or ascent 'center))))
+
 (defun shuying-org--finish-render
     (buffer overlay generation artifact error-data report-error)
   "Finish rendering OVERLAY in BUFFER for GENERATION.
@@ -305,8 +321,9 @@ REPORT-ERROR reports a current render failure without duplicating its batch."
             (overlay-put overlay 'shuying-org-error error-data)
             (overlay-put overlay 'shuying-org-specification-hash nil)
             (funcall report-error error-data))
-        (let ((image (create-image artifact nil nil :ascent 'center)))
-          (overlay-put overlay 'shuying-org-artifact artifact)
+        (let ((image (shuying-org--image artifact)))
+          (overlay-put overlay 'shuying-org-artifact
+                       (shuying-artifact-path artifact))
           (overlay-put overlay 'shuying-org-image image)
           (overlay-put overlay 'shuying-org-dirty nil)
           (overlay-put overlay 'shuying-org-error nil)

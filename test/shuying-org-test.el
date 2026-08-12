@@ -16,6 +16,8 @@
     (cl-incf shuying-org-test--render-count)
     (with-temp-file (shuying-backend-request-output-file request)
       (insert "image"))
+    (setf (shuying-backend-request-metadata request)
+          '(:width 1.0 :height 1.2 :depth 0.2))
     (funcall complete request nil)))
 
 (defun shuying-org-test--overlay ()
@@ -24,6 +26,22 @@
    (lambda (overlay)
      (overlay-get overlay 'shuying-org))
    (overlays-in (point-min) (point-max))))
+
+(ert-deftest shuying-org-aligns-images-from-rendered-geometry ()
+  (let ((artifact
+         (make-shuying-artifact
+          :path "formula.svg"
+          :metadata '(:width 1.0 :height 1.2 :depth 0.2)))
+        arguments)
+    (cl-letf (((symbol-function 'create-image)
+               (lambda (&rest values)
+                 (setq arguments values)
+                 'image)))
+      (should (eq (shuying-org--image artifact) 'image))
+      (should
+       (equal arguments
+              '("formula.svg" nil nil
+                :height (1.2 . em) :ascent 83))))))
 
 (ert-deftest shuying-org-builds-direct-latex-render-specifications ()
   (let ((shuying-latex-engine-command '("test-latex"))
@@ -706,6 +724,8 @@
                 (with-temp-file
                     (shuying-backend-request-output-file (car newer))
                   (insert "newer"))
+                (setf (shuying-backend-request-metadata (car newer))
+                      '(:width 1.0 :height 1.2 :depth 0.2))
                 (funcall (cdr newer) (car newer) nil)
                 (let ((newer-artifact
                        (overlay-get overlay
@@ -714,6 +734,8 @@
                   (with-temp-file
                       (shuying-backend-request-output-file (car older))
                     (insert "older"))
+                  (setf (shuying-backend-request-metadata (car older))
+                        '(:width 1.0 :height 1.2 :depth 0.2))
                   (funcall (cdr older) (car older) nil)
                   (should
                    (equal
