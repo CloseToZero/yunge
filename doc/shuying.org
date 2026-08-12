@@ -1,0 +1,230 @@
+#+title: 数影（Shuying）
+
+Shuying is an independent Emacs library for responsive, accurate LaTeX
+previews.  Org is its first front end, but rendering, scheduling, and caching
+belong to Shuying rather than to Org-specific configuration.  The design is
+free to evolve with actual use instead of preserving unused compatibility.
+
+* Interaction
+
+The Org integration has one small interaction boundary:
+
+- Point outside a LaTeX fragment shows its image.
+- Entering a fragment reveals its source.
+- Editing marks the fragment dirty without starting work for every keystroke.
+- Leaving a dirty fragment requests a new preview.
+- A late result from an older request cannot replace a newer result.
+
+Manual commands preview or clear a fragment, region, subtree, or buffer.
+Continuous rendering while typing is separate from this basic interaction and
+only belongs here if it proves useful in practice.
+
+* Library boundary
+
+The source layout is:
+
+- =shuying.el= owns render specifications, jobs, backends, and the cache.
+- =shuying-org.el= finds Org fragments and manages their display lifecycle.
+- =yunge-org.el= enables Shuying and assigns user-facing key bindings.
+
+The core must not depend on Org syntax or overlays.  An adapter supplies source
+text and context, then consumes completed render artifacts.
+
+* Render specifications
+
+A render specification contains every input that can change an artifact:
+
+- source text;
+- preamble and TeX engine;
+- backend and output format;
+- foreground and background colors;
+- scale, page width, and equation-numbering context; and
+- a Shuying cache-format version.
+
+The hash of the complete render specification is the cache key.  A cache hit
+therefore means that all rendering inputs match, not merely that the source
+text matches.
+
+An Org fragment also has independent display and work state:
+
+- display: source or image;
+- content: clean or dirty; and
+- work: idle or rendering, with a monotonically increasing generation.
+
+The generation is checked when asynchronous work completes.  This makes stale
+result rejection part of the model instead of an overlay-specific workaround.
+
+* Foundations
+
+Shuying owns fragment discovery, display state, render specifications, cache
+keys, artifact locations, and the backend protocol from the beginning.  These
+concepts form the stable boundary between front ends and renderers.
+
+A backend accepts a render request and a completion function.  It may complete
+the request immediately or asynchronously, but the caller always observes the
+same protocol.  This keeps process management out of the Org adapter and makes
+the synchronous implementation exercise the same boundary as the native
+asynchronous renderer.
+
+The first compiler backend delegates one render request to Org 9.8.7's public
+=org-create-formula-image= function.  That function accepts source and an
+output path without owning fragment discovery, Shuying's cache key, or the
+buffer display.  It is a small compatibility backend; Shuying still owns every
+long-lived abstraction and can replace the compiler without rewriting its
+interaction model.
+
+* Scheduler and native renderer
+
+The scheduler accepts requests from every Shuying front end.  Identical render
+specifications share one pending job.  Visible and explicitly requested
+fragments take priority over background work, while a superseded generation
+can be discarded before it consumes more work.
+
+The native =latex= and =dvisvgm= backend uses this pipeline:
+
+1. Return cache hits immediately.
+2. Collect misses with compatible preambles and rendering options.
+3. Compile each compatible batch in one temporary TeX document.
+4. Convert its pages to SVG and publish each artifact atomically.
+5. Deliver artifacts as they become available instead of waiting for the batch.
+6. Check the request generation before changing a buffer display.
+
+Backends encapsulate process topology and artifact production.  Other engines
+or image formats do not add conditionals throughout the scheduler or the Org
+adapter.
+
+Equation numbering is buffer context, not fragment-local input.  Shuying
+computes numbering before scheduling jobs and includes the result in each
+render specification.  Editing an earlier numbered equation may therefore
+invalidate later numbered previews without invalidating unrelated fragments.
+
+* External environment
+
+Shuying diagnoses missing tools, but does not silently install a TeX
+distribution or modify the system package database.  A TeX installation is
+large, platform-managed state and may require administrator access.
+
+** Required programs
+
+The =latex= and =dvisvgm= backend requires these commands on =exec-path=:
+
+- =latex= compiles a temporary document to DVI.
+- =dvisvgm= converts DVI pages to SVG.
+- =kpsewhich= locates TeX files for diagnostics.
+
+Verify them with:
+
+#+begin_src shell
+latex --version
+dvisvgm --version
+kpsewhich preview.sty
+#+end_src
+
+** Required TeX packages
+
+Package names below are TeX package names, not necessarily operating-system
+package names.
+
+| TeX package | Required file | Purpose |
+|-------------+---------------+---------|
+| =preview=   | =preview.sty= | Isolate fragments and report their geometry. |
+| =amsmath=   | =amsmath.sty= | Standard mathematical environments. |
+| =amsfonts=  | =amssymb.sty= | Symbols used by Org's default snippet setup. |
+
+The following are not Shuying runtime requirements, but are a useful baseline
+for mathematical notes and custom preambles:
+
+| TeX package | Representative files | Purpose |
+|-------------+----------------------+---------|
+| =mathtools= | =mathtools.sty=      | Extensions and fixes for =amsmath=. |
+| =graphics=  | =graphicx.sty=, =color.sty= | Graphics and basic colors. |
+| =xcolor=    | =xcolor.sty=         | Richer color handling. |
+| =ulem=      | =ulem.sty=           | Underline and strikeout commands. |
+
+=fontspec= is only needed with XeLaTeX or LuaLaTeX support.  Individual
+notes may introduce further dependencies through their preamble; Shuying
+should report the missing file from the TeX log rather than guess packages.
+
+Verify the baseline files with:
+
+#+begin_src shell
+kpsewhich preview.sty
+kpsewhich amsmath.sty
+kpsewhich amssymb.sty
+kpsewhich mathtools.sty
+kpsewhich graphicx.sty
+kpsewhich xcolor.sty
+kpsewhich ulem.sty
+#+end_src
+
+** Windows
+
+A per-user Basic MiKTeX installation is recommended because it is small and
+does not require administrator access.  A shared MiKTeX installation or
+another TeX distribution works as long as the required programs and files are
+available.  For MiKTeX, refresh its package database and install the explicit
+baseline:
+
+#+begin_src powershell
+miktex packages update-package-database
+miktex packages install preview amsmath amsfonts graphics
+miktex packages install mathtools xcolor ulem
+#+end_src
+
+MiKTeX can install a missing package on demand, but unattended preview jobs
+must not wait behind an installation dialog.  Either install the baseline
+above or configure missing-package installation to =Always= in MiKTeX Console.
+Restart Emacs after the installer changes =PATH=.
+
+** macOS
+
+BasicTeX, the small TeX Live distribution published with MacTeX, is the
+recommended macOS setup.  Full MacTeX and other compatible TeX distributions
+also work.  Add the required backend and packages to BasicTeX with =tlmgr=:
+
+#+begin_src shell
+sudo tlmgr update --self
+sudo tlmgr install dvisvgm preview amsmath amsfonts graphics
+sudo tlmgr install mathtools xcolor ulem
+#+end_src
+
+The DVI-to-SVG path does not need MacTeX's optional Ghostscript extras.  Those
+extras are relevant when =dvisvgm= processes PDF or PostScript input.
+
+** GNU/Linux
+
+Distribution-managed TeX Live packages are recommended so the operating
+system remains the owner of the installation.  An upstream TeX Live or another
+compatible distribution also works.  On Debian and Ubuntu, the corresponding
+packages are:
+
+#+begin_src shell
+sudo apt install texlive-latex-base texlive-latex-recommended
+sudo apt install texlive-plain-generic preview-latex-style dvisvgm
+#+end_src
+
+On Arch Linux, they are:
+
+#+begin_src shell
+sudo pacman -S texlive-latex texlive-latexrecommended
+sudo pacman -S texlive-latexextra texlive-plaingeneric dvisvgm
+#+end_src
+
+Other distributions divide TeX Live differently.  Their package search can
+identify the operating-system packages that provide =preview.sty= and the
+other files above.  Avoid mixing a system-managed TeX Live with =tlmgr=.
+
+* Testing
+
+Unit tests use fake backends and temporary caches, so the ordinary test suite
+does not require TeX.  The same backend contract tests cover immediate and
+deferred completion.  Conditional end-to-end tests compile a small set of
+fragments with the real =latex= and =dvisvgm= programs and verify the SVG
+output, cache reuse, and stale-result rejection.
+
+* References
+
+- [[https://orgmode.org/manual/LaTeX-Previews.html][Org manual: LaTeX previews]]
+- [[https://docs.miktex.org/manual/miktex-packages.html][MiKTeX packages]]
+- [[https://tug.org/mactex/morepackages.html][MacTeX and BasicTeX packages]]
+- [[https://tug.org/texlive/][TeX Live]]
