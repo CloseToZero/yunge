@@ -21,6 +21,12 @@
   :type 'directory
   :group 'shuying)
 
+(defcustom shuying-max-concurrent-batches 4
+  "Maximum number of render batches owned by backends at once.
+A batch retains its slot until all of its requests complete."
+  :type '(integer :match (lambda (_widget value) (> value 0)))
+  :group 'shuying)
+
 (defconst shuying-cache-format-version 1
   "Version included in Shuying render specification hashes.")
 
@@ -49,6 +55,10 @@
   function
   batch-key-function)
 
+(cl-defstruct shuying--batch
+  jobs
+  remaining)
+
 (cl-defstruct shuying-backend-request
   specification
   output-file)
@@ -59,12 +69,22 @@
 (defvar shuying--pending-jobs (make-hash-table :test #'equal)
   "Render jobs indexed by render specification hash.")
 
+(defvar shuying--waiting-batches nil
+  "Render batches waiting for a scheduler slot in FIFO order.")
+
+(defvar shuying--active-batch-count 0
+  "Number of render batches currently owned by backends.")
+
+(defvar shuying--scheduler-running nil
+  "Whether the scheduler is currently dispatching batches.")
+
 (defun shuying-register-backend
     (name function &optional batch-key-function)
   "Register FUNCTION as rendering backend NAME.
 FUNCTION receives a list of `shuying-backend-request' objects and a
-completion function.  It calls the completion function with each request
-and nil on success, or an error value on failure.
+completion function.  It calls the completion function exactly once for
+each request, with nil on success or an error value on failure.  If FUNCTION
+signals, Shuying completes every unfinished request with that error.
 
 When BATCH-KEY-FUNCTION is non-nil, it receives a render specification.
 Only specifications for which it returns equal keys share a backend call."
@@ -151,9 +171,22 @@ Only specifications for which it returns equal keys share a backend call."
        (cons (car group) (nreverse (cdr group))))
      (nreverse groups))))
 
-(defun shuying--dispatch-job-group (jobs)
-  "Dispatch compatible JOBS through their registered backend."
-  (let* ((backend
+(defun shuying--finish-batch-job (batch job error-data)
+  "Finish JOB in BATCH with ERROR-DATA."
+  (when (eq job
+            (gethash (shuying--job-key job)
+                     shuying--pending-jobs))
+    (unwind-protect
+        (shuying--complete-job job error-data)
+      (cl-decf (shuying--batch-remaining batch))
+      (when (zerop (shuying--batch-remaining batch))
+        (cl-decf shuying--active-batch-count)
+        (shuying--run-scheduler)))))
+
+(defun shuying--dispatch-batch (batch)
+  "Dispatch BATCH through its registered backend."
+  (let* ((jobs (shuying--batch-jobs batch))
+         (backend
           (shuying--backend-for
            (shuying--job-specification (car jobs))))
          (requests
@@ -175,19 +208,41 @@ Only specifications for which it returns equal keys share a backend call."
          (lambda (request backend-error)
            (setq completion-running t)
            (let ((job (gethash request request-jobs)))
-             (when (eq job
-                       (gethash (shuying--job-key job)
-                                shuying--pending-jobs))
-               (shuying--complete-job job backend-error)))
+             (shuying--finish-batch-job
+              batch job backend-error))
            (setq completion-running nil)))
       (error
        (if completion-running
            (signal (car error-data) (cdr error-data))
          (dolist (job jobs)
-           (when (eq job
-                     (gethash (shuying--job-key job)
-                              shuying--pending-jobs))
-             (shuying--complete-job job error-data))))))))
+           (shuying--finish-batch-job
+            batch job error-data)))))))
+
+(defun shuying--run-scheduler ()
+  "Dispatch queued batches while scheduler slots are available."
+  (unless shuying--scheduler-running
+    (let ((shuying--scheduler-running t))
+      (while (and shuying--waiting-batches
+                  (< shuying--active-batch-count
+                     shuying-max-concurrent-batches))
+        (let ((batch (pop shuying--waiting-batches)))
+          (cl-incf shuying--active-batch-count)
+          (shuying--dispatch-batch batch))))))
+
+(defun shuying--enqueue-job-groups (groups)
+  "Append compatible job GROUPS to the render queue."
+  (when groups
+    (setq shuying--waiting-batches
+          (nconc
+           shuying--waiting-batches
+           (mapcar
+            (lambda (group)
+              (let ((jobs (cdr group)))
+                (make-shuying--batch
+                 :jobs jobs
+                 :remaining (length jobs))))
+            groups)))
+    (shuying--run-scheduler)))
 
 (defun shuying-render-batch (requests)
   "Render REQUESTS through compatible backend batches.
@@ -225,8 +280,8 @@ complete immediately, while identical pending specifications share a job."
                   :callbacks (list callback))))
             (puthash key job shuying--pending-jobs)
             (push job jobs))))))
-    (dolist (group (shuying--group-jobs (nreverse jobs)))
-      (shuying--dispatch-job-group (cdr group)))))
+    (shuying--enqueue-job-groups
+     (shuying--group-jobs (nreverse jobs)))))
 
 (defun shuying-render (specification callback)
   "Render SPECIFICATION and call CALLBACK with its artifact and error.

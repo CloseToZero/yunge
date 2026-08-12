@@ -160,6 +160,219 @@
           (should (seq-every-p #'file-exists-p artifacts)))
       (delete-directory root t))))
 
+(ert-deftest shuying-limits-render-batches-and-preserves-fifo-order ()
+  (let* ((root (make-temp-file "shuying-cache-" t))
+         (shuying-cache-directory root)
+         (shuying-backends nil)
+         (shuying--pending-jobs (make-hash-table :test #'equal))
+         (shuying--waiting-batches nil)
+         (shuying--active-batch-count 0)
+         (shuying--scheduler-running nil)
+         (shuying-max-concurrent-batches 2)
+         controls
+         started
+         results)
+    (unwind-protect
+        (progn
+          (shuying-register-backend
+           'test
+           (lambda (requests complete)
+             (let ((source
+                    (shuying-render-spec-source
+                     (shuying-backend-request-specification
+                      (car requests)))))
+               (push source started)
+               (push (list source (car requests) complete)
+                     controls)))
+           #'shuying-render-spec-preamble)
+          (cl-labels
+              ((complete
+                (source)
+                (pcase-let* ((`(,_ ,request ,callback)
+                              (assoc source controls))
+                             (output
+                              (shuying-backend-request-output-file
+                               request)))
+                  (with-temp-file output
+                    (insert source))
+                  (funcall callback request nil))))
+            (shuying-render-batch
+             (mapcar
+              (lambda (source)
+                (let ((specification (shuying-test--spec source)))
+                  (setf (shuying-render-spec-preamble specification)
+                        source)
+                  (cons
+                   specification
+                   (lambda (artifact error-data)
+                     (should-not error-data)
+                     (push artifact results)))))
+              '("$a$" "$b$" "$c$" "$d$")))
+            (should (equal (reverse started) '("$a$" "$b$")))
+            (should (= shuying--active-batch-count 2))
+            (should (= (length shuying--waiting-batches) 2))
+            (complete "$a$")
+            (should (equal (reverse started)
+                           '("$a$" "$b$" "$c$")))
+            (complete "$b$")
+            (should (equal (reverse started)
+                           '("$a$" "$b$" "$c$" "$d$")))
+            (complete "$c$")
+            (complete "$d$")
+            (should (= (length results) 4))
+            (should (zerop shuying--active-batch-count))
+            (should-not shuying--waiting-batches)))
+      (delete-directory root t))))
+
+(ert-deftest shuying-holds-a-batch-slot-until-every-request-finishes ()
+  (let* ((root (make-temp-file "shuying-cache-" t))
+         (shuying-cache-directory root)
+         (shuying-backends nil)
+         (shuying--pending-jobs (make-hash-table :test #'equal))
+         (shuying--waiting-batches nil)
+         (shuying--active-batch-count 0)
+         (shuying--scheduler-running nil)
+         (shuying-max-concurrent-batches 1)
+         calls
+         results)
+    (unwind-protect
+        (progn
+          (shuying-register-backend
+           'test
+           (lambda (requests complete)
+             (push (cons requests complete) calls))
+           #'shuying-render-spec-preamble)
+          (let ((first (shuying-test--spec "$x$"))
+                (second (shuying-test--spec "$y$"))
+                (third (shuying-test--spec "$z$")))
+            (setf (shuying-render-spec-preamble third) "other")
+            (shuying-render-batch
+             (mapcar
+              (lambda (specification)
+                (cons
+                 specification
+                 (lambda (artifact error-data)
+                   (should-not error-data)
+                   (push artifact results))))
+              (list first second third))))
+          (should (= (length calls) 1))
+          (should (= (length shuying--waiting-batches) 1))
+          (pcase-let* ((`(,requests . ,complete) (car calls))
+                       (first (car requests))
+                       (second (cadr requests)))
+            (dolist (request (list first second))
+              (with-temp-file
+                  (shuying-backend-request-output-file request)
+                (insert "artifact")))
+            (funcall complete first nil)
+            (should (= (length calls) 1))
+            (should (= shuying--active-batch-count 1))
+            (funcall complete second nil))
+          (should (= (length calls) 2))
+          (should-not shuying--waiting-batches)
+          (pcase-let* ((`(,requests . ,complete) (car calls))
+                       (request (car requests)))
+            (with-temp-file
+                (shuying-backend-request-output-file request)
+              (insert "artifact"))
+            (funcall complete request nil))
+          (should (= (length results) 3))
+          (should (zerop shuying--active-batch-count)))
+      (delete-directory root t))))
+
+(ert-deftest shuying-dispatches-synchronous-batches-without-reentry ()
+  (let* ((root (make-temp-file "shuying-cache-" t))
+         (shuying-cache-directory root)
+         (shuying-backends nil)
+         (shuying--pending-jobs (make-hash-table :test #'equal))
+         (shuying--waiting-batches nil)
+         (shuying--active-batch-count 0)
+         (shuying--scheduler-running nil)
+         (shuying-max-concurrent-batches 1)
+         (depth 0)
+         (maximum-depth 0)
+         started)
+    (unwind-protect
+        (progn
+          (shuying-register-backend
+           'test
+           (lambda (requests complete)
+             (cl-incf depth)
+             (setq maximum-depth (max depth maximum-depth))
+             (let* ((request (car requests))
+                    (source
+                     (shuying-render-spec-source
+                      (shuying-backend-request-specification
+                       request))))
+               (push source started)
+               (with-temp-file
+                   (shuying-backend-request-output-file request)
+                 (insert source))
+               (funcall complete request nil))
+             (cl-decf depth))
+           #'shuying-render-spec-preamble)
+          (shuying-render-batch
+           (mapcar
+            (lambda (source)
+              (let ((specification (shuying-test--spec source)))
+                (setf (shuying-render-spec-preamble specification)
+                      source)
+                (cons specification #'ignore)))
+            '("$a$" "$b$" "$c$")))
+          (should (equal (reverse started) '("$a$" "$b$" "$c$")))
+          (should (= maximum-depth 1))
+          (should (zerop shuying--active-batch-count))
+          (should-not shuying--waiting-batches))
+      (delete-directory root t))))
+
+(ert-deftest shuying-dispatches-the-next-batch-after-an-error ()
+  (let* ((root (make-temp-file "shuying-cache-" t))
+         (shuying-cache-directory root)
+         (shuying-backends nil)
+         (shuying--pending-jobs (make-hash-table :test #'equal))
+         (shuying--waiting-batches nil)
+         (shuying--active-batch-count 0)
+         (shuying--scheduler-running nil)
+         (shuying-max-concurrent-batches 1)
+         started
+         results)
+    (unwind-protect
+        (progn
+          (shuying-register-backend
+           'test
+           (lambda (requests complete)
+             (let* ((request (car requests))
+                    (source
+                     (shuying-render-spec-source
+                      (shuying-backend-request-specification
+                       request))))
+               (push source started)
+               (if (equal source "$bad$")
+                   (error "Backend failed")
+                 (with-temp-file
+                     (shuying-backend-request-output-file request)
+                   (insert source))
+                 (funcall complete request nil))))
+           #'shuying-render-spec-preamble)
+          (shuying-render-batch
+           (mapcar
+            (lambda (source)
+              (let ((specification (shuying-test--spec source)))
+                (setf (shuying-render-spec-preamble specification)
+                      source)
+                (cons
+                 specification
+                 (lambda (artifact error-data)
+                   (push (cons artifact error-data) results)))))
+            '("$bad$" "$good$")))
+          (should (equal (reverse started) '("$bad$" "$good$")))
+          (should (= (length results) 2))
+          (should (= (length (seq-filter #'car results)) 1))
+          (should (= (length (seq-filter #'cdr results)) 1))
+          (should (zerop shuying--active-batch-count))
+          (should-not shuying--waiting-batches))
+      (delete-directory root t))))
+
 (ert-deftest shuying-finishes-a-partially-failed-backend-batch ()
   (let* ((root (make-temp-file "shuying-cache-" t))
          (shuying-cache-directory root)

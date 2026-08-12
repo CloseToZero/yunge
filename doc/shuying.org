@@ -81,7 +81,9 @@ asynchronously.  This keeps process management out of the Org adapter.
 * Scheduler and LaTeX renderer
 
 The scheduler accepts requests from every Shuying front end.  Identical render
-specifications share one pending job.
+specifications share one pending job.  Compatible batches enter a FIFO queue,
+and at most =shuying-max-concurrent-batches= are owned by backends at once.  A
+batch keeps its scheduler slot until every request in it has completed.
 
 The direct =latex= and =dvisvgm= backend uses this pipeline:
 
