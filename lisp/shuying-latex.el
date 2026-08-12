@@ -1,4 +1,4 @@
-;;; shuying-latex.el --- Asynchronous LaTeX rendering -*- lexical-binding: t; -*-
+;;; shuying-latex.el --- Async LaTeX rendering -*- lexical-binding: t; -*-
 ;; SPDX-FileCopyrightText: 2026 Chen Zhexuan
 ;; SPDX-License-Identifier: MIT
 
@@ -19,6 +19,19 @@
   :type '(repeat string)
   :group 'shuying)
 
+(defcustom shuying-latex-precompile-preamble t
+  "Whether to precompile reusable LaTeX preambles.
+If precompilation is unavailable or fails, Shuying compiles the complete
+preamble with each batch instead."
+  :type 'boolean
+  :group 'shuying)
+
+(defcustom shuying-latex-format-directory
+  (yunge-var-subdirectory "shuying/formats")
+  "Directory containing precompiled LaTeX formats."
+  :type 'directory
+  :group 'shuying)
+
 (defconst shuying-latex--preview-package
   "\\usepackage[active,tightpage]{preview}\n"
   "LaTeX setup that turns each preview environment into one page.")
@@ -28,7 +41,26 @@
   complete
   directory
   log-buffer
-  dvi-file)
+  tex-file
+  dvi-file
+  engine
+  format-key
+  format-file
+  suspect-format-file)
+
+(cl-defstruct shuying-latex--format-build
+  key
+  callbacks
+  directory
+  log-buffer
+  built-file
+  target-file)
+
+(defvar shuying-latex--format-builds (make-hash-table :test #'equal)
+  "LaTeX format builds currently shared by waiting batches.")
+
+(defvar shuying-latex--failed-formats (make-hash-table :test #'equal)
+  "LaTeX formats which failed during the current Emacs session.")
 
 (defun shuying-latex-batch-key (specification)
   "Return the compatibility key for SPECIFICATION.
@@ -74,8 +106,16 @@ values affect the document or converter as a whole."
   (insert (shuying-render-spec-source specification))
   (insert "\n\\end{preview}\n"))
 
-(defun shuying-latex--write-document (requests file)
-  "Write a batch document for REQUESTS to FILE."
+(defun shuying-latex--write-preamble (specification)
+  "Insert the reusable preamble for SPECIFICATION at point."
+  (insert (shuying-render-spec-preamble specification))
+  (unless (bolp)
+    (insert "\n"))
+  (insert shuying-latex--preview-package))
+
+(defun shuying-latex--write-document (requests file &optional format-file)
+  "Write a batch document for REQUESTS to FILE.
+Load FORMAT-FILE instead of writing the full preamble when it is non-nil."
   (let* ((specification
           (shuying-backend-request-specification (car requests)))
          (foreground
@@ -87,10 +127,8 @@ values affect the document or converter as a whole."
          (write-region-inhibit-fsync t)
          (coding-system-for-write 'utf-8-unix))
     (with-temp-file file
-      (insert (shuying-render-spec-preamble specification))
-      (unless (bolp)
-        (insert "\n"))
-      (insert shuying-latex--preview-package)
+      (unless format-file
+        (shuying-latex--write-preamble specification))
       (insert "\\begin{document}\n")
       (when-let* ((width
                   (shuying-render-spec-page-width specification)))
@@ -116,6 +154,158 @@ values affect the document or converter as a whole."
    'shuying-latex-error
    (format "%s exited with status %d; see %s"
            stage (process-exit-status process) (buffer-name buffer))))
+
+(defun shuying-latex--format-key (specification engine)
+  "Return the precompiled format key for SPECIFICATION and ENGINE."
+  ;; These are precisely the inputs dumped before `\endofdump'.  Fragment
+  ;; source, colors, and dimensions remain in the ordinary batch document.
+  (secure-hash
+   'sha256
+   (encode-coding-string
+    (prin1-to-string
+     (list
+      (shuying-render-spec-preamble specification)
+      shuying-latex--preview-package
+      engine
+      (shuying-render-spec-cache-version specification)))
+    'utf-8-unix)))
+
+(defun shuying-latex--base-format (engine)
+  "Return the dumpable base format for ENGINE, or nil."
+  (when (string-equal
+         (downcase (file-name-base (car engine))) "latex")
+    "latex"))
+
+(defun shuying-latex--complete-format-build (build success)
+  "Complete BUILD with SUCCESS and notify its waiting batches."
+  (let* ((key (shuying-latex--format-build-key build))
+         (built-file (shuying-latex--format-build-built-file build))
+         (target-file (shuying-latex--format-build-target-file build))
+         (log-buffer (shuying-latex--format-build-log-buffer build)))
+    (setq success (and success (file-exists-p built-file)))
+    (when success
+      (condition-case nil
+          (rename-file built-file target-file t)
+        (file-error
+         (setq success nil))))
+    (unless success
+      (puthash key t shuying-latex--failed-formats)
+      (display-warning
+       'shuying
+       (concat
+        "Could not precompile a LaTeX preamble; using the full preamble.  "
+        "See " (buffer-name log-buffer))
+       :warning))
+    (remhash key shuying-latex--format-builds)
+    (when (file-directory-p
+           (shuying-latex--format-build-directory build))
+      (delete-directory
+       (shuying-latex--format-build-directory build) t))
+    (when (and success (buffer-live-p log-buffer))
+      (kill-buffer log-buffer))
+    (dolist (callback
+             (nreverse (shuying-latex--format-build-callbacks build)))
+      (funcall callback (and success target-file)))))
+
+(defun shuying-latex--format-sentinel (build process _event)
+  "Handle completion of the precompiled format PROCESS for BUILD."
+  (when (memq (process-status process) '(exit signal))
+    (shuying-latex--complete-format-build
+     build
+     (and (eq (process-status process) 'exit)
+          (= (process-exit-status process) 0)))))
+
+(defun shuying-latex--start-format-build
+    (key specification engine base-format callback)
+  "Build KEY for SPECIFICATION with ENGINE and BASE-FORMAT.
+CALLBACK receives the resulting format file, or nil on failure."
+  (make-directory shuying-work-directory t)
+  (make-directory shuying-latex-format-directory t)
+  (let* ((directory
+          (make-temp-file
+           (expand-file-name "format-" shuying-work-directory) t))
+         (source-file (expand-file-name "preamble.tex" directory))
+         (built-file
+          (expand-file-name (concat key ".fmt") directory))
+         (target-file
+          (expand-file-name
+           (concat key ".fmt") shuying-latex-format-directory))
+         (log-buffer
+          (generate-new-buffer "*Shuying LaTeX precompile*"))
+         (build
+          (make-shuying-latex--format-build
+           :key key
+           :callbacks (list callback)
+           :directory directory
+           :log-buffer log-buffer
+           :built-file built-file
+           :target-file target-file))
+         (command
+          (append
+           engine
+           (list
+            "-interaction=nonstopmode"
+            (concat "-output-directory=" directory)
+            "-ini"
+            (concat "-jobname=" key)
+            (concat "&" base-format)
+            "mylatexformat.ltx"
+            source-file))))
+    (buffer-disable-undo log-buffer)
+    (let ((write-region-inhibit-fsync t)
+          (coding-system-for-write 'utf-8-unix))
+      (with-temp-file source-file
+        (shuying-latex--write-preamble specification)
+        (insert "\\endofdump\n")))
+    (puthash key build shuying-latex--format-builds)
+    (condition-case error-data
+        (let ((default-directory (file-name-as-directory directory)))
+          (make-process
+           :name "shuying-latex-precompile"
+           :buffer log-buffer
+           :command command
+           :connection-type 'pipe
+           :noquery t
+           :sentinel
+           (lambda (process event)
+             (shuying-latex--format-sentinel build process event))))
+      (error
+       (with-current-buffer log-buffer
+         (insert (error-message-string error-data) "\n"))
+       (shuying-latex--complete-format-build build nil)))))
+
+(defun shuying-latex--ensure-format
+    (specification engine callback)
+  "Call CALLBACK with a reusable format for SPECIFICATION and ENGINE.
+CALLBACK receives nil when precompilation is disabled or unavailable."
+  (let* ((base-format (shuying-latex--base-format engine))
+         (key
+          (and shuying-latex-precompile-preamble
+               base-format
+               (shuying-latex--format-key specification engine)))
+         (target-file
+          (and key
+               (expand-file-name
+                (concat key ".fmt")
+                shuying-latex-format-directory)))
+         (build (and key (gethash key shuying-latex--format-builds))))
+    (cond
+     ((not key)
+      (funcall callback nil nil))
+     ((gethash key shuying-latex--failed-formats)
+      (funcall callback key nil))
+     ((file-exists-p target-file)
+      (funcall callback key target-file))
+     (build
+      (push
+       (lambda (format-file)
+         (funcall callback key format-file))
+       (shuying-latex--format-build-callbacks build)))
+     (t
+      (shuying-latex--start-format-build
+       key specification engine base-format
+       (lambda (format-file)
+         (funcall callback key format-file)))))))
 
 (defun shuying-latex--cleanup (batch keep-log)
   "Clean BATCH files, preserving its log when KEEP-LOG is non-nil."
@@ -230,16 +420,100 @@ dvisvgm zero-pads page numbers to the width of the final page number."
     (batch specification process _event)
   "Continue BATCH after the LaTeX PROCESS for SPECIFICATION exits."
   (when (memq (process-status process) '(exit signal))
-    (if (and (eq (process-status process) 'exit)
-             (file-exists-p (shuying-latex--batch-dvi-file batch)))
+    (cond
+     ((and (eq (process-status process) 'exit)
+           (file-exists-p (shuying-latex--batch-dvi-file batch)))
+      (when-let* ((format-file
+                   (shuying-latex--batch-suspect-format-file batch)))
+        ;; The same document compiled with the complete preamble, so the
+        ;; cached format rather than the fragment caused the first failure.
+        (when (file-exists-p format-file)
+          (delete-file format-file))
+        (puthash
+         (shuying-latex--batch-format-key batch)
+         t shuying-latex--failed-formats))
+      (condition-case error-data
+          (shuying-latex--start-converter batch specification)
+        (error
+         (shuying-latex--complete-all batch error-data))))
+     ((and (eq (process-status process) 'exit)
+           (shuying-latex--batch-format-file batch))
+      ;; A format can become invalid after the TeX installation changes.
+      ;; Discard it and retry this batch with the complete preamble once.
+      (let ((format-file (shuying-latex--batch-format-file batch)))
+        (setf (shuying-latex--batch-format-file batch) nil
+              (shuying-latex--batch-suspect-format-file batch)
+              format-file)
+        (with-current-buffer (shuying-latex--batch-log-buffer batch)
+          (goto-char (point-max))
+          (insert "\nRetrying with the complete LaTeX preamble.\n"))
         (condition-case error-data
-            (shuying-latex--start-converter batch specification)
+            (progn
+              (shuying-latex--write-document
+               (shuying-latex--batch-requests batch)
+               (shuying-latex--batch-tex-file batch))
+              (shuying-latex--start-compiler batch specification))
           (error
-           (shuying-latex--complete-all batch error-data)))
+           (shuying-latex--complete-all batch error-data)))))
+     (t
       (shuying-latex--complete-all
        batch
        (shuying-latex--process-error
-        "LaTeX" process (shuying-latex--batch-log-buffer batch))))))
+        "LaTeX" process (shuying-latex--batch-log-buffer batch)))))))
+
+(defun shuying-latex--start-compiler (batch specification)
+  "Start the LaTeX compiler for BATCH and SPECIFICATION."
+  (let* ((directory (shuying-latex--batch-directory batch))
+         (command
+          (append
+           (shuying-latex--batch-engine batch)
+           (when-let* ((format-file
+                        (shuying-latex--batch-format-file batch)))
+             (list
+              (concat
+               "-fmt=" (file-name-base format-file))))
+           (list
+            "-interaction=nonstopmode"
+            (concat "-output-directory=" directory)
+            (shuying-latex--batch-tex-file batch)))))
+    (let ((default-directory (file-name-as-directory directory)))
+      (make-process
+       :name "shuying-latex"
+       :buffer (shuying-latex--batch-log-buffer batch)
+       :command command
+       :connection-type 'pipe
+       :noquery t
+       :sentinel
+       (lambda (process event)
+         (shuying-latex--compilation-sentinel
+          batch specification process event))))))
+
+(defun shuying-latex--start-batch
+    (batch specification format-key format-file)
+  "Start BATCH for SPECIFICATION, optionally using FORMAT-FILE.
+FORMAT-KEY identifies the persistent format for invalidation."
+  (condition-case error-data
+      (progn
+        (setf (shuying-latex--batch-format-key batch) format-key
+              (shuying-latex--batch-format-file batch) format-file)
+        (when format-file
+          ;; Let every TeX distribution find the custom format in the batch
+          ;; directory without changing its global format search path.
+          (let ((local-format
+                 (expand-file-name
+                  (file-name-nondirectory format-file)
+                  (shuying-latex--batch-directory batch))))
+            (condition-case nil
+                (add-name-to-file format-file local-format)
+              (file-error
+               (copy-file format-file local-format t)))))
+        (shuying-latex--write-document
+         (shuying-latex--batch-requests batch)
+         (shuying-latex--batch-tex-file batch)
+         format-file)
+        (shuying-latex--start-compiler batch specification))
+    (error
+     (shuying-latex--complete-all batch error-data))))
 
 (defun shuying-latex-render-batch (requests complete)
   "Render compatible REQUESTS asynchronously and call COMPLETE for each."
@@ -267,30 +541,16 @@ dvisvgm zero-pads page numbers to the width of the final page number."
              :complete complete
              :directory directory
              :log-buffer log-buffer
-             :dvi-file dvi-file))
-           (command
-            (append
-             engine
-             (list
-              "-interaction=nonstopmode"
-              (concat "-output-directory=" directory)
-              tex-file))))
+             :tex-file tex-file
+             :dvi-file dvi-file
+             :engine engine)))
       (buffer-disable-undo log-buffer)
       (condition-case error-data
-          (progn
-            (shuying-latex--write-document requests tex-file)
-            (let ((default-directory
-                   (file-name-as-directory directory)))
-              (make-process
-               :name "shuying-latex"
-               :buffer log-buffer
-               :command command
-               :connection-type 'pipe
-               :noquery t
-               :sentinel
-               (lambda (process event)
-                 (shuying-latex--compilation-sentinel
-                  batch specification process event)))))
+          (shuying-latex--ensure-format
+           specification engine
+           (lambda (format-key format-file)
+             (shuying-latex--start-batch
+              batch specification format-key format-file)))
         (error
          (shuying-latex--cleanup batch nil)
          (signal (car error-data) (cdr error-data)))))))

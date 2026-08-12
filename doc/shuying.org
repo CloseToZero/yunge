@@ -99,15 +99,25 @@ The direct =latex= and =dvisvgm= backend uses this pipeline:
 
 1. Return cache hits immediately.
 2. Collect misses with compatible preambles and rendering options.
-3. Compile each compatible batch in one temporary TeX document.
-4. Convert every page to SVG and map it back to its request.
-5. Publish each artifact atomically after conversion finishes.
-6. Check the request generation before changing a buffer display.
+3. Reuse or asynchronously build one precompiled format for the preamble.
+4. Compile each compatible batch in one temporary TeX document.
+5. Convert every page to SVG and map it back to its request.
+6. Publish each artifact atomically after conversion finishes.
+7. Check the request generation before changing a buffer display.
 
 LaTeX and dvisvgm run as a nonblocking process chain.  A batch uses an isolated
 working directory below =var/shuying/work/=.  Successful work is removed after
 its artifacts are published; failed work preserves a process log buffer for
 diagnosis.
+
+Precompiled formats are keyed by the complete preamble, preview setup, engine,
+and Shuying cache version, then retained below =var/shuying/formats/=.  Batches
+waiting for the same missing format share one build.  A batch normally exposes
+the cached format in its working directory with a hard link; filesystems that
+cannot create that link fall back to a local copy.  If a cached format fails,
+Shuying retries the batch once with the complete preamble.  The format is only
+discarded when that retry succeeds, distinguishing a stale format from an
+ordinary error in the fragment or preamble.
 
 Backends encapsulate process topology and artifact production.  Other engines
 or image formats do not add conditionals throughout the scheduler or the Org
@@ -146,6 +156,10 @@ package names.
 | =amsmath=   | =amsmath.sty= | Standard mathematical environments. |
 | =amsfonts=  | =amssymb.sty= | Symbols used by Org's default snippet setup. |
 
+The optional =mylatexformat= package provides =mylatexformat.ltx= and enables
+preamble precompilation.  Rendering still works with complete preambles when
+that package is unavailable or precompilation fails.
+
 The following are not Shuying runtime requirements, but are a useful baseline
 for mathematical notes and custom preambles:
 
@@ -164,6 +178,7 @@ Verify the baseline files with:
 
 #+begin_src shell
 kpsewhich preview.sty
+kpsewhich mylatexformat.ltx
 kpsewhich amsmath.sty
 kpsewhich amssymb.sty
 kpsewhich mathtools.sty
@@ -182,7 +197,7 @@ baseline:
 
 #+begin_src powershell
 miktex packages update-package-database
-miktex packages install preview amsmath amsfonts graphics
+miktex packages install preview mylatexformat amsmath amsfonts graphics
 miktex packages install mathtools xcolor ulem
 #+end_src
 
@@ -199,7 +214,7 @@ also work.  Add the required backend and packages to BasicTeX with =tlmgr=:
 
 #+begin_src shell
 sudo tlmgr update --self
-sudo tlmgr install dvisvgm preview amsmath amsfonts graphics
+sudo tlmgr install dvisvgm preview mylatexformat amsmath amsfonts graphics
 sudo tlmgr install mathtools xcolor ulem
 #+end_src
 
@@ -216,6 +231,7 @@ packages are:
 #+begin_src shell
 sudo apt install texlive-latex-base texlive-latex-recommended
 sudo apt install texlive-plain-generic preview-latex-style dvisvgm
+sudo apt install texlive-latex-extra
 #+end_src
 
 On Arch Linux, they are:

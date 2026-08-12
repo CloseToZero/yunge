@@ -19,6 +19,11 @@
    :scale 1.0
    :cache-version shuying-cache-format-version))
 
+(ert-deftest shuying-latex-keeps-formats-under-var ()
+  (should
+   (equal shuying-latex-format-directory
+          (yunge-var-subdirectory "shuying/formats"))))
+
 (ert-deftest shuying-latex-batch-key-excludes-fragment-inputs ()
   (let ((first (shuying-latex-test--spec "$x$"))
         (second (shuying-latex-test--spec "$y$")))
@@ -31,6 +36,210 @@
     (should-not
      (equal (shuying-latex-batch-key first)
             (shuying-latex-batch-key second)))))
+
+(ert-deftest shuying-latex-format-key-covers-only-format-inputs ()
+  (let* ((first (shuying-latex-test--spec "$x$"))
+         (second (shuying-latex-test--spec "$y$"))
+         (engine '("latex")))
+    (should
+     (equal (shuying-latex--format-key first engine)
+            (shuying-latex--format-key second engine)))
+    (setf (shuying-render-spec-preamble second) "other preamble")
+    (should-not
+     (equal (shuying-latex--format-key first engine)
+            (shuying-latex--format-key second engine)))
+    (setf (shuying-render-spec-preamble second)
+          (shuying-render-spec-preamble first))
+    (should-not
+     (equal (shuying-latex--format-key first engine)
+            (shuying-latex--format-key first '("other-latex"))))))
+
+(ert-deftest shuying-latex-shares-a-pending-format-build ()
+  (let* ((root (make-temp-file "shuying-latex-test-" t))
+         (shuying-work-directory (expand-file-name "work" root))
+         (shuying-latex-format-directory
+          (expand-file-name "formats" root))
+         (shuying-latex--format-builds
+          (make-hash-table :test #'equal))
+         (shuying-latex--failed-formats
+          (make-hash-table :test #'equal))
+         (specification (shuying-latex-test--spec "$x$"))
+         invocation
+         formats)
+    (unwind-protect
+        (cl-letf
+            (((symbol-function 'make-process)
+              (lambda (&rest arguments)
+                (setq invocation arguments)
+                'format-process))
+             ((symbol-function 'process-status)
+              (lambda (_process) 'exit))
+             ((symbol-function 'process-exit-status)
+              (lambda (_process) 0)))
+          (dotimes (_ 2)
+            (shuying-latex--ensure-format
+             specification '("latex")
+             (lambda (_key format-file)
+               (push format-file formats))))
+          (should invocation)
+          (should-not formats)
+          (let* ((sentinel (plist-get invocation :sentinel))
+                 (key
+                  (shuying-latex--format-key
+                   specification '("latex")))
+                 (build
+                  (gethash key shuying-latex--format-builds)))
+            (with-temp-file
+                (shuying-latex--format-build-built-file build))
+            (funcall sentinel 'format-process "finished\n")
+            (should (= (length formats) 2))
+            (should (equal (car formats) (cadr formats)))
+            (should (file-exists-p (car formats)))
+            (should-not (gethash key shuying-latex--format-builds))))
+      (delete-directory root t))))
+
+(ert-deftest shuying-latex-falls-back-after-a-format-build-fails ()
+  (let* ((root (make-temp-file "shuying-latex-test-" t))
+         (shuying-work-directory (expand-file-name "work" root))
+         (shuying-latex-format-directory
+          (expand-file-name "formats" root))
+         (shuying-latex--format-builds
+          (make-hash-table :test #'equal))
+         (shuying-latex--failed-formats
+          (make-hash-table :test #'equal))
+         (specification (shuying-latex-test--spec "$x$"))
+         invocation
+         formats)
+    (unwind-protect
+        (cl-letf
+            (((symbol-function 'make-process)
+              (lambda (&rest arguments)
+                (setq invocation arguments)
+                'format-process))
+             ((symbol-function 'process-status)
+              (lambda (_process) 'exit))
+             ((symbol-function 'process-exit-status)
+              (lambda (_process) 1))
+             ((symbol-function 'display-warning) #'ignore))
+          (shuying-latex--ensure-format
+           specification '("latex")
+           (lambda (_key format-file)
+             (push format-file formats)))
+          (funcall
+           (plist-get invocation :sentinel)
+           'format-process "failed\n")
+          (should (equal formats '(nil)))
+          (should (= (hash-table-count
+                      shuying-latex--failed-formats)
+                     1))
+          (setq formats nil invocation nil)
+          (shuying-latex--ensure-format
+           specification '("latex")
+           (lambda (_key format-file)
+             (push format-file formats)))
+          (should-not invocation)
+          (should (equal formats '(nil))))
+      (delete-directory root t))))
+
+(ert-deftest shuying-latex-falls-back-when-format-process-cannot-start ()
+  (let* ((root (make-temp-file "shuying-latex-test-" t))
+         (shuying-work-directory (expand-file-name "work" root))
+         (shuying-latex-format-directory
+          (expand-file-name "formats" root))
+         (shuying-latex--format-builds
+          (make-hash-table :test #'equal))
+         (shuying-latex--failed-formats
+          (make-hash-table :test #'equal))
+         format)
+    (unwind-protect
+        (cl-letf
+            (((symbol-function 'make-process)
+              (lambda (&rest _arguments)
+                (error "Could not start LaTeX")))
+             ((symbol-function 'display-warning) #'ignore))
+          (shuying-latex--ensure-format
+           (shuying-latex-test--spec "$x$") '("latex")
+           (lambda (_key format-file)
+             (setq format format-file)))
+          (should-not format)
+          (should (= (hash-table-count
+                      shuying-latex--failed-formats)
+                     1))
+          (should (= (hash-table-count
+                      shuying-latex--format-builds)
+                     0)))
+      (delete-directory root t))))
+
+(ert-deftest shuying-latex-invalidates-a-format-after-fallback-succeeds ()
+  (let* ((root (make-temp-file "shuying-latex-test-" t))
+         (directory (expand-file-name "work" root))
+         (tex-file (expand-file-name "input.tex" directory))
+         (format-file (expand-file-name "preamble.fmt" root))
+         (log-buffer (generate-new-buffer " *Shuying LaTeX test*"))
+         (shuying-latex--failed-formats
+          (make-hash-table :test #'equal))
+         errors
+         (request
+          (make-shuying-backend-request
+           :specification (shuying-latex-test--spec "$x$")))
+         (batch
+          (make-shuying-latex--batch
+           :requests (list request)
+           :complete
+           (lambda (_request error-data)
+             (push error-data errors))
+           :directory directory
+           :log-buffer log-buffer
+           :tex-file tex-file
+           :dvi-file (expand-file-name "input.dvi" directory)
+           :engine '("latex")
+           :format-key "format-key"
+           :format-file format-file))
+         (starts 0)
+         (conversions 0))
+    (make-directory directory t)
+    (with-temp-file format-file)
+    (unwind-protect
+        (cl-letf
+            (((symbol-function 'process-status)
+              (lambda (_process) 'exit))
+             ((symbol-function 'process-exit-status)
+              (lambda (_process) 1))
+             ((symbol-function 'shuying-latex--start-compiler)
+              (lambda (_batch _specification)
+                (cl-incf starts)))
+             ((symbol-function 'shuying-latex--start-converter)
+              (lambda (_batch _specification)
+                (cl-incf conversions))))
+          (shuying-latex--compilation-sentinel
+           batch
+           (shuying-backend-request-specification request)
+           'latex-process "finished\n")
+          (should-not errors)
+          (should (= starts 1))
+          (should-not (shuying-latex--batch-format-file batch))
+          (should
+           (equal
+            (shuying-latex--batch-suspect-format-file batch)
+            format-file))
+          (should (file-exists-p format-file))
+          (should-not
+           (gethash "format-key" shuying-latex--failed-formats))
+          (with-temp-buffer
+            (insert-file-contents tex-file)
+            (should (search-forward "\\documentclass" nil t)))
+          (with-temp-file (shuying-latex--batch-dvi-file batch))
+          (shuying-latex--compilation-sentinel
+           batch
+           (shuying-backend-request-specification request)
+           'latex-process "finished\n")
+          (should (= conversions 1))
+          (should-not (file-exists-p format-file))
+          (should
+           (gethash "format-key" shuying-latex--failed-formats)))
+      (when (buffer-live-p log-buffer)
+        (kill-buffer log-buffer))
+      (delete-directory root t))))
 
 (ert-deftest shuying-latex-sets-the-equation-counter-before-a-fragment ()
   (let ((specification
@@ -51,6 +260,7 @@
 (ert-deftest shuying-latex-renders-a-batch-with-two-processes ()
   (let* ((root (make-temp-file "shuying-latex-test-" t))
          (shuying-work-directory (expand-file-name "work" root))
+         (shuying-latex-precompile-preamble nil)
          (outputs (list (make-temp-file "shuying-latex-output-")
                         (make-temp-file "shuying-latex-output-")))
          (requests
@@ -142,6 +352,7 @@
             default-directory))
          (shuying-cache-directory (expand-file-name "cache" root))
          (shuying-work-directory (expand-file-name "work" root))
+         (shuying-latex-precompile-preamble nil)
          (shuying-backends nil)
          (shuying--pending-jobs (make-hash-table :test #'equal))
          (original-make-process (symbol-function 'make-process))
@@ -191,6 +402,7 @@
   (let* ((root (make-temp-file "shuying-latex-test-" t))
          (shuying-cache-directory (expand-file-name "cache" root))
          (shuying-work-directory (expand-file-name "work" root))
+         (shuying-latex-precompile-preamble nil)
          (shuying-backends nil)
          (shuying--pending-jobs (make-hash-table :test #'equal))
          (first
@@ -236,6 +448,69 @@
             ;; different SVGs confirm that LaTeX used the supplied counter.
             (should-not
              (equal (alist-get 2 images) (alist-get 11 images)))))
+      (delete-directory root t))))
+
+(ert-deftest shuying-latex-precompiles-and-reuses-a-preamble ()
+  (unless (and (executable-find "latex")
+               (executable-find "dvisvgm")
+               (executable-find "kpsewhich")
+               (= (call-process
+                   "kpsewhich" nil nil nil "mylatexformat.ltx")
+                  0))
+    (ert-skip "The LaTeX precompile toolchain is unavailable"))
+  (let* ((root (make-temp-file "shuying-latex-test-" t))
+         (shuying-work-directory (expand-file-name "work" root))
+         (shuying-latex-format-directory
+          (expand-file-name "formats" root))
+         (shuying-latex-precompile-preamble t)
+         (shuying-latex--format-builds
+          (make-hash-table :test #'equal))
+         (shuying-latex--failed-formats
+          (make-hash-table :test #'equal))
+         (original-make-process (symbol-function 'make-process))
+         (process-count 0)
+         results)
+    (unwind-protect
+        (cl-labels
+            ((render
+              (source name)
+              (let* ((output (expand-file-name name root))
+                     (request
+                      (make-shuying-backend-request
+                       :specification
+                       (shuying-latex-test--spec source)
+                       :output-file output)))
+                (shuying-latex-render-batch
+                 (list request)
+                 (lambda (_request error-data)
+                   (push (cons output error-data) results))))))
+          (cl-letf
+              (((symbol-function 'make-process)
+                (lambda (&rest arguments)
+                  (cl-incf process-count)
+                  (apply original-make-process arguments))))
+            (render "$x$" "first.svg")
+            (with-timeout
+                (30 (ert-fail "Timed out precompiling a LaTeX preamble"))
+              (while (< (length results) 1)
+                (accept-process-output nil 0.05)))
+            (should (= process-count 3))
+            (should (= (length
+                        (directory-files
+                         shuying-latex-format-directory nil "\\.fmt\\'"))
+                       1))
+            (render "$y$" "second.svg")
+            (with-timeout
+                (30 (ert-fail "Timed out reusing a LaTeX preamble"))
+              (while (< (length results) 2)
+                (accept-process-output nil 0.05)))
+            (should (= process-count 5))
+            (should (seq-every-p #'null (mapcar #'cdr results)))
+            (dolist (result results)
+              (should (file-exists-p (car result)))
+              (with-temp-buffer
+                (insert-file-contents (car result))
+                (should (search-forward "<svg" nil t))))))
       (delete-directory root t))))
 
 ;;; shuying-latex-test.el ends here
