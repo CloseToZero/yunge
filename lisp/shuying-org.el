@@ -161,9 +161,10 @@
     (overlay-put overlay 'display image)))
 
 (defun shuying-org--finish-render
-    (buffer overlay generation artifact error-data)
+    (buffer overlay generation artifact error-data report-error)
   "Finish rendering OVERLAY in BUFFER for GENERATION.
-ARTIFACT is the completed cache file, or nil when ERROR-DATA is non-nil."
+ARTIFACT is the completed cache file, or nil when ERROR-DATA is non-nil.
+REPORT-ERROR reports a current render failure without duplicating its batch."
   (when (and (buffer-live-p buffer)
              (overlay-buffer overlay)
              (= generation
@@ -174,8 +175,7 @@ ARTIFACT is the completed cache file, or nil when ERROR-DATA is non-nil."
             (overlay-put overlay 'display nil)
             (overlay-put overlay 'shuying-org-dirty t)
             (overlay-put overlay 'shuying-org-error error-data)
-            (display-warning
-             'shuying (error-message-string error-data) :error))
+            (funcall report-error error-data))
         (let ((image (create-image artifact nil nil :ascent 'center)))
           (overlay-put overlay 'shuying-org-artifact artifact)
           (overlay-put overlay 'shuying-org-image image)
@@ -185,7 +185,7 @@ ARTIFACT is the completed cache file, or nil when ERROR-DATA is non-nil."
               (overlay-put overlay 'display nil)
             (shuying-org--show-overlay overlay)))))))
 
-(defun shuying-org--render-request (fragment)
+(defun shuying-org--render-request (fragment report-error)
   "Return a Shuying render request for Org FRAGMENT."
   (let* ((overlay (shuying-org--ensure-overlay fragment))
          (generation
@@ -198,12 +198,22 @@ ARTIFACT is the completed cache file, or nil when ERROR-DATA is non-nil."
      specification
      (lambda (artifact error-data)
        (shuying-org--finish-render
-        buffer overlay generation artifact error-data)))))
+        buffer overlay generation artifact error-data report-error)))))
 
 (defun shuying-org--preview-fragments (fragments)
   "Request previews for Org FRAGMENTS as one render group."
-  (shuying-render-batch
-   (mapcar #'shuying-org--render-request fragments)))
+  (let (error-reported)
+    (shuying-render-batch
+     (mapcar
+      (lambda (fragment)
+        (shuying-org--render-request
+         fragment
+         (lambda (error-data)
+           (unless error-reported
+             (setq error-reported t)
+             (display-warning
+              'shuying (error-message-string error-data) :error)))))
+      fragments))))
 
 (defun shuying-org--preview-fragment (fragment)
   "Request a preview for Org FRAGMENT."

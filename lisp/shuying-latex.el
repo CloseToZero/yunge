@@ -135,24 +135,35 @@ values affect the document or converter as a whole."
                  request error-data))
     (shuying-latex--cleanup batch t)))
 
+(defun shuying-latex--page-file (directory page page-count)
+  "Return the dvisvgm output in DIRECTORY for PAGE of PAGE-COUNT.
+dvisvgm zero-pads page numbers to the width of the final page number."
+  (let* ((page-string (number-to-string page))
+         (width (length (number-to-string page-count)))
+         (padding (make-string (- width (length page-string)) ?0)))
+    (expand-file-name
+     (concat "page-" padding page-string ".svg") directory)))
+
 (defun shuying-latex--finish-conversion (batch process)
   "Publish the pages produced for BATCH by PROCESS."
-  (let ((directory (shuying-latex--batch-directory batch))
-        (complete (shuying-latex--batch-complete batch))
-        (log-buffer (shuying-latex--batch-log-buffer batch))
-        (process-error
-         (unless (and (eq (process-status process) 'exit)
-                      (= (process-exit-status process) 0))
-           (shuying-latex--process-error
-            "dvisvgm" process
-            (shuying-latex--batch-log-buffer batch))))
-        failed)
+  (let* ((directory (shuying-latex--batch-directory batch))
+         (requests (shuying-latex--batch-requests batch))
+         (page-count (length requests))
+         (complete (shuying-latex--batch-complete batch))
+         (log-buffer (shuying-latex--batch-log-buffer batch))
+         (process-error
+          (unless (and (eq (process-status process) 'exit)
+                       (= (process-exit-status process) 0))
+            (shuying-latex--process-error
+             "dvisvgm" process
+             (shuying-latex--batch-log-buffer batch))))
+         failed)
     (unwind-protect
         (cl-loop
-         for request in (shuying-latex--batch-requests batch)
+         for request in requests
          for page from 1
-         for page-file = (expand-file-name
-                          (format "page-%d.svg" page) directory)
+         for page-file = (shuying-latex--page-file
+                          directory page page-count)
          do
          (if (file-exists-p page-file)
              (condition-case error-data
@@ -204,15 +215,16 @@ values affect the document or converter as a whole."
             (format "--scale=%s" scale)
             (concat "--output=" output-pattern)
             (shuying-latex--batch-dvi-file batch)))))
-    (make-process
-     :name "shuying-dvisvgm"
-     :buffer (shuying-latex--batch-log-buffer batch)
-     :command command
-     :connection-type 'pipe
-     :noquery t
-     :sentinel
-     (lambda (process event)
-       (shuying-latex--conversion-sentinel batch process event)))))
+    (let ((default-directory (file-name-as-directory directory)))
+      (make-process
+       :name "shuying-dvisvgm"
+       :buffer (shuying-latex--batch-log-buffer batch)
+       :command command
+       :connection-type 'pipe
+       :noquery t
+       :sentinel
+       (lambda (process event)
+         (shuying-latex--conversion-sentinel batch process event))))))
 
 (defun shuying-latex--compilation-sentinel
     (batch specification process _event)
@@ -267,16 +279,18 @@ values affect the document or converter as a whole."
       (condition-case error-data
           (progn
             (shuying-latex--write-document requests tex-file)
-            (make-process
-             :name "shuying-latex"
-             :buffer log-buffer
-             :command command
-             :connection-type 'pipe
-             :noquery t
-             :sentinel
-             (lambda (process event)
-               (shuying-latex--compilation-sentinel
-                batch specification process event))))
+            (let ((default-directory
+                   (file-name-as-directory directory)))
+              (make-process
+               :name "shuying-latex"
+               :buffer log-buffer
+               :command command
+               :connection-type 'pipe
+               :noquery t
+               :sentinel
+               (lambda (process event)
+                 (shuying-latex--compilation-sentinel
+                  batch specification process event)))))
         (error
          (shuying-latex--cleanup batch nil)
          (signal (car error-data) (cdr error-data)))))))

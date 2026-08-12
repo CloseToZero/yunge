@@ -248,6 +248,39 @@
                   2)))))
       (delete-directory root t))))
 
+(ert-deftest shuying-org-reports-a-batch-error-once ()
+  (let* ((root (make-temp-file "shuying-org-" t))
+         (shuying-cache-directory root)
+         (shuying-backends nil)
+         (shuying--pending-jobs (make-hash-table :test #'equal))
+         warnings)
+    (unwind-protect
+        (progn
+          (shuying-register-backend
+           'shuying-latex
+           (lambda (requests complete)
+             (cl-loop
+              for request in requests
+              for page from 1
+              do (funcall complete request
+                          (list 'error
+                                (format "Missing page %d" page))))))
+          (cl-letf (((symbol-function 'display-warning)
+                     (lambda (&rest warning)
+                       (push warning warnings))))
+            (with-temp-buffer
+              (org-mode)
+              (insert "$x$ and $y$")
+              (shuying-org-preview-buffer)
+              (should (= (length warnings) 1))
+              (should
+               (seq-every-p
+                (lambda (overlay)
+                  (overlay-get overlay 'shuying-org-error))
+                (shuying-org--fragment-overlays
+                 (point-min) (point-max)))))))
+      (delete-directory root t))))
+
 (ert-deftest shuying-org-rejects-an-older-render-result ()
   (let* ((root (make-temp-file "shuying-org-" t))
          (shuying-cache-directory root)

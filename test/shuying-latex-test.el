@@ -45,12 +45,14 @@
               :output-file output))
            '("$x$" "$y$") outputs))
          invocations
+         process-directories
          results)
     (unwind-protect
         (cl-letf
             (((symbol-function 'make-process)
               (lambda (&rest arguments)
                 (let ((process (make-symbol "process")))
+                  (push default-directory process-directories)
                   (push (cons process arguments) invocations)
                   process)))
              ((symbol-function 'process-status)
@@ -62,6 +64,7 @@
            (lambda (request error-data)
              (push (cons request error-data) results)))
           (should (= (length invocations) 1))
+          (should (= (length process-directories) 1))
           (should-not results)
           (let* ((latex-invocation (car invocations))
                  (latex-arguments (cdr latex-invocation))
@@ -73,6 +76,10 @@
             (with-temp-file (expand-file-name "input.dvi" directory))
             (funcall latex-sentinel (car latex-invocation) "finished\n")
             (should (= (length invocations) 2))
+            (should (seq-every-p
+                     (lambda (process-directory)
+                       (equal process-directory directory))
+                     process-directories))
             (should-not results)
             (let* ((converter-invocation (car invocations))
                    (converter-arguments (cdr converter-invocation))
@@ -104,7 +111,7 @@
           (delete-file file)))
       (delete-directory root t))))
 
-(ert-deftest shuying-latex-renders-two-svg-pages ()
+(ert-deftest shuying-latex-renders-svg-pages-across-number-widths ()
   (unless (and (executable-find "latex")
                (executable-find "dvisvgm")
                (executable-find "kpsewhich")
@@ -112,6 +119,11 @@
                   0))
     (ert-skip "The LaTeX preview toolchain is unavailable"))
   (let* ((root (make-temp-file "shuying-latex-test-" t))
+         (default-directory
+          (if (and (eq system-type 'windows-nt)
+                   (file-directory-p "D:/"))
+              "D:/"
+            default-directory))
          (shuying-cache-directory (expand-file-name "cache" root))
          (shuying-work-directory (expand-file-name "work" root))
          (shuying-backends nil)
@@ -132,16 +144,17 @@
                   (apply original-make-process arguments))))
             (shuying-render-batch
              (mapcar
-              (lambda (source)
+              (lambda (number)
                 (cons
-                 (shuying-latex-test--spec source)
+                 (shuying-latex-test--spec
+                  (format "$x_{%d}$" number))
                  (lambda (artifact error-data)
                    (push (cons artifact error-data) results))))
-              '("$x$" "$y$")))
+              (number-sequence 1 12)))
             (should-not results)
             (with-timeout
                 (30 (ert-fail "Timed out rendering LaTeX previews"))
-              (while (< (length results) 2)
+              (while (< (length results) 12)
                 (accept-process-output nil 0.05))))
           (should (= process-count 2))
           (should (seq-every-p #'null (mapcar #'cdr results)))
