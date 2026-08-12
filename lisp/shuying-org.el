@@ -286,7 +286,14 @@ EQUATION-NUMBER is the next automatic number at the fragment's start."
 (defun shuying-org--show-overlay (overlay)
   "Show the cached image belonging to OVERLAY."
   (when-let* ((image (overlay-get overlay 'shuying-org-image)))
-    (overlay-put overlay 'display image)))
+    (unless (equal (overlay-get overlay 'display) image)
+      (overlay-put overlay 'display image)
+      ;; Replacing source with an image can expose more text at the bottom of
+      ;; a window without changing its start or size.  Let the existing
+      ;; viewport scheduler discover formulas in the newly visible region.
+      (when (bound-and-true-p shuying-org-mode)
+        (setq shuying-org--visible-window-state nil)
+        (shuying-org--schedule-visible-preview)))))
 
 (defun shuying-org--image (artifact)
   "Return an image display for ARTIFACT aligned to the text baseline."

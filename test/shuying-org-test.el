@@ -27,6 +27,30 @@
      (overlay-get overlay 'shuying-org))
    (overlays-in (point-min) (point-max))))
 
+(ert-deftest shuying-org-rechecks-viewport-after-displaying-an-image ()
+  (with-temp-buffer
+    (insert "formula")
+    (let ((overlay (make-overlay (point-min) (point-max)))
+          (shuying-org-mode t)
+          (shuying-org--visible-window-state 'rendered)
+          schedule-called
+          scheduled-immediately)
+      (overlay-put overlay 'shuying-org-image 'image)
+      (cl-letf (((symbol-function 'shuying-org--schedule-visible-preview)
+                 (lambda (&optional immediate)
+                   (setq schedule-called t
+                         scheduled-immediately immediate))))
+        (shuying-org--show-overlay overlay)
+        (should (eq (overlay-get overlay 'display) 'image))
+        (should-not shuying-org--visible-window-state)
+        (should schedule-called)
+        (should-not scheduled-immediately)
+        (setq schedule-called nil
+              shuying-org--visible-window-state 'settled)
+        (shuying-org--show-overlay overlay)
+        (should (eq shuying-org--visible-window-state 'settled))
+        (should-not schedule-called)))))
+
 (ert-deftest shuying-org-aligns-images-from-rendered-geometry ()
   (let ((artifact
          (make-shuying-artifact
@@ -394,6 +418,7 @@
               (setq shuying-org--visible-window-state nil)
               (shuying-org--preview-visible-windows)
               (should (= shuying-org-test--render-count 1))
+              (setq scheduled nil)
               (setq foreground "dark")
               (shuying-org--theme-changed 'dark-theme))
             (should (equal scheduled (list (cons buffer t))))

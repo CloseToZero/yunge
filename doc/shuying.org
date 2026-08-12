@@ -18,6 +18,8 @@ The Org integration has one small interaction boundary:
   are requested without compiling every off-screen fragment.
 - Rapid viewport changes replace the pending viewport update, so rendering
   starts from the final visible range after scrolling settles.
+- Displaying rendered images rechecks the viewport until formulas exposed by
+  the changed layout are also populated.
 - Saving an Org buffer or changing the active theme rechecks visible previews.
   Only formulas whose rendering inputs changed request new artifacts.
 - Inline previews use the height and depth reported by =dvisvgm= to follow the
