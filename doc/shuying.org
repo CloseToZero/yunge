@@ -14,8 +14,10 @@ The Org integration has one small interaction boundary:
 - Editing marks the fragment dirty without starting work for every keystroke.
 - Leaving a dirty fragment requests a new preview.
 - A late result from an older request cannot replace a newer result.
+- When an Org buffer is first displayed or scrolled, newly visible fragments
+  are requested without compiling every off-screen fragment.
 
-Manual commands preview or clear a fragment, region, subtree, or buffer.
+Manual commands preview or clear a fragment, region, section, or buffer.
 Continuous rendering while typing is separate from this basic interaction and
 only belongs here if it proves useful in practice.
 
@@ -36,7 +38,7 @@ A render specification contains every input that can change an artifact:
 
 - source text;
 - preamble and TeX engine;
-- backend and output format;
+- backend, backend options, and output format;
 - foreground and background colors;
 - scale, page width, and equation-numbering context; and
 - a Shuying cache-format version.
@@ -71,7 +73,8 @@ The first compiler backend delegates one render request to Org 9.8.7's public
 output path without owning fragment discovery, Shuying's cache key, or the
 buffer display.  It is a small compatibility backend; Shuying still owns every
 long-lived abstraction and can replace the compiler without rewriting its
-interaction model.
+interaction model.  Each request uses an isolated working directory below
+=var/shuying/work/= that is removed after either success or failure.
 
 * Scheduler and native renderer
 

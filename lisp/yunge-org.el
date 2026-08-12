@@ -52,11 +52,21 @@
 (defvar evil-move-beyond-eol)
 (defvar evil-respect-visual-line-mode)
 
+(autoload 'shuying-org-mode "shuying-org" nil t)
+(autoload 'shuying-org-preview "shuying-org" nil t)
+(autoload 'shuying-org-preview-buffer "shuying-org" nil t)
+(autoload 'shuying-org-startup "shuying-org")
+
+(add-hook 'org-mode-hook #'shuying-org-mode)
+(add-hook 'org-mode-hook #'shuying-org-startup t)
+
 (setq org-id-link-consider-parent-id t
       org-id-link-to-org-use-id 'create-if-interactive)
 
 (defconst yunge-org-command-bindings
-  '(("t" org-todo "change TODO state")))
+  '(("p" shuying-org-preview "preview LaTeX")
+    ("P" shuying-org-preview-buffer "preview all LaTeX")
+    ("t" org-todo "change TODO state")))
 
 (defvar-keymap yunge-org-command-map
   :doc "Keymap for Org commands.")
@@ -296,6 +306,10 @@ Keep point unchanged when FUNCTION is editing a region or existing link."
                 #'org-edit-src-exit)
     (define-key org-src-mode-map [remap evil-quit]
                 #'org-edit-src-abort)))
+
+(with-eval-after-load 'org
+  (define-key org-mode-map [remap org-latex-preview]
+              #'shuying-org-preview))
 
 (with-eval-after-load 'which-key
   (yunge-key-add-which-key-descriptions

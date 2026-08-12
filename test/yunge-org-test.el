@@ -10,13 +10,19 @@
   (require 'yunge-org))
 
 (yunge-test-deftest-lazy-load yunge-org
-  (org ob-core ol org-id which-key))
+  (org ob-core ol org-id shuying shuying-org which-key))
 
 (ert-deftest yunge-org-configures-structural-evil-bindings ()
   (yunge-org-test--load-config)
   (with-temp-buffer
     (org-mode)
     (evil-normal-state)
+    (should shuying-org-mode)
+    (should
+     (memq #'shuying-org--preview-visible-windows
+           post-command-hook))
+    (should (eq (command-remapping 'org-latex-preview)
+                #'shuying-org-preview))
     (yunge-test-evil-keys
      'normal
      '(("0" . yunge-org-beginning-of-line)
@@ -92,14 +98,16 @@
      '(("C-d" . yunge-org-shift-left-line)
        ("C-t" . yunge-org-shift-right-line)))))
 
-(ert-deftest yunge-org-configures-local-todo-command ()
+(ert-deftest yunge-org-configures-local-commands ()
   (yunge-org-test--load-config)
   (with-temp-buffer
     (org-mode)
     (evil-normal-state)
     (yunge-test-evil-keys
      'normal
-     '(("SPC m t" . org-todo)))))
+     '(("SPC m p" . shuying-org-preview)
+       ("SPC m P" . shuying-org-preview-buffer)
+       ("SPC m t" . org-todo)))))
 
 (ert-deftest yunge-org-moves-to-the-outermost-heading ()
   (yunge-org-test--load-config)
