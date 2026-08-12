@@ -34,9 +34,12 @@
       (goto-char (point-min))
       (let ((specification
              (shuying-org--render-spec
-              (shuying-org--fragment-at-point))))
+              (shuying-org--fragment-at-point)
+              "test-preamble")))
         (should (eq (shuying-render-spec-backend specification)
                     'shuying-latex))
+        (should (equal (shuying-render-spec-preamble specification)
+                       "test-preamble"))
         (should (equal (shuying-render-spec-engine specification)
                        '("test-latex")))
         (should
@@ -225,7 +228,8 @@
          (shuying-backends nil)
          (shuying--pending-jobs (make-hash-table :test #'equal))
          (shuying-org-test--render-count 0)
-         (shuying-org-test--backend-call-count 0))
+         (shuying-org-test--backend-call-count 0)
+         (preamble-count 0))
     (unwind-protect
         (progn
           (shuying-register-backend
@@ -233,12 +237,17 @@
            #'shuying-org-test--render-now)
           (cl-letf (((symbol-function 'create-image)
                      (lambda (file &rest _properties)
-                       (list 'image file))))
+                       (list 'image file)))
+                    ((symbol-function 'shuying-org--preamble)
+                     (lambda ()
+                       (cl-incf preamble-count)
+                       "test-preamble")))
             (with-temp-buffer
               (org-mode)
               (insert "$x$ and $y$\n")
               (goto-char (point-max))
               (shuying-org-preview-buffer)
+              (should (= preamble-count 1))
               (should (= shuying-org-test--render-count 2))
               (should (= shuying-org-test--backend-call-count 1))
               (should

@@ -70,9 +70,7 @@ asynchronously.  This keeps process management out of the Org adapter.
 * Scheduler and LaTeX renderer
 
 The scheduler accepts requests from every Shuying front end.  Identical render
-specifications share one pending job.  Visible and explicitly requested
-fragments take priority over background work, while a superseded generation
-can be discarded before it consumes more work.
+specifications share one pending job.
 
 The direct =latex= and =dvisvgm= backend uses this pipeline:
 
@@ -91,11 +89,6 @@ diagnosis.
 Backends encapsulate process topology and artifact production.  Other engines
 or image formats do not add conditionals throughout the scheduler or the Org
 adapter.
-
-Equation numbering is buffer context, not fragment-local input.  Shuying
-computes numbering before scheduling jobs and includes the result in each
-render specification.  Editing an earlier numbered equation may therefore
-invalidate later numbered previews without invalidating unrelated fragments.
 
 * External environment
 

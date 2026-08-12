@@ -125,8 +125,8 @@
    org-format-latex-header
    'snippet))
 
-(defun shuying-org--render-spec (fragment)
-  "Return the Shuying render specification for Org FRAGMENT."
+(defun shuying-org--render-spec (fragment preamble)
+  "Return the render specification for Org FRAGMENT using PREAMBLE."
   (let ((bounds (shuying-org--fragment-bounds fragment)))
     (save-excursion
       (goto-char (car bounds))
@@ -134,7 +134,7 @@
        :source
        (substring-no-properties
         (org-element-property :value fragment))
-       :preamble (shuying-org--preamble)
+       :preamble preamble
        :engine shuying-latex-engine-command
        :backend 'shuying-latex
        :backend-options
@@ -185,13 +185,13 @@ REPORT-ERROR reports a current render failure without duplicating its batch."
               (overlay-put overlay 'display nil)
             (shuying-org--show-overlay overlay)))))))
 
-(defun shuying-org--render-request (fragment report-error)
-  "Return a Shuying render request for Org FRAGMENT."
+(defun shuying-org--render-request (fragment preamble report-error)
+  "Return a render request for Org FRAGMENT using PREAMBLE."
   (let* ((overlay (shuying-org--ensure-overlay fragment))
          (generation
           (1+ (or (overlay-get overlay 'shuying-org-generation) 0)))
          (buffer (current-buffer))
-         (specification (shuying-org--render-spec fragment)))
+         (specification (shuying-org--render-spec fragment preamble)))
     (overlay-put overlay 'display nil)
     (overlay-put overlay 'shuying-org-generation generation)
     (cons
@@ -202,18 +202,20 @@ REPORT-ERROR reports a current render failure without duplicating its batch."
 
 (defun shuying-org--preview-fragments (fragments)
   "Request previews for Org FRAGMENTS as one render group."
-  (let (error-reported)
-    (shuying-render-batch
-     (mapcar
-      (lambda (fragment)
-        (shuying-org--render-request
-         fragment
-         (lambda (error-data)
-           (unless error-reported
-             (setq error-reported t)
-             (display-warning
-              'shuying (error-message-string error-data) :error)))))
-      fragments))))
+  (when fragments
+    (let ((preamble (shuying-org--preamble))
+          error-reported)
+      (shuying-render-batch
+       (mapcar
+        (lambda (fragment)
+          (shuying-org--render-request
+           fragment preamble
+           (lambda (error-data)
+             (unless error-reported
+               (setq error-reported t)
+               (display-warning
+                'shuying (error-message-string error-data) :error)))))
+        fragments)))))
 
 (defun shuying-org--preview-fragment (fragment)
   "Request a preview for Org FRAGMENT."
