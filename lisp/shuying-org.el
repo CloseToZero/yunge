@@ -2,6 +2,7 @@
 ;; SPDX-FileCopyrightText: 2026 Chen Zhexuan
 ;; SPDX-License-Identifier: MIT
 
+(require 'cl-lib)
 (require 'org)
 (require 'org-element)
 (require 'seq)
@@ -12,6 +13,13 @@
                   "ox" (&optional backend subtreep ext-plist))
 (declare-function org-latex-make-preamble
                   "ox-latex" (info &optional template snippetp))
+
+(cl-defstruct (shuying-org-fragment
+               (:constructor shuying-org--make-fragment))
+  "The source needed to preview one Org LaTeX fragment."
+  beginning
+  end
+  value)
 
 (defvar-local shuying-org--active-start nil
   "Marker at the fragment currently containing point.")
@@ -25,16 +33,29 @@
 (defvar-local shuying-org--changed-overlays nil
   "Preview overlays modified by the current command.")
 
+(defvar-local shuying-org--fragment-catalog nil
+  "Org LaTeX fragments found at `shuying-org--catalog-tick'.")
+
+(defvar-local shuying-org--catalog-tick nil
+  "Buffer modification tick of `shuying-org--fragment-catalog'.")
+
 (defun shuying-org--fragment-bounds (fragment)
   "Return the source bounds of Org LaTeX FRAGMENT."
-  (cons
-   (org-element-begin fragment)
-   (- (org-element-end fragment)
-      (or (org-element-property :post-blank fragment) 0))))
+  (cons (shuying-org-fragment-beginning fragment)
+        (shuying-org-fragment-end fragment)))
 
 (defun shuying-org--latex-fragment-p (datum)
   "Return whether Org DATUM is previewable LaTeX."
   (org-element-type-p datum '(latex-fragment latex-environment)))
+
+(defun shuying-org--fragment-from-element (element)
+  "Return a Shuying fragment described by Org ELEMENT."
+  (shuying-org--make-fragment
+   :beginning (org-element-begin element)
+   :end (- (org-element-end element)
+           (or (org-element-property :post-blank element) 0))
+   :value (substring-no-properties
+           (org-element-property :value element))))
 
 (defun shuying-org--fragment-at-position (position)
   "Return the Org LaTeX fragment containing POSITION, or nil."
@@ -45,6 +66,7 @@
       (goto-char position)
       (let ((fragment (org-element-context)))
         (when (shuying-org--latex-fragment-p fragment)
+          (setq fragment (shuying-org--fragment-from-element fragment))
           (pcase-let ((`(,beginning . ,end)
                        (shuying-org--fragment-bounds fragment)))
             (when (and (<= beginning position) (< position end))
@@ -132,8 +154,7 @@
       (goto-char (car bounds))
       (make-shuying-render-spec
        :source
-       (substring-no-properties
-        (org-element-property :value fragment))
+       (shuying-org-fragment-value fragment)
        :preamble preamble
        :engine shuying-latex-engine-command
        :backend 'shuying-latex
@@ -244,7 +265,7 @@ REPORT-ERROR reports a current render failure without duplicating its batch."
     (setq shuying-org--active-start (make-marker)))
   (set-marker
    shuying-org--active-start
-   (org-element-begin fragment)
+   (shuying-org-fragment-beginning fragment)
    (current-buffer)))
 
 (defun shuying-org--clear-active-fragment ()
@@ -256,7 +277,8 @@ REPORT-ERROR reports a current render failure without duplicating its batch."
 (defun shuying-org--post-command ()
   "Update preview visibility after point moves or source changes."
   (let* ((current (shuying-org--fragment-at-point))
-         (current-start (and current (org-element-begin current)))
+         (current-start
+          (and current (shuying-org-fragment-beginning current)))
          (active-position
           (and (markerp shuying-org--active-start)
                (marker-position shuying-org--active-start)))
@@ -270,7 +292,8 @@ REPORT-ERROR reports a current render failure without duplicating its batch."
                    (shuying-org--fragment-at-position
                     active-position)))
             (progn
-              (push (org-element-begin active) processed-starts)
+              (push (shuying-org-fragment-beginning active)
+                    processed-starts)
               (shuying-org--leave-fragment active))
           (dolist (overlay
                    (shuying-org--fragment-overlays
@@ -284,8 +307,10 @@ REPORT-ERROR reports a current render failure without duplicating its batch."
       (when-let* ((completed
                   (shuying-org--fragment-at-position
                    shuying-org--previous-point)))
-        (unless (memq (org-element-begin completed) processed-starts)
-          (push (org-element-begin completed) processed-starts)
+        (unless (memq (shuying-org-fragment-beginning completed)
+                      processed-starts)
+          (push (shuying-org-fragment-beginning completed)
+                processed-starts)
           (shuying-org--leave-fragment completed))))
     ;; Undo and programmatic edits can modify a preview while point remains
     ;; outside it, so they cannot rely on a later cursor-leave transition.
@@ -304,14 +329,51 @@ REPORT-ERROR reports a current render failure without duplicating its batch."
           (delete-overlay overlay))))
     (setq shuying-org--previous-point (point))))
 
-(defun shuying-org--fragments-in-region (beginning end)
-  "Return Org LaTeX fragments between BEGINNING and END."
+(defun shuying-org--rebuild-fragment-catalog ()
+  "Parse and remember every Org LaTeX fragment in the current buffer."
   (save-restriction
-    (narrow-to-region beginning end)
-    (org-element-map
-        (org-element-parse-buffer)
-        '(latex-fragment latex-environment)
-      #'identity)))
+    (widen)
+    (setq shuying-org--fragment-catalog
+          (org-element-map
+              (org-element-parse-buffer)
+              '(latex-fragment latex-environment)
+            #'shuying-org--fragment-from-element)
+          shuying-org--catalog-tick
+          (buffer-chars-modified-tick))))
+
+(defun shuying-org--fragments ()
+  "Return the current buffer's catalog of Org LaTeX fragments."
+  (unless (equal shuying-org--catalog-tick
+                 (buffer-chars-modified-tick))
+    (shuying-org--rebuild-fragment-catalog))
+  shuying-org--fragment-catalog)
+
+(defun shuying-org--fragments-in-ranges (ranges)
+  "Return Org LaTeX fragments overlapping any of RANGES.
+RANGES and the fragment catalog are traversed in buffer order."
+  (let ((remaining
+         (sort (copy-sequence ranges)
+               (lambda (left right)
+                 (< (car left) (car right)))))
+        fragments)
+    (catch 'done
+      (dolist (fragment (shuying-org--fragments))
+        (pcase-let ((`(,beginning . ,end)
+                     (shuying-org--fragment-bounds fragment)))
+          (while (and remaining
+                      (<= (cdar remaining) beginning))
+            (setq remaining (cdr remaining)))
+          (unless remaining
+            (throw 'done nil))
+          (when (and (< beginning (cdar remaining))
+                     (< (caar remaining) end))
+            (push fragment fragments)))))
+    (nreverse fragments)))
+
+(defun shuying-org--fragments-in-region (beginning end)
+  "Return Org LaTeX fragments overlapping BEGINNING through END."
+  (shuying-org--fragments-in-ranges
+   (list (cons beginning end))))
 
 (defun shuying-org--preview-region (beginning end)
   "Preview Org LaTeX fragments between BEGINNING and END."
@@ -341,21 +403,10 @@ REPORT-ERROR reports a current render failure without duplicating its batch."
       (when (and (bound-and-true-p shuying-org-mode) window-state)
         (let ((ranges (shuying-org--visible-ranges))
               fragments)
-          ;; Parse the complete buffer so an environment crossing a window
-          ;; edge is still discovered, but only submit visible fragments.
           (dolist (fragment
-                   (shuying-org--fragments-in-region
-                    (point-min) (point-max)))
-            (pcase-let ((`(,beginning . ,end)
-                         (shuying-org--fragment-bounds fragment)))
-              (when (and
-                     (not (shuying-org--fragment-overlay fragment))
-                     (seq-some
-                      (lambda (range)
-                        (and (< beginning (cdr range))
-                             (< (car range) end)))
-                      ranges))
-                (push fragment fragments))))
+                   (shuying-org--fragments-in-ranges ranges))
+            (unless (shuying-org--fragment-overlay fragment)
+              (push fragment fragments)))
           (shuying-org--preview-fragments (nreverse fragments)))))))
 
 ;;;###autoload

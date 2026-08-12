@@ -50,6 +50,30 @@
           '("test-dvisvgm")))
         (should (= (shuying-render-spec-scale specification) 1.7))))))
 
+(ert-deftest shuying-org-selects-fragments-from-disjoint-ranges ()
+  (with-temp-buffer
+    (org-mode)
+    (insert "$a$ gap $b$ gap $c$")
+    (let* ((fragments (shuying-org--fragments))
+           (first (nth 0 fragments))
+           (second (nth 1 fragments))
+           (third (nth 2 fragments)))
+      (should
+       (equal
+        (shuying-org--fragments-in-ranges
+         (list
+          (cons (shuying-org-fragment-beginning third)
+                (shuying-org-fragment-end third))
+          (cons (shuying-org-fragment-beginning first)
+                (shuying-org-fragment-end first))))
+        (list first third)))
+      (should
+       (equal
+        (shuying-org--fragments-in-region
+         (shuying-org-fragment-end first)
+         (shuying-org-fragment-beginning third))
+        (list second))))))
+
 (ert-deftest shuying-org-previews-after-leaving-edited-source ()
   (let* ((root (make-temp-file "shuying-org-" t))
          (shuying-cache-directory root)
@@ -143,7 +167,9 @@
          (buffer (generate-new-buffer " *shuying-org-visible*"))
          visible-end
          (window-state 'initial)
-         ranges)
+         ranges
+         (parse-count 0)
+         (parse-buffer (symbol-function 'org-element-parse-buffer)))
     (unwind-protect
         (progn
           (shuying-register-backend
@@ -156,7 +182,11 @@
                      (lambda ()
                        ranges))
                     ((symbol-function 'shuying-org--window-state)
-                     (lambda () window-state)))
+                     (lambda () window-state))
+                    ((symbol-function 'org-element-parse-buffer)
+                     (lambda (&rest arguments)
+                       (cl-incf parse-count)
+                       (apply parse-buffer arguments))))
             (with-current-buffer buffer
               (org-mode)
               (insert "Visible $x$.\n")
@@ -174,6 +204,7 @@
                      post-command-hook)))
             (with-current-buffer buffer
               (shuying-org--preview-visible-windows)
+              (should (= parse-count 1))
               (should (= shuying-org-test--render-count 1))
               (should (= (length
                           (shuying-org--fragment-overlays
@@ -183,15 +214,24 @@
                (overlay-get
                 (shuying-org-test--overlay) 'display))
               (shuying-org--preview-visible-windows)
+              (should (= parse-count 1))
               (should (= shuying-org-test--render-count 1))
               (setq window-state 'scrolled
                     ranges (list (cons (point-min) (point-max))))
               (shuying-org--preview-visible-windows)
+              (should (= parse-count 1))
               (should (= shuying-org-test--render-count 2))
               (should (= (length
                           (shuying-org--fragment-overlays
                            (point-min) (point-max)))
-                         2)))))
+                         2))
+              (goto-char (point-max))
+              (insert "Added $z$.\n")
+              (setq window-state 'edited
+                    ranges (list (cons (point-min) (point-max))))
+              (shuying-org--preview-visible-windows)
+              (should (= parse-count 2))
+              (should (= shuying-org-test--render-count 3)))))
       (when (buffer-live-p buffer)
         (kill-buffer buffer))
       (delete-directory root t))))
