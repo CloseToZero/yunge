@@ -73,6 +73,10 @@ text matches.  Each cached image has a small sidecar containing backend
 metadata such as width, height, and depth.  The renderer owns that metadata;
 front ends decide how to apply it to their display system.
 
+=M-x shuying-clear-cache= removes completed artifacts and their metadata.
+It preserves precompiled formats, render work, and diagnostic logs, and
+refuses to run while rendering is in progress.
+
 An Org fragment also has independent display and work state:
 
 - display: source or image;

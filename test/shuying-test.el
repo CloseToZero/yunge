@@ -19,6 +19,42 @@
    :scale 1.0
    :cache-version shuying-cache-format-version))
 
+(ert-deftest shuying-clears-only-completed-cache-files ()
+  (let* ((root (make-temp-file "shuying-cache-test-" t))
+         (shuying-cache-directory root)
+         (shuying--pending-jobs (make-hash-table :test #'equal))
+         (key (make-string 64 ?a))
+         (artifact (expand-file-name (concat key ".svg") root))
+         (metadata (concat artifact ".eld"))
+         (temporary (expand-file-name ".render-pending.svg" root))
+         (unrelated (expand-file-name "README" root)))
+    (unwind-protect
+        (progn
+          (dolist (file (list artifact metadata temporary unrelated))
+            (with-temp-file file))
+          (let ((inhibit-message t))
+            (should (= (shuying-clear-cache) 2)))
+          (should-not (file-exists-p artifact))
+          (should-not (file-exists-p metadata))
+          (should (file-exists-p temporary))
+          (should (file-exists-p unrelated)))
+      (delete-directory root t))))
+
+(ert-deftest shuying-refuses-to-clear-cache-while-rendering ()
+  (let* ((root (make-temp-file "shuying-cache-test-" t))
+         (shuying-cache-directory root)
+         (shuying--pending-jobs (make-hash-table :test #'equal))
+         (artifact
+          (expand-file-name
+           (concat (make-string 64 ?a) ".svg") root)))
+    (unwind-protect
+        (progn
+          (with-temp-file artifact)
+          (puthash "pending" t shuying--pending-jobs)
+          (should-error (shuying-clear-cache) :type 'user-error)
+          (should (file-exists-p artifact)))
+      (delete-directory root t))))
+
 (ert-deftest shuying-keeps-artifacts-under-var ()
   (should
    (equal shuying-cache-directory

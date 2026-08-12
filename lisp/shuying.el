@@ -30,6 +30,10 @@ A batch retains its slot until all of its requests complete."
 (defconst shuying-cache-format-version 1
   "Version included in Shuying render specification hashes.")
 
+(defconst shuying--cache-file-regexp
+  (rx string-start (= 64 xdigit) "." (+ anychar) string-end)
+  "Regexp matching files owned by the Shuying artifact cache.")
+
 (cl-defstruct shuying-artifact
   "A rendered file and the metadata needed to display it."
   path
@@ -136,6 +140,26 @@ Only specifications for which it returns equal keys share a backend call."
 (defun shuying--artifact-metadata-file (artifact-file)
   "Return the metadata sidecar belonging to ARTIFACT-FILE."
   (concat artifact-file ".eld"))
+
+;;;###autoload
+(defun shuying-clear-cache ()
+  "Delete completed Shuying artifacts and metadata sidecars.
+Precompiled formats, render work, and diagnostic logs are not affected.
+Refuse to clear the cache while render jobs are pending."
+  (interactive)
+  (when (> (hash-table-count shuying--pending-jobs) 0)
+    (user-error "Shuying is rendering; wait before clearing its cache"))
+  (let ((deleted 0))
+    (when (file-directory-p shuying-cache-directory)
+      (dolist (file
+               (directory-files
+                shuying-cache-directory t shuying--cache-file-regexp t))
+        (when (file-regular-p file)
+          (delete-file file)
+          (cl-incf deleted))))
+    (message "Deleted %d Shuying cache file%s"
+             deleted (if (= deleted 1) "" "s"))
+    deleted))
 
 (defun shuying--read-artifact (artifact-file metadata-file)
   "Return the cached artifact described by ARTIFACT-FILE and METADATA-FILE."
