@@ -6,14 +6,17 @@
 (require 'shuying-org)
 
 (defvar shuying-org-test--render-count 0)
+(defvar shuying-org-test--backend-call-count 0)
 
 (defun shuying-org-test--render-now
-    (_specification output-file done)
-  "Write a fake image to OUTPUT-FILE and call DONE."
-  (cl-incf shuying-org-test--render-count)
-  (with-temp-file output-file
-    (insert "image"))
-  (funcall done nil))
+    (requests complete)
+  "Write fake images for REQUESTS and call COMPLETE."
+  (cl-incf shuying-org-test--backend-call-count)
+  (dolist (request requests)
+    (cl-incf shuying-org-test--render-count)
+    (with-temp-file (shuying-backend-request-output-file request)
+      (insert "image"))
+    (funcall complete request nil)))
 
 (defun shuying-org-test--overlay ()
   "Return the first Shuying overlay in the current buffer."
@@ -66,7 +69,7 @@
 (ert-deftest shuying-org-previews-after-leaving-edited-source ()
   (let* ((root (make-temp-file "shuying-org-" t))
          (shuying-cache-directory root)
-         (shuying-backend-functions nil)
+         (shuying-backends nil)
          (shuying--pending-jobs (make-hash-table :test #'equal))
          (shuying-org-test--render-count 0))
     (unwind-protect
@@ -104,7 +107,7 @@
 (ert-deftest shuying-org-restores-a-preview-after-undo-outside-it ()
   (let* ((root (make-temp-file "shuying-org-" t))
          (shuying-cache-directory root)
-         (shuying-backend-functions nil)
+         (shuying-backends nil)
          (shuying--pending-jobs (make-hash-table :test #'equal))
          (shuying-org-test--render-count 0))
     (unwind-protect
@@ -150,7 +153,7 @@
 (ert-deftest shuying-org-previews-visible-fragments-after-display ()
   (let* ((root (make-temp-file "shuying-org-" t))
          (shuying-cache-directory root)
-         (shuying-backend-functions nil)
+         (shuying-backends nil)
          (shuying--pending-jobs (make-hash-table :test #'equal))
          (shuying-org-test--render-count 0)
          (buffer (generate-new-buffer " *shuying-org-visible*"))
@@ -212,7 +215,7 @@
 (ert-deftest shuying-org-previews-a-newly-closed-fragment ()
   (let* ((root (make-temp-file "shuying-org-" t))
          (shuying-cache-directory root)
-         (shuying-backend-functions nil)
+         (shuying-backends nil)
          (shuying--pending-jobs (make-hash-table :test #'equal))
          (shuying-org-test--render-count 0))
     (unwind-protect
@@ -235,20 +238,51 @@
                 (shuying-org-test--overlay) 'display)))))
       (delete-directory root t))))
 
+(ert-deftest shuying-org-submits-a-region-as-one-backend-batch ()
+  (let* ((root (make-temp-file "shuying-org-" t))
+         (shuying-cache-directory root)
+         (shuying-backends nil)
+         (shuying--pending-jobs (make-hash-table :test #'equal))
+         (shuying-org-test--render-count 0)
+         (shuying-org-test--backend-call-count 0))
+    (unwind-protect
+        (progn
+          (shuying-register-backend
+           'shuying-org-formula-image
+           #'shuying-org-test--render-now)
+          (cl-letf (((symbol-function 'create-image)
+                     (lambda (file &rest _properties)
+                       (list 'image file))))
+            (with-temp-buffer
+              (org-mode)
+              (insert "$x$ and $y$\n")
+              (goto-char (point-max))
+              (shuying-org-preview-buffer)
+              (should (= shuying-org-test--render-count 2))
+              (should (= shuying-org-test--backend-call-count 1))
+              (should
+               (= (length
+                   (shuying-org--fragment-overlays
+                    (point-min) (point-max)))
+                  2)))))
+      (delete-directory root t))))
+
 (ert-deftest shuying-org-rejects-an-older-render-result ()
   (let* ((root (make-temp-file "shuying-org-" t))
          (shuying-cache-directory root)
-         (shuying-backend-functions nil)
+         (shuying-backends nil)
          (shuying--pending-jobs (make-hash-table :test #'equal))
          requests)
     (unwind-protect
         (progn
           (shuying-register-backend
            'shuying-org-formula-image
-           (lambda (_specification output-file done)
-             (setq requests
-                   (append requests
-                           (list (cons output-file done))))))
+           (lambda (backend-requests complete)
+             (dolist (request backend-requests)
+               (setq requests
+                     (append
+                      requests
+                      (list (cons request complete)))))))
           (cl-letf (((symbol-function 'create-image)
                      (lambda (file &rest _properties)
                        (list 'image file))))
@@ -267,16 +301,18 @@
               (let* ((overlay (shuying-org-test--overlay))
                      (older (car requests))
                      (newer (cadr requests)))
-                (with-temp-file (car newer)
+                (with-temp-file
+                    (shuying-backend-request-output-file (car newer))
                   (insert "newer"))
-                (funcall (cdr newer) nil)
+                (funcall (cdr newer) (car newer) nil)
                 (let ((newer-artifact
                        (overlay-get overlay
                                     'shuying-org-artifact)))
                   (should newer-artifact)
-                  (with-temp-file (car older)
+                  (with-temp-file
+                      (shuying-backend-request-output-file (car older))
                     (insert "older"))
-                  (funcall (cdr older) nil)
+                  (funcall (cdr older) (car older) nil)
                   (should
                    (equal
                     newer-artifact

@@ -62,15 +62,16 @@ Shuying owns fragment discovery, display state, render specifications, cache
 keys, artifact locations, and the backend protocol from the beginning.  These
 concepts form the stable boundary between front ends and renderers.
 
-A backend accepts a render request and a completion function.  It may complete
-the request immediately or asynchronously, but the caller always observes the
-same protocol.  This keeps process management out of the Org adapter and makes
-the synchronous implementation exercise the same boundary as the native
+A backend accepts a compatible group of render requests and a completion
+function.  It completes each request independently, either immediately or
+asynchronously, so a renderer can publish part of a batch before the rest has
+finished.  This keeps process management out of the Org adapter and makes the
+synchronous implementation exercise the same boundary as the native
 asynchronous renderer.
 
-The first compiler backend delegates one render request to Org 9.8.7's public
-=org-create-formula-image= function.  That function accepts source and an
-output path without owning fragment discovery, Shuying's cache key, or the
+The first compiler backend delegates each request in a batch to Org 9.8.7's
+public =org-create-formula-image= function.  That function accepts source and
+an output path without owning fragment discovery, Shuying's cache key, or the
 buffer display.  It is a small compatibility backend; Shuying still owns every
 long-lived abstraction and can replace the compiler without rewriting its
 interaction model.  Each request uses an isolated working directory below

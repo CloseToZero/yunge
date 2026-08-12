@@ -74,14 +74,17 @@
       (delete-directory working-directory t))))
 
 (defun shuying-org--formula-image-backend
-    (specification output-file done)
-  "Render SPECIFICATION to OUTPUT-FILE and call DONE."
-  (condition-case error-data
-      (progn
-        (shuying-org--create-formula-image specification output-file)
-        (funcall done nil))
-    (error
-     (funcall done error-data))))
+    (requests complete)
+  "Render REQUESTS with Org's formula compiler and call COMPLETE."
+  (dolist (request requests)
+    (condition-case error-data
+        (progn
+          (shuying-org--create-formula-image
+           (shuying-backend-request-specification request)
+           (shuying-backend-request-output-file request))
+          (funcall complete request nil))
+      (error
+       (funcall complete request error-data)))))
 
 (shuying-register-backend
  'shuying-org-formula-image
@@ -258,8 +261,8 @@ ARTIFACT is the completed cache file, or nil when ERROR-DATA is non-nil."
               (overlay-put overlay 'display nil)
             (shuying-org--show-overlay overlay)))))))
 
-(defun shuying-org--preview-fragment (fragment)
-  "Request a preview for Org FRAGMENT."
+(defun shuying-org--render-request (fragment)
+  "Return a Shuying render request for Org FRAGMENT."
   (let* ((overlay (shuying-org--ensure-overlay fragment))
          (generation
           (1+ (or (overlay-get overlay 'shuying-org-generation) 0)))
@@ -267,11 +270,20 @@ ARTIFACT is the completed cache file, or nil when ERROR-DATA is non-nil."
          (specification (shuying-org--render-spec fragment)))
     (overlay-put overlay 'display nil)
     (overlay-put overlay 'shuying-org-generation generation)
-    (shuying-render
+    (cons
      specification
      (lambda (artifact error-data)
        (shuying-org--finish-render
         buffer overlay generation artifact error-data)))))
+
+(defun shuying-org--preview-fragments (fragments)
+  "Request previews for Org FRAGMENTS as one render group."
+  (shuying-render-batch
+   (mapcar #'shuying-org--render-request fragments)))
+
+(defun shuying-org--preview-fragment (fragment)
+  "Request a preview for Org FRAGMENT."
+  (shuying-org--preview-fragments (list fragment)))
 
 (defun shuying-org--leave-fragment (fragment)
   "Show or refresh Org FRAGMENT after point leaves it."
@@ -367,9 +379,8 @@ ARTIFACT is the completed cache file, or nil when ERROR-DATA is non-nil."
 
 (defun shuying-org--preview-region (beginning end)
   "Preview Org LaTeX fragments between BEGINNING and END."
-  (dolist (fragment
-           (shuying-org--fragments-in-region beginning end))
-    (shuying-org--preview-fragment fragment)))
+  (shuying-org--preview-fragments
+   (shuying-org--fragments-in-region beginning end)))
 
 (defun shuying-org--visible-ranges ()
   "Return the ranges visible in windows showing the current buffer."
@@ -392,7 +403,8 @@ ARTIFACT is the completed cache file, or nil when ERROR-DATA is non-nil."
     (unless (equal window-state shuying-org--visible-window-state)
       (setq shuying-org--visible-window-state window-state)
       (when (and (bound-and-true-p shuying-org-mode) window-state)
-        (let ((ranges (shuying-org--visible-ranges)))
+        (let ((ranges (shuying-org--visible-ranges))
+              fragments)
           ;; Parse the complete buffer so an environment crossing a window
           ;; edge is still discovered, but only submit visible fragments.
           (dolist (fragment
@@ -407,7 +419,8 @@ ARTIFACT is the completed cache file, or nil when ERROR-DATA is non-nil."
                         (and (< beginning (cdr range))
                              (< (car range) end)))
                       ranges))
-                (shuying-org--preview-fragment fragment)))))))))
+                (push fragment fragments))))
+          (shuying-org--preview-fragments (nreverse fragments)))))))
 
 ;;;###autoload
 (defun shuying-org-startup ()
