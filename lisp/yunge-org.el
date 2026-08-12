@@ -55,10 +55,8 @@
 (autoload 'shuying-org-mode "shuying-org" nil t)
 (autoload 'shuying-org-preview "shuying-org" nil t)
 (autoload 'shuying-org-preview-buffer "shuying-org" nil t)
-(autoload 'shuying-org-startup "shuying-org")
 
 (add-hook 'org-mode-hook #'shuying-org-mode)
-(add-hook 'org-mode-hook #'shuying-org-startup t)
 
 (setq org-id-link-consider-parent-id t
       org-id-link-to-org-use-id 'create-if-interactive)

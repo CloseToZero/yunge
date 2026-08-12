@@ -16,12 +16,17 @@ The Org integration has one small interaction boundary:
 - A late result from an older request cannot replace a newer result.
 - When an Org buffer is first displayed or scrolled, newly visible fragments
   are requested without compiling every off-screen fragment.
+- Rapid viewport changes replace the pending viewport update, so rendering
+  starts from the final visible range after scrolling settles.
 
 The Org adapter keeps a buffer-local catalog of fragment bounds and source
 text.  It builds the catalog with Org's parser, reuses it while the text is
 unchanged, and rebuilds it the next time fragments are enumerated after an
 edit.  Visible ranges are matched against the position-ordered catalog
 without reparsing the buffer.
+
+Only automatic viewport discovery is delayed.  Manual previews and previews
+requested after leaving an edited fragment enter the renderer immediately.
 
 Manual commands preview or clear a fragment, region, section, or buffer.
 Continuous rendering while typing is separate from this basic interaction and

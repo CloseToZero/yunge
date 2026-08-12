@@ -30,8 +30,16 @@
 (defvar-local shuying-org--visible-window-state nil
   "Last window state populated with Shuying previews.")
 
-(defvar-local shuying-org--visible-preview-pending nil
-  "Whether a visible preview update is waiting for idle time.")
+(defcustom shuying-org-visible-preview-delay 0.15
+  "Idle time before previewing formulas exposed by viewport changes."
+  :type 'number
+  :group 'shuying)
+
+(defvar-local shuying-org--visible-preview-timer nil
+  "Timer for the pending visible preview update.")
+
+(defvar-local shuying-org--pending-window-state nil
+  "Window state represented by `shuying-org--visible-preview-timer'.")
 
 (defvar-local shuying-org--changed-overlays nil
   "Preview overlays modified by the current command.")
@@ -416,29 +424,41 @@ RANGES and the fragment catalog are traversed in buffer order."
   "Populate visible previews in BUFFER after a window change."
   (when (buffer-live-p buffer)
     (with-current-buffer buffer
-      (setq shuying-org--visible-preview-pending nil)
+      (setq shuying-org--visible-preview-timer nil
+            shuying-org--pending-window-state nil)
       (when (bound-and-true-p shuying-org-mode)
         (shuying-org--preview-visible-windows)))))
+
+(defun shuying-org--cancel-visible-preview-timer ()
+  "Cancel the pending visible preview update."
+  (when (timerp shuying-org--visible-preview-timer)
+    (cancel-timer shuying-org--visible-preview-timer))
+  (setq shuying-org--visible-preview-timer nil
+        shuying-org--pending-window-state nil))
+
+(defun shuying-org--schedule-visible-preview (&optional immediate)
+  "Coalesce viewport discovery before submitting render requests.
+When IMMEDIATE is non-nil, replace any pending update and run at
+the next idle opportunity."
+  (let ((window-state (shuying-org--window-state)))
+    (unless (or (equal window-state shuying-org--visible-window-state)
+                (and (not immediate)
+                     (equal window-state
+                            shuying-org--pending-window-state)))
+      (shuying-org--cancel-visible-preview-timer)
+      (setq shuying-org--pending-window-state window-state
+            shuying-org--visible-preview-timer
+            (run-with-idle-timer
+             (if immediate 0 shuying-org-visible-preview-delay)
+             nil #'shuying-org--run-visible-preview
+             (current-buffer))))))
 
 (defun shuying-org--window-buffer-changed (window)
   "Schedule previews when WINDOW starts displaying the current buffer."
   (when (and (window-live-p window)
              (eq (window-buffer window) (current-buffer)))
     (setq shuying-org--visible-window-state nil)
-    (unless shuying-org--visible-preview-pending
-      (setq shuying-org--visible-preview-pending t)
-      (run-with-idle-timer
-       0 nil #'shuying-org--run-visible-preview (current-buffer)))))
-
-;;;###autoload
-(defun shuying-org-startup ()
-  "Populate previews as windows expose parts of the current Org buffer."
-  (setq shuying-org--visible-window-state nil)
-  (add-hook 'post-command-hook
-            #'shuying-org--preview-visible-windows nil t)
-  (add-hook 'window-buffer-change-functions
-            #'shuying-org--window-buffer-changed nil t)
-  (shuying-org--preview-visible-windows))
+    (shuying-org--schedule-visible-preview t)))
 
 (defun shuying-org--clear-region (beginning end)
   "Remove Shuying overlays between BEGINNING and END."
@@ -506,14 +526,20 @@ preview the whole buffer.  With three, clear the whole buffer."
           (user-error "Shuying Org mode requires an Org buffer"))
         (setq shuying-org--previous-point (point))
         (add-hook 'post-command-hook
-                  #'shuying-org--post-command nil t))
+                  #'shuying-org--post-command nil t)
+        (setq shuying-org--visible-window-state nil)
+        (add-hook 'post-command-hook
+                  #'shuying-org--schedule-visible-preview nil t)
+        (add-hook 'window-buffer-change-functions
+                  #'shuying-org--window-buffer-changed nil t)
+        (shuying-org--schedule-visible-preview t))
     (remove-hook 'post-command-hook #'shuying-org--post-command t)
     (remove-hook 'post-command-hook
-                 #'shuying-org--preview-visible-windows t)
+                 #'shuying-org--schedule-visible-preview t)
     (remove-hook 'window-buffer-change-functions
                  #'shuying-org--window-buffer-changed t)
     (setq shuying-org--visible-window-state nil)
-    (setq shuying-org--visible-preview-pending nil)
+    (shuying-org--cancel-visible-preview-timer)
     (setq shuying-org--changed-overlays nil)
     (shuying-org--clear-active-fragment)
     (shuying-org-clear-buffer)))

@@ -166,7 +166,7 @@
          (shuying-org-test--render-count 0)
          (buffer (generate-new-buffer " *shuying-org-visible*"))
          visible-end
-         (window-state 'initial)
+         window-state
          ranges
          (parse-count 0)
          (parse-buffer (symbol-function 'org-element-parse-buffer)))
@@ -197,10 +197,10 @@
               (goto-char (point-min))
               (shuying-org-mode 1)
               (should (= shuying-org-test--render-count 0))
-              (setq ranges (list (cons (point-min) visible-end)))
-              (shuying-org-startup)
+              (setq window-state 'initial
+                    ranges (list (cons (point-min) visible-end)))
               (should
-               (memq #'shuying-org--preview-visible-windows
+               (memq #'shuying-org--schedule-visible-preview
                      post-command-hook)))
             (with-current-buffer buffer
               (shuying-org--preview-visible-windows)
@@ -236,6 +236,83 @@
         (kill-buffer buffer))
       (delete-directory root t))))
 
+(ert-deftest shuying-org-coalesces-viewport-preview-updates ()
+  (let* ((root (make-temp-file "shuying-org-" t))
+         (shuying-cache-directory root)
+         (shuying-backends nil)
+         (shuying--pending-jobs (make-hash-table :test #'equal))
+         (shuying-org-test--render-count 0)
+         (buffer (generate-new-buffer " *shuying-org-coalesce*"))
+         (idle-timer (symbol-function 'run-with-idle-timer))
+         (cancel (symbol-function 'cancel-timer))
+         window-state
+         ranges
+         scheduled
+         cancelled)
+    (unwind-protect
+        (progn
+          (shuying-register-backend
+           'shuying-latex
+           #'shuying-org-test--render-now)
+          (cl-letf (((symbol-function 'create-image)
+                     (lambda (file &rest _properties)
+                       (list 'image file)))
+                    ((symbol-function 'shuying-org--visible-ranges)
+                     (lambda () ranges))
+                    ((symbol-function 'shuying-org--window-state)
+                     (lambda () window-state))
+                    ((symbol-function 'run-with-idle-timer)
+                     (lambda (seconds repeat function &rest arguments)
+                       (if (eq function
+                               #'shuying-org--run-visible-preview)
+                           (let ((timer (timer-create)))
+                             (push (list timer seconds function arguments)
+                                   scheduled)
+                             timer)
+                         (apply idle-timer seconds repeat
+                                function arguments))))
+                    ((symbol-function 'cancel-timer)
+                     (lambda (timer)
+                       (if (seq-find
+                            (lambda (entry) (eq (car entry) timer))
+                            scheduled)
+                           (push timer cancelled)
+                         (funcall cancel timer)))))
+            (with-current-buffer buffer
+              (org-mode)
+              (insert "First $x$.\n")
+              (let ((first-end (point)))
+                (dotimes (_ 100)
+                  (insert "Filler.\n"))
+                (let ((second-start (point)))
+                  (insert "Second $y$.\n")
+                  (shuying-org-mode 1)
+                  (setq window-state 'first
+                        ranges (list (cons (point-min) first-end)))
+                  (shuying-org--schedule-visible-preview)
+                  (should (= (length scheduled) 1))
+                  (should
+                   (= (cadr (car scheduled))
+                      shuying-org-visible-preview-delay))
+                  (shuying-org--schedule-visible-preview)
+                  (should (= (length scheduled) 1))
+                  (setq window-state 'second
+                        ranges
+                        (list (cons second-start (point-max))))
+                  (shuying-org--schedule-visible-preview)
+                  (should (= (length scheduled) 2))
+                  (should
+                   (memq (car (cadr scheduled)) cancelled))
+                  (let ((latest (car scheduled)))
+                    (apply (nth 2 latest) (nth 3 latest)))
+                  (should (= shuying-org-test--render-count 1))
+                  (should
+                   (= (overlay-start (shuying-org-test--overlay))
+                      (+ second-start 7))))))))
+      (when (buffer-live-p buffer)
+        (kill-buffer buffer))
+      (delete-directory root t))))
+
 (ert-deftest shuying-org-previews-when-a-window-first-shows-the-buffer ()
   (let* ((root (make-temp-file "shuying-org-" t))
          (shuying-cache-directory root)
@@ -245,6 +322,7 @@
          (buffer (generate-new-buffer " *shuying-org-first-display*"))
          (idle-timer (symbol-function 'run-with-idle-timer))
          visible-start
+         scheduled-delay
          scheduled)
     (unwind-protect
         (progn
@@ -258,7 +336,10 @@
                      (lambda (seconds repeat function &rest arguments)
                        (if (eq function
                                #'shuying-org--run-visible-preview)
-                           (setq scheduled (cons function arguments))
+                           (progn
+                             (setq scheduled-delay seconds)
+                             (setq scheduled
+                                   (cons function arguments)))
                          (apply idle-timer seconds repeat
                                 function arguments)))))
             (with-current-buffer buffer
@@ -270,7 +351,6 @@
               (insert "Restored $y$.\n")
               (goto-char (point-min))
               (shuying-org-mode 1)
-              (shuying-org-startup)
               (should (= shuying-org-test--render-count 0)))
             (save-window-excursion
               (set-window-buffer (selected-window) buffer)
@@ -281,6 +361,7 @@
                 (shuying-org--window-buffer-changed
                  (selected-window))
                 (should scheduled)
+                (should (= scheduled-delay 0))
                 (should (= shuying-org-test--render-count 0))
                 (apply (car scheduled) (cdr scheduled))
                 (should (= shuying-org-test--render-count 1))

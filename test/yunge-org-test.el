@@ -19,11 +19,19 @@
     (evil-normal-state)
     (should shuying-org-mode)
     (should
-     (memq #'shuying-org--preview-visible-windows
+     (memq #'shuying-org--schedule-visible-preview
            post-command-hook))
     (should
      (memq #'shuying-org--window-buffer-changed
            window-buffer-change-functions))
+    (shuying-org-mode -1)
+    (should-not
+     (memq #'shuying-org--schedule-visible-preview
+           post-command-hook))
+    (should-not
+     (memq #'shuying-org--window-buffer-changed
+           window-buffer-change-functions))
+    (shuying-org-mode 1)
     (should (eq (command-remapping 'org-latex-preview)
                 #'shuying-org-preview))
     (yunge-test-evil-keys
