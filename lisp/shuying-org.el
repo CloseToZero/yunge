@@ -207,6 +207,7 @@ REPORT-ERROR reports a current render failure without duplicating its batch."
             (overlay-put overlay 'display nil)
             (overlay-put overlay 'shuying-org-dirty t)
             (overlay-put overlay 'shuying-org-error error-data)
+            (overlay-put overlay 'shuying-org-specification-hash nil)
             (funcall report-error error-data))
         (let ((image (create-image artifact nil nil :ascent 'center)))
           (overlay-put overlay 'shuying-org-artifact artifact)
@@ -217,37 +218,56 @@ REPORT-ERROR reports a current render failure without duplicating its batch."
               (overlay-put overlay 'display nil)
             (shuying-org--show-overlay overlay)))))))
 
-(defun shuying-org--render-request (fragment preamble report-error)
-  "Return a render request for Org FRAGMENT using PREAMBLE."
+(defun shuying-org--render-request
+    (fragment specification specification-hash report-error)
+  "Return a render request for Org FRAGMENT using SPECIFICATION."
   (let* ((overlay (shuying-org--ensure-overlay fragment))
          (generation
           (1+ (or (overlay-get overlay 'shuying-org-generation) 0)))
-         (buffer (current-buffer))
-         (specification (shuying-org--render-spec fragment preamble)))
+         (buffer (current-buffer)))
     (overlay-put overlay 'display nil)
+    (overlay-put overlay 'shuying-org-dirty nil)
     (overlay-put overlay 'shuying-org-generation generation)
+    (overlay-put overlay 'shuying-org-specification-hash
+                 specification-hash)
     (cons
      specification
      (lambda (artifact error-data)
        (shuying-org--finish-render
         buffer overlay generation artifact error-data report-error)))))
 
-(defun shuying-org--preview-fragments (fragments)
-  "Request previews for Org FRAGMENTS as one render group."
+(defun shuying-org--preview-fragments (fragments &optional stale-only)
+  "Request previews for Org FRAGMENTS as one render group.
+When STALE-ONLY is non-nil, skip overlays whose render inputs still match."
   (when fragments
     (let ((preamble (shuying-org--preamble))
-          error-reported)
-      (shuying-render-batch
-       (mapcar
-        (lambda (fragment)
-          (shuying-org--render-request
-           fragment preamble
-           (lambda (error-data)
-             (unless error-reported
-               (setq error-reported t)
-               (display-warning
-                'shuying (error-message-string error-data) :error)))))
-        fragments)))))
+          error-reported
+          requests)
+      (dolist (fragment fragments)
+        (let* ((specification
+                (shuying-org--render-spec fragment preamble))
+               (specification-hash
+                (shuying-render-spec-hash specification))
+               (overlay (shuying-org--fragment-overlay fragment)))
+          (unless (and stale-only overlay
+                       (not (overlay-get overlay 'shuying-org-dirty))
+                       (equal
+                        (overlay-get
+                         overlay 'shuying-org-specification-hash)
+                        specification-hash))
+            (push
+             (shuying-org--render-request
+              fragment specification specification-hash
+              (lambda (error-data)
+                (unless error-reported
+                  (setq error-reported t)
+                  (display-warning
+                   'shuying
+                   (error-message-string error-data)
+                   :error))))
+             requests))))
+      (when requests
+        (shuying-render-batch (nreverse requests))))))
 
 (defun shuying-org--preview-fragment (fragment)
   "Request a preview for Org FRAGMENT."
@@ -412,13 +432,10 @@ RANGES and the fragment catalog are traversed in buffer order."
     (unless (equal window-state shuying-org--visible-window-state)
       (setq shuying-org--visible-window-state window-state)
       (when (and (bound-and-true-p shuying-org-mode) window-state)
-        (let ((ranges (shuying-org--visible-ranges))
-              fragments)
-          (dolist (fragment
-                   (shuying-org--fragments-in-ranges ranges))
-            (unless (shuying-org--fragment-overlay fragment)
-              (push fragment fragments)))
-          (shuying-org--preview-fragments (nreverse fragments)))))))
+        (shuying-org--preview-fragments
+         (shuying-org--fragments-in-ranges
+          (shuying-org--visible-ranges))
+         t)))))
 
 (defun shuying-org--run-visible-preview (buffer)
   "Populate visible previews in BUFFER after a window change."
@@ -459,6 +476,24 @@ the next idle opportunity."
              (eq (window-buffer window) (current-buffer)))
     (setq shuying-org--visible-window-state nil)
     (shuying-org--schedule-visible-preview t)))
+
+(defun shuying-org--theme-changed (&optional _theme)
+  "Recheck visible Org previews after the active theme changes."
+  (dolist (buffer (buffer-list))
+    (with-current-buffer buffer
+      (when (and (bound-and-true-p shuying-org-mode)
+                 (shuying-org--window-state))
+        (setq shuying-org--visible-window-state nil)
+        (shuying-org--schedule-visible-preview t)))))
+
+(defun shuying-org--buffer-saved ()
+  "Recheck visible previews after their Org buffer is saved."
+  (when (shuying-org--window-state)
+    (setq shuying-org--visible-window-state nil)
+    (shuying-org--schedule-visible-preview t)))
+
+(add-hook 'enable-theme-functions #'shuying-org--theme-changed)
+(add-hook 'disable-theme-functions #'shuying-org--theme-changed)
 
 (defun shuying-org--clear-region (beginning end)
   "Remove Shuying overlays between BEGINNING and END."
@@ -532,12 +567,14 @@ preview the whole buffer.  With three, clear the whole buffer."
                   #'shuying-org--schedule-visible-preview nil t)
         (add-hook 'window-buffer-change-functions
                   #'shuying-org--window-buffer-changed nil t)
+        (add-hook 'after-save-hook #'shuying-org--buffer-saved nil t)
         (shuying-org--schedule-visible-preview t))
     (remove-hook 'post-command-hook #'shuying-org--post-command t)
     (remove-hook 'post-command-hook
                  #'shuying-org--schedule-visible-preview t)
     (remove-hook 'window-buffer-change-functions
                  #'shuying-org--window-buffer-changed t)
+    (remove-hook 'after-save-hook #'shuying-org--buffer-saved t)
     (setq shuying-org--visible-window-state nil)
     (shuying-org--cancel-visible-preview-timer)
     (setq shuying-org--changed-overlays nil)

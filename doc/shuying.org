@@ -18,6 +18,8 @@ The Org integration has one small interaction boundary:
   are requested without compiling every off-screen fragment.
 - Rapid viewport changes replace the pending viewport update, so rendering
   starts from the final visible range after scrolling settles.
+- Saving an Org buffer or changing the active theme rechecks visible previews.
+  Only formulas whose rendering inputs changed request new artifacts.
 
 The Org adapter keeps a buffer-local catalog of fragment bounds and source
 text.  It builds the catalog with Org's parser, reuses it while the text is
@@ -67,6 +69,9 @@ An Org fragment also has independent display and work state:
 
 The generation is checked when asynchronous work completes.  This makes stale
 result rejection part of the model instead of an overlay-specific workaround.
+Each displayed overlay also remembers its render specification hash.  A later
+viewport pass can therefore distinguish an existing preview from one rendered
+with an obsolete preamble, color, scale, or backend configuration.
 
 * Foundations
 

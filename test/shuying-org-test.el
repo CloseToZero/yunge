@@ -236,6 +236,110 @@
         (kill-buffer buffer))
       (delete-directory root t))))
 
+(ert-deftest shuying-org-refreshes-visible-previews-after-theme-changes ()
+  (let* ((root (make-temp-file "shuying-org-" t))
+         (shuying-cache-directory root)
+         (shuying-backends nil)
+         (shuying--pending-jobs (make-hash-table :test #'equal))
+         (shuying-org-test--render-count 0)
+         (buffer (generate-new-buffer " *shuying-org-theme*"))
+         (foreground "light")
+         window-state
+         ranges
+         scheduled)
+    (unwind-protect
+        (progn
+          (shuying-register-backend
+           'shuying-latex
+           #'shuying-org-test--render-now)
+          (cl-letf (((symbol-function 'create-image)
+                     (lambda (file &rest _properties)
+                       (list 'image file)))
+                    ((symbol-function 'shuying-org--face-color)
+                     (lambda (_option attribute)
+                       (if (eq attribute :foreground)
+                           foreground
+                         "Transparent")))
+                    ((symbol-function 'shuying-org--visible-ranges)
+                     (lambda () ranges))
+                    ((symbol-function 'shuying-org--window-state)
+                     (lambda () window-state))
+                    ((symbol-function 'shuying-org--schedule-visible-preview)
+                     (lambda (&optional immediate)
+                       (push (cons (current-buffer) immediate)
+                             scheduled))))
+            (with-current-buffer buffer
+              (org-mode)
+              (insert "Visible $x$.\n")
+              (setq ranges (list (cons (point-min) (point-max)))
+                    window-state 'visible)
+              (shuying-org-mode 1)
+              (setq scheduled nil)
+              (shuying-org--preview-visible-windows)
+              (should (= shuying-org-test--render-count 1))
+              (setq shuying-org--visible-window-state nil)
+              (shuying-org--preview-visible-windows)
+              (should (= shuying-org-test--render-count 1))
+              (setq foreground "dark")
+              (shuying-org--theme-changed 'dark-theme))
+            (should (equal scheduled (list (cons buffer t))))
+            (with-current-buffer buffer
+              (should-not shuying-org--visible-window-state)
+              (shuying-org--preview-visible-windows)
+              (should (= shuying-org-test--render-count 2)))))
+      (when (buffer-live-p buffer)
+        (kill-buffer buffer))
+      (delete-directory root t))))
+
+(ert-deftest shuying-org-refreshes-previews-after-preamble-changes ()
+  (let* ((root (make-temp-file "shuying-org-" t))
+         (shuying-cache-directory root)
+         (shuying-backends nil)
+         (shuying--pending-jobs (make-hash-table :test #'equal))
+         (shuying-org-test--render-count 0)
+         (preamble "first"))
+    (unwind-protect
+        (progn
+          (shuying-register-backend
+           'shuying-latex
+           #'shuying-org-test--render-now)
+          (cl-letf (((symbol-function 'create-image)
+                     (lambda (file &rest _properties)
+                       (list 'image file)))
+                    ((symbol-function 'shuying-org--preamble)
+                     (lambda () preamble)))
+            (with-temp-buffer
+              (org-mode)
+              (insert "$x$")
+              (let ((fragments (shuying-org--fragments)))
+                (shuying-org--preview-fragments fragments t)
+                (should (= shuying-org-test--render-count 1))
+                (shuying-org--preview-fragments fragments t)
+                (should (= shuying-org-test--render-count 1))
+                (setq preamble "second")
+                (shuying-org--preview-fragments fragments t)
+                (should (= shuying-org-test--render-count 2))))))
+      (delete-directory root t))))
+
+(ert-deftest shuying-org-rechecks-preview-context-after-save ()
+  (with-temp-buffer
+    (org-mode)
+    (let (scheduled)
+      (cl-letf (((symbol-function 'shuying-org--window-state)
+                 (lambda () 'visible))
+                ((symbol-function 'shuying-org--schedule-visible-preview)
+                 (lambda (&optional immediate)
+                   (setq scheduled immediate))))
+        (shuying-org-mode 1)
+        (setq scheduled nil
+              shuying-org--visible-window-state 'visible)
+        (run-hooks 'after-save-hook)
+        (should-not shuying-org--visible-window-state)
+        (should scheduled)
+        (shuying-org-mode -1)
+        (should-not
+         (memq #'shuying-org--buffer-saved after-save-hook))))))
+
 (ert-deftest shuying-org-coalesces-viewport-preview-updates ()
   (let* ((root (make-temp-file "shuying-org-" t))
          (shuying-cache-directory root)
