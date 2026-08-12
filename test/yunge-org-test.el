@@ -21,6 +21,9 @@
     (should
      (memq #'shuying-org--preview-visible-windows
            post-command-hook))
+    (should
+     (memq #'shuying-org--window-buffer-changed
+           window-buffer-change-functions))
     (should (eq (command-remapping 'org-latex-preview)
                 #'shuying-org-preview))
     (yunge-test-evil-keys

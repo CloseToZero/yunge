@@ -236,6 +236,64 @@
         (kill-buffer buffer))
       (delete-directory root t))))
 
+(ert-deftest shuying-org-previews-when-a-window-first-shows-the-buffer ()
+  (let* ((root (make-temp-file "shuying-org-" t))
+         (shuying-cache-directory root)
+         (shuying-backends nil)
+         (shuying--pending-jobs (make-hash-table :test #'equal))
+         (shuying-org-test--render-count 0)
+         (buffer (generate-new-buffer " *shuying-org-first-display*"))
+         (idle-timer (symbol-function 'run-with-idle-timer))
+         visible-start
+         scheduled)
+    (unwind-protect
+        (progn
+          (shuying-register-backend
+           'shuying-latex
+           #'shuying-org-test--render-now)
+          (cl-letf (((symbol-function 'create-image)
+                     (lambda (file &rest _properties)
+                       (list 'image file)))
+                    ((symbol-function 'run-with-idle-timer)
+                     (lambda (seconds repeat function &rest arguments)
+                       (if (eq function
+                               #'shuying-org--run-visible-preview)
+                           (setq scheduled (cons function arguments))
+                         (apply idle-timer seconds repeat
+                                function arguments)))))
+            (with-current-buffer buffer
+              (org-mode)
+              (insert "Hidden $x$.\n")
+              (dotimes (_ 100)
+                (insert "Filler.\n"))
+              (setq visible-start (point))
+              (insert "Restored $y$.\n")
+              (goto-char (point-min))
+              (shuying-org-mode 1)
+              (shuying-org-startup)
+              (should (= shuying-org-test--render-count 0)))
+            (save-window-excursion
+              (set-window-buffer (selected-window) buffer)
+              (with-current-buffer buffer
+                (set-window-start
+                 (selected-window)
+                 visible-start)
+                (shuying-org--window-buffer-changed
+                 (selected-window))
+                (should scheduled)
+                (should (= shuying-org-test--render-count 0))
+                (apply (car scheduled) (cdr scheduled))
+                (should (= shuying-org-test--render-count 1))
+                (should
+                 (= (overlay-start (shuying-org-test--overlay))
+                    (+ visible-start 9)))
+                (should
+                 (overlay-get
+                  (shuying-org-test--overlay) 'display))))))
+      (when (buffer-live-p buffer)
+        (kill-buffer buffer))
+      (delete-directory root t))))
+
 (ert-deftest shuying-org-previews-a-newly-closed-fragment ()
   (let* ((root (make-temp-file "shuying-org-" t))
          (shuying-cache-directory root)
