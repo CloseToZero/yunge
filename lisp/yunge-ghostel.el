@@ -7,6 +7,9 @@
 (require 'yunge-state)
 
 (declare-function evil-ghostel-mode "evil-ghostel" (&optional arg))
+(declare-function evil-ghostel--prompt-active-p "evil-ghostel" ())
+(declare-function evil-ghostel-redo "evil-ghostel" (count))
+(declare-function evil-ghostel-undo "evil-ghostel" (count))
 (declare-function ghostel--send-encoded
                   "ghostel" (key-name mods &optional utf8))
 (declare-function ghostel--send-event "ghostel" ())
@@ -52,6 +55,10 @@ prompt without changing the user's PowerShell profile.")
 (defconst yunge-ghostel-mouse-bindings
   '(([down-mouse-1] ghostel-mouse-press-or-copy-mode nil)))
 
+(defconst yunge-ghostel-evil-bindings
+  '(([remap evil-undo] yunge-ghostel-undo nil)
+    ([remap evil-redo] yunge-ghostel-redo nil)))
+
 (defun yunge-ghostel--windows-shell-spec ()
   "Return the preferred Windows shell command for Ghostel."
   (if-let* ((powershell (or (executable-find "pwsh.exe")
@@ -65,6 +72,34 @@ prompt without changing the user's PowerShell profile.")
   (if (ghostel-alt-screen-p)
       (ghostel--send-event)
     (ghostel--send-encoded key "")))
+
+(defun yunge-ghostel--powershell-p ()
+  "Return non-nil when the current local Ghostel shell is PowerShell."
+  (and (not (file-remote-p default-directory))
+       (let* ((program (if (consp ghostel-shell)
+                           (car ghostel-shell)
+                         ghostel-shell))
+              (name (and program
+                         (downcase (file-name-base program)))))
+         (member name '("powershell" "pwsh")))))
+
+(defun yunge-ghostel-undo (count)
+  "Undo shell input COUNT times using the current line editor."
+  (interactive "p")
+  (if (and (yunge-ghostel--powershell-p)
+           (evil-ghostel--prompt-active-p))
+      (dotimes (_ (or count 1))
+        (ghostel--send-encoded "z" "ctrl"))
+    (evil-ghostel-undo count)))
+
+(defun yunge-ghostel-redo (count)
+  "Redo shell input COUNT times using the current line editor."
+  (interactive "p")
+  (if (and (yunge-ghostel--powershell-p)
+           (evil-ghostel--prompt-active-p))
+      (dotimes (_ (or count 1))
+        (ghostel--send-encoded "y" "ctrl"))
+    (evil-ghostel-redo count)))
 
 (defun yunge-ghostel-next-input ()
   "Request the next shell input in Ghostel."
@@ -95,7 +130,10 @@ ARG follows the prefix conventions of `ghostel-project'."
                     yunge-ghostel-history-bindings)
   (yunge-key-evil-define '(normal visual operator motion)
                          evil-ghostel-mode-map
-                         yunge-ghostel-mouse-bindings))
+                         yunge-ghostel-mouse-bindings)
+  (yunge-key-evil-define '(normal visual)
+                         evil-ghostel-mode-map
+                         yunge-ghostel-evil-bindings))
 
 (defun yunge-ghostel--enable-evil-in-existing-buffers ()
   "Enable Evil Ghostel integration in existing terminal buffers."
