@@ -26,6 +26,7 @@ only belongs here if it proves useful in practice.
 The source layout is:
 
 - =shuying.el= owns render specifications, jobs, backends, and the cache.
+- =shuying-latex.el= runs batched LaTeX and dvisvgm processes.
 - =shuying-org.el= finds Org fragments and manages their display lifecycle.
 - =yunge-org.el= enables Shuying and assigns user-facing key bindings.
 
@@ -64,34 +65,28 @@ concepts form the stable boundary between front ends and renderers.
 
 A backend accepts a compatible group of render requests and a completion
 function.  It completes each request independently, either immediately or
-asynchronously, so a renderer can publish part of a batch before the rest has
-finished.  This keeps process management out of the Org adapter and makes the
-synchronous implementation exercise the same boundary as the native
-asynchronous renderer.
+asynchronously.  This keeps process management out of the Org adapter.
 
-The first compiler backend delegates each request in a batch to Org 9.8.7's
-public =org-create-formula-image= function.  That function accepts source and
-an output path without owning fragment discovery, Shuying's cache key, or the
-buffer display.  It is a small compatibility backend; Shuying still owns every
-long-lived abstraction and can replace the compiler without rewriting its
-interaction model.  Each request uses an isolated working directory below
-=var/shuying/work/= that is removed after either success or failure.
-
-* Scheduler and native renderer
+* Scheduler and LaTeX renderer
 
 The scheduler accepts requests from every Shuying front end.  Identical render
 specifications share one pending job.  Visible and explicitly requested
 fragments take priority over background work, while a superseded generation
 can be discarded before it consumes more work.
 
-The native =latex= and =dvisvgm= backend uses this pipeline:
+The direct =latex= and =dvisvgm= backend uses this pipeline:
 
 1. Return cache hits immediately.
 2. Collect misses with compatible preambles and rendering options.
 3. Compile each compatible batch in one temporary TeX document.
-4. Convert its pages to SVG and publish each artifact atomically.
-5. Deliver artifacts as they become available instead of waiting for the batch.
+4. Convert every page to SVG and map it back to its request.
+5. Publish each artifact atomically after conversion finishes.
 6. Check the request generation before changing a buffer display.
+
+LaTeX and dvisvgm run as a nonblocking process chain.  A batch uses an isolated
+working directory below =var/shuying/work/=.  Successful work is removed after
+its artifacts are published; failed work preserves a process log buffer for
+diagnosis.
 
 Backends encapsulate process topology and artifact production.  Other engines
 or image formats do not add conditionals throughout the scheduler or the Org

@@ -25,46 +25,27 @@
      (overlay-get overlay 'shuying-org))
    (overlays-in (point-min) (point-max))))
 
-(ert-deftest shuying-org-cleans-render-working-directories ()
-  (let* ((root (make-temp-file "shuying-org-test-" t))
-         (shuying-work-directory (expand-file-name "work" root))
-         (specification
-          (make-shuying-render-spec
-           :source "$x$"
-           :preamble ""
-           :backend-options
-           '(:processing-type dvisvgm
-             :processing-info (:image-output-type "svg"))
-           :foreground "Black"
-           :background "Transparent"
-           :scale 1.0)))
-    (unwind-protect
-        (dolist (fail '(nil t))
-          (let (execution-directory)
-            (cl-letf (((symbol-function 'org-create-formula-image)
-                       (lambda (&rest _arguments)
-                         (setq execution-directory default-directory)
-                         (with-temp-file
-                             (expand-file-name "compiler.log")
-                           (insert "output"))
-                         (when fail
-                           (error "Rendering failed")))))
-              (if fail
-                  (should-error
-                   (shuying-org--create-formula-image
-                    specification "unused.svg"))
-                (shuying-org--create-formula-image
-                 specification "unused.svg")))
-            (should
-             (equal
-              (file-truename
-               (directory-file-name
-                (file-name-directory
-                 (directory-file-name execution-directory))))
-              (file-truename
-               (directory-file-name shuying-work-directory))))
-            (should-not (file-exists-p execution-directory))))
-      (delete-directory root t))))
+(ert-deftest shuying-org-builds-direct-latex-render-specifications ()
+  (let ((shuying-latex-engine-command '("test-latex"))
+        (shuying-latex-converter-command '("test-dvisvgm")))
+    (with-temp-buffer
+      (org-mode)
+      (insert "$x$")
+      (goto-char (point-min))
+      (let ((specification
+             (shuying-org--render-spec
+              (shuying-org--fragment-at-point))))
+        (should (eq (shuying-render-spec-backend specification)
+                    'shuying-latex))
+        (should (equal (shuying-render-spec-engine specification)
+                       '("test-latex")))
+        (should
+         (equal
+          (plist-get
+           (shuying-render-spec-backend-options specification)
+           :converter)
+          '("test-dvisvgm")))
+        (should (= (shuying-render-spec-scale specification) 1.7))))))
 
 (ert-deftest shuying-org-previews-after-leaving-edited-source ()
   (let* ((root (make-temp-file "shuying-org-" t))
@@ -75,7 +56,7 @@
     (unwind-protect
         (progn
           (shuying-register-backend
-           'shuying-org-formula-image
+           'shuying-latex
            #'shuying-org-test--render-now)
           (cl-letf (((symbol-function 'create-image)
                      (lambda (file &rest _properties)
@@ -113,7 +94,7 @@
     (unwind-protect
         (progn
           (shuying-register-backend
-           'shuying-org-formula-image
+           'shuying-latex
            #'shuying-org-test--render-now)
           (cl-letf (((symbol-function 'create-image)
                      (lambda (file &rest _properties)
@@ -163,7 +144,7 @@
     (unwind-protect
         (progn
           (shuying-register-backend
-           'shuying-org-formula-image
+           'shuying-latex
            #'shuying-org-test--render-now)
           (cl-letf (((symbol-function 'create-image)
                      (lambda (file &rest _properties)
@@ -221,7 +202,7 @@
     (unwind-protect
         (progn
           (shuying-register-backend
-           'shuying-org-formula-image
+           'shuying-latex
            #'shuying-org-test--render-now)
           (cl-letf (((symbol-function 'create-image)
                      (lambda (file &rest _properties)
@@ -248,7 +229,7 @@
     (unwind-protect
         (progn
           (shuying-register-backend
-           'shuying-org-formula-image
+           'shuying-latex
            #'shuying-org-test--render-now)
           (cl-letf (((symbol-function 'create-image)
                      (lambda (file &rest _properties)
@@ -276,7 +257,7 @@
     (unwind-protect
         (progn
           (shuying-register-backend
-           'shuying-org-formula-image
+           'shuying-latex
            (lambda (backend-requests complete)
              (dolist (request backend-requests)
                (setq requests
@@ -340,14 +321,18 @@
              "\\binom{n}{k} x^{n-k} y^k.\\]\n")
             (goto-char (point-max))
             (shuying-org-preview-buffer)
-            (let ((artifact
-                   (overlay-get
-                    (shuying-org-test--overlay)
-                    'shuying-org-artifact)))
-              (should (file-exists-p artifact))
-              (with-temp-buffer
-                (insert-file-contents artifact)
-                (should (search-forward "<svg" nil t))))))
+            (let ((overlay (shuying-org-test--overlay)))
+              (with-timeout
+                  (30 (ert-fail "Timed out rendering an Org preview"))
+                (while (not (overlay-get overlay
+                                         'shuying-org-artifact))
+                  (accept-process-output nil 0.05)))
+              (let ((artifact
+                     (overlay-get overlay 'shuying-org-artifact)))
+                (should (file-exists-p artifact))
+                (with-temp-buffer
+                  (insert-file-contents artifact)
+                  (should (search-forward "<svg" nil t)))))))
       (delete-directory root t))))
 
 ;;; shuying-org-test.el ends here

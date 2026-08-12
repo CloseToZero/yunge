@@ -9,6 +9,16 @@
 
 (define-error 'shuying-latex-error "Shuying LaTeX rendering failed")
 
+(defcustom shuying-latex-engine-command '("latex")
+  "Command prefix used to compile Shuying preview documents."
+  :type '(repeat string)
+  :group 'shuying)
+
+(defcustom shuying-latex-converter-command '("dvisvgm")
+  "Command prefix used to convert Shuying DVI pages to SVG."
+  :type '(repeat string)
+  :group 'shuying)
+
 (defconst shuying-latex--preview-package
   "\\usepackage[active,tightpage]{preview}\n"
   "LaTeX setup that turns each preview environment into one page.")

@@ -5,18 +5,13 @@
 (require 'org)
 (require 'org-element)
 (require 'seq)
-(require 'shuying)
+(require 'shuying-latex)
 
 (declare-function org-export-get-backend "ox" (name))
 (declare-function org-export-get-environment
                   "ox" (&optional backend subtreep ext-plist))
 (declare-function org-latex-make-preamble
                   "ox-latex" (info &optional template snippetp))
-
-(defcustom shuying-org-processing-type 'dvisvgm
-  "Org image process used by the synchronous Shuying backend."
-  :type 'symbol
-  :group 'shuying)
 
 (defvar-local shuying-org--active-start nil
   "Marker at the fragment currently containing point.")
@@ -29,66 +24,6 @@
 
 (defvar-local shuying-org--changed-overlays nil
   "Preview overlays modified by the current command.")
-
-(defun shuying-org--create-formula-image
-    (specification output-file)
-  "Render SPECIFICATION to OUTPUT-FILE with Org's image compiler."
-  (let* ((output-file (expand-file-name output-file))
-         (backend-options
-          (shuying-render-spec-backend-options specification))
-         (processing-type
-          (plist-get backend-options :processing-type))
-         (processing-info
-          (copy-tree
-           (plist-get backend-options :processing-info)))
-         (org-preview-latex-process-alist
-          (list
-           (cons
-            processing-type
-            (plist-put
-             processing-info :latex-header
-             (shuying-render-spec-preamble specification)))))
-         (options
-          (list
-           :foreground
-           (shuying-render-spec-foreground specification)
-           :background
-           (shuying-render-spec-background specification)
-           :scale
-           (shuying-render-spec-scale specification)))
-         (_ (make-directory shuying-work-directory t))
-         (working-directory
-          (make-temp-file
-           (expand-file-name "shuying-org-" shuying-work-directory)
-           t))
-         ;; Keeping the compiler inputs and working directory together
-         ;; also avoids a MiKTeX dvisvgm bug across Windows drives.
-         (temporary-file-directory
-          (file-name-as-directory working-directory))
-         (default-directory
-          temporary-file-directory))
-    (unwind-protect
-        (org-create-formula-image
-         (shuying-render-spec-source specification)
-         output-file options t processing-type)
-      (delete-directory working-directory t))))
-
-(defun shuying-org--formula-image-backend
-    (requests complete)
-  "Render REQUESTS with Org's formula compiler and call COMPLETE."
-  (dolist (request requests)
-    (condition-case error-data
-        (progn
-          (shuying-org--create-formula-image
-           (shuying-backend-request-specification request)
-           (shuying-backend-request-output-file request))
-          (funcall complete request nil))
-      (error
-       (funcall complete request error-data)))))
-
-(shuying-register-backend
- 'shuying-org-formula-image
- #'shuying-org--formula-image-backend)
 
 (defun shuying-org--fragment-bounds (fragment)
   "Return the source bounds of Org LaTeX FRAGMENT."
@@ -192,15 +127,7 @@
 
 (defun shuying-org--render-spec (fragment)
   "Return the Shuying render specification for Org FRAGMENT."
-  (let* ((processing-info
-          (copy-tree
-           (cdr
-            (assq shuying-org-processing-type
-                  org-preview-latex-process-alist))))
-         (bounds (shuying-org--fragment-bounds fragment)))
-    (unless processing-info
-      (user-error "Unknown Org LaTeX process: %s"
-                  shuying-org-processing-type))
+  (let ((bounds (shuying-org--fragment-bounds fragment)))
     (save-excursion
       (goto-char (car bounds))
       (make-shuying-render-spec
@@ -208,22 +135,19 @@
        (substring-no-properties
         (org-element-property :value fragment))
        :preamble (shuying-org--preamble)
-       :engine (plist-get processing-info :latex-compiler)
-       :backend 'shuying-org-formula-image
+       :engine shuying-latex-engine-command
+       :backend 'shuying-latex
        :backend-options
-       (list :processing-type shuying-org-processing-type
-             :processing-info processing-info
-             :display-dpi
-             (if (display-graphic-p)
-                 (org--get-display-dpi)
-               140.0))
-       :output-format
-       (plist-get processing-info :image-output-type)
+       (list :converter shuying-latex-converter-command)
+       :output-format "svg"
        :foreground
        (shuying-org--face-color :foreground :foreground)
        :background
        (shuying-org--face-color :background :background)
-       :scale (or (plist-get org-format-latex-options :scale) 1.0)
+       ;; Preserve Org's established dvisvgm preview size.  Its process
+       ;; definition applies this adjustment before the user scale.
+       :scale (* 1.7
+                 (or (plist-get org-format-latex-options :scale) 1.0))
        :cache-version shuying-cache-format-version))))
 
 (defun shuying-org--point-inside-overlay-p (overlay)
