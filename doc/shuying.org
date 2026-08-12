@@ -30,6 +30,11 @@ without reparsing the buffer.
 Only automatic viewport discovery is delayed.  Manual previews and previews
 requested after leaving an edited fragment enter the renderer immediately.
 
+Numbered LaTeX environments follow their order in the Org buffer.  Each row
+of a multi-equation environment advances the counter unless it uses
+=\nonumber=, =\notag=, or =\tag=; row breaks inside nested environments do
+not affect the outer sequence.
+
 Manual commands preview or clear a fragment, region, section, or buffer.
 Continuous rendering while typing is separate from this basic interaction and
 only belongs here if it proves useful in practice.

@@ -19,7 +19,33 @@
   "The source needed to preview one Org LaTeX fragment."
   beginning
   end
-  value)
+  value
+  equation-number)
+
+(defconst shuying-org--single-equation-environments
+  '("equation" "multline" "subequations")
+  "LaTeX environments containing one automatically numbered equation.")
+
+(defconst shuying-org--multi-equation-environments
+  '("eqnarray" "align" "alignat" "flalign" "gather" "xalignat"
+    "xxalignat")
+  "LaTeX environments that may contain several numbered equations.")
+
+(defconst shuying-org--equation-token-regexp
+  (rx
+   (or
+    "%"
+    (seq
+     "\\"
+     (or
+      (seq "begin{" (group (+ (not "}"))) "}")
+      (seq "end{" (group (+ (not "}"))) "}")
+      (group
+       (seq "\\" (? "*")
+            (? (seq "[" (* (not "]")) "]"))))
+      (group (or "nonumber" "notag"))
+      (group (seq "tag" (? "*") (* space) "{"))))))
+  "Regexp matching LaTeX structure relevant to equation numbering.")
 
 (defvar-local shuying-org--active-start nil
   "Marker at the fragment currently containing point.")
@@ -50,6 +76,11 @@
 (defvar-local shuying-org--catalog-tick nil
   "Buffer modification tick of `shuying-org--fragment-catalog'.")
 
+(defun shuying-org--catalog-current-p ()
+  "Return whether the fragment catalog describes the current text."
+  (equal shuying-org--catalog-tick
+         (buffer-chars-modified-tick)))
+
 (defun shuying-org--fragment-bounds (fragment)
   "Return the source bounds of Org LaTeX FRAGMENT."
   (cons (shuying-org-fragment-beginning fragment)
@@ -59,14 +90,70 @@
   "Return whether Org DATUM is previewable LaTeX."
   (org-element-type-p datum '(latex-fragment latex-environment)))
 
-(defun shuying-org--fragment-from-element (element)
-  "Return a Shuying fragment described by Org ELEMENT."
+(defun shuying-org--escaped-p (position)
+  "Return whether the character at POSITION is backslash-escaped."
+  (let ((slashes 0))
+    (while (and (> position (point-min))
+                (eq (char-before position) ?\\))
+      (cl-incf slashes)
+      (cl-decf position))
+    (cl-oddp slashes)))
+
+(defun shuying-org--count-equation-rows (source multi-row-p)
+  "Count automatic equation numbers produced by SOURCE.
+When MULTI-ROW-P is non-nil, each outer row may receive a number."
+  (with-temp-buffer
+    (insert source)
+    (goto-char (point-min))
+    (let ((depth 0)
+          (count 0)
+          (row-numbered t))
+      (while (re-search-forward shuying-org--equation-token-regexp nil t)
+        (cond
+         ((match-beginning 1)
+          (cl-incf depth))
+         ((match-beginning 2)
+          (when (= depth 1)
+            (when row-numbered
+              (cl-incf count)))
+          (setq depth (max 0 (1- depth))))
+         ((and multi-row-p (match-beginning 3) (= depth 1))
+          (when row-numbered
+            (cl-incf count))
+          (setq row-numbered t))
+         ((and (= depth 1)
+               (or (match-beginning 4) (match-beginning 5)))
+          (setq row-numbered nil))
+         ((and (eq (char-after (match-beginning 0)) ?%)
+               (not (shuying-org--escaped-p (match-beginning 0))))
+          (goto-char (line-end-position)))))
+      count)))
+
+(defun shuying-org--equation-count (element)
+  "Return automatic equation count for Org ELEMENT, or nil.
+Nil means ELEMENT is not an automatically numbered environment."
+  (let ((source (org-element-property :value element)))
+    (when (and (eq (org-element-type element) 'latex-environment)
+               (string-match
+                "\\`[ \t\n]*\\\\begin{\\([^}]+\\)}" source))
+      (let ((environment (match-string 1 source)))
+        (cond
+         ((member environment shuying-org--single-equation-environments)
+          (shuying-org--count-equation-rows source nil))
+         ((member environment shuying-org--multi-equation-environments)
+          (shuying-org--count-equation-rows source t)))))))
+
+(defun shuying-org--fragment-from-element
+    (element &optional equation-number)
+  "Return a Shuying fragment described by Org ELEMENT.
+EQUATION-NUMBER is the next automatic number at the fragment's start."
   (shuying-org--make-fragment
    :beginning (org-element-begin element)
    :end (- (org-element-end element)
            (or (org-element-property :post-blank element) 0))
    :value (substring-no-properties
-           (org-element-property :value element))))
+           (org-element-property :value element))
+   :equation-number equation-number))
 
 (defun shuying-org--fragment-at-position (position)
   "Return the Org LaTeX fragment containing POSITION, or nil."
@@ -103,6 +190,13 @@
        (and (= (overlay-start overlay) beginning)
             (= (overlay-end overlay) end)))
      (shuying-org--fragment-overlays beginning end))))
+
+(defun shuying-org--fragment-by-beginning (fragments beginning)
+  "Return the member of FRAGMENTS starting at BEGINNING, or nil."
+  (seq-find
+   (lambda (fragment)
+     (= (shuying-org-fragment-beginning fragment) beginning))
+   fragments))
 
 (defun shuying-org--modified
     (overlay after _beginning _end &optional _length)
@@ -176,6 +270,8 @@
        (shuying-org--face-color :foreground :foreground)
        :background
        (shuying-org--face-color :background :background)
+       :equation-number
+       (shuying-org-fragment-equation-number fragment)
        ;; Preserve Org's established dvisvgm preview size.  Its process
        ;; definition applies this adjustment before the user scale.
        :scale (* 1.7
@@ -271,14 +367,41 @@ When STALE-ONLY is non-nil, skip overlays whose render inputs still match."
 
 (defun shuying-org--preview-fragment (fragment)
   "Request a preview for Org FRAGMENT."
-  (shuying-org--preview-fragments (list fragment)))
+  (let* ((beginning (shuying-org-fragment-beginning fragment))
+         (catalog-stale (not (shuying-org--catalog-current-p)))
+         (old-fragment
+          (and catalog-stale
+               (shuying-org--fragment-by-beginning
+                shuying-org--fragment-catalog beginning)))
+         (catalog (shuying-org--fragments))
+         (catalog-fragment
+          (shuying-org--fragment-by-beginning catalog beginning)))
+    ;; Point tracking uses a local Org context so editing does not parse the
+    ;; whole buffer on every command.  Rendering resolves that lightweight
+    ;; value against the catalog to obtain document-wide numbering context.
+    (setq fragment (or catalog-fragment fragment))
+    (shuying-org--preview-fragments (list fragment) catalog-stale)
+    (when (and catalog-stale
+               (or (and old-fragment
+                        (shuying-org-fragment-equation-number
+                         old-fragment))
+                   (and catalog-fragment
+                        (shuying-org-fragment-equation-number
+                         catalog-fragment)))
+               (bound-and-true-p shuying-org-mode)
+               (shuying-org--window-state))
+      ;; A changed environment can renumber every environment after it.
+      ;; Rechecking the viewport updates only previews whose hashes changed.
+      (setq shuying-org--visible-window-state nil)
+      (shuying-org--schedule-visible-preview t))))
 
 (defun shuying-org--leave-fragment (fragment)
   "Show or refresh Org FRAGMENT after point leaves it."
   (if-let* ((overlay (shuying-org--fragment-overlay fragment)))
       (let ((artifact
              (overlay-get overlay 'shuying-org-artifact)))
-        (if (and (not (overlay-get overlay 'shuying-org-dirty))
+        (if (and (shuying-org--catalog-current-p)
+                 (not (overlay-get overlay 'shuying-org-dirty))
                  artifact
                  (file-exists-p artifact))
             (shuying-org--show-overlay overlay)
@@ -316,7 +439,8 @@ When STALE-ONLY is non-nil, skip overlays whose render inputs still match."
          (changed-overlays
           (prog1 shuying-org--changed-overlays
             (setq shuying-org--changed-overlays nil)))
-         processed-starts)
+         processed-starts
+         refresh-visible)
     (unless (equal current-start active-position)
       (when active-position
         (if-let* ((active
@@ -329,7 +453,8 @@ When STALE-ONLY is non-nil, skip overlays whose render inputs still match."
           (dolist (overlay
                    (shuying-org--fragment-overlays
                     active-position (1+ active-position)))
-            (delete-overlay overlay))))
+            (delete-overlay overlay)
+            (setq refresh-visible t))))
       (shuying-org--clear-active-fragment)
       (when current
         (shuying-org--enter-fragment current)
@@ -357,25 +482,35 @@ When STALE-ONLY is non-nil, skip overlays whose render inputs still match."
                                (< (point) end)))
                 (push beginning processed-starts)
                 (shuying-org--leave-fragment fragment)))
-          (delete-overlay overlay))))
+          (delete-overlay overlay)
+          (setq refresh-visible t))))
+    (when refresh-visible
+      (setq shuying-org--visible-window-state nil)
+      (shuying-org--schedule-visible-preview t))
     (setq shuying-org--previous-point (point))))
 
 (defun shuying-org--rebuild-fragment-catalog ()
   "Parse and remember every Org LaTeX fragment in the current buffer."
   (save-restriction
     (widen)
-    (setq shuying-org--fragment-catalog
-          (org-element-map
-              (org-element-parse-buffer)
-              '(latex-fragment latex-environment)
-            #'shuying-org--fragment-from-element)
-          shuying-org--catalog-tick
-          (buffer-chars-modified-tick))))
+    (let ((equation-number 1))
+      (setq shuying-org--fragment-catalog
+            (org-element-map
+                (org-element-parse-buffer)
+                '(latex-fragment latex-environment)
+              (lambda (element)
+                (let ((count (shuying-org--equation-count element)))
+                  (prog1
+                      (shuying-org--fragment-from-element
+                       element (and count equation-number))
+                    (when count
+                      (cl-incf equation-number count))))))
+            shuying-org--catalog-tick
+            (buffer-chars-modified-tick)))))
 
 (defun shuying-org--fragments ()
   "Return the current buffer's catalog of Org LaTeX fragments."
-  (unless (equal shuying-org--catalog-tick
-                 (buffer-chars-modified-tick))
+  (unless (shuying-org--catalog-current-p)
     (shuying-org--rebuild-fragment-catalog))
   shuying-org--fragment-catalog)
 

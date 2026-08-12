@@ -42,6 +42,8 @@
                        "test-preamble"))
         (should (equal (shuying-render-spec-engine specification)
                        '("test-latex")))
+        (should-not
+         (shuying-render-spec-equation-number specification))
         (should
          (equal
           (plist-get
@@ -49,6 +51,100 @@
            :converter)
           '("test-dvisvgm")))
         (should (= (shuying-render-spec-scale specification) 1.7))))))
+
+(ert-deftest shuying-org-tracks-equation-numbering-context ()
+  (with-temp-buffer
+    (org-mode)
+    (insert
+     "\\begin{equation}\na = b\n\\end{equation}\n\n"
+     "$x$\n\n"
+     "\\begin{align}\n"
+     "a &= b \\\\\n"
+     "c &= \\begin{aligned}\n"
+     "  x & = y \\\\\n"
+     "  z & = w\n"
+     "\\end{aligned} \\nonumber \\\\\n"
+     "d &= e \\tag{manual} \\\\\n"
+     "% A commented \\\\ does not start another row.\n"
+     "f &= g\n"
+     "\\end{align}\n\n"
+     "\\begin{equation}\nj = k \\tag{manual}\n\\end{equation}\n\n"
+     "\\begin{multline}\np + q \\\\\n"
+     "+ r = s\n\\end{multline}\n\n"
+     "\\begin{equation}\nh = i\n\\end{equation}\n")
+    (should
+     (equal
+      (mapcar #'shuying-org-fragment-equation-number
+              (shuying-org--fragments))
+      '(1 nil 2 4 4 5)))))
+
+(ert-deftest shuying-org-does-not-number-starred-environments ()
+  (with-temp-buffer
+    (org-mode)
+    (insert
+     "\\begin{align*}\na &= b\n\\end{align*}\n\n"
+     "\\begin{displaymath}\nx = y\n\\end{displaymath}\n\n"
+     "\\begin{equation}\nc = d\n\\end{equation}\n")
+    (should
+     (equal
+      (mapcar #'shuying-org-fragment-equation-number
+              (shuying-org--fragments))
+      '(nil nil 1)))))
+
+(ert-deftest shuying-org-adds-equation-number-to-render-specification ()
+  (with-temp-buffer
+    (org-mode)
+    (insert "\\begin{equation}\nx = y\n\\end{equation}\n")
+    (let ((specification
+           (shuying-org--render-spec
+            (car (shuying-org--fragments)) "test-preamble")))
+      (should
+       (= (shuying-render-spec-equation-number specification) 1)))))
+
+(ert-deftest shuying-org-renumbers-after-an-earlier-environment-changes ()
+  (with-temp-buffer
+    (org-mode)
+    (insert
+     "\\begin{equation}\nx = y\n\\end{equation}\n\n"
+     "\\begin{equation}\ny = z\n\\end{equation}\n")
+    (should
+     (equal
+      (mapcar #'shuying-org-fragment-equation-number
+              (shuying-org--fragments))
+      '(1 2)))
+    (goto-char (point-min))
+    (search-forward "x = y")
+    (insert " \\tag{manual}")
+    (should
+     (equal
+      (mapcar #'shuying-org-fragment-equation-number
+              (shuying-org--fragments))
+      '(1 1)))))
+
+(ert-deftest shuying-org-reschedules-visible-numbering-after-an-edit ()
+  (with-temp-buffer
+    (org-mode)
+    (insert
+     "\\begin{equation}\nx = y\n\\end{equation}\n\n"
+     "\\begin{equation}\ny = z\n\\end{equation}\n")
+    (let ((fragment (car (shuying-org--fragments)))
+          scheduled)
+      (cl-letf (((symbol-function 'shuying-org--preview-fragments)
+                 #'ignore)
+                ((symbol-function 'shuying-org--window-state)
+                 (lambda () 'visible))
+                ((symbol-function 'shuying-org--schedule-visible-preview)
+                 (lambda (&optional immediate)
+                   (setq scheduled immediate))))
+        (setq shuying-org-mode t
+              shuying-org--visible-window-state 'visible)
+        (goto-char (shuying-org-fragment-beginning fragment))
+        (search-forward "x = y")
+        (insert " \\tag{manual}")
+        (shuying-org--preview-fragment
+         (shuying-org--fragment-at-position (1- (point))))
+        (should scheduled)
+        (should-not shuying-org--visible-window-state)))))
 
 (ert-deftest shuying-org-selects-fragments-from-disjoint-ranges ()
   (with-temp-buffer

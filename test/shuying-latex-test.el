@@ -32,6 +32,22 @@
      (equal (shuying-latex-batch-key first)
             (shuying-latex-batch-key second)))))
 
+(ert-deftest shuying-latex-sets-the-equation-counter-before-a-fragment ()
+  (let ((specification
+         (shuying-latex-test--spec
+          "\\begin{equation}x = y\\end{equation}")))
+    (setf (shuying-render-spec-equation-number specification) 7)
+    (with-temp-buffer
+      (shuying-latex--insert-fragment specification)
+      (should
+       (equal
+        (buffer-string)
+        (concat
+         "\n\\begin{preview}\n"
+         "\\setcounter{equation}{6}\n"
+         "\\begin{equation}x = y\\end{equation}"
+         "\n\\end{preview}\n"))))))
+
 (ert-deftest shuying-latex-renders-a-batch-with-two-processes ()
   (let* ((root (make-temp-file "shuying-latex-test-" t))
          (shuying-work-directory (expand-file-name "work" root))
@@ -163,6 +179,63 @@
             (with-temp-buffer
               (insert-file-contents (car result))
               (should (search-forward "<svg" nil t)))))
+      (delete-directory root t))))
+
+(ert-deftest shuying-latex-renders-equations-from-their-document-numbers ()
+  (unless (and (executable-find "latex")
+               (executable-find "dvisvgm")
+               (executable-find "kpsewhich")
+               (= (call-process "kpsewhich" nil nil nil "preview.sty")
+                  0))
+    (ert-skip "The LaTeX preview toolchain is unavailable"))
+  (let* ((root (make-temp-file "shuying-latex-test-" t))
+         (shuying-cache-directory (expand-file-name "cache" root))
+         (shuying-work-directory (expand-file-name "work" root))
+         (shuying-backends nil)
+         (shuying--pending-jobs (make-hash-table :test #'equal))
+         (first
+          (shuying-latex-test--spec
+           "\\begin{equation}x = y\\end{equation}"))
+         (second
+          (shuying-latex-test--spec
+           "\\begin{equation}x = y\\end{equation}"))
+         results)
+    (setf (shuying-render-spec-equation-number first) 2
+          (shuying-render-spec-equation-number second) 11)
+    (unwind-protect
+        (progn
+          (shuying-register-backend
+           'shuying-latex
+           #'shuying-latex-render-batch
+           #'shuying-latex-batch-key)
+          (shuying-render-batch
+           (cl-mapcar
+            (lambda (number specification)
+              (cons specification
+                    (lambda (artifact error-data)
+                      (push (list number artifact error-data)
+                            results))))
+            '(2 11) (list first second)))
+          (with-timeout
+              (30 (ert-fail "Timed out rendering numbered equations"))
+            (while (< (length results) 2)
+              (accept-process-output nil 0.05)))
+          (should (seq-every-p #'null (mapcar #'caddr results)))
+          (let ((images
+                 (mapcar
+                  (lambda (result)
+                    (with-temp-buffer
+                      (insert-file-contents (cadr result))
+                      (cons
+                       (car result)
+                       (replace-regexp-in-string
+                        "id='page[0-9]+'" "id='page'"
+                        (buffer-string)))))
+                  results)))
+            ;; These specifications differ only in numbering context, so
+            ;; different SVGs confirm that LaTeX used the supplied counter.
+            (should-not
+             (equal (alist-get 2 images) (alist-get 11 images)))))
       (delete-directory root t))))
 
 ;;; shuying-latex-test.el ends here
