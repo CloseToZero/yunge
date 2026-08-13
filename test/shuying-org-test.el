@@ -27,6 +27,19 @@
      (overlay-get overlay 'shuying-org))
    (overlays-in (point-min) (point-max))))
 
+(ert-deftest shuying-org-finds-only-displayed-previews-at-position ()
+  (with-temp-buffer
+    (insert "before $x$ after")
+    (let ((overlay (make-overlay 8 11)))
+      (overlay-put overlay 'shuying-org t)
+      (overlay-put overlay 'display 'image)
+      (should (eq (shuying-org-preview-overlay-at 8) overlay))
+      (should (eq (shuying-org-preview-overlay-at 9) overlay))
+      (should-not (shuying-org-preview-overlay-at 7))
+      (should-not (shuying-org-preview-overlay-at 11))
+      (overlay-put overlay 'display nil)
+      (should-not (shuying-org-preview-overlay-at 9)))))
+
 (ert-deftest shuying-org-rechecks-viewport-after-displaying-an-image ()
   (with-temp-buffer
     (insert "formula")

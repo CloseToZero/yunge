@@ -39,6 +39,10 @@
 (declare-function org-up-heading-safe "org" ())
 (declare-function org-edit-src-abort "org-src" ())
 (declare-function org-edit-src-exit "org-src" ())
+(declare-function shuying-org-preview-overlay-at
+                  "shuying-org" (position))
+(declare-function yunge-avy-make-projection
+                  "yunge-avy" (&rest arguments))
 (declare-function yunge-jump-history-track-command
                   "yunge-jump-history" (command))
 
@@ -51,10 +55,27 @@
 (defvar org-src-mode-map)
 (defvar evil-move-beyond-eol)
 (defvar evil-respect-visual-line-mode)
+(defvar yunge-avy-candidate-project-functions)
 
 (autoload 'shuying-org-mode "shuying-org" nil t)
 (autoload 'shuying-org-preview "shuying-org" nil t)
 (autoload 'shuying-org-preview-buffer "shuying-org" nil t)
+
+(defun yunge-org--avy-shuying-projection (beginning end _window)
+  "Project a Shuying preview containing BEGINNING through END for Avy."
+  (when-let* (((fboundp 'shuying-org-preview-overlay-at))
+              (overlay (shuying-org-preview-overlay-at beginning))
+              ((<= end (overlay-end overlay))))
+    (let ((anchor (overlay-start overlay)))
+      (yunge-avy-make-projection
+       :identity overlay
+       :beginning anchor
+       :end (min (1+ anchor) (overlay-end overlay))
+       :target beginning))))
+
+(with-eval-after-load 'yunge-avy
+  (add-hook 'yunge-avy-candidate-project-functions
+            #'yunge-org--avy-shuying-projection))
 
 (add-hook 'org-mode-hook #'shuying-org-mode)
 

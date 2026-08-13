@@ -4,6 +4,17 @@
 
 (require 'yunge-test-helper)
 
+(defvar yunge-avy-candidate-project-functions)
+
+(declare-function yunge-avy-projection-beginning
+                  "yunge-avy" (projection))
+(declare-function yunge-avy-projection-end
+                  "yunge-avy" (projection))
+(declare-function yunge-avy-projection-identity
+                  "yunge-avy" (projection))
+(declare-function yunge-avy-projection-target
+                  "yunge-avy" (projection))
+
 (defun yunge-org-test--load-config ()
   "Load the Org configuration after enabling Evil."
   (yunge-test-enable-evil)
@@ -11,6 +22,25 @@
 
 (yunge-test-deftest-lazy-load yunge-org
   (org ob-core ol org-id shuying shuying-org which-key))
+
+(ert-deftest yunge-org-registers-shuying-as-an-avy-projection-provider ()
+  (yunge-org-test--load-config)
+  (yunge-test-load-package-config 'yunge-avy)
+  (require 'shuying-org)
+  (should (memq #'yunge-org--avy-shuying-projection
+                yunge-avy-candidate-project-functions))
+  (with-temp-buffer
+    (insert "before $x$ after")
+    (let ((overlay (make-overlay 8 11)))
+      (overlay-put overlay 'shuying-org t)
+      (overlay-put overlay 'display 'image)
+      (let ((projection
+             (yunge-org--avy-shuying-projection 9 10 nil)))
+        (should (eq (yunge-avy-projection-identity projection)
+                    overlay))
+        (should (= (yunge-avy-projection-beginning projection) 8))
+        (should (= (yunge-avy-projection-end projection) 9))
+        (should (= (yunge-avy-projection-target projection) 9))))))
 
 (ert-deftest yunge-org-configures-structural-evil-bindings ()
   (yunge-org-test--load-config)

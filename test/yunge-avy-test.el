@@ -4,11 +4,34 @@
 
 (require 'yunge-test-helper)
 
+(defvar avy-action)
 (defvar avy-all-windows)
 (defvar avy-keys)
+(defvar avy-last-candidates)
 (defvar avy-single-candidate-jump)
+(defvar yunge-avy-candidate-project-functions)
 
+(declare-function yunge-avy--jump "yunge-avy" (regexp))
 (declare-function yunge-avy--query-regexp "yunge-avy" (text))
+(declare-function yunge-avy-make-projection
+                  "yunge-avy" (&rest arguments))
+
+(defun yunge-avy-test--overlay-projection (beginning end _window)
+  "Project a test display overlay containing BEGINNING through END."
+  (when-let* ((overlay
+               (seq-find
+                (lambda (candidate)
+                  (and
+                   (overlay-get candidate 'yunge-avy-test-projection)
+                   (overlay-get candidate 'display)))
+                (overlays-at beginning)))
+              ((<= end (overlay-end overlay))))
+    (let ((anchor (overlay-start overlay)))
+      (yunge-avy-make-projection
+       :identity overlay
+       :beginning anchor
+       :end (min (1+ anchor) (overlay-end overlay))
+       :target beginning))))
 
 (defun yunge-avy-test--load-config ()
   "Load the Avy configuration synchronously for command tests."
@@ -80,6 +103,134 @@
                   (lambda (function) (funcall function))))
               (yunge-avy-jump-to-text "中文")))
           (should (= (point) 6)))
+      (when (buffer-live-p buffer)
+        (kill-buffer buffer)))))
+
+(ert-deftest yunge-avy-jump-to-text-projects-rendered-source ()
+  (yunge-avy-test--load-config)
+  (require 'avy)
+  (let ((buffer (generate-new-buffer " *yunge-avy-projection*")))
+    (unwind-protect
+        (save-window-excursion
+          (switch-to-buffer buffer)
+          (insert "$alpha + alpha$ outside alpha $alpha$")
+          (goto-char (point-min))
+          (let* ((first-beginning (point-min))
+                 (first-end (1- (search-forward "$ ")))
+                 (normal-target (progn (search-forward "alpha")
+                                       (match-beginning 0)))
+                 (second-beginning (progn (search-forward "$")
+                                          (1- (point))))
+                 (second-target (progn (search-forward "alpha")
+                                       (match-beginning 0)))
+                 (second-end (progn (search-forward "$") (point)))
+                 (first (make-overlay first-beginning first-end))
+                 (second (make-overlay second-beginning second-end)))
+            (dolist (overlay (list first second))
+              (overlay-put overlay 'yunge-avy-test-projection t)
+              (overlay-put overlay 'display "[SVG]"))
+            (goto-char (point-min))
+            (let ((avy-all-windows nil)
+                  (avy-keys '(?a ?s ?d))
+                  (avy-single-candidate-jump nil)
+                  (yunge-avy-candidate-project-functions
+                   '(yunge-avy-test--overlay-projection))
+                  (unread-command-events '(?d)))
+              (cl-letf
+                  (((symbol-function
+                     'yunge-input-source-call-with-ascii)
+                    (lambda (function) (funcall function))))
+                (yunge-avy-jump-to-text "alpha")))
+            (should (= (point) second-target))
+            (should (equal (mapcar #'caar avy-last-candidates)
+                           (list first-beginning normal-target
+                                 second-beginning)))
+            (should (equal (overlay-get first 'display) "[SVG]"))
+            (should (equal (overlay-get second 'display) "[SVG]"))))
+      (when (buffer-live-p buffer)
+        (kill-buffer buffer)))))
+
+(ert-deftest yunge-avy-projected-source-dispatches-at-the-real-match ()
+  (yunge-avy-test--load-config)
+  (require 'avy)
+  (let ((buffer (generate-new-buffer " *yunge-avy-projection-action*")))
+    (unwind-protect
+        (save-window-excursion
+          (switch-to-buffer buffer)
+          (insert "$alpha + alpha$")
+          (let ((overlay (make-overlay (point-min) (point-max))))
+            (overlay-put overlay 'yunge-avy-test-projection t)
+            (overlay-put overlay 'display "[SVG]")
+            (goto-char (point-max))
+            (let ((avy-all-windows nil)
+                  (avy-keys '(?a ?s))
+                  (avy-single-candidate-jump nil)
+                  (yunge-avy-candidate-project-functions
+                   '(yunge-avy-test--overlay-projection))
+                  (unread-command-events '(?m ?a)))
+              (cl-letf
+                  (((symbol-function
+                     'yunge-input-source-call-with-ascii)
+                    (lambda (function) (funcall function))))
+                (yunge-avy-jump-to-text "alpha")))
+            (should (= (mark) 2))
+            (should (equal (overlay-get overlay 'display) "[SVG]"))))
+      (when (buffer-live-p buffer)
+        (kill-buffer buffer)))))
+
+(ert-deftest yunge-avy-projected-source-preserves-a-preselected-action ()
+  (yunge-avy-test--load-config)
+  (require 'avy)
+  (let ((buffer (generate-new-buffer " *yunge-avy-projection-action*"))
+        target)
+    (unwind-protect
+        (save-window-excursion
+          (switch-to-buffer buffer)
+          (insert "$alpha$")
+          (let ((overlay (make-overlay (point-min) (point-max))))
+            (overlay-put overlay 'yunge-avy-test-projection t)
+            (overlay-put overlay 'display "[SVG]")
+            (goto-char (point-max))
+            (let ((avy-action (lambda (position) (setq target position)))
+                  (avy-all-windows nil)
+                  (avy-single-candidate-jump t)
+                  (yunge-avy-candidate-project-functions
+                   '(yunge-avy-test--overlay-projection)))
+              (yunge-avy--jump "alpha"))
+            (should (= target 2))
+            (should (equal (overlay-get overlay 'display) "[SVG]"))))
+      (when (buffer-live-p buffer)
+        (kill-buffer buffer)))))
+
+(ert-deftest yunge-avy-cancel-keeps-projected-displays-intact ()
+  (yunge-avy-test--load-config)
+  (require 'avy)
+  (let ((buffer (generate-new-buffer " *yunge-avy-projection-cancel*")))
+    (unwind-protect
+        (save-window-excursion
+          (switch-to-buffer buffer)
+          (insert "$alpha$ and $alpha$")
+          (let ((first (make-overlay 1 8))
+                (second (make-overlay 13 20)))
+            (dolist (overlay (list first second))
+              (overlay-put overlay 'yunge-avy-test-projection t)
+              (overlay-put overlay 'display "[SVG]"))
+            (goto-char (point-max))
+            (let ((origin (point))
+                  (avy-all-windows nil)
+                  (avy-keys '(?a ?s))
+                  (avy-single-candidate-jump nil)
+                  (yunge-avy-candidate-project-functions
+                   '(yunge-avy-test--overlay-projection))
+                  (unread-command-events '(?\e)))
+              (cl-letf
+                  (((symbol-function
+                     'yunge-input-source-call-with-ascii)
+                    (lambda (function) (funcall function))))
+                (yunge-avy-jump-to-text "alpha"))
+              (should (= (point) origin)))
+            (should (equal (overlay-get first 'display) "[SVG]"))
+            (should (equal (overlay-get second 'display) "[SVG]"))))
       (when (buffer-live-p buffer)
         (kill-buffer buffer)))))
 

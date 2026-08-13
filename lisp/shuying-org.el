@@ -181,6 +181,15 @@ EQUATION-NUMBER is the next automatic number at the fragment's start."
      (overlay-get overlay 'shuying-org))
    (overlays-in beginning end)))
 
+(defun shuying-org-preview-overlay-at (position)
+  "Return the displayed Shuying preview overlay containing POSITION.
+Return nil when POSITION has no preview or its source is currently visible."
+  (seq-find
+   (lambda (overlay)
+     (and (overlay-get overlay 'shuying-org)
+          (overlay-get overlay 'display)))
+   (overlays-at position)))
+
 (defun shuying-org--fragment-overlay (fragment)
   "Return the Shuying overlay for FRAGMENT, or nil."
   (pcase-let ((`(,beginning . ,end)
