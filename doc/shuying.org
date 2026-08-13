@@ -213,10 +213,39 @@ miktex packages install preview mylatexformat amsmath amsfonts graphics
 miktex packages install mathtools xcolor ulem
 #+end_src
 
+On Windows, =M-x shuying-setup= performs this setup explicitly.  It downloads
+the current official installer when MiKTeX is absent, verifies its published
+SHA-256, verifies its Authenticode signature when one is present, requests a
+private unattended install, installs the package baseline above, and verifies
+every required program and file.  An unsigned installer is accepted only
+after its SHA-256 matches the digest published alongside it on MiKTeX's HTTPS
+download page; a present but invalid signature is rejected.  The command is
+never called during startup or preview rendering.  Other platforms are
+rejected until their setup paths can be tested.
+
+Package installation is idempotent: each package is queried immediately
+before installation and an existing package is skipped.  This avoids treating
+MiKTeX's nonzero "package is already installed" result as a setup failure,
+including when an earlier package installed a later one as a dependency.
+
+Each invocation uses a private temporary directory.  The directory and the
+downloaded installer are removed after success, ordinary failure, or process
+startup failure, while the =*Shuying setup*= buffer is retained for diagnosis.
+A cancelled Windows installer can hold its downloaded executable briefly, so
+both the setup process and Emacs retry cleanup before reporting a leftover.
+PowerShell and native-tool output is normalized to UTF-8 before Emacs displays
+the log.  Setup does not uninstall MiKTeX or roll back packages after a later
+stage fails: some state may have existed before the command, so removing it
+would be unsafe.  The operation is repeatable and a later invocation continues
+from the installed state.  If Emacs itself is forcibly terminated, its
+temporary directory may remain below =var/shuying/setup/= and can be removed
+manually.
+
 MiKTeX can install a missing package on demand, but unattended preview jobs
 must not wait behind an installation dialog.  Either install the baseline
 above or configure missing-package installation to =Always= in MiKTeX Console.
-Restart Emacs after the installer changes =PATH=.
+The setup command refreshes the current Emacs process after the installer
+changes =PATH=; restart Emacs if manual installation changes it instead.
 
 ** macOS
 

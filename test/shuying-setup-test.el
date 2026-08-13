@@ -1,0 +1,205 @@
+;;; shuying-setup-test.el --- Shuying setup tests -*- lexical-binding: t; -*-
+;; SPDX-FileCopyrightText: 2026 Chen Zhexuan
+;; SPDX-License-Identifier: MIT
+
+(require 'yunge-test-helper)
+(require 'shuying-setup)
+
+(ert-deftest shuying-setup-dispatches-to-windows ()
+  (let ((system-type 'windows-nt)
+        called)
+    (cl-letf (((symbol-function 'shuying-setup--windows)
+               (lambda () (setq called t))))
+      (shuying-setup))
+    (should called)))
+
+(ert-deftest shuying-setup-rejects-untested-platforms ()
+  (let ((system-type 'gnu/linux))
+    (should-error (shuying-setup) :type 'user-error)))
+
+(ert-deftest shuying-setup-windows-script-keeps-safety-contracts ()
+  (let ((script (shuying-setup--script)))
+    (with-temp-buffer
+      (insert-file-contents script)
+      (dolist (text '("[Console]::OutputEncoding = $utf8"
+                      "$Program @Arguments 2>&1"
+                      "Test-MiktexPackageInstalled"
+                      "Already installed: $package"
+                      "SignatureStatus]::NotSigned"
+                      "the official SHA-256 matched"
+                      "Authenticode verification failed"))
+        (goto-char (point-min))
+        (should (search-forward text nil t))))))
+
+(ert-deftest shuying-setup-windows-starts-an-explicit-process ()
+  (let ((shuying-setup--process nil)
+        arguments
+        process-property
+        (buffer (get-buffer-create shuying-setup--log-buffer-name)))
+    (unwind-protect
+        (cl-letf (((symbol-function 'process-live-p) #'ignore)
+                  ((symbol-function 'shuying-setup--powershell)
+                   (lambda () "C:/Windows/powershell.exe"))
+                  ((symbol-function 'shuying-setup--script)
+                   (lambda () "C:/config/script/setup.ps1"))
+                  ((symbol-function 'file-readable-p)
+                   (lambda (_file) t))
+                  ((symbol-function 'yes-or-no-p)
+                   (lambda (&rest _arguments) t))
+                  ((symbol-function 'shuying-setup--work-directory)
+                   (lambda () "C:/temp/shuying-run"))
+                  ((symbol-function 'make-process)
+                   (lambda (&rest plist)
+                     (setq arguments plist)
+                     'setup-process))
+                  ((symbol-function 'process-status)
+                   (lambda (_process) 'run))
+                  ((symbol-function 'process-get)
+                   (lambda (_process _key) nil))
+                  ((symbol-function 'process-put)
+                   (lambda (process key value)
+                     (setq process-property (list process key value))))
+                  ((symbol-function 'display-buffer) #'ignore))
+          (should (eq (shuying-setup--windows) 'setup-process))
+          (should (eq shuying-setup--process 'setup-process))
+          (should
+           (equal
+            (plist-get arguments :command)
+            `("C:/Windows/powershell.exe"
+              "-NoLogo" "-NoProfile" "-NonInteractive"
+              "-ExecutionPolicy" "Bypass"
+              "-File" "C:/config/script/setup.ps1"
+              "-WorkDirectory" "C:/temp/shuying-run"
+              "-WorkRoot"
+              ,(yunge-var-subdirectory "shuying/setup")
+              "-DownloadPage" "https://miktex.org/download")))
+          (should
+           (equal process-property
+                  '(setup-process shuying-setup-work-directory
+                                  "C:/temp/shuying-run"))))
+      (kill-buffer buffer))))
+
+(ert-deftest shuying-setup-windows-cleans-up-process-start-failure ()
+  (let ((shuying-setup--process nil)
+        cleaned
+        (buffer (get-buffer-create shuying-setup--log-buffer-name)))
+    (unwind-protect
+        (cl-letf (((symbol-function 'process-live-p) #'ignore)
+                  ((symbol-function 'shuying-setup--powershell)
+                   (lambda () "powershell.exe"))
+                  ((symbol-function 'shuying-setup--script)
+                   (lambda () "setup.ps1"))
+                  ((symbol-function 'file-readable-p)
+                   (lambda (_file) t))
+                  ((symbol-function 'yes-or-no-p)
+                   (lambda (&rest _arguments) t))
+                  ((symbol-function 'shuying-setup--work-directory)
+                   (lambda () "C:/temp/failed-run"))
+                  ((symbol-function 'make-process)
+                   (lambda (&rest _plist) (error "could not start")))
+                  ((symbol-function 'shuying-setup--cleanup)
+                   (lambda (directory) (setq cleaned directory))))
+          (should-error (shuying-setup--windows))
+          (should (equal cleaned "C:/temp/failed-run")))
+      (kill-buffer buffer))))
+
+(ert-deftest shuying-setup-cleans-only-owned-work-directories ()
+  (let* ((root (make-temp-file "shuying-setup-cleanup-" t))
+         (yunge-var-directory (file-name-as-directory root))
+         (setup-root (yunge-var-subdirectory "shuying/setup"))
+         (owned (expand-file-name "run-owned" setup-root))
+         (outside (expand-file-name "other" root)))
+    (unwind-protect
+        (progn
+          (make-directory owned t)
+          (make-directory outside t)
+          (should (shuying-setup--owned-work-directory-p owned))
+          (should-not (shuying-setup--owned-work-directory-p outside))
+          (shuying-setup--cleanup owned)
+          (should-not (file-exists-p owned))
+          (should (file-directory-p outside)))
+      (delete-directory root t))))
+
+(ert-deftest shuying-setup-retries-a-sharing-violation-without-blocking ()
+  (let* ((root (make-temp-file "shuying-setup-retry-" t))
+         (yunge-var-directory (file-name-as-directory root))
+         (directory
+          (expand-file-name
+           "run-locked" (yunge-var-subdirectory "shuying/setup")))
+         timer-arguments)
+    (unwind-protect
+        (progn
+          (make-directory directory t)
+          (cl-letf (((symbol-function 'delete-directory)
+                     (lambda (&rest _arguments)
+                       (signal 'file-error '("sharing violation"))))
+                    ((symbol-function 'run-at-time)
+                     (lambda (&rest arguments)
+                       (setq timer-arguments arguments))))
+            (shuying-setup--cleanup directory))
+          (should
+           (equal timer-arguments
+                  (list 0.5 nil #'shuying-setup--cleanup directory 3))))
+      (delete-directory root t))))
+
+(ert-deftest shuying-setup-sentinel-refreshes-path-and-cleans-up ()
+  (let ((buffer (get-buffer-create " *shuying-setup-sentinel-test*"))
+        (shuying-setup--process 'setup-process)
+        installed
+        cleaned)
+    (unwind-protect
+        (progn
+          (with-current-buffer buffer
+            (erase-buffer)
+            (insert
+             "SHUYING_MIKTEX_BIN:QzovTWlLVGVYL21pa3RleC9iaW4veDY0\n"))
+          (cl-letf (((symbol-function 'process-status)
+                     (lambda (_process) 'exit))
+                    ((symbol-function 'process-exit-status)
+                     (lambda (_process) 0))
+                    ((symbol-function 'process-buffer)
+                     (lambda (_process) buffer))
+                    ((symbol-function 'process-get)
+                     (lambda (_process key)
+                       (and (eq key 'shuying-setup-work-directory)
+                            "C:/temp/setup-run")))
+                    ((symbol-function 'process-put) #'ignore)
+                    ((symbol-function 'shuying-setup--add-exec-directory)
+                     (lambda (directory) (setq installed directory)))
+                    ((symbol-function 'shuying-setup--cleanup)
+                     (lambda (directory) (setq cleaned directory))))
+            (shuying-setup--sentinel 'setup-process "finished\n"))
+          (should-not shuying-setup--process)
+          (should (equal installed "C:/MiKTeX/miktex/bin/x64"))
+          (should (equal cleaned "C:/temp/setup-run")))
+      (kill-buffer buffer))))
+
+(ert-deftest shuying-setup-sentinel-preserves-log-on-failure ()
+  (let ((buffer (get-buffer-create " *shuying-setup-log-test*"))
+        (shuying-setup--process 'setup-process)
+        displayed
+        cleaned)
+    (unwind-protect
+        (cl-letf (((symbol-function 'process-status)
+                   (lambda (_process) 'exit))
+                  ((symbol-function 'process-exit-status)
+                   (lambda (_process) 1))
+                  ((symbol-function 'process-buffer)
+                   (lambda (_process) buffer))
+                  ((symbol-function 'process-get)
+                   (lambda (_process key)
+                     (and (eq key 'shuying-setup-work-directory)
+                          "C:/temp/setup-run")))
+                  ((symbol-function 'process-put) #'ignore)
+                  ((symbol-function 'display-buffer)
+                   (lambda (candidate) (setq displayed candidate)))
+                  ((symbol-function 'shuying-setup--cleanup)
+                   (lambda (directory) (setq cleaned directory))))
+          (shuying-setup--sentinel 'setup-process "failed\n")
+          (should (eq displayed buffer))
+          (should (equal cleaned "C:/temp/setup-run")))
+      (kill-buffer buffer))))
+
+(provide 'shuying-setup-test)
+
+;;; shuying-setup-test.el ends here
