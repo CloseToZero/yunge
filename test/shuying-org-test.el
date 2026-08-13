@@ -712,6 +712,42 @@
                  (point-min) (point-max)))))))
       (delete-directory root t))))
 
+(ert-deftest shuying-org-silences-unavailable-automatic-previews ()
+  (let* ((root (make-temp-file "shuying-org-" t))
+         (shuying-cache-directory root)
+         (shuying-backends nil)
+         (shuying--pending-jobs (make-hash-table :test #'equal))
+         warnings)
+    (unwind-protect
+        (progn
+          (shuying-register-backend
+           'shuying-latex
+           (lambda (requests complete)
+             (dolist (request requests)
+               (funcall complete request
+                        '(shuying-latex-unavailable
+                          "LaTeX engine executable not found: latex")))))
+          (cl-letf (((symbol-function 'display-warning)
+                     (lambda (&rest warning)
+                       (push warning warnings))))
+            (with-temp-buffer
+              (org-mode)
+              (insert "$x$")
+              (let ((fragments (shuying-org--fragments)))
+                (shuying-org--preview-fragments fragments nil t)
+                (should-not warnings)
+                (should
+                 (eq
+                  (car
+                   (overlay-get
+                    (car (shuying-org--fragment-overlays
+                          (point-min) (point-max)))
+                    'shuying-org-error))
+                  'shuying-latex-unavailable))
+                (shuying-org--preview-fragments fragments)
+                (should (= (length warnings) 1))))))
+      (delete-directory root t))))
+
 (ert-deftest shuying-org-rejects-an-older-render-result ()
   (let* ((root (make-temp-file "shuying-org-" t))
          (shuying-cache-directory root)

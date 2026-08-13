@@ -54,6 +54,122 @@
      (equal (shuying-latex--format-key first engine)
             (shuying-latex--format-key first '("other-latex"))))))
 
+(ert-deftest shuying-latex-uses-a-cache-hit-without-the-toolchain ()
+  (let* ((root (make-temp-file "shuying-latex-test-" t))
+         (shuying-cache-directory root)
+         (shuying-backends nil)
+         (shuying--pending-jobs (make-hash-table :test #'equal))
+         (specification (shuying-latex-test--spec "$x$"))
+         (artifact-file (shuying-artifact-file specification))
+         (metadata-file
+          (shuying--artifact-metadata-file artifact-file))
+         result)
+    (unwind-protect
+        (progn
+          (with-temp-file artifact-file
+            (insert "cached"))
+          (with-temp-file metadata-file
+            (insert "(:height 1.0 :depth 0.0)"))
+          (shuying-register-backend
+           'shuying-latex
+           #'shuying-latex-render-batch
+           #'shuying-latex-batch-key)
+          (cl-letf (((symbol-function 'executable-find)
+                     (lambda (&rest _arguments)
+                       (ert-fail "A cache hit checked the toolchain"))))
+            (shuying-render
+             specification
+             (lambda (artifact error-data)
+               (setq result (cons artifact error-data)))))
+          (should-not (cdr result))
+          (should
+           (equal (shuying-artifact-path (car result)) artifact-file)))
+      (delete-directory root t))))
+
+(ert-deftest shuying-latex-rejects-a-missing-engine-before-starting-work ()
+  (let* ((root (make-temp-file "shuying-latex-test-" t))
+         (shuying-cache-directory (expand-file-name "cache" root))
+         (shuying-work-directory (expand-file-name "work" root))
+         (shuying-backends nil)
+         (shuying--pending-jobs (make-hash-table :test #'equal))
+         (shuying--waiting-batches nil)
+         (shuying--active-batch-count 0)
+         (shuying--scheduler-running nil)
+         process-started
+         result)
+    (unwind-protect
+        (progn
+          (shuying-register-backend
+           'shuying-latex
+           #'shuying-latex-render-batch
+           #'shuying-latex-batch-key)
+          (cl-letf (((symbol-function 'executable-find) #'ignore)
+                    ((symbol-function 'make-process)
+                     (lambda (&rest _arguments)
+                       (setq process-started t)
+                       (ert-fail "A process was started without LaTeX"))))
+            (shuying-render
+             (shuying-latex-test--spec "$x$")
+             (lambda (artifact error-data)
+               (setq result (list artifact error-data)))))
+          (should-not (car result))
+          (should
+           (eq (car (cadr result)) 'shuying-latex-unavailable))
+          (should
+           (string-match-p
+            "LaTeX engine executable not found: latex"
+            (error-message-string (cadr result))))
+          (should
+           (string-match-p
+            (if (eq system-type 'windows-nt)
+                "run M-x shuying-setup"
+              "install it or add it to exec-path")
+            (error-message-string (cadr result))))
+          (should-not process-started)
+          (should-not (file-exists-p shuying-work-directory))
+          (should (zerop (hash-table-count shuying--pending-jobs))))
+      (delete-directory root t))))
+
+(ert-deftest shuying-latex-rejects-a-missing-converter-before-compiling ()
+  (let* ((root (make-temp-file "shuying-latex-test-" t))
+         (shuying-cache-directory (expand-file-name "cache" root))
+         (shuying-work-directory (expand-file-name "work" root))
+         (shuying-backends nil)
+         (shuying--pending-jobs (make-hash-table :test #'equal))
+         (shuying--waiting-batches nil)
+         (shuying--active-batch-count 0)
+         (shuying--scheduler-running nil)
+         process-started
+         result)
+    (unwind-protect
+        (progn
+          (shuying-register-backend
+           'shuying-latex
+           #'shuying-latex-render-batch
+           #'shuying-latex-batch-key)
+          (cl-letf
+              (((symbol-function 'executable-find)
+                (lambda (program)
+                  (and (equal program "latex") "C:/tex/latex.exe")))
+               ((symbol-function 'make-process)
+                (lambda (&rest _arguments)
+                  (setq process-started t)
+                  (ert-fail "LaTeX started without dvisvgm"))))
+            (shuying-render
+             (shuying-latex-test--spec "$x$")
+             (lambda (artifact error-data)
+               (setq result (list artifact error-data)))))
+          (should-not (car result))
+          (should
+           (eq (car (cadr result)) 'shuying-latex-unavailable))
+          (should
+           (string-match-p
+            "LaTeX converter executable not found: dvisvgm"
+            (error-message-string (cadr result))))
+          (should-not process-started)
+          (should-not (file-exists-p shuying-work-directory)))
+      (delete-directory root t))))
+
 (ert-deftest shuying-latex-extracts-unscaled-geometry-in-em-units ()
   (with-temp-buffer
     (insert
@@ -297,7 +413,11 @@
          results)
     (unwind-protect
         (cl-letf
-            (((symbol-function 'make-process)
+            (((symbol-function 'executable-find)
+              (lambda (program)
+                (expand-file-name
+                 (concat program ".exe") "C:/tex")))
+             ((symbol-function 'make-process)
               (lambda (&rest arguments)
                 (let ((process (make-symbol "process")))
                   (push default-directory process-directories)

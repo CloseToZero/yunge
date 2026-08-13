@@ -8,6 +8,9 @@
 (require 'subr-x)
 
 (define-error 'shuying-latex-error "Shuying LaTeX rendering failed")
+(define-error 'shuying-latex-unavailable
+  "Shuying LaTeX dependency unavailable"
+  'shuying-latex-error)
 
 (defcustom shuying-latex-engine-command '("latex")
   "Command prefix used to compile Shuying preview documents."
@@ -48,6 +51,7 @@ preamble with each batch instead."
   tex-file
   dvi-file
   engine
+  converter
   format-key
   format-file
   suspect-format-file)
@@ -148,9 +152,27 @@ Load FORMAT-FILE instead of writing the full preamble when it is non-nil."
 
 (defun shuying-latex--command (value name)
   "Validate command VALUE used as NAME and return it."
-  (unless (and (consp value) (seq-every-p #'stringp value))
+  (unless (and (consp value)
+               (seq-every-p #'stringp value)
+               (not (string-empty-p (car value))))
     (error "%s must be a non-empty list of strings" name))
   value)
+
+(defun shuying-latex--resolve-command (value name)
+  "Validate command VALUE used as NAME and resolve its executable."
+  (let* ((command (shuying-latex--command value name))
+         (program (car command))
+         (executable (executable-find program)))
+    (unless executable
+      (signal
+       'shuying-latex-unavailable
+       (list
+        (concat
+         (format "%s executable not found: %s" name program)
+         (if (eq system-type 'windows-nt)
+             "; run M-x shuying-setup"
+           "; install it or add it to exec-path")))))
+    (cons executable (cdr command))))
 
 (defun shuying-latex--process-error (stage process buffer)
   "Return an error value for STAGE, PROCESS, and log BUFFER."
@@ -443,11 +465,7 @@ dvisvgm zero-pads page numbers to the width of the final page number."
 
 (defun shuying-latex--start-converter (batch specification)
   "Start the SVG converter for BATCH using SPECIFICATION."
-  (let* ((options
-          (shuying-render-spec-backend-options specification))
-         (converter
-          (shuying-latex--command
-           (plist-get options :converter) "LaTeX converter"))
+  (let* ((converter (shuying-latex--batch-converter batch))
          (directory (shuying-latex--batch-directory batch))
          (output-pattern (expand-file-name "page-%p.svg" directory))
          (scale (or (shuying-render-spec-scale specification) 1.0))
@@ -578,8 +596,14 @@ FORMAT-KEY identifies the persistent format for invalidation."
     (let* ((specification
             (shuying-backend-request-specification (car requests)))
            (engine
-            (shuying-latex--command
+            (shuying-latex--resolve-command
              (shuying-render-spec-engine specification) "LaTeX engine"))
+           (converter
+            (shuying-latex--resolve-command
+             (plist-get
+              (shuying-render-spec-backend-options specification)
+              :converter)
+             "LaTeX converter"))
            (_
             (unless (equal
                      (shuying-render-spec-output-format specification)
@@ -600,7 +624,8 @@ FORMAT-KEY identifies the persistent format for invalidation."
              :log-buffer log-buffer
              :tex-file tex-file
              :dvi-file dvi-file
-             :engine engine)))
+             :engine engine
+             :converter converter)))
       (buffer-disable-undo log-buffer)
       (condition-case error-data
           (shuying-latex--ensure-format

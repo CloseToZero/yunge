@@ -149,6 +149,12 @@ The =latex= and =dvisvgm= backend requires these commands on =exec-path=:
 - =dvisvgm= converts DVI pages to SVG.
 - =kpsewhich= locates TeX files for diagnostics.
 
+The backend resolves the engine and converter before creating render work or
+starting a process.  When either is unavailable, automatic previews remain
+quiet and stay eligible for a later preview request; an explicit preview
+reports the missing command and, on Windows, points to =M-x shuying-setup=.
+Existing cache hits remain displayable without the external toolchain.
+
 Verify them with:
 
 #+begin_src shell
