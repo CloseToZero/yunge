@@ -6,6 +6,7 @@
 (require 'yunge-jump-history)
 (require 'yunge-minibuffer)
 (require 'yunge-pinyin)
+(require 'yunge-state)
 
 (declare-function evil-add-command-properties "evil-common")
 (declare-function evil-ex-delete-hl "evil-search" (name))
@@ -187,9 +188,9 @@ Pinyin search is literal, so its `/` and `?` remain part of PATTERN."
     ("r" revert-buffer "revert buffer")))
 
 (defun yunge-open-config-directory ()
-  "Open `user-emacs-directory' in Dired."
+  "Open `yunge-config-directory' in Dired."
   (interactive)
-  (dired user-emacs-directory))
+  (dired yunge-config-directory))
 
 (defconst yunge-file-bindings
   '(("c" yunge-open-config-directory "open config directory")

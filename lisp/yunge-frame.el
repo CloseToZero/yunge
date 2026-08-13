@@ -2,6 +2,8 @@
 ;; SPDX-FileCopyrightText: 2026 Chen Zhexuan
 ;; SPDX-License-Identifier: MIT
 
+(require 'yunge-state)
+
 ;; Our Windows build adds this primitive because the upstream helper makes
 ;; maximized W32 frames undecorated.  That removes the resize border and lets
 ;; the client area extend behind the taskbar.  The custom primitive removes
@@ -17,7 +19,7 @@
               (handle (frame-parameter frame 'window-id)))
     (let* ((script
             (expand-file-name "script/yunge-title-bar.ps1"
-                              user-emacs-directory))
+                              yunge-config-directory))
            (command (format "& '%s' -Handle %s" script handle))
            (encoded-command
             (base64-encode-string

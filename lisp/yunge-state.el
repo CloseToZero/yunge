@@ -11,6 +11,10 @@
 (defvar org-persist-directory)
 (defvar org-publish-timestamp-directory)
 
+(defvar yunge-config-directory
+  (file-name-as-directory user-emacs-directory)
+  "Directory containing this configuration's tracked files.")
+
 (defvar yunge-var-directory
   (file-name-as-directory
    (expand-file-name "var/" user-emacs-directory))

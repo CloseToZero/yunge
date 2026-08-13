@@ -4,8 +4,7 @@
 
 (require 'yunge-test-helper)
 
-(let ((user-emacs-directory (file-name-as-directory yunge-test-root)))
-  (require 'yunge-treesit))
+(require 'yunge-treesit)
 
 (yunge-test-deftest-lazy-load yunge-treesit
   (c-ts-mode

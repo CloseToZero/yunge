@@ -238,13 +238,13 @@
 
 (ert-deftest yunge-evil-opens-config-directory ()
   (yunge-test-enable-evil)
-  (let ((user-emacs-directory "C:/config/emacs/")
+  (let ((yunge-config-directory "C:/config/emacs/")
         opened-directory)
     (cl-letf (((symbol-function 'dired)
                (lambda (directory)
                  (setq opened-directory directory))))
       (call-interactively #'yunge-open-config-directory))
-    (should (equal opened-directory user-emacs-directory))))
+    (should (equal opened-directory yunge-config-directory))))
 
 (ert-deftest yunge-evil-leader-exposes-overridden-marker-command ()
   (yunge-test-enable-evil)

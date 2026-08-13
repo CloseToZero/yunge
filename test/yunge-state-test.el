@@ -9,11 +9,17 @@
    "--eval"
    (prin1-to-string
     '(let* ((root (make-temp-file "yunge-state-" t))
+            (config-root (make-temp-file "yunge-config-" t))
             (user-emacs-directory (file-name-as-directory root))
+            (yunge-config-directory
+             (file-name-as-directory config-root))
             (file (expand-file-name "file.txt" root)))
        (unwind-protect
            (progn
              (require 'yunge-state)
+             (unless (equal yunge-config-directory
+                            (file-name-as-directory config-root))
+               (error "The tracked configuration root was not preserved"))
              (unless (equal yunge-var-directory
                             (file-name-as-directory
                              (expand-file-name "var/" root)))
@@ -79,7 +85,8 @@
                          "transient/levels.el"
                          "transient/values.el")))
                (error "Transient state was not redirected under var")))
-         (delete-directory root t))))))
+         (delete-directory root t)
+         (delete-directory config-root t))))))
 
 (provide 'yunge-state-test)
 

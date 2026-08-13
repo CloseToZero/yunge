@@ -12,7 +12,7 @@
 (defvar elpaca-sources-directory
   (expand-file-name "source/" elpaca-directory))
 (defvar elpaca-lock-file
-  (expand-file-name "elpaca-lock.el" user-emacs-directory))
+  (expand-file-name "elpaca-lock.el" yunge-config-directory))
 
 (defvar elpaca-order
   '(elpaca :repo "https://github.com/progfolio/elpaca.git"

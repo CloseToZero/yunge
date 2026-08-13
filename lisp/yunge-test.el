@@ -23,13 +23,13 @@
   (let* ((buffer (get-buffer-create "*yunge-test*"))
          (running (get-buffer-process buffer))
          (test-directory
-          (expand-file-name "test/" user-emacs-directory)))
+          (expand-file-name "test/" yunge-config-directory)))
     (when (process-live-p running)
       (user-error "Tests are already running"))
     (with-current-buffer buffer
       (let ((inhibit-read-only t))
         (erase-buffer))
-      (setq default-directory user-emacs-directory)
+      (setq default-directory yunge-config-directory)
       (compilation-mode))
     (let ((process-environment (copy-sequence process-environment))
           (test-config-home

@@ -12,7 +12,7 @@
                         extra-data include-package-version generate-full))
 
 (defvar yunge-autoload-source-directory
-  (expand-file-name "lisp/" user-emacs-directory)
+  (expand-file-name "lisp/" yunge-config-directory)
   "Directory scanned when generating configuration autoloads.")
 
 (defvar yunge-autoload-cache-directory
@@ -25,7 +25,7 @@
   "Generated configuration autoload file.")
 
 (defvar yunge-autoload-repository-hash-file
-  (expand-file-name "autoloads.sha256" user-emacs-directory)
+  (expand-file-name "autoloads.sha256" yunge-config-directory)
   "Tracked hash of the current configuration autoloads.")
 
 (defvar yunge-autoload-cache-hash-file

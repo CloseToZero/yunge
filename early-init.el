@@ -6,7 +6,15 @@
   (error "This configuration requires Emacs 31 or newer (found %s)"
          emacs-version))
 
-(add-to-list 'load-path (expand-file-name "lisp/" user-emacs-directory))
+(defvar yunge-config-directory
+  (file-name-as-directory
+   (file-name-directory
+    (or load-file-name
+        (expand-file-name "early-init.el" user-emacs-directory))))
+  "Directory containing this configuration's tracked files.")
+
+(add-to-list 'load-path
+             (expand-file-name "lisp/" yunge-config-directory))
 (require 'yunge-state)
 (require 'yunge-encoding)
 

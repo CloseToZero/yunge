@@ -26,7 +26,7 @@
 (defun shuying-setup--script ()
   "Return the Windows setup script path."
   (expand-file-name
-   "script/shuying-setup-windows.ps1" user-emacs-directory))
+   "script/shuying-setup-windows.ps1" yunge-config-directory))
 
 (defun shuying-setup--work-directory ()
   "Create and return a private directory for one setup run."
@@ -158,7 +158,7 @@ Report cleanup failures without hiding the setup result."
         (let ((inhibit-read-only t))
           (erase-buffer)
           (insert "Shuying dependency setup\n\n"))
-        (setq default-directory user-emacs-directory)
+        (setq default-directory yunge-config-directory)
         (compilation-mode))
       (condition-case error-data
           (setq process

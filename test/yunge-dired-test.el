@@ -199,7 +199,7 @@
 
 (ert-deftest yunge-dired-windows-reveal-uses-api-for-many-files ()
   (require 'yunge-dired)
-  (let ((user-emacs-directory "C:/Config Dir/")
+  (let ((yunge-config-directory "C:/Config Dir/")
         arguments)
     (cl-letf (((symbol-function 'executable-find)
                (lambda (_program) "pwsh"))

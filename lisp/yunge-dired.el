@@ -3,6 +3,7 @@
 ;; SPDX-License-Identifier: MIT
 
 (require 'yunge-key)
+(require 'yunge-state)
 
 (declare-function dbus-call-method "dbus"
                   (bus service path interface method &rest args))
@@ -223,7 +224,7 @@ inconsistently from keyboard modifiers and the source application."
         (let* ((script
                 (expand-file-name
                  "script/yunge-reveal.ps1"
-                 user-emacs-directory))
+                 yunge-config-directory))
                (command
                 (concat
                  "& "

@@ -5,6 +5,9 @@
 (defconst yunge-test-root
   (expand-file-name ".." (file-name-directory load-file-name)))
 
+(defvar yunge-config-directory
+  (file-name-as-directory yunge-test-root))
+
 (defvar yunge-var-directory
   (expand-file-name "var/" yunge-test-root))
 
@@ -86,6 +89,11 @@ Elpaca manages itself separately, so it is not recorded in its lock file."
                    (append
                     (yunge-test-package-arguments)
                     (list "-L" (expand-file-name "lisp" yunge-test-root))
+                    (list
+                     "--eval"
+                     (prin1-to-string
+                      `(defvar yunge-config-directory
+                         ,(file-name-as-directory yunge-test-root))))
                     arguments)))
       (unless (equal status 0)
         (ert-fail
