@@ -6,6 +6,8 @@
 
 (declare-function yunge-server-start "yunge-server")
 
+(defvar server-process)
+
 (yunge-test-deftest-lazy-load yunge-server
   (server))
 
@@ -25,19 +27,22 @@
        (when (featurep 'server)
          (error "Registering the startup hook loaded server.el"))))))
 
-(ert-deftest yunge-server-starts-only-when-no-server-is-detected ()
+(ert-deftest yunge-server-starts-unless-current-process-is-live ()
   (require 'server)
   (require 'yunge-server)
-  (let ((results '(t unknown nil))
+  (let ((server-process 'live)
         (starts 0))
-    (cl-letf (((symbol-function 'server-running-p)
-               (lambda (&optional _name)
-                 (pop results)))
+    (cl-letf (((symbol-function 'process-live-p)
+               (lambda (process)
+                 (eq process 'live)))
               ((symbol-function 'server-start)
                (lambda (&rest _arguments)
                  (cl-incf starts))))
-      (dotimes (_ 3)
-        (yunge-server-start)))
-    (should (= starts 1))))
+      (yunge-server-start)
+      (setq server-process 'dead)
+      (yunge-server-start)
+      (setq server-process nil)
+      (yunge-server-start))
+    (should (= starts 2))))
 
 ;;; yunge-server-test.el ends here

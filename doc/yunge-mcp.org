@@ -1,0 +1,35 @@
+#+title: Yunge MCP
+
+Yunge MCP exposes selected Emacs capabilities to local AI clients through a
+typed Model Context Protocol interface.  The native executable implements the
+stdio protocol and forwards only registered tool calls to the running Yunge
+Emacs.  Emacs owns tool definitions, editor state, and application semantics;
+the executable does not evaluate caller-supplied Lisp or access application
+databases itself.
+
+The initial tool set belongs to Fangcun:
+
+- =fangcun_list_yiyus= lists the configured note roots by identifier and
+  display name.
+- =fangcun_search_nodes= searches node titles, aliases, tags, yiyu names, and
+  relative files.
+- =fangcun_read_node= returns one node's metadata and Org source.
+- =fangcun_list_backlinks= returns every indexed link to one node.
+- =fangcun_create_file_node= creates, saves, and indexes a new Org file node.
+
+Run =M-x yunge-mcp-setup= to build and install the server, then declare it in
+the user configuration of selected AI agents.  The prompt always lists every
+supported agent; an agent need not be installed before it is selected.
+The initial clients are Codex, Claude Code, Gemini CLI, Cursor, and the default
+Visual Studio Code profile.
+
+The installed executable has the stable path
+=var/yunge-mcp/bin/yunge-mcp=, with the platform's executable suffix where
+required.  Agent declarations keep pointing to this path when the server is
+rebuilt.  Existing agent configuration is retained; setup owns only the MCP
+server entry named =yunge=.
+
+Use =M-x yunge-mcp-install= to rebuild without changing agent configuration,
+or =M-x yunge-mcp-register-agents= to change declarations without rebuilding.
+The bridge protocol and runtime manifest are documented in
+[[file:../native/yunge-mcp/README.org][the native bridge documentation]].

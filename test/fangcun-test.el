@@ -4,6 +4,7 @@
 
 (require 'yunge-test-helper)
 (require 'fangcun)
+(require 'fangcun-mcp)
 
 (declare-function yunge-jump-history--track-navigation
                   "yunge-jump-history")
@@ -1620,5 +1621,79 @@
         (fangcun-node-visit node)
         (should-not (buffer-narrowed-p))
         (should (equal (org-id-get) "theorem"))))))
+
+(ert-deftest fangcun-mcp-searches-and-reads-nodes ()
+  (fangcun-test-with-notes
+    (fangcun-db-sync)
+    (let* ((matches
+            (fangcun-mcp--search-nodes
+             '(:query "A THEOREM" :limit 10)))
+           (match
+            (seq-find
+             (lambda (node)
+               (equal (plist-get node :id) "theorem"))
+             matches))
+           (result (fangcun-mcp--read-node '(:id "theorem"))))
+      (should match)
+      (should (equal (plist-get match :title) "A theorem"))
+      (should
+       (string-match-p
+        (regexp-quote "* [[id:source][A theorem]]")
+        (plist-get result :content))))))
+
+(ert-deftest fangcun-mcp-lists-configured-yiyus ()
+  (fangcun-test-with-notes
+    (should
+     (equal
+      (fangcun-mcp--list-yiyus nil)
+      [(:id "personal" :name "Personal")
+       (:id "work" :name "Work")]))))
+
+(ert-deftest fangcun-mcp-lists-every-backlink-occurrence ()
+  (fangcun-test-with-notes
+    (fangcun-test--write-file
+     personal-file
+     (concat
+      ":PROPERTIES:\n"
+      ":ID: target\n"
+      ":END:\n"
+      "#+title: Target\n\n"
+      "* Source\n"
+      ":PROPERTIES:\n"
+      ":ID: source\n"
+      ":END:\n"
+      "[[id:target]] and [[id:target]].\n"))
+    (fangcun-db-sync)
+    (let* ((result
+            (fangcun-mcp--list-backlinks '(:id "target")))
+           (backlinks (plist-get result :backlinks)))
+      (should (= (length backlinks) 2))
+      (should
+       (seq-every-p
+        (lambda (backlink)
+          (equal
+           (plist-get (plist-get backlink :source) :id)
+           "source"))
+        backlinks)))))
+
+(ert-deftest fangcun-mcp-creates-and-indexes-file-nodes ()
+  (fangcun-test-with-notes
+    (fangcun-db-sync)
+    (cl-letf (((symbol-function 'org-id-new)
+               (lambda (&optional _prefix) "mcp-created")))
+      (let* ((result
+              (fangcun-mcp--create-file-node
+               '(:yiyu "personal"
+                 :file "created.org"
+                 :title "Created note"
+                 :content "Initial content.")))
+             (file (expand-file-name "created.org" personal-root)))
+        (should (equal (plist-get result :id) "mcp-created"))
+        (should (file-exists-p file))
+        (should (fangcun-node-from-id "mcp-created"))
+        (with-temp-buffer
+          (insert-file-contents file)
+          (should (search-forward "#+title: Created note" nil t))
+          (should (search-forward "Initial content." nil t)))))))
 
 ;;; fangcun-test.el ends here

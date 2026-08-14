@@ -1,0 +1,43 @@
+#+title: Yunge MCP native bridge
+
+The =yunge-mcp= executable is a stdio Model Context Protocol server.  An MCP
+client starts it as a child process and exchanges one JSON-RPC message per
+line.  Standard output is reserved for MCP messages; process and bridge errors
+use standard error.
+
+Tool descriptions and implementations live in Emacs.  For each =tools/list=
+or =tools/call= request, the executable invokes =emacsclient= with a fixed Lisp
+form and passes the bridge request as a separate process argument.  It never
+constructs Lisp source from tool input.
+
+The internal request is a JSON object with an =operation= member:
+
+#+begin_src json
+{"operation":"list-tools"}
+{"operation":"call-tool","name":"fangcun_read_node",
+ "arguments":{"id":"node-id"}}
+#+end_src
+
+Emacs returns a base64-encoded JSON object because =emacsclient --eval= prints
+its result as a Lisp string.  Successful and failed responses have these
+forms:
+
+#+begin_src json
+{"ok":true,"value":{}}
+{"ok":false,"error":{"type":"user-error","message":"..."}}
+#+end_src
+
+The installed executable reads =../runtime.json= relative to its =bin=
+directory.  The manifest records the exact =emacsclient= executable and the
+arguments that select Yunge's Emacs server:
+
+#+begin_src json
+{"version":1,
+ "emacsclient":"D:/softwares/emacs/bin/emacsclient.exe",
+ "connectionArguments":["--server-file","C:/path/to/server"]}
+#+end_src
+
+=M-x yunge-mcp-install= regenerates this machine-local file.  For development
+and diagnostics, =YUNGE_MCP_RUNTIME= selects another manifest,
+=YUNGE_EMACSCLIENT= overrides its executable, and
+=YUNGE_EMACS_SERVER_FILE= overrides its connection arguments.

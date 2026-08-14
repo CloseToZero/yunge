@@ -6,4 +6,5 @@
 
 - [[file:doc/fangcun.org][Fangcun]]
 - [[file:doc/shuying.org][Shuying]]
+- [[file:doc/yunge-mcp.org][Yunge MCP]]
 - [[file:doc/keybinding.org][Keybinding conventions and workflows]]
