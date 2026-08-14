@@ -10,6 +10,7 @@
 (declare-function evil-exit-visual-state "evil-states" (&optional later buffer))
 (declare-function consult--buffer-pair "consult")
 (declare-function consult--buffer-query "consult")
+(declare-function consult-grep "consult" (&optional dir initial))
 (declare-function consult-ripgrep "consult" (&optional dir initial))
 
 (defvar evil-command-line-map)
@@ -22,8 +23,9 @@
 (defconst yunge-consult-search-bindings
   '(("b" consult-line "search buffer")
     ("B" consult-line-multi "search project buffers")
-    ("p" consult-ripgrep "search project")
-    ("P" yunge-consult-ripgrep-symbol "search symbol in project")))
+    ("p" yunge-consult-project-search "search project")
+    ("P" yunge-consult-project-search-symbol
+     "search symbol in project")))
 
 (defconst yunge-consult-jump-bindings
   '(("b" consult-bookmark "jump to bookmark")
@@ -38,7 +40,7 @@
 
 (defconst yunge-consult-navigation-commands
   '(consult-bookmark consult-buffer consult-imenu consult-line
-    consult-line-multi consult-recent-file consult-ripgrep))
+    consult-line-multi consult-recent-file consult-grep consult-ripgrep))
 
 (defun yunge-consult--previous-window-buffer (&optional window)
   "Return the most recent live buffer previously shown in WINDOW."
@@ -72,7 +74,21 @@
         (cons previous-item (delq previous-item items))
       items)))
 
-(defun yunge-consult-ripgrep-symbol ()
+(defun yunge-consult--project-search-command ()
+  "Return the available Consult command for searching project files."
+  (cond
+   ((executable-find "rg") #'consult-ripgrep)
+   ((executable-find "grep") #'consult-grep)
+   (t
+    (user-error "Project search requires rg or grep"))))
+
+(defun yunge-consult-project-search (&optional initial)
+  "Search the current project, optionally starting with INITIAL."
+  (interactive)
+  (funcall-interactively
+   (yunge-consult--project-search-command) nil initial))
+
+(defun yunge-consult-project-search-symbol ()
   "Search the current project for the selection or symbol at point."
   (interactive)
   (let* ((text
@@ -84,7 +100,7 @@
     (when (eq evil-state 'visual)
       (evil-exit-visual-state))
     (deactivate-mark)
-    (consult-ripgrep nil initial)))
+    (yunge-consult-project-search initial)))
 
 (defun yunge-consult--setup-keys ()
   "Set up Consult command and remap bindings."
@@ -109,7 +125,9 @@
     (evil-add-command-properties command :jump nil :repeat nil)
     (yunge-jump-history-track-command command))
   (evil-add-command-properties
-   'yunge-consult-ripgrep-symbol :jump nil :repeat nil))
+   'yunge-consult-project-search :jump nil :repeat nil)
+  (evil-add-command-properties
+   'yunge-consult-project-search-symbol :jump nil :repeat nil))
 
 (defun yunge-consult--describe-keys ()
   "Describe Consult leader bindings to Which-Key."
@@ -145,10 +163,11 @@
        (consult-customize
         consult-source-buffer :items #'yunge-consult--buffer-items)
        (consult-customize
-        consult-ripgrep yunge-consult-ripgrep-symbol
+        consult-grep consult-ripgrep yunge-consult-project-search
+        yunge-consult-project-search-symbol
         :preview-key '(:debounce 0.4 any))
        (consult-customize
-        consult-ripgrep
+        consult-grep consult-ripgrep yunge-consult-project-search
         :initial
         (when (use-region-p)
           (prog1

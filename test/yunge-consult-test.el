@@ -44,8 +44,10 @@
                        'consult-imenu)
                    (eq (keymap-lookup yunge-search-map "b")
                        'consult-line)
+                   (eq (keymap-lookup yunge-search-map "p")
+                       'yunge-consult-project-search)
                    (eq (keymap-lookup yunge-search-map "P")
-                       'yunge-consult-ripgrep-symbol)
+                       'yunge-consult-project-search-symbol)
                    (eq (keymap-lookup minibuffer-local-map "M-r")
                        'consult-history)
                    (eq (command-remapping 'switch-to-buffer)
@@ -67,8 +69,8 @@
      ("SPC j b" . consult-bookmark)
      ("SPC s b" . consult-line)
      ("SPC s B" . consult-line-multi)
-     ("SPC s p" . consult-ripgrep)
-     ("SPC s P" . yunge-consult-ripgrep-symbol)
+     ("SPC s p" . yunge-consult-project-search)
+     ("SPC s P" . yunge-consult-project-search-symbol)
      ("SPC j i" . consult-imenu)))
 
   (yunge-test-keymap-keys
@@ -105,16 +107,16 @@
 
   (dolist (command '(consult-bookmark consult-buffer consult-imenu
                      consult-line consult-line-multi consult-recent-file
-                     consult-ripgrep))
+                     consult-grep consult-ripgrep))
     (should-not (evil-get-command-property command :jump))
     (should-not (evil-get-command-property command :repeat t))
     (should
      (advice-member-p #'yunge-jump-history--track-navigation command)))
 
-  (should-not
-   (evil-get-command-property 'yunge-consult-ripgrep-symbol :jump))
-  (should-not
-   (evil-get-command-property 'yunge-consult-ripgrep-symbol :repeat t)))
+  (dolist (command '(yunge-consult-project-search
+                     yunge-consult-project-search-symbol))
+    (should-not (evil-get-command-property command :jump))
+    (should-not (evil-get-command-property command :repeat t))))
 
 (ert-deftest yunge-consult-prefers-the-selected-window-history ()
   (require 'consult)
@@ -136,7 +138,7 @@
         (when (buffer-live-p buffer)
           (kill-buffer buffer))))))
 
-(ert-deftest yunge-consult-ripgrep-starts-from-visual-selection ()
+(ert-deftest yunge-consult-project-search-starts-from-visual-selection ()
   (yunge-test-enable-evil)
   (require 'consult)
   (yunge-test-load-package-config 'yunge-consult)
@@ -146,18 +148,18 @@
     (goto-char (point-max))
     (activate-mark)
     (evil-visual-state)
-    (let ((this-command 'consult-ripgrep))
+    (let ((this-command 'yunge-consult-project-search))
       (should
        (equal
         (plist-get (consult--customize-args nil) :initial)
         "foo\\.bar")))
     (should (eq evil-state 'normal))
     (should-not (use-region-p))
-    (let ((this-command 'consult-ripgrep))
+    (let ((this-command 'yunge-consult-project-search))
       (should-not
        (plist-get (consult--customize-args nil) :initial)))))
 
-(ert-deftest yunge-consult-ripgrep-symbol-prefers-visual-selection ()
+(ert-deftest yunge-consult-project-symbol-prefers-visual-selection ()
   (yunge-test-enable-evil)
   (require 'consult)
   (yunge-test-load-package-config 'yunge-consult)
@@ -169,17 +171,16 @@
     (activate-mark)
     (evil-visual-state)
     (let (arguments)
-      (cl-letf (((symbol-function 'consult-ripgrep)
-                 (lambda (&optional directory initial)
-                   (setq arguments (list directory initial)))))
-        (yunge-consult-ripgrep-symbol))
+      (cl-letf (((symbol-function 'yunge-consult-project-search)
+                 (lambda (&optional initial)
+                   (setq arguments initial))))
+        (yunge-consult-project-search-symbol))
       (should (equal arguments
-                     (list nil
-                           (regexp-quote "glyph_data_format()"))))
+                     (regexp-quote "glyph_data_format()")))
       (should (eq evil-state 'normal))
       (should-not (use-region-p)))))
 
-(ert-deftest yunge-consult-ripgrep-symbol-uses-literal-symbol-at-point ()
+(ert-deftest yunge-consult-project-symbol-uses-literal-symbol-at-point ()
   (require 'consult)
   (yunge-test-load-package-config 'yunge-consult)
   (with-temp-buffer
@@ -187,22 +188,52 @@
     (insert "foo+bar")
     (goto-char (point-min))
     (let (initial)
-      (cl-letf (((symbol-function 'consult-ripgrep)
-                 (lambda (_directory value)
+      (cl-letf (((symbol-function 'yunge-consult-project-search)
+                 (lambda (&optional value)
                    (setq initial value))))
-        (yunge-consult-ripgrep-symbol))
+        (yunge-consult-project-search-symbol))
       (should (equal initial (regexp-quote "foo+bar"))))))
 
-(ert-deftest yunge-consult-ripgrep-symbol-allows-an-empty-input ()
+(ert-deftest yunge-consult-project-symbol-allows-an-empty-input ()
   (require 'consult)
   (yunge-test-load-package-config 'yunge-consult)
   (with-temp-buffer
     (insert " ")
     (let ((initial 'unset))
-      (cl-letf (((symbol-function 'consult-ripgrep)
-                 (lambda (_directory value)
+      (cl-letf (((symbol-function 'yunge-consult-project-search)
+                 (lambda (&optional value)
                    (setq initial value))))
-        (yunge-consult-ripgrep-symbol))
+        (yunge-consult-project-search-symbol))
       (should-not initial))))
+
+(ert-deftest yunge-consult-project-search-prefers-ripgrep ()
+  (require 'consult)
+  (yunge-test-load-package-config 'yunge-consult)
+  (let (called)
+    (cl-letf (((symbol-function 'executable-find)
+               (lambda (name) (and (equal name "rg") "rg")))
+              ((symbol-function 'consult-ripgrep)
+               (lambda (&optional directory initial)
+                 (setq called (list directory initial)))))
+      (yunge-consult-project-search "needle"))
+    (should (equal called '(nil "needle")))))
+
+(ert-deftest yunge-consult-project-search-falls-back-to-grep ()
+  (require 'consult)
+  (yunge-test-load-package-config 'yunge-consult)
+  (let (called)
+    (cl-letf (((symbol-function 'executable-find)
+               (lambda (name) (and (equal name "grep") "grep")))
+              ((symbol-function 'consult-grep)
+               (lambda (&optional directory initial)
+                 (setq called (list directory initial)))))
+      (yunge-consult-project-search "needle"))
+    (should (equal called '(nil "needle")))))
+
+(ert-deftest yunge-consult-project-search-requires-a-search-program ()
+  (require 'consult)
+  (yunge-test-load-package-config 'yunge-consult)
+  (cl-letf (((symbol-function 'executable-find) #'ignore))
+    (should-error (yunge-consult-project-search) :type 'user-error)))
 
 ;;; yunge-consult-test.el ends here

@@ -88,7 +88,12 @@ selected text.
 In Xref results, ~j/k~ move by display line and ~C-j/C-k~ move between
 references while showing their source.  Use ~[[/]]~ to move between result
 groups, ~RET~ to visit a result, and ~gf~ to show its source without leaving
-the list.  Editing and query replacement remain under ~SPC m~.
+the list.  Use ~i~ to edit results and ~SPC m r~ for query replacement.
+
+Grep and Occur follow the same navigation shape: ~j/k~ move by line,
+~C-j/C-k~ move by match, ~RET~ visits, ~gf~ shows the source, ~gr~ refreshes,
+and ~i~ enters the result editor.  Grep also uses ~[[/]]~ to move by file.
+From a Consult project search, ~M-a E~ exports the results to Grep.
 
 * Edit sessions
 
@@ -102,6 +107,12 @@ ordinary file.
 Implement these semantics through command remapping so every Evil entry point
 uses the mode's lifecycle.  This convention applies to Org source edit
 buffers, Wdired, and the With-Editor buffers used by Magit.
+
+Grep, Occur, and Xref result editors apply each change to the source buffer as
+it is made, so they have no truthful discard operation.  Their ~ZZ~, ~:wq~,
+~:x~, and native finish command save the source buffers touched during the
+session and return to the result view.  ~ZQ~ and ~:q~ refuse to pretend that
+the changes can be discarded; undo them first, then finish the session.
 
 * Completion interfaces
 
