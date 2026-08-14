@@ -109,8 +109,10 @@ While a completion interface is active:
 
 - ~TAB~ incorporates the current candidate or common prefix into the input and
   keeps the interface active when further completion is possible.
-- ~RET~ accepts the current candidate or input and leaves the completion
-  interface.
+- In minibuffer completion, ~RET~ accepts the current candidate or input and
+  leaves the completion interface.
+- In Corfu, ~RET~ keeps the surrounding mode's action; it does not accept the
+  selected completion candidate.
 
 These bindings apply only while completion is active.  The surrounding mode's
 bindings resume when completion ends.

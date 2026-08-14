@@ -11,6 +11,7 @@
 (defvar corfu-auto-delay)
 (defvar corfu-auto-prefix)
 (defvar corfu-cycle)
+(defvar corfu-map)
 (defvar corfu-mode)
 (defvar corfu-preview-current)
 (defvar text-mode-ispell-word-completion)
@@ -22,8 +23,6 @@
 (defconst yunge-corfu-popup-bindings
   '(("C-j" corfu-next "next candidate")
     ("C-k" corfu-previous "previous candidate")
-    ("RET" corfu-insert "accept candidate")
-    ("<return>" corfu-insert nil)
     ("TAB" corfu-complete "complete candidate")
     ("<tab>" corfu-complete nil)))
 
@@ -54,12 +53,13 @@
             #'yunge-corfu--sync-completion-mode))
 
 (with-eval-after-load 'corfu
+  ;; Return belongs to the surrounding interface; Tab accepts completion.
+  (keymap-unset corfu-map "RET")
   (yunge-corfu--setup-keys))
 
 (with-eval-after-load 'evil
   (with-eval-after-load 'corfu
-    ;; An active completion interface owns acceptance even when the surrounding
-    ;; mode, such as a REPL, binds RET in its own Evil minor-mode map.
+    ;; Completion navigation must outrank surrounding Evil minor-mode maps.
     (add-to-list 'emulation-mode-map-alists
                  'yunge-corfu--emulation-map-alist)))
 
