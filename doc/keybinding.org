@@ -181,6 +181,9 @@ project, and ~SPC l d~ to disable it.
 
 While Eglot manages a buffer, use ~g D~ for declarations and ~g r~ for
 references.  Use ~g a~ to switch between a source and header with clangd.
+Use ~SPC l i~ for implementations, ~SPC l t~ for type definitions, and
+~SPC l s~ to search workspace symbols.  ~SPC l c~ opens the incoming and
+outgoing call hierarchy; ~SPC l T~ opens the supertype and subtype hierarchy.
 Use ~SPC l a~ for code actions, ~SPC l f~ to format, ~SPC l o~ to organize
 imports, and ~SPC l r~ to rename.  Code actions and formatting also operate
 on Visual selections.  Automatic ElDoc feedback stays on one echo-area line.
@@ -188,6 +191,11 @@ Use ~K~, or ~SPC l h~, to show complete documentation in a child frame;
 documentation never opens a child frame automatically.  The ~SPC l~ editing
 entries, ~K~, and the ~g~ bindings disappear when Eglot stops managing the
 buffer; ~SPC l e/d~ remain available.
+
+Call and type hierarchies open as trees.  Use ~RET~ to visit a node or toggle
+an expansion control, ~g]/g[~ or ~TAB/S-TAB~ to move between controls, and
+~gc~ to rebuild the hierarchy with the current node as its root.  Use ~q~ to
+close the hierarchy window.
 
 Window commands under ~SPC w~ execute once.  Use ~SPC w SPC~ to enter an
 explicit persistent window control map when several operations are needed.

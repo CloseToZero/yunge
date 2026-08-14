@@ -11,24 +11,32 @@
 (declare-function eglot--executable-find "eglot" (command remote))
 (declare-function eglot-current-server "eglot" ())
 (declare-function eglot-find-declaration "eglot" ())
+(declare-function eglot-find-implementation "eglot" ())
+(declare-function eglot-find-typeDefinition "eglot" ())
 (declare-function eglot-ensure "eglot" ())
+(declare-function eglot-hierarchy-center-on-node "eglot" ())
 (declare-function eglot-managed-p "eglot" ())
 (declare-function eglot-path-to-uri "eglot" (path &rest args))
+(declare-function eglot-show-call-hierarchy "eglot" (direction))
+(declare-function eglot-show-type-hierarchy "eglot" (direction))
 (declare-function eglot-shutdown "eglot" (server &optional interactive
                                                  timeout preserve-buffers))
 (declare-function eglot-uri-to-path "eglot" (uri))
 (declare-function eldoc-box-help-at-point "eldoc-box" ())
 (declare-function evil-add-command-properties "evil-common"
                   (command &rest properties))
+(declare-function evil-set-initial-state "evil-core" (mode state))
 (declare-function jsonrpc-request "jsonrpc"
                   (connection method params &rest args))
 (declare-function project-current "project"
                   (&optional maybe-prompt directory))
 (declare-function project-root "project" (project))
 (declare-function xref-find-references "xref" (identifier))
+(declare-function xref-find-apropos "xref" (pattern))
 
 (defvar eglot-server-programs)
 (defvar eglot-sync-connect)
+(defvar eglot-hierarchy-mode-map)
 (defvar eldoc-echo-area-use-multiline-p)
 (defvar yunge-leader-map)
 
@@ -60,6 +68,9 @@ Each entry is a plist containing :root, :modes, and optionally
   '(("a" (menu-item "code actions" eglot-code-actions
                     :filter yunge-eglot--managed-command-binding)
      "code actions")
+    ("c" (menu-item "call hierarchy" eglot-show-call-hierarchy
+                    :filter yunge-eglot--managed-command-binding)
+     "call hierarchy")
     ("d" yunge-eglot-disable-project "disable")
     ("e" yunge-eglot-enable-project "enable")
     ("f" (menu-item "format" eglot-format
@@ -68,12 +79,24 @@ Each entry is a plist containing :root, :modes, and optionally
     ("h" (menu-item "documentation" eldoc-box-help-at-point
                     :filter yunge-eglot--managed-command-binding)
      "documentation")
+    ("i" (menu-item "implementation" eglot-find-implementation
+                    :filter yunge-eglot--managed-command-binding)
+     "implementation")
     ("o" (menu-item "organize imports" eglot-code-action-organize-imports
                     :filter yunge-eglot--managed-command-binding)
      "organize imports")
     ("r" (menu-item "rename" eglot-rename
                     :filter yunge-eglot--managed-command-binding)
-     "rename")))
+     "rename")
+    ("s" (menu-item "workspace symbols" xref-find-apropos
+                    :filter yunge-eglot--managed-command-binding)
+     "workspace symbols")
+    ("t" (menu-item "type definition" eglot-find-typeDefinition
+                    :filter yunge-eglot--managed-command-binding)
+     "type definition")
+    ("T" (menu-item "type hierarchy" eglot-show-type-hierarchy
+                    :filter yunge-eglot--managed-command-binding)
+     "type hierarchy")))
 
 (defconst yunge-eglot-leader-bindings
   `(("l" ,yunge-eglot-command-map "LSP")))
@@ -83,6 +106,12 @@ Each entry is a plist containing :root, :modes, and optionally
     ("gr" xref-find-references "references")
     ("ga" yunge-eglot-switch-source-header "alternate source/header")
     ("K" eldoc-box-help-at-point "documentation")))
+
+(defconst yunge-eglot-hierarchy-normal-bindings
+  `(("RET" push-button "visit or toggle")
+    ("q" quit-window "quit")
+    ("gc" eglot-hierarchy-center-on-node "reroot hierarchy")
+    ,@yunge-key-button-navigation-bindings))
 
 (defun yunge-eglot--load-state ()
   "Load project Eglot settings from `yunge-eglot-state-file'."
@@ -362,9 +391,14 @@ Offer PREFERRED first when it still names a compilation database."
    (cons yunge-eglot--clangd-modes
          #'yunge-eglot--clangd-contact))
   (with-eval-after-load 'evil
+    (evil-set-initial-state 'eglot-hierarchy-mode 'normal)
     (yunge-key-evil-define-minor-mode
      'normal 'eglot--managed-mode yunge-eglot-managed-bindings)
+    (yunge-key-evil-define 'normal eglot-hierarchy-mode-map
+                           yunge-eglot-hierarchy-normal-bindings)
     (dolist (command '(eglot-find-declaration
+                       eglot-find-implementation
+                       eglot-find-typeDefinition
                        xref-find-references
                        yunge-eglot-switch-source-header))
       (evil-add-command-properties command :jump t))))

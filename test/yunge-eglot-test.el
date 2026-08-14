@@ -14,6 +14,7 @@
   (require 'yunge-eglot))
 
 (declare-function eglot--lookup-mode "eglot" (mode))
+(declare-function eglot-hierarchy-mode "eglot" ())
 
 (yunge-test-deftest-lazy-load yunge-eglot
   (eglot eldoc-box project))
@@ -429,17 +430,27 @@
        ("g a" . yunge-eglot-switch-source-header)
        ("K" . eldoc-box-help-at-point)
        ("SPC l a" . eglot-code-actions)
+       ("SPC l c" . eglot-show-call-hierarchy)
        ("SPC l f" . eglot-format)
        ("SPC l h" . eldoc-box-help-at-point)
+       ("SPC l i" . eglot-find-implementation)
        ("SPC l o" . eglot-code-action-organize-imports)
-       ("SPC l r" . eglot-rename)))
+       ("SPC l r" . eglot-rename)
+       ("SPC l s" . xref-find-apropos)
+       ("SPC l t" . eglot-find-typeDefinition)
+       ("SPC l T" . eglot-show-type-hierarchy)))
     (yunge-test-which-key-prefix
      "SPC l"
      '(("a" nil "code actions")
+       ("c" nil "call hierarchy")
        ("f" nil "format")
        ("h" nil "documentation")
+       ("i" nil "implementation")
        ("o" nil "organize imports")
-       ("r" nil "rename")))
+       ("r" nil "rename")
+       ("s" nil "workspace symbols")
+       ("t" nil "type definition")
+       ("T" nil "type hierarchy")))
     (evil-visual-state)
     (yunge-test-evil-keys
      'visual
@@ -453,10 +464,15 @@
                 'what-cursor-position))
     (should (eq (key-binding (kbd "K")) 'evil-lookup))
     (should-not (key-binding (kbd "SPC l a")))
+    (should-not (key-binding (kbd "SPC l c")))
     (should-not (key-binding (kbd "SPC l f")))
     (should-not (key-binding (kbd "SPC l h")))
+    (should-not (key-binding (kbd "SPC l i")))
     (should-not (key-binding (kbd "SPC l o")))
     (should-not (key-binding (kbd "SPC l r")))
+    (should-not (key-binding (kbd "SPC l s")))
+    (should-not (key-binding (kbd "SPC l t")))
+    (should-not (key-binding (kbd "SPC l T")))
     (yunge-test-keys
      '(("SPC l e" . yunge-eglot-enable-project)
        ("SPC l d" . yunge-eglot-disable-project)))))
@@ -478,9 +494,29 @@
   (with-temp-buffer
     (fundamental-mode)
     (should-not (key-binding (kbd "SPC l a")))
+    (should-not (key-binding (kbd "SPC l c")))
     (should-not (key-binding (kbd "SPC l f")))
     (should-not (key-binding (kbd "SPC l h")))
+    (should-not (key-binding (kbd "SPC l i")))
     (should-not (key-binding (kbd "SPC l o")))
-    (should-not (key-binding (kbd "SPC l r")))))
+    (should-not (key-binding (kbd "SPC l r")))
+    (should-not (key-binding (kbd "SPC l s")))
+    (should-not (key-binding (kbd "SPC l t")))
+    (should-not (key-binding (kbd "SPC l T")))))
+
+(ert-deftest yunge-eglot-integrates-hierarchy-buffers-with-evil ()
+  (yunge-test-enable-evil)
+  (require 'eglot)
+  (with-temp-buffer
+    (eglot-hierarchy-mode)
+    (yunge-test-evil-keys
+     'normal
+     '(("RET" . push-button)
+       ("q" . quit-window)
+       ("gc" . eglot-hierarchy-center-on-node)
+       ("g]" . forward-button)
+       ("g[" . backward-button)
+       ("<tab>" . forward-button)
+       ("S-TAB" . backward-button)))))
 
 ;;; yunge-eglot-test.el ends here
