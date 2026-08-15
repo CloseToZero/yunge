@@ -72,12 +72,21 @@
  (eldoc-box
   :source "elpaca-menu-lock-file"
   :recipe
-  (:package "eldoc-box"
+ (:package "eldoc-box"
    :repo "casouri/eldoc-box"
    :fetcher github
    :files (:defaults)
    :source "MELPA"
    :ref "e458cefba4013785ef6099c6245463689a50dd7d"))
+ (editorconfig
+  :source "elpaca-menu-lock-file"
+  :recipe
+  (:package "editorconfig"
+   :repo "editorconfig/editorconfig-emacs"
+   :fetcher github
+   :files (:defaults)
+   :source "MELPA"
+   :ref "b18fcf7fdea1ce84b7fdc60360ad8016b5c00d79"))
  (eglot
   :source "elpaca-menu-lock-file"
   :recipe
