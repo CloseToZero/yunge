@@ -10,6 +10,12 @@
   (make-yunge-reader-document
    :metadata (list :page-count (length pages) :pages pages)))
 
+(defun yunge-reader-pdf-test--handle (id &optional session)
+  "Return a native PDF handle for ID in SESSION."
+  (make-yunge-reader-pdf-handle
+   :session (or session 17)
+   :id id))
+
 (defun yunge-reader-pdf-test--link
     (page index bounds target &optional label)
   "Return one internal PDF link fixture from PAGE to TARGET."
@@ -124,17 +130,24 @@
           request
           (leases 0))
       (cl-letf (((symbol-function 'yunge-reader-native-acquire)
-                 (lambda () (cl-incf leases)))
+                 (lambda ()
+                   (cl-incf leases)
+                   17))
                 ((symbol-function 'yunge-reader-native-release)
                  (lambda () (cl-decf leases)))
                 ((symbol-function 'yunge-reader-native-live-p)
                  (lambda () t))
-                ((symbol-function 'yunge-reader-native-request)
-                 (lambda (operation parameters complete)
+                ((symbol-function
+                  'yunge-reader-native-session-live-p)
+                 (lambda (session) (= session 17)))
+                ((symbol-function
+                  'yunge-reader-native-request-in-session)
+                 (lambda (session operation parameters complete)
+                   (should (= session 17))
                    (setq request (list operation parameters))
                    (pcase operation
                      ("open"
-                     (funcall complete
+                      (funcall complete
                                '((document . 7)
                                  (page-count . 3)
                                  (pages
@@ -158,7 +171,9 @@
                  properties value
                  error-data error)))
         (should (= leases 1))
-        (should (= opened 7))
+        (should (yunge-reader-pdf-handle-p opened))
+        (should (= (yunge-reader-pdf-handle-session opened) 17))
+        (should (= (yunge-reader-pdf-handle-id opened) 7))
         (should-not error-data)
         (should (eq (plist-get properties :layout) 'fixed))
         (should (= (plist-get (plist-get properties :metadata)
@@ -180,11 +195,15 @@
     (let ((leases 0)
           completion-error)
       (cl-letf (((symbol-function 'yunge-reader-native-acquire)
-                 (lambda () (cl-incf leases)))
+                 (lambda ()
+                   (cl-incf leases)
+                   17))
                 ((symbol-function 'yunge-reader-native-release)
                  (lambda () (cl-decf leases)))
-                ((symbol-function 'yunge-reader-native-request)
-                 (lambda (_operation _parameters complete)
+                ((symbol-function
+                  'yunge-reader-native-request-in-session)
+                 (lambda (session _operation _parameters complete)
+                   (should (= session 17))
                    (funcall complete nil '(error "cannot open")))))
         (yunge-reader-pdf--open
          "C:/books/broken.pdf"
@@ -209,7 +228,9 @@
           completion-error)
       (cl-letf
           (((symbol-function 'yunge-reader-native-acquire)
-            (lambda () (cl-incf leases)))
+            (lambda ()
+              (cl-incf leases)
+              17))
            ((symbol-function 'yunge-reader-native-release)
             (lambda () (cl-decf leases)))
            ((symbol-function 'password-read-from-cache)
@@ -226,8 +247,10 @@
             (lambda (prompt &rest _arguments)
               (push prompt prompts)
               (pop answers)))
-           ((symbol-function 'yunge-reader-native-request)
-            (lambda (_operation parameters complete)
+           ((symbol-function
+             'yunge-reader-native-request-in-session)
+            (lambda (session _operation parameters complete)
+              (should (= session 17))
               (let ((password (alist-get 'password parameters)))
                 (push (and password (copy-sequence password)) requests)
                 (if (equal password "secret")
@@ -252,7 +275,9 @@
       (setq requests (nreverse requests)
             prompts (nreverse prompts))
       (should (= leases 1))
-      (should (= opened 9))
+      (should (yunge-reader-pdf-handle-p opened))
+      (should (= (yunge-reader-pdf-handle-session opened) 17))
+      (should (= (yunge-reader-pdf-handle-id opened) 9))
       (should-not completion-error)
       (should (equal requests '("stale" "wrong" "secret")))
       (should (= (length prompts) 2))
@@ -269,7 +294,9 @@
           completion-error)
       (cl-letf
           (((symbol-function 'yunge-reader-native-acquire)
-            (lambda () (cl-incf leases)))
+            (lambda ()
+              (cl-incf leases)
+              17))
            ((symbol-function 'yunge-reader-native-release)
             (lambda () (cl-decf leases)))
            ((symbol-function 'password-read-from-cache)
@@ -279,8 +306,10 @@
             (lambda (&rest _arguments) t))
            ((symbol-function 'read-passwd)
             (lambda (&rest _arguments) (signal 'quit nil)))
-           ((symbol-function 'yunge-reader-native-request)
-            (lambda (_operation _parameters complete)
+           ((symbol-function
+             'yunge-reader-native-request-in-session)
+            (lambda (session _operation _parameters complete)
+              (should (= session 17))
               (funcall
                complete nil
                '(yunge-reader-native-pdf-password-error)))))
@@ -301,7 +330,9 @@
           completion-error)
       (cl-letf
           (((symbol-function 'yunge-reader-native-acquire)
-            (lambda () (cl-incf leases)))
+            (lambda ()
+              (cl-incf leases)
+              17))
            ((symbol-function 'yunge-reader-native-release)
             (lambda () (cl-decf leases)))
            ((symbol-function 'password-read-from-cache)
@@ -311,8 +342,10 @@
             (lambda (&rest _arguments) nil))
            ((symbol-function 'read-passwd)
             (lambda (&rest _arguments) (setq prompted t)))
-           ((symbol-function 'yunge-reader-native-request)
-            (lambda (_operation _parameters complete)
+           ((symbol-function
+             'yunge-reader-native-request-in-session)
+            (lambda (session _operation _parameters complete)
+              (should (= session 17))
               (funcall
                complete nil
                '(yunge-reader-native-pdf-password-error)))))
@@ -336,7 +369,9 @@
           completion-error)
       (cl-letf
           (((symbol-function 'yunge-reader-native-acquire)
-            (lambda () (cl-incf leases)))
+            (lambda ()
+              (cl-incf leases)
+              17))
            ((symbol-function 'yunge-reader-native-release)
             (lambda () (cl-decf leases)))
            ((symbol-function 'password-read-from-cache)
@@ -348,8 +383,10 @@
             (lambda (&rest _arguments)
               (cl-incf prompts)
               (copy-sequence "wrong")))
-           ((symbol-function 'yunge-reader-native-request)
-            (lambda (_operation _parameters complete)
+           ((symbol-function
+             'yunge-reader-native-request-in-session)
+            (lambda (session _operation _parameters complete)
+              (should (= session 17))
               (cl-incf requests)
               (funcall
                complete nil
@@ -372,19 +409,45 @@
                (lambda () nil))
               ((symbol-function 'yunge-reader-native-release)
                (lambda () (cl-decf leases)))
-              ((symbol-function 'yunge-reader-native-request)
+              ((symbol-function
+                'yunge-reader-native-request-in-session)
                (lambda (&rest _arguments) (setq requested t))))
       (yunge-reader-pdf--close
-       (make-yunge-reader-document :handle 7)))
+       (make-yunge-reader-document
+        :handle (yunge-reader-pdf-test--handle 7))))
+    (should (zerop leases))
+    (should-not requested)))
+
+(ert-deftest yunge-reader-pdf-does-not-close-a-colliding-new-session-handle ()
+  (let ((leases 1)
+        requested)
+    (cl-letf
+        (((symbol-function 'yunge-reader-native-live-p)
+          (lambda () t))
+         ((symbol-function 'yunge-reader-native-session-live-p)
+          (lambda (session)
+            (should (= session 17))
+            nil))
+         ((symbol-function 'yunge-reader-native-release)
+          (lambda () (cl-decf leases)))
+         ((symbol-function 'yunge-reader-native-request-in-session)
+          (lambda (&rest _arguments) (setq requested t))))
+      (yunge-reader-pdf--close
+       (make-yunge-reader-document
+        :handle (yunge-reader-pdf-test--handle 1))))
     (should (zerop leases))
     (should-not requested)))
 
 (ert-deftest yunge-reader-pdf-maps-reader-requests-to-native-operations ()
-  (let ((document (make-yunge-reader-document :handle 11))
+  (let ((document
+         (make-yunge-reader-document
+          :handle (yunge-reader-pdf-test--handle 11)))
         calls)
-    (cl-letf (((symbol-function 'yunge-reader-native-request)
-               (lambda (operation parameters _complete)
-                 (push (cons operation parameters) calls))))
+    (cl-letf
+        (((symbol-function 'yunge-reader-native-request-in-session)
+          (lambda (session operation parameters _complete)
+            (should (= session 17))
+            (push (cons operation parameters) calls))))
       (yunge-reader-pdf--request
        document 'page-info '(:page 2) #'ignore)
       (yunge-reader-pdf--request
@@ -672,15 +735,19 @@
         (should (eq (cdadr candidates) second))))))
 
 (ert-deftest yunge-reader-pdf-resolves-cross-page-selection-natively ()
-  (let* ((document (make-yunge-reader-document :handle 11))
+  (let* ((document
+          (make-yunge-reader-document
+           :handle (yunge-reader-pdf-test--handle 11)))
          (start (make-yunge-reader-position :unit 3 :offset 9))
          (end (make-yunge-reader-position :unit 2 :offset 4))
          request
          result)
-    (cl-letf (((symbol-function 'yunge-reader-native-request)
-               (lambda (operation parameters complete)
-                 (setq request (cons operation parameters))
-                 (funcall complete '((text . "exact text")) nil))))
+    (cl-letf
+        (((symbol-function 'yunge-reader-native-request-in-session)
+          (lambda (session operation parameters complete)
+            (should (= session 17))
+            (setq request (cons operation parameters))
+            (funcall complete '((text . "exact text")) nil))))
       (yunge-reader-pdf--request
        document 'selection-text
        (list :start start :end end)

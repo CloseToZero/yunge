@@ -57,6 +57,11 @@
 (defconst yunge-reader-pdf-link-maximum-items 4096
   "Maximum number of links accepted from one PDF page response.")
 
+(cl-defstruct yunge-reader-pdf-handle
+  "A process-local PDF document bound to one native helper session."
+  session
+  id)
+
 (cl-defstruct yunge-reader-pdf-link
   "One PDF page link with disposable hit geometry."
   page
@@ -445,6 +450,7 @@
          (state (and window (yunge-reader--window-state window)))
          (key (yunge-reader-pdf--password-cache-key file))
          (cached-password (password-read-from-cache key))
+         session
          acquired
          finished)
     (cl-labels
@@ -468,7 +474,9 @@
                    (setq yunge-reader-pdf-page 0)))
                (funcall
                 complete
-                (alist-get 'document result)
+                (make-yunge-reader-pdf-handle
+                 :session session
+                 :id (alist-get 'document result))
                 (yunge-reader-pdf--open-properties result)
                 nil))))
          (prompt (attempt last-error)
@@ -492,7 +500,8 @@
                (error (finish nil prompt-error nil nil)))))
          (request (password attempt cached owned)
            (condition-case request-error
-               (yunge-reader-native-request
+               (yunge-reader-native-request-in-session
+                session
                 "open"
                 (append
                  (list (cons 'path file))
@@ -512,7 +521,7 @@
              (error (finish nil request-error password owned)))))
       (condition-case acquire-error
           (progn
-            (yunge-reader-native-acquire)
+            (setq session (yunge-reader-native-acquire))
             (setq acquired t)
             (request cached-password 0 (and cached-password t) nil))
         (error (finish nil acquire-error nil nil))))))
@@ -528,13 +537,21 @@
       (if (not (yunge-reader-native-live-p))
           (release)
         (condition-case error-data
-            (yunge-reader-native-request
-             "close"
-             (list
-              (cons 'document
-                    (yunge-reader-document-handle document)))
-             (lambda (_result _native-error)
-               (release)))
+            (let ((handle (yunge-reader-document-handle document)))
+              (unless (yunge-reader-pdf-handle-p handle)
+                (error "Invalid PDF document handle: %S" handle))
+              (if (not
+                   (yunge-reader-native-session-live-p
+                    (yunge-reader-pdf-handle-session handle)))
+                  (release)
+                (yunge-reader-native-request-in-session
+                 (yunge-reader-pdf-handle-session handle)
+                 "close"
+                 (list
+                  (cons 'document
+                        (yunge-reader-pdf-handle-id handle)))
+                 (lambda (_result _native-error)
+                   (release)))))
           (error
            (release)
            (signal (car error-data) (cdr error-data))))))))
@@ -542,12 +559,19 @@
 (defun yunge-reader-pdf--request
     (document operation arguments complete)
   "Dispatch PDF DOCUMENT OPERATION with ARGUMENTS to COMPLETE."
-  (let ((handle (yunge-reader-document-handle document)))
+  (let* ((handle (yunge-reader-document-handle document))
+         (valid (yunge-reader-pdf-handle-p handle))
+         (session
+          (and valid (yunge-reader-pdf-handle-session handle)))
+         (id (and valid (yunge-reader-pdf-handle-id handle))))
+    (unless valid
+      (error "Invalid PDF document handle: %S" handle))
     (pcase operation
       ('outline
-       (yunge-reader-native-request
+       (yunge-reader-native-request-in-session
+        session
         "outline"
-        (list (cons 'document handle))
+        (list (cons 'document id))
         (lambda (result native-error)
           (funcall complete
                    (and result
@@ -555,16 +579,18 @@
                          document result))
                    native-error))))
       ('page-info
-       (yunge-reader-native-request
+       (yunge-reader-native-request-in-session
+        session
         "page-info"
-        (list (cons 'document handle)
+        (list (cons 'document id)
               (cons 'page (plist-get arguments :page)))
         complete))
       ('page-links
        (let ((page (plist-get arguments :page)))
-         (yunge-reader-native-request
+         (yunge-reader-native-request-in-session
+          session
           "page-links"
-          (list (cons 'document handle)
+          (list (cons 'document id)
                 (cons 'page page))
           (lambda (result native-error)
             (funcall complete
@@ -573,27 +599,30 @@
                            document page result))
                      native-error)))))
       ('page-text
-       (yunge-reader-native-request
+       (yunge-reader-native-request-in-session
+        session
         "page-text"
-        (list (cons 'document handle)
+        (list (cons 'document id)
               (cons 'page (plist-get arguments :page)))
         complete))
       ('render-page
-       (yunge-reader-native-request
+       (yunge-reader-native-request-in-session
+        session
         "render-page"
-        (list (cons 'document handle)
+        (list (cons 'document id)
               (cons 'page (plist-get arguments :page))
               (cons 'width (plist-get arguments :width))
               (cons 'cache-key
                     (plist-get arguments :cache-key)))
-         complete))
+        complete))
       ('search
        (let ((cursor (plist-get arguments :cursor)))
-         (yunge-reader-native-request
+         (yunge-reader-native-request-in-session
+          session
           "search"
           (append
            (list
-            (cons 'document handle)
+            (cons 'document id)
             (cons 'query (plist-get arguments :query))
             (cons 'case-sensitive
                   (if (plist-get arguments :case-sensitive) t :false))
@@ -627,10 +656,11 @@
               complete nil
               (yunge-reader-pdf--native-error
                "PDF selection endpoints must be indexed positions"))
-           (yunge-reader-native-request
+           (yunge-reader-native-request-in-session
+            session
             "selection-text"
             (list
-             (cons 'document handle)
+             (cons 'document id)
              (cons 'start
                    (list (cons 'page start-page)
                          (cons 'offset start-offset)))

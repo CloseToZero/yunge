@@ -15,6 +15,9 @@
 (define-error 'yunge-reader-native-pdf-password-error
   "PDF password is missing or incorrect")
 
+(define-error 'yunge-reader-native-session-lost
+  "Yunge Reader native session ended")
+
 (defcustom yunge-reader-native-idle-seconds 300
   "Seconds with no native clients before stopping the helper.
 Set this to nil to keep an explicitly acquired helper alive until it is
@@ -85,6 +88,9 @@ This must not exceed `yunge-reader-cache-max-bytes'."
 
 (defvar yunge-reader-native--next-id 0
   "Last native request identifier allocated by Emacs.")
+
+(defvar yunge-reader-native--session-counter 0
+  "Last opaque native helper session allocated by Emacs.")
 
 (defvar yunge-reader-native--client-count 0
   "Number of reader components retaining the native service.")
@@ -259,7 +265,7 @@ This must not exceed `yunge-reader-cache-max-bytes'."
     (process-put process 'yunge-reader-output pending)))
 
 (defun yunge-reader-native--fail-callbacks (reason)
-  "Complete every pending native callback with error REASON."
+  "Complete every pending native callback after session loss REASON."
   (let (callbacks)
     (maphash
      (lambda (_id callback)
@@ -268,7 +274,9 @@ This must not exceed `yunge-reader-cache-max-bytes'."
     (clrhash yunge-reader-native--callbacks)
     (setq yunge-reader-native--outbound-queue nil)
     (dolist (callback callbacks)
-      (funcall callback nil (list 'error reason)))))
+      (funcall
+       callback nil
+       (list 'yunge-reader-native-session-lost reason)))))
 
 (defun yunge-reader-native--start-after-crash ()
   "Restart the helper once after an unexpected exit."
@@ -355,14 +363,27 @@ This must not exceed `yunge-reader-cache-max-bytes'."
                :noquery t
                :stderr log
                :filter #'yunge-reader-native--filter
-               :sentinel #'yunge-reader-native--sentinel)))
+               :sentinel #'yunge-reader-native--sentinel))
+             (session (cl-incf yunge-reader-native--session-counter)))
         (process-put process 'yunge-reader-output "")
         (process-put process 'yunge-reader-ready nil)
         (process-put process 'yunge-reader-intentional-stop nil)
+        (process-put process 'yunge-reader-session session)
         (setq yunge-reader-native--process process)
         (when (called-interactively-p 'interactive)
           (message "Starting Yunge Reader native service..."))
         process))))
+
+(defun yunge-reader-native-current-session ()
+  "Return the current opaque native helper session, or nil."
+  (and (process-live-p yunge-reader-native--process)
+       (process-get yunge-reader-native--process
+                    'yunge-reader-session)))
+
+(defun yunge-reader-native-session-live-p (session)
+  "Return whether opaque native SESSION is the current live session."
+  (and (integerp session)
+       (eql session (yunge-reader-native-current-session))))
 
 (defun yunge-reader-native-request (operation parameters complete)
   "Send native OPERATION with PARAMETERS and call COMPLETE on response.
@@ -385,6 +406,26 @@ COMPLETE receives a result and nil, or nil and an Emacs error value."
         (yunge-reader-native--send-line process line)
       (push (cons id line) yunge-reader-native--outbound-queue))
     id))
+
+(defun yunge-reader-native-request-in-session
+    (session operation parameters complete)
+  "Send a native request only while SESSION remains current.
+OPERATION, PARAMETERS, and COMPLETE follow `yunge-reader-native-request'.
+A stale session completes with `yunge-reader-native-session-lost' without
+starting or writing to another helper process."
+  (unless (integerp session)
+    (error "Native reader session must be an integer: %S" session))
+  (unless (stringp operation)
+    (error "Native reader operation must be a string: %S" operation))
+  (unless (functionp complete)
+    (error "Native reader completion must be a function: %S" complete))
+  (if (yunge-reader-native-session-live-p session)
+      (yunge-reader-native-request operation parameters complete)
+    (funcall
+     complete nil
+     '(yunge-reader-native-session-lost
+       "The requested helper session is no longer active"))
+    nil))
 
 (defun yunge-reader-native-live-p ()
   "Return whether the Yunge Reader native helper is running."
@@ -455,6 +496,7 @@ FORCE."
             'ready)
            (t 'starting))
           :clients yunge-reader-native--client-count
+          :session (yunge-reader-native-current-session)
           :cache-pruning yunge-reader-native--cache-pruning
           :program (yunge-reader-native-program)
           :pdfium (yunge-reader-native-pdfium-library)
@@ -556,11 +598,14 @@ When NOTIFY is non-nil, report successful cleanup in the echo area."
    (not (process-live-p yunge-reader-native--process)) t))
 
 (defun yunge-reader-native-acquire ()
-  "Retain and start the native service for one reader component."
+  "Retain the native service and return its opaque current session."
   (yunge-reader-native--cancel-timer 'yunge-reader-native--idle-timer)
   (cl-incf yunge-reader-native--client-count)
   (condition-case error-data
-      (yunge-reader-native-start)
+      (progn
+        (yunge-reader-native-start)
+        (or (yunge-reader-native-current-session)
+            (error "Yunge Reader helper has no live session")))
     (error
      (cl-decf yunge-reader-native--client-count)
      (signal (car error-data) (cdr error-data)))))

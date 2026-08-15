@@ -26,7 +26,8 @@ The current PDF adapter provides:
 - versioned per-document places with zoom-aware PDF viewport restoration;
 - window-local back and forward history for semantic Reader jumps;
 - immutable render keys, stale-response rejection, and bounded disk cache
-  eviction; and
+  eviction;
+- session-bound native handles that cannot alias after a helper restart; and
 - graceful, forced, idle, EOF, and Emacs-exit service shutdown paths.
 
 The reader uses one key vocabulary with or without Evil.  Shared keys are
@@ -267,7 +268,7 @@ and avoiding process startup for every page.  It remains owned by Emacs:
   deadline.  A prefix argument terminates it immediately.
 - =M-x yunge-reader-native-restart= replaces it after graceful shutdown.
 - =M-x yunge-reader-native-status= reports state, clients, paths, PDFium API,
-  and native build identity.
+  helper session, and native build identity.
 - =M-x yunge-reader-cache-prune= prunes cached pages while no Reader document
   is open.
 
@@ -287,9 +288,16 @@ grandchildren.
 Every startup begins with a =ready= message containing protocol version,
 source build ID, PDFium API, and capabilities.  Emacs queues requests until it
 validates all four.  Request IDs match asynchronous responses to callbacks.  A
-crash fails all outstanding callbacks and permits at most one automatic
-restart while a component retains the service.  The wire format is documented
-in [[file:../native/yunge-reader/README.org][the native protocol document]].
+crash fails all outstanding callbacks with a native-session error and permits
+at most one automatic restart while a component retains the service.
+
+Each helper start receives an opaque Emacs-side session identity.  A PDF
+document handle pairs that identity with its process-local numeric handle.
+Document requests require the same live session, so an old handle cannot alias
+a newly opened document whose new helper happens to reuse the same number.
+Closing a stale handle releases its service lease without starting or writing
+to the replacement helper.  The wire format is documented in
+[[file:../native/yunge-reader/README.org][the native protocol document]].
 
 * Setup and PDF engine
 
@@ -324,7 +332,7 @@ selection, and annotation conformance tests.
 
 The next implementation slices should add, in order:
 
-1. real helper crash recovery coverage;
+1. transparent PDF reopening after a real helper crash;
 2. large-document stress coverage; and
 3. a second format driver to exercise the reflow contract.
 
@@ -348,12 +356,14 @@ completions, bounded link mapping and hit testing, tagged URI validation,
 allowlisted explicit activation, link request coalescing, late link caching,
 password retry, cancellation, attempt bounds, late-prompt rejection, cache
 replacement, lease balance, cache limits, prune-before-stop ordering, and
-lease races.  Rust tests cover the handshake, strict parameters, stable PDF
-password errors, bounded outline, link labels, and URIs, destination view
-mapping, safe cache eviction, Unicode literal matching, byte-to-PDFium-index
-mapping, search cursors and limits, regular and singular-angle quadrilateral
-recovery, cross-page inclusive ranges, protocol errors, shutdown ordering,
-and EOF.
+lease races.  Native lifecycle tests additionally cover unique helper session
+identities, one-shot callback failure, stale-session request rejection, and
+process-local handle collisions.  Rust tests cover the handshake, strict
+parameters, stable PDF password errors, bounded outline, link labels, and
+URIs, destination view mapping, safe cache eviction, Unicode literal matching,
+byte-to-PDFium-index mapping, search cursors and limits, regular and
+singular-angle quadrilateral recovery, cross-page inclusive ranges, protocol
+errors, shutdown ordering, and EOF.
 
 The integration path installs the pinned Windows library through the public
 setup command, runs its =pdfium-info= smoke test, opens a five-page A4 fixture,
@@ -388,3 +398,9 @@ an incorrect password with =pdf-password-error=.  Its correct password opens
 the document, returns the expected page geometry, and permits an orderly
 document close and helper shutdown.  The temporary credential and fixture are
 not retained.
+
+A real lifecycle smoke check opens a PDF as document 1, forcibly terminates
+the helper, waits for a distinct replacement session, and opens the fixture as
+document 1 again.  A request bound to the old session is rejected locally;
+the same page request succeeds in the new session before its document closes
+and the replacement helper shuts down cleanly.

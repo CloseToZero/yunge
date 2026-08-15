@@ -14,6 +14,7 @@
          (yunge-reader-native--callbacks (make-hash-table :test #'eql))
          (yunge-reader-native--outbound-queue nil)
          (yunge-reader-native--next-id 0)
+         (yunge-reader-native--session-counter 0)
          (yunge-reader-native--client-count 0)
          (yunge-reader-native--idle-timer nil)
          (yunge-reader-native--cache-pruning nil)
@@ -36,6 +37,11 @@
                ((symbol-function 'process-live-p)
                 (lambda (process)
                   (and live (eq process 'fake-reader-process))))
+               ((symbol-function 'process-status)
+                (lambda (process)
+                  (if (and live (eq process 'fake-reader-process))
+                      'run
+                    'exit)))
                ((symbol-function 'process-put)
                 (lambda (process property value)
                   (puthash (cons process property) value properties)))
@@ -160,7 +166,7 @@
   (yunge-reader-native-test--with-fake-process
     (let ((yunge-reader-native-idle-seconds 42)
           timer-arguments)
-      (yunge-reader-native-acquire)
+      (should (= (yunge-reader-native-acquire) 1))
       (should (= yunge-reader-native--client-count 1))
       (cl-letf (((symbol-function 'run-at-time)
                  (lambda (&rest arguments)
@@ -280,6 +286,61 @@
         (yunge-reader-native--start-after-crash))
       (should-not started))))
 
+(ert-deftest yunge-reader-native-rejects-requests-from-an-old-session ()
+  (yunge-reader-native-test--with-fake-process
+    (yunge-reader-native-start)
+    (let ((old-session (yunge-reader-native-current-session))
+          request-error)
+      (should (= old-session 1))
+      (yunge-reader-native-stop t)
+      (yunge-reader-native--sentinel 'fake-reader-process "killed")
+      (yunge-reader-native-start)
+      (should (= (yunge-reader-native-current-session) 2))
+      (process-put 'fake-reader-process 'yunge-reader-ready t)
+      (yunge-reader-native-request-in-session
+       old-session "page-info" '((document . 1) (page . 0))
+       (lambda (_result error-data)
+         (setq request-error error-data)))
+      (should
+       (eq (car request-error)
+           'yunge-reader-native-session-lost))
+      (should-not sent)
+      (should (zerop (hash-table-count
+                      yunge-reader-native--callbacks))))))
+
+(ert-deftest yunge-reader-native-crash-fails-callbacks-for-its-session ()
+  (yunge-reader-native-test--with-fake-process
+    (let ((calls 0)
+          request-error
+          restart-function)
+      (should (= (yunge-reader-native-acquire) 1))
+      (yunge-reader-native-request
+       "ping" nil
+       (lambda (_result error-data)
+         (cl-incf calls)
+         (setq request-error error-data)))
+      (setq live nil)
+      (cl-letf (((symbol-function 'run-at-time)
+                 (lambda (_delay _repeat function &rest _arguments)
+                   (setq restart-function function)
+                   'fake-timer)))
+        (yunge-reader-native--sentinel
+         'fake-reader-process "exited"))
+      (should
+       (eq (car request-error)
+           'yunge-reader-native-session-lost))
+      (should (= calls 1))
+      (should (zerop (hash-table-count
+                      yunge-reader-native--callbacks)))
+      (should (= yunge-reader-native--restart-count 1))
+      (should (eq restart-function
+                  #'yunge-reader-native--start-after-crash))
+      (yunge-reader-native--sentinel
+       'fake-reader-process "exited again")
+      (should (= calls 1))
+      (funcall restart-function)
+      (should (= (yunge-reader-native-current-session) 2)))))
+
 (ert-deftest yunge-reader-native-status-distinguishes-starting-and-ready ()
   (yunge-reader-native-test--with-fake-process
     (should (eq (plist-get (yunge-reader-native-status) :state)
@@ -287,6 +348,7 @@
     (yunge-reader-native-start)
     (should (eq (plist-get (yunge-reader-native-status) :state)
                 'starting))
+    (should (= (plist-get (yunge-reader-native-status) :session) 1))
     (process-put 'fake-reader-process 'yunge-reader-ready t)
     (should (eq (plist-get (yunge-reader-native-status) :state)
                 'ready))))
