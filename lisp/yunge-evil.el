@@ -97,7 +97,7 @@ Preserve `search-failed' for non-interactive callers."
     (let ((pattern (funcall function regexp)))
       ;; Evil returns a fresh (REGEXP IGNORE-CASE WHOLE-LINE) pattern.
       ;; Replacing only its regexp preserves Vim's smart-case decision.
-      (setcar pattern (yunge-pinyin-regexp regexp))
+      (setcar pattern (yunge-pinyin-query-regexp regexp))
       pattern))))
 
 (defun yunge-evil--split-pinyin-search-pattern

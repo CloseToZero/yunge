@@ -67,7 +67,9 @@
                (eq (car orderless-style-dispatchers)
                    'orderless-kwd-dispatch)
                (eq (car (alist-get 're orderless-kwd-alist))
-                   'orderless-regexp))
+                   'orderless-regexp)
+               (eq (car (alist-get 'py orderless-kwd-alist))
+                   'yunge-pinyin-permissive-regexp))
         (error "Orderless keyword dispatch was not configured"))
       (let* ((chinese (string #x4fdd #x7559))
              (matches
@@ -94,6 +96,13 @@
         (error "Default Orderless matching interpreted a regexp"))
       (unless (completion-all-completions
                ":re:a.b" '("axb") nil 7)
-        (error "Explicit Orderless regexp did not match")))))
+        (error "Explicit Orderless regexp did not match"))
+      (let ((candidate (string #x80cc #x666f #x50cf #x7d20)))
+        (when (completion-all-completions
+               "beijx" (list candidate) nil 5)
+          (error "Structured Pinyin unexpectedly allowed internal mixing"))
+        (unless (completion-all-completions
+                 ":py:beijx" (list candidate) nil 9)
+          (error "Explicit permissive Pinyin did not match"))))))
 
 ;;; yunge-orderless-test.el ends here

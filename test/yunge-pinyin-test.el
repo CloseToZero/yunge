@@ -25,6 +25,38 @@
       (should (string-match-p regexp "保留"))
       (should (string-match-p regexp query)))))
 
+(ert-deftest yunge-pinyin-structured-grammar-rejects-internal-mixing ()
+  (require 'yunge-pinyin)
+  (dolist (query '("beijx" "notion"))
+    (should-not (yunge-pinyin-segmentations query 'structured))
+    (should (equal (yunge-pinyin-regexp query 'structured)
+                   (regexp-quote query)))))
+
+(ert-deftest yunge-pinyin-permissive-grammar-allows-internal-mixing ()
+  (require 'yunge-pinyin)
+  (should (member '("bei" "j" "x")
+                  (yunge-pinyin-segmentations "beijx" 'permissive)))
+  (let ((regexp (yunge-pinyin-regexp "beijx" 'permissive)))
+    (should (string-match-p regexp "背景像素"))
+    (should (string-match-p regexp "beijx"))))
+
+(ert-deftest yunge-pinyin-query-prefix-selects-permissive-grammar ()
+  (require 'yunge-pinyin)
+  (should (equal (yunge-pinyin-parse-query "beijx")
+                 '("beijx" . structured)))
+  (should (equal (yunge-pinyin-parse-query ":py:beijx")
+                 '("beijx" . permissive)))
+  (let ((regexp (yunge-pinyin-query-regexp ":py:beijx")))
+    (should (string-match-p regexp "背景像素"))
+    (should (string-match-p regexp "beijx"))
+    (should-not (equal regexp (regexp-quote ":py:beijx")))))
+
+(ert-deftest yunge-pinyin-permissive-grammar-can-be-the-default ()
+  (require 'yunge-pinyin)
+  (let ((yunge-pinyin-query-grammar 'permissive))
+    (should (string-match-p (yunge-pinyin-regexp "beijx")
+                            "背景像素"))))
+
 (ert-deftest yunge-pinyin-supports-ambiguous-and-polyphonic-readings ()
   (require 'yunge-pinyin)
   (should (string-match-p (yunge-pinyin-regexp "xian") "西安"))
@@ -72,7 +104,7 @@
   (require 'yunge-pinyin)
   (let* ((query "asdfkljadsflkasdjflksadlfk")
          (regexp (yunge-pinyin-regexp query)))
-    (should (equal regexp (regexp-quote query)))
+    (should (<= (length regexp) yunge-pinyin-regexp-budget))
     (should (yunge-pinyin--valid-regexp-p regexp))
     (should (string-match-p regexp query))))
 
@@ -85,9 +117,9 @@
         (progn
           (yunge-pinyin-clear-cache)
           (cl-letf (((symbol-function 'yunge-pinyin--segment-run)
-                     (lambda (run)
+                     (lambda (run grammar)
                        (cl-incf calls)
-                       (funcall original run))))
+                       (funcall original run grammar))))
             (let ((first (yunge-pinyin-regexp "xianxing"))
                   (second (yunge-pinyin-regexp "xianxing")))
               (should (equal first second))
@@ -104,7 +136,29 @@
             (yunge-pinyin-regexp query))
           (should (= (hash-table-count yunge-pinyin--regexp-cache) 2))
           (should-not
-           (gethash (yunge-pinyin--regexp-cache-key "baoliu")
+           (gethash (yunge-pinyin--regexp-cache-key
+                     "baoliu" 'structured)
+                    yunge-pinyin--regexp-cache)))
+      (yunge-pinyin-clear-cache))))
+
+(ert-deftest yunge-pinyin-caches-grammar-results-separately ()
+  (require 'yunge-pinyin)
+  (let ((yunge-pinyin-regexp-cache-size 8))
+    (unwind-protect
+        (progn
+          (yunge-pinyin-clear-cache)
+          (should (equal (yunge-pinyin-regexp "beijx" 'structured)
+                         "beijx"))
+          (should (string-match-p
+                   (yunge-pinyin-regexp "beijx" 'permissive)
+                   "背景像素"))
+          (should
+           (gethash (yunge-pinyin--regexp-cache-key
+                     "beijx" 'structured)
+                    yunge-pinyin--regexp-cache))
+          (should
+           (gethash (yunge-pinyin--regexp-cache-key
+                     "beijx" 'permissive)
                     yunge-pinyin--regexp-cache)))
       (yunge-pinyin-clear-cache))))
 
@@ -128,7 +182,10 @@
       (should (equal (levels-for "shi" 4) '(1 4)))
       (should (equal (levels-for "shi" 5) '(1 5)))
       (let ((fallback-levels
-             (levels-for "asdfkljadsflkasdjflksadlfk" 4)))
+             (levels-for
+              (concat "asdfkljadsflkasdjflksadlfk"
+                      "asdfkljadsflkasdjflksadlfk")
+              4)))
         (should (= (length fallback-levels) 1))
         (should (<= (car fallback-levels) 4))))))
 

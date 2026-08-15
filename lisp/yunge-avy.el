@@ -37,7 +37,7 @@ matches with the same identity in one window.")
 
 (defun yunge-avy--query-regexp (text)
   "Return a literal or Pinyin-aware regexp for TEXT."
-  (or (yunge-pinyin-regexp text)
+  (or (yunge-pinyin-query-regexp text)
       (regexp-quote text)))
 
 (defun yunge-avy--project-match ()
@@ -105,7 +105,7 @@ matches with the same identity in one window.")
 
 (defun yunge-avy-jump-to-text (text)
   "Jump to visible TEXT or projected source matches.
-Also accept full or abbreviated Pinyin."
+Also accept structured Pinyin, or permissive Pinyin after `:py:'."
   (interactive (list (read-from-minibuffer "Jump to text: ")))
   (when (string-empty-p text)
     (user-error "Jump text cannot be empty"))

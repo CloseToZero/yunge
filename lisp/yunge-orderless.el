@@ -23,8 +23,10 @@
         completion-pcm-leading-wildcard t)
   (with-eval-after-load 'orderless
     (require 'orderless-kwd)
-    ;; Keep explicit regexp queries consistent with Evil's `:re:' syntax.
+    ;; Keep explicit query syntaxes consistent with Evil and Avy.
     (add-to-list 'orderless-kwd-alist '(re orderless-regexp))
+    (add-to-list 'orderless-kwd-alist
+                 '(py yunge-pinyin-permissive-regexp))
     (add-to-list 'orderless-style-dispatchers
                  #'orderless-kwd-dispatch)))
 

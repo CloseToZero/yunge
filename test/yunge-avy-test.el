@@ -84,6 +84,14 @@
       (should (string-match-p regexp "保留"))
       (should (string-match-p regexp query)))))
 
+(ert-deftest yunge-avy-pinyin-query-supports-explicit-permissive-grammar ()
+  (yunge-avy-test--load-config)
+  (should-not (string-match-p (yunge-avy--query-regexp "beijx")
+                              "背景像素"))
+  (let ((regexp (yunge-avy--query-regexp ":py:beijx")))
+    (should (string-match-p regexp "背景像素"))
+    (should (string-match-p regexp "beijx"))))
+
 (ert-deftest yunge-avy-jump-to-text-selects-visible-non-ascii-text ()
   (yunge-avy-test--load-config)
   (require 'avy)

@@ -7,11 +7,13 @@
 ;; This Pinyin query compiler is shared by Evil search, Orderless, Avy, and
 ;; other regexp consumers.
 ;;
-;; A query is segmented with a bounded syllable DAG.  Legal full syllables,
-;; incomplete final syllables, and initial abbreviations are supported.  The
-;; best segmentations are compiled into cached character classes.  A semantic
-;; complexity budget prevents broad initial-only queries from producing huge,
-;; slow regexps; the literal query is always retained as a safe fallback.
+;; A query is segmented with a bounded syllable DAG.  The default structured
+;; grammar accepts either full syllables with an optional incomplete final
+;; syllable, or an initials-only query.  The explicit :py: query prefix selects
+;; a permissive grammar that may mix both forms.  The best segmentations are
+;; compiled into cached character classes.  A semantic complexity budget
+;; prevents broad initial-only queries from producing huge, slow regexps; the
+;; literal query is always retained as a safe fallback.
 
 ;;; Code:
 
@@ -44,6 +46,15 @@ Set this to zero to disable the complete-query cache."
   "Maximum number of ranked Pinyin segmentations compiled for one run."
   :type 'integer)
 
+(defcustom yunge-pinyin-query-grammar 'structured
+  "Pinyin grammar used for queries without an explicit prefix.
+The structured grammar accepts either complete syllables with an optional
+incomplete final syllable, or a sequence consisting entirely of initials.
+The permissive grammar additionally permits both forms to be mixed within a
+query.  The `:py:' prefix always selects the permissive grammar."
+  :type '(choice (const :tag "Structured" structured)
+                 (const :tag "Permissive" permissive)))
+
 (defcustom yunge-pinyin-segmentation-cost-slack 12
   "Maximum cost above the best segmentation retained as an alternative."
   :type 'integer)
@@ -68,6 +79,9 @@ This models the high false-positive cost of broad initial character classes."
   '("b" "p" "m" "f" "d" "t" "n" "l" "g" "k" "h"
     "j" "q" "x" "zh" "ch" "sh" "r" "z" "c" "s" "y" "w"
     "a" "e" "o"))
+
+(defconst yunge-pinyin-query-prefix ":py:"
+  "Prefix that explicitly selects permissive Pinyin query grammar.")
 
 (defconst yunge-pinyin--tone-replacements
   '(("ā" . "a") ("á" . "a") ("ǎ" . "a") ("à" . "a")
@@ -202,9 +216,11 @@ the token reaches the end of the input."
        (- yunge-pinyin--maximum-syllable-length
           (min (length text) yunge-pinyin--maximum-syllable-length))))))
 
-(defun yunge-pinyin--edges-at (text beginning allow-incomplete)
+(defun yunge-pinyin--edges-at
+    (text beginning allow-incomplete grammar)
   "Return legal segmentation edges in TEXT starting at BEGINNING.
-ALLOW-INCOMPLETE permits the final edge to be a syllable prefix."
+ALLOW-INCOMPLETE permits the final edge to be a syllable prefix.
+GRAMMAR is `full', `initials', or `permissive'."
   (let ((end (length text))
         edges)
     (cl-loop
@@ -214,14 +230,16 @@ ALLOW-INCOMPLETE permits the final edge to be a syllable prefix."
      for terminalp = (= token-end end)
      do
      (cond
-      ((and terminalp allow-incomplete
+      ((and (memq grammar '(full permissive))
+            terminalp allow-incomplete
             (gethash candidate yunge-pinyin--prefix-table))
        (push (list token-end
                    (yunge-pinyin--make-token
                     :text candidate :prefixp t)
                    (yunge-pinyin--edge-cost candidate t t))
              edges))
-      ((and (gethash candidate yunge-pinyin--syllable-table)
+      ((and (memq grammar '(full permissive))
+            (gethash candidate yunge-pinyin--syllable-table)
             ;; A consonant written alone inside a run is overwhelmingly an
             ;; abbreviation, not an interjection syllable such as m or n.
             (or terminalp
@@ -232,7 +250,8 @@ ALLOW-INCOMPLETE permits the final edge to be a syllable prefix."
                     :text candidate :prefixp nil)
                    (yunge-pinyin--edge-cost candidate nil nil))
              edges)))
-     (when (and (not terminalp)
+     (when (and (memq grammar '(initials permissive))
+                (or (eq grammar 'initials) (not terminalp))
                 (member candidate yunge-pinyin--abbreviation-prefixes))
        (push (list token-end
                    (yunge-pinyin--make-token
@@ -241,9 +260,10 @@ ALLOW-INCOMPLETE permits the final edge to be a syllable prefix."
              edges)))
     edges))
 
-(defun yunge-pinyin--segment-one (text &optional exact-end)
+(defun yunge-pinyin--segment-one (text grammar &optional exact-end)
   "Return ranked segmentations for apostrophe-free Pinyin TEXT.
-When EXACT-END is non-nil, require the final token to be a complete syllable."
+GRAMMAR is `full', `initials', or `permissive'.  When EXACT-END is non-nil,
+require the final token to be a complete syllable in full or permissive mode."
   (yunge-pinyin--initialize)
   (let* ((length (length text))
          (candidate-limit (max 12 (* yunge-pinyin-max-segmentations 4)))
@@ -254,7 +274,9 @@ When EXACT-END is non-nil, require the final token to be a complete syllable."
      for beginning downfrom (1- length) to 0
      do
      (let (candidates)
-       (dolist (edge (yunge-pinyin--edges-at text beginning (not exact-end)))
+       (dolist (edge
+                (yunge-pinyin--edges-at
+                 text beginning (not exact-end) grammar))
          (pcase-let ((`(,end ,token ,edge-cost) edge))
            (dolist (tail (aref best end))
              (push
@@ -280,29 +302,60 @@ When EXACT-END is non-nil, require the final token to be a complete syllable."
          result)))
     (yunge-pinyin--prune-paths result limit)))
 
-(defun yunge-pinyin--segment-run (run)
-  "Return internal ranked segmentations for Pinyin RUN."
-  (let ((parts (split-string (yunge-pinyin-normalize run) "'" t))
+(defun yunge-pinyin--segment-parts (parts grammar)
+  "Return ranked segmentations of apostrophe-separated PARTS using GRAMMAR."
+  (let ((parts (copy-sequence parts))
         (paths (list (yunge-pinyin--make-path :tokens nil :cost 0))))
     (while (and parts paths)
-      (let ((part-paths
-             (yunge-pinyin--segment-one (pop parts) (not (null parts)))))
+      (let* ((part (pop parts))
+             (exact-end (and parts (not (eq grammar 'initials))))
+             (part-paths
+              (yunge-pinyin--segment-one part grammar exact-end)))
         (setq paths
               (and part-paths
                    (yunge-pinyin--combine-segmentations
                     paths part-paths
                     (max 12 (* yunge-pinyin-max-segmentations 4)))))))
-    (seq-take paths yunge-pinyin-max-segmentations)))
+    paths))
 
-(defun yunge-pinyin-segmentations (text)
+(defun yunge-pinyin--segment-run (run grammar)
+  "Return internal ranked segmentations for Pinyin RUN using GRAMMAR."
+  (let ((parts (split-string (yunge-pinyin-normalize run) "'" t))
+        paths)
+    (setq paths
+          (pcase grammar
+            ('structured
+             ;; Prefer a full-Pinyin interpretation when one exists.  The
+             ;; initials grammar is a fallback, not an extra source of broad
+             ;; alternatives for text that is already valid full Pinyin.
+             (or (yunge-pinyin--segment-parts parts 'full)
+                 (yunge-pinyin--segment-parts parts 'initials)))
+            ('permissive
+             (yunge-pinyin--segment-parts parts 'permissive))
+            (_ (error "Unknown Pinyin query grammar: %S" grammar))))
+    (seq-take
+     (yunge-pinyin--prune-paths
+      paths (max 12 (* yunge-pinyin-max-segmentations 4)))
+     yunge-pinyin-max-segmentations)))
+
+(defun yunge-pinyin--resolve-grammar (grammar)
+  "Return GRAMMAR or the configured default, validating the result."
+  (let ((resolved (or grammar yunge-pinyin-query-grammar)))
+    (unless (memq resolved '(structured permissive))
+      (error "Unknown Pinyin query grammar: %S" resolved))
+    resolved))
+
+(defun yunge-pinyin-segmentations (text &optional grammar)
   "Return ranked Pinyin syllable segmentations for ASCII TEXT.
-Each result is a list of strings.  Apostrophes force syllable boundaries."
+Each result is a list of strings.  Apostrophes force syllable boundaries.
+GRAMMAR defaults to `yunge-pinyin-query-grammar'."
   (delete-dups
    (mapcar
     (lambda (path)
       (mapcar #'yunge-pinyin--token-text
               (yunge-pinyin--path-tokens path)))
-    (yunge-pinyin--segment-run text))))
+    (yunge-pinyin--segment-run
+     text (yunge-pinyin--resolve-grammar grammar)))))
 
 (defun yunge-pinyin--token-syllables (token)
   "Return source syllables whose characters may satisfy TOKEN."
@@ -440,8 +493,11 @@ Each result is a list of strings.  Apostrophes force syllable boundaries."
                    ;; by itself.  regexp-opt-charset on such rare tails is a
                    ;; large cold-cache cost whose result is then discarded.
                    (<= maximum remaining)
-                   (<= (+ (yunge-pinyin--path-cost path) total)
-                       (* 2 remaining))
+                   ;; The semantic estimate counts uncompressed characters,
+                   ;; so allow modest charset compression without admitting
+                   ;; a much broader expansion merely because it compresses.
+                   (<= (* 2 (+ (yunge-pinyin--path-cost path) total))
+                       (* 3 remaining))
                    (yunge-pinyin--compile-path path level))))
         (if (and regexp (<= (+ (length regexp) 2) remaining))
             (progn
@@ -452,10 +508,10 @@ Each result is a list of strings.  Apostrophes force syllable boundaries."
       (yunge-pinyin--alternation
        (cons literal (delete-dups (nreverse expansions)))))))
 
-(defun yunge-pinyin--compile-run (run limit)
-  "Compile Pinyin RUN into a regexp no longer than LIMIT."
+(defun yunge-pinyin--compile-run (run limit grammar)
+  "Compile Pinyin RUN with GRAMMAR into a regexp no longer than LIMIT."
   (let ((literal (regexp-quote run))
-        (paths (yunge-pinyin--segment-run run))
+        (paths (yunge-pinyin--segment-run run grammar))
         result)
     (when paths
       ;; Start at the first level where a complete path has characters.  If
@@ -489,9 +545,10 @@ Each result is a list of strings.  Apostrophes force syllable boundaries."
         t)
     (invalid-regexp nil)))
 
-(defun yunge-pinyin--regexp-cache-key (text)
-  "Return a complete-query cache key for TEXT and compiler settings."
+(defun yunge-pinyin--regexp-cache-key (text grammar)
+  "Return a complete-query cache key for TEXT, GRAMMAR, and settings."
   (list text
+        grammar
         yunge-pinyin-regexp-budget
         yunge-pinyin-max-frequency-level
         yunge-pinyin-max-segmentations
@@ -516,8 +573,8 @@ Each result is a list of strings.  Apostrophes force syllable boundaries."
         (setq yunge-pinyin--regexp-cache-tail cell))))
   regexp)
 
-(defun yunge-pinyin--regexp-uncached (text)
-  "Return a bounded literal-or-Pinyin regexp for nonempty TEXT."
+(defun yunge-pinyin--regexp-uncached (text grammar)
+  "Return a bounded literal-or-Pinyin regexp for nonempty TEXT using GRAMMAR."
   (let* ((literal-regexp (regexp-quote text))
          (remaining-extra
           (max 0 (- yunge-pinyin-regexp-budget
@@ -532,7 +589,7 @@ Each result is a list of strings.  Apostrophes force syllable boundaries."
              (literal-run (regexp-quote run))
              (compiled
               (yunge-pinyin--compile-run
-               run (+ (length literal-run) remaining-extra)))
+               run (+ (length literal-run) remaining-extra) grammar))
              (extra (max 0 (- (length compiled) (length literal-run)))))
         (push (regexp-quote (substring text position beginning)) parts)
         (push compiled parts)
@@ -545,19 +602,40 @@ Each result is a list of strings.  Apostrophes force syllable boundaries."
           regexp
         literal-regexp))))
 
-(defun yunge-pinyin-regexp (text)
+(defun yunge-pinyin-regexp (text &optional grammar)
   "Return a bounded regexp matching TEXT literally or through Pinyin.
 Pinyin letter runs are independently expanded.  Other characters are quoted.
-When expansion would be too broad, only the affected literal run is kept."
+When expansion would be too broad, only the affected literal run is kept.
+GRAMMAR defaults to `yunge-pinyin-query-grammar'."
   (unless (string-empty-p text)
-    (let* ((plain-text (substring-no-properties text))
-           (key (yunge-pinyin--regexp-cache-key plain-text))
+    (let* ((grammar (yunge-pinyin--resolve-grammar grammar))
+           (plain-text (substring-no-properties text))
+           (key (yunge-pinyin--regexp-cache-key plain-text grammar))
            (cached (and (> yunge-pinyin-regexp-cache-size 0)
                         (gethash key yunge-pinyin--regexp-cache 'missing))))
       (if (and cached (not (eq cached 'missing)))
           cached
         (yunge-pinyin--cache-regexp
-         key (yunge-pinyin--regexp-uncached plain-text))))))
+         key (yunge-pinyin--regexp-uncached plain-text grammar))))))
+
+(defun yunge-pinyin-parse-query (text)
+  "Return (QUERY . GRAMMAR) for prefixed or ordinary TEXT.
+The `:py:' prefix is removed and selects the permissive grammar."
+  (let ((plain-text (substring-no-properties text)))
+    (if (string-prefix-p yunge-pinyin-query-prefix plain-text)
+        (cons (substring plain-text (length yunge-pinyin-query-prefix))
+              'permissive)
+      (cons plain-text (yunge-pinyin--resolve-grammar nil)))))
+
+(defun yunge-pinyin-query-regexp (text)
+  "Return the literal-or-Pinyin regexp selected by query TEXT.
+An initial `:py:' is query syntax and explicitly selects permissive Pinyin."
+  (pcase-let ((`(,query . ,grammar) (yunge-pinyin-parse-query text)))
+    (yunge-pinyin-regexp query grammar)))
+
+(defun yunge-pinyin-permissive-regexp (text)
+  "Return a literal-or-Pinyin regexp for TEXT using permissive grammar."
+  (yunge-pinyin-regexp text 'permissive))
 
 (provide 'yunge-pinyin)
 

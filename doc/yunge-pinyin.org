@@ -12,13 +12,25 @@ The public entry points are:
 - =yunge-pinyin-normalize= for tone and ü normalization;
 - =yunge-pinyin-segmentations= for ranked syllable segmentation;
 - =yunge-pinyin-regexp= for a literal-or-Pinyin search regexp;
+- =yunge-pinyin-query-regexp= for shared =:py:= query-prefix handling;
 - =yunge-pinyin-clear-cache= for clearing generated character classes.
 
-The regexp compiler uses a bounded syllable DAG.  It supports full syllables,
-an incomplete final syllable, initial abbreviations, and apostrophes as forced
-syllable boundaries.  A complexity budget based on the expanded character
-sets and abbreviated initials prevents broad queries from producing an
-expensive regexp.  A query always remains searchable literally.
+The regexp compiler uses a bounded syllable DAG.  Its default structured
+grammar accepts either full syllables with an optional incomplete final
+syllable, or a query made entirely of initials.  For example, =baoliu=,
+=baol=, and =bl= all match the same Pinyin phrase.  Apostrophes force syllable
+boundaries.
+
+The explicit =:py:= prefix selects a permissive grammar which may mix full
+syllables and initials inside one query.  The same syntax is accepted by Evil
+search and Avy; Orderless exposes it through =orderless-kwd=, for example
+=:py:beijx=.  Set =yunge-pinyin-query-grammar= to =permissive= to make that
+grammar the default instead.
+
+This distinction is purely grammatical: the compiler does not try to detect
+whether input is English.  A complexity budget based on the expanded
+character sets and abbreviated initials prevents broad queries from producing
+an expensive regexp.  A query always remains searchable literally.
 
 The compiler normally stops at frequency level 4.  This keeps ordinary
 queries focused on modern-use characters instead of expanding them with the

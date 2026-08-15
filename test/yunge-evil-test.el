@@ -187,7 +187,16 @@
       "a.b"))
     (should
      (equal (evil-ex-split-search-pattern ":re:font/" 'forward)
-            '(":re:font" "" nil)))))
+            '(":re:font" "" nil)))
+    (let ((structured
+           (evil-ex-pattern-regex
+            (evil-ex-make-search-pattern "beijx")))
+          (permissive
+           (evil-ex-pattern-regex
+            (evil-ex-make-search-pattern ":py:beijx"))))
+      (should-not (string-match-p structured "背景像素"))
+      (should (string-match-p permissive "背景像素"))
+      (should (string-match-p permissive "beijx")))))
 
 (ert-deftest yunge-evil-star-searches-the-word-literally ()
   (yunge-test-enable-evil)
