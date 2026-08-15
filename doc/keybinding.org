@@ -158,7 +158,8 @@ Ordinary buffers use markers, with file and directory data for reopening dead
 buffers.  Other location types can register capture, comparison, and visit
 functions.  Their values remain opaque to the history.  A visit may complete
 asynchronously; the history moves its index only after success, rejects a
-second traversal while completion is pending, and skips failed targets.
+second traversal while completion is pending, and skips failed targets.  A
+provider can cancel a pending traversal without moving or skipping an entry.
 
 * Leader
 
@@ -338,7 +339,9 @@ Shared reader bindings are:
 In fixed-layout readers, ~J/K~ move to the next or previous page, ~gg/G~ move
 to the first or last page, and ~gp~ prompts for a page.  Page Down and Page Up
 retain screen-scrolling behavior.  These page keys stay separate from search
-repeat keys.
+repeat keys.  Search-result changes and ~gg/G/gp~ are semantic jumps, so
+~C-o/C-i~ can revisit them.  Paging and ordinary scrolling do not add jump
+entries.
 
 * Cross-platform rules
 

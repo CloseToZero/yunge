@@ -55,7 +55,8 @@ CAPTURE runs in a candidate buffer with WINDOW and POSITION and returns an
 opaque target value, or nil when it does not accept the location.  SAME
 receives two values and identifies equivalent locations.  VISIT receives a
 value, destination window, and completion function; it must call completion
-exactly once with non-nil after a successful visit.  Completion may be
+exactly once with non-nil after a successful visit, nil for an unavailable
+target, or `:cancel' to stop traversal without moving.  Completion may be
 called asynchronously.
 
 Registering NAME again replaces the old provider and gives the new provider
@@ -315,10 +316,14 @@ When BRANCH is non-nil, discard entries newer than the current one."
              (yunge-jump-history--provider-visit-function provider)
              (yunge-jump-history--entry-value entry)
              window
-             (lambda (success)
+             (lambda (result)
                (unless completed
                  (setq completed t)
-                 (funcall complete (and success t)))))
+                 (funcall
+                  complete
+                  (cond
+                   ((eq result :cancel) :cancel)
+                   (result t))))))
           (error
            (unless completed
              (setq completed t)
@@ -344,7 +349,11 @@ an error message."
          immediate-error)
     (setf (yunge-jump-history--history-pending history) token)
     (cl-labels
-        ((finish
+        ((cancel
+          ()
+          (when (eq (yunge-jump-history--history-pending history) token)
+            (setf (yunge-jump-history--history-pending history) nil)))
+         (finish
           (moved)
           (when (eq (yunge-jump-history--history-pending history) token)
             (setf (yunge-jump-history--history-pending history) nil)
@@ -362,17 +371,19 @@ an error message."
                   (finish moved)
                 (yunge-jump-history--visit
                  (nth candidate entries) window
-                 (lambda (success)
+                 (lambda (result)
                    (when
                        (eq (yunge-jump-history--history-pending history)
                            token)
-                     (if success
-                         (progn
-                           (setf
-                            (yunge-jump-history--history-index history)
-                            candidate)
-                           (seek candidate (1- remaining) t))
-                       (seek candidate remaining moved))))))))))
+                     (cond
+                      ((eq result :cancel) (cancel))
+                      (result
+                       (setf
+                        (yunge-jump-history--history-index history)
+                        candidate)
+                      (seek candidate (1- remaining) t))
+                      (t
+                       (seek candidate remaining moved)))))))))))
       (seek (yunge-jump-history--history-index history) count nil)
       (setq synchronous nil)
       (when immediate-error

@@ -218,6 +218,174 @@
       (when (buffer-live-p buffer)
         (kill-buffer buffer)))))
 
+(ert-deftest yunge-reader-captures-immutable-jump-targets ()
+  (let ((file (expand-file-name "jump-capture.pdf"))
+        (yunge-reader-drivers nil)
+        (current (make-yunge-reader-position :unit 3))
+        buffer)
+    (unwind-protect
+        (save-window-excursion
+          (setq buffer (generate-new-buffer " *reader-jump-capture*"))
+          (switch-to-buffer buffer)
+          (yunge-reader-mode)
+          (let ((driver
+                 (yunge-reader-register-driver
+                  'test
+                  :match (lambda (_file) t)
+                  :open #'ignore :close #'ignore :request #'ignore
+                  :location (lambda (_document _window) current)
+                  :restore (lambda (&rest _arguments) t))))
+            (setq yunge-reader-document
+                  (make-yunge-reader-document
+                   :file file :driver driver :layout 'fixed)
+                  yunge-reader--place-recording-enabled t)
+            (let* ((entry
+                    (yunge-jump-history--window-entry
+                     (selected-window)))
+                   (target
+                    (yunge-jump-history--entry-value entry)))
+              (should
+               (eq (yunge-jump-history--entry-type entry) 'reader))
+              (should (equal (plist-get target :file) file))
+              (setf (yunge-reader-position-unit current) 9)
+              (should
+               (= (plist-get
+                   (plist-get (plist-get target :place) :position)
+                   :unit)
+                  3)))))
+      (when (buffer-live-p buffer)
+        (kill-buffer buffer)))))
+
+(ert-deftest yunge-reader-rejected-live-jump-rolls-back ()
+  (let* ((file (expand-file-name "jump-rejected.pdf"))
+         (old (yunge-reader-test--place 'test 4))
+         (target (yunge-reader-test--place 'test 9))
+         (key (yunge-reader--place-file-key file))
+         (yunge-reader-saved-places
+          (list (cons key (copy-tree old t))))
+         (yunge-reader-drivers nil)
+         (current (make-yunge-reader-position :unit 4))
+         completion
+         buffer)
+    (unwind-protect
+        (save-window-excursion
+          (setq buffer (generate-new-buffer " *reader-jump-reject*"))
+          (switch-to-buffer buffer)
+          (yunge-reader-mode)
+          (let ((driver
+                 (yunge-reader-register-driver
+                  'test
+                  :match (lambda (_file) t)
+                  :open #'ignore :close #'ignore :request #'ignore
+                  :location (lambda (_document _window) current)
+                  :restore
+                  (lambda (_document position _window)
+                    (setq current position)
+                    (/= (yunge-reader-position-unit position) 9)))))
+            (setq yunge-reader-document
+                  (make-yunge-reader-document
+                   :file file :driver driver :layout 'fixed)
+                  yunge-reader--place-recording-enabled t)
+            (yunge-reader--visit-jump-target
+             (list :file file :place target)
+             (selected-window)
+             (lambda (success) (setq completion success))))
+          (should-not completion)
+          (should (= (yunge-reader-position-unit current) 4))
+          (should (eq (window-buffer) buffer))
+          (should (equal (cdr (assoc key yunge-reader-saved-places))
+                         old)))
+      (when (buffer-live-p buffer)
+        (kill-buffer buffer)))))
+
+(ert-deftest yunge-reader-reopens-jump-target-asynchronously ()
+  (let* ((file (expand-file-name "jump-reopen.pdf"))
+         (old (yunge-reader-test--place 'test 17))
+         (target (yunge-reader-test--place 'test 6))
+         (key (yunge-reader--place-file-key file))
+         (yunge-reader-saved-places
+          (list (cons key (copy-tree old t))))
+         (yunge-reader-drivers nil)
+         (current (make-yunge-reader-position :unit 0))
+         complete-open
+         completion
+         (restored 0)
+         reader-buffer)
+    (unwind-protect
+        (save-window-excursion
+          (with-temp-buffer
+            (switch-to-buffer (current-buffer))
+            (yunge-reader-register-driver
+             'test
+             :match (lambda (_file) t)
+             :open
+             (lambda (_file complete) (setq complete-open complete))
+             :close #'ignore :request #'ignore
+             :location (lambda (_document _window) current)
+             :restore
+             (lambda (_document position _window)
+               (setq current position)
+               (cl-incf restored)
+               t))
+            (yunge-reader--visit-jump-target
+             (list :file file :place target)
+             (selected-window)
+             (lambda (success) (setq completion success)))
+            (should complete-open)
+            (should-not completion)
+            (should (eq (window-buffer) (current-buffer)))
+            (funcall complete-open 'handle '(:layout fixed) nil)
+            (setq reader-buffer (window-buffer))
+            (should completion)
+            (with-current-buffer reader-buffer
+              (should (derived-mode-p 'yunge-reader-mode)))
+            (should (= restored 2))
+            (should (= (yunge-reader-position-unit current) 6))
+            (should
+             (equal (cdr (assoc key yunge-reader-saved-places))
+                    target))))
+      (when (buffer-live-p reader-buffer)
+        (kill-buffer reader-buffer)))))
+
+(ert-deftest yunge-reader-abandons-reopen-after-window-change ()
+  (let* ((file (expand-file-name "jump-abandoned.pdf"))
+         (old (yunge-reader-test--place 'test 21))
+         (target (yunge-reader-test--place 'test 8))
+         (key (yunge-reader--place-file-key file))
+         (yunge-reader-saved-places
+          (list (cons key (copy-tree old t))))
+         (yunge-reader-drivers nil)
+         (current (make-yunge-reader-position :unit 0))
+         complete-open
+         completion)
+    (save-window-excursion
+      (with-temp-buffer
+        (insert "before\nafter\n")
+        (switch-to-buffer (current-buffer))
+        (goto-char (point-min))
+        (yunge-reader-register-driver
+         'test
+         :match (lambda (_file) t)
+         :open (lambda (_file complete) (setq complete-open complete))
+         :close #'ignore :request #'ignore
+         :location (lambda (_document _window) current)
+         :restore
+         (lambda (_document position _window)
+           (setq current position)
+           t))
+        (yunge-reader--visit-jump-target
+         (list :file file :place target)
+         (selected-window)
+         (lambda (success) (setq completion success)))
+        (goto-char (point-max))
+        (funcall complete-open 'handle '(:layout fixed) nil)
+        (should (eq completion :cancel))
+        (should (eq (window-buffer) (current-buffer)))
+        (should (= (point) (point-max)))
+        (should-not (yunge-reader--existing-buffer file))
+        (should
+         (equal (cdr (assoc key yunge-reader-saved-places)) old))))))
+
 (ert-deftest yunge-reader-saved-places-are-bounded-and-most-recent-first ()
   (let ((yunge-reader-place-limit 2)
         (yunge-reader-saved-places nil))
@@ -401,6 +569,29 @@
          (should (eq value 'first))
          (cl-incf calls)))
       (should (= calls 1)))))
+
+(ert-deftest yunge-reader-search-records-before-visiting-a-result ()
+  (save-window-excursion
+    (with-temp-buffer
+      (switch-to-buffer (current-buffer))
+      (yunge-reader-mode)
+      (let ((yunge-reader-search-results
+             (list
+              (make-yunge-reader-search-result
+               :start (make-yunge-reader-position :unit 2)
+               :end (make-yunge-reader-position :unit 2)
+               :text "match")))
+            events)
+        (add-hook
+         'yunge-reader-search-result-hook
+         (lambda () (push 'visit events)) nil t)
+        (cl-letf (((symbol-function 'yunge-jump-history-record)
+                   (lambda (window)
+                     (should (eq window (selected-window)))
+                     (should-not yunge-reader-search-result)
+                     (push 'record events))))
+          (yunge-reader--set-search-index 0))
+        (should (equal (nreverse events) '(record visit)))))))
 
 (ert-deftest yunge-reader-search-loads-bounded-batches-on-demand ()
   (with-temp-buffer

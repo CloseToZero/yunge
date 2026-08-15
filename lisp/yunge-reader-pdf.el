@@ -1433,6 +1433,12 @@ When SINGLE is non-nil, use the event start for both points."
      (1+ yunge-reader-pdf-page))))
   (yunge-reader-pdf--set-page (1- page)))
 
+(dolist (command
+         '(yunge-reader-pdf-first-page
+           yunge-reader-pdf-last-page
+           yunge-reader-pdf-goto-page))
+  (yunge-jump-history-track-command command))
+
 (provide 'yunge-reader-pdf)
 
 ;;; yunge-reader-pdf.el ends here

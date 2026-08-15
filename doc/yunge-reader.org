@@ -21,6 +21,7 @@ The current PDF adapter provides:
 - cross-page drag, polygonal SVG highlights, and exact text copying;
 - bounded Unicode literal search, repeat navigation, and glyph-level jumping;
 - versioned per-document places with zoom-aware PDF viewport restoration;
+- window-local back and forward history for semantic Reader jumps;
 - immutable render keys, stale-response rejection, and bounded disk cache
   eviction; and
 - graceful, forced, idle, EOF, and Emacs-exit service shutdown paths.
@@ -78,6 +79,25 @@ serialize Lisp structures that may be undefined when =savehist= first loads.
 A driver that supports places supplies location and restore functions as a
 pair.  Future reflowable drivers can use the same contract without storing an
 Emacs buffer point.
+
+Jump history and the saved place answer different questions.  The saved place
+is the most recent successful view used when a document is opened normally.
+Each jump entry instead owns an immutable snapshot of the file, stable
+position, and zoom state at that moment.  Visiting an older entry therefore
+does not consult a newer saved place and cannot change the entry underneath a
+later traversal.
+
+Reader targets use the same window-local =C-o/C-i= history as ordinary
+buffers.  PDF =gg=, =G=, and =gp= commands, together with successful search
+result changes, create semantic jumps.  =J/K= paging, Page Up or Page Down,
+mouse wheel movement, and ordinary scrolling do not fill the history.
+
+If a target Reader buffer was killed, traversal reopens the document
+asynchronously in a hidden buffer.  It replaces the jump window only after the
+driver has opened the document and accepted the captured place.  A failed
+open or restore leaves the history index, original window, and saved place
+unchanged.  If the user changes that window while opening is pending, the late
+Reader buffer is closed instead of taking the window away.
 
 Opening treats an old place as pending data.  Place recording remains disabled
 through native document opening, the initial view refresh, and restoration.
@@ -241,9 +261,9 @@ selection, and annotation conformance tests.
 
 The next implementation slices should add, in order:
 
-1. back and forward jump-history integration;
-2. document outlines and internal or external links; and
-3. annotation anchors and independent decoration layers.
+1. document outlines and internal or external links;
+2. annotation anchors and independent decoration layers; and
+3. a second format driver to exercise the reflow contract.
 
 * Testing
 
@@ -255,11 +275,13 @@ rotated polygon painting, rectangle fallback, bounded search continuation,
 stale search rejection, independent match painting, precise match scrolling,
 canonical viewport capture, cross-scale place restoration, page clamping,
 deferred window restoration, failed-open place protection, rejected restores,
-keyed render completions, cache limits, prune-before-stop ordering, and lease
-races.  Rust tests cover the handshake, strict parameters, safe cache
-eviction, Unicode literal matching, byte-to-PDFium-index mapping, search
-cursors and limits, regular and singular-angle quadrilateral recovery,
-cross-page inclusive ranges, protocol errors, shutdown ordering, and EOF.
+immutable Reader jump capture, failed live-jump rollback, asynchronous reopen,
+late-window protection, semantic page tracking, keyed render completions,
+cache limits, prune-before-stop ordering, and lease races.  Rust tests cover
+the handshake, strict parameters, safe cache eviction, Unicode literal
+matching, byte-to-PDFium-index mapping, search cursors and limits, regular and
+singular-angle quadrilateral recovery, cross-page inclusive ranges, protocol
+errors, shutdown ordering, and EOF.
 
 The integration path installs the pinned Windows library through the public
 setup command, runs its =pdfium-info= smoke test, opens a five-page A4 fixture,

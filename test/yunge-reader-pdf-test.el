@@ -26,6 +26,23 @@
    (eq (lookup-key yunge-reader-pdf-view-mode-map (kbd "b"))
        #'yunge-reader-pdf-previous-page)))
 
+(ert-deftest yunge-reader-pdf-tracks-only-semantic-page-jumps ()
+  (dolist (command
+           '(yunge-reader-pdf-first-page
+             yunge-reader-pdf-last-page
+             yunge-reader-pdf-goto-page))
+    (should
+     (advice-member-p
+      #'yunge-jump-history--track-navigation command)))
+  (dolist (command
+           '(yunge-reader-pdf-next-page
+             yunge-reader-pdf-previous-page
+             scroll-up-command
+             scroll-down-command))
+    (should-not
+     (advice-member-p
+      #'yunge-jump-history--track-navigation command))))
+
 (ert-deftest yunge-reader-pdf-integrates-page-bindings-with-evil ()
   (yunge-test-enable-evil)
   (require 'which-key)

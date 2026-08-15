@@ -349,6 +349,43 @@
       (yunge-jump-history-test--kill origin current)
       (yunge-jump-history-test--reset))))
 
+(ert-deftest yunge-jump-history-cancels-an-asynchronous-traversal ()
+  (yunge-test-enable-evil)
+  (yunge-jump-history-test--reset)
+  (let ((older (yunge-jump-history-test--buffer " *yunge-jump-older*"))
+        (current (yunge-jump-history-test--buffer " *yunge-jump-current*"))
+        finish)
+    (unwind-protect
+        (save-window-excursion
+          (yunge-jump-history-register-target
+           'test-custom
+           :capture
+           (lambda (_window position)
+             (when yunge-jump-history-test--custom-target
+               (cons (current-buffer) position)))
+           :same #'equal
+           :visit
+           (lambda (_value _window complete)
+             (setq finish complete)))
+          (with-current-buffer older
+            (setq-local yunge-jump-history-test--custom-target t))
+          (switch-to-buffer current)
+          (goto-char 8)
+          (yunge-jump-history-test--record older 3)
+
+          (yunge-jump-history-backward)
+          (let ((history (yunge-jump-history--history)))
+            (should finish)
+            (should (yunge-jump-history--history-pending history))
+            (funcall finish :cancel)
+            (should-not (yunge-jump-history--history-pending history))
+            (should (= (yunge-jump-history--history-index history) 0)))
+          (should (eq (current-buffer) current))
+          (should (= (point) 8)))
+      (yunge-jump-history-unregister-target 'test-custom)
+      (yunge-jump-history-test--kill older current)
+      (yunge-jump-history-test--reset))))
+
 (ert-deftest yunge-jump-history-skips-a-failed-asynchronous-target ()
   (yunge-test-enable-evil)
   (yunge-jump-history-test--reset)

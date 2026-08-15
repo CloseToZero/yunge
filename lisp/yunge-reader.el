@@ -5,6 +5,7 @@
 (require 'cl-lib)
 (require 'seq)
 (require 'subr-x)
+(require 'yunge-jump-history)
 (require 'yunge-key)
 
 (declare-function evil-set-initial-state "evil-core" (mode state))
@@ -365,33 +366,39 @@ new definition highest precedence."
          (eq (window-buffer window) (current-buffer))
          window)))
 
-(defun yunge-reader-record-place (&optional window)
-  "Record the current durable Reader place as viewed in WINDOW.
-Do nothing until document opening and any prior place restoration commit."
-  (when (and yunge-reader--place-recording-enabled
-             (not yunge-reader--restoring-place)
-             yunge-reader-document)
+(defun yunge-reader--current-place (&optional window)
+  "Return the current Reader place viewed in WINDOW, or nil."
+  (when yunge-reader-document
     (let* ((driver
             (yunge-reader-document-driver yunge-reader-document))
            (location
             (yunge-reader-driver-location-function driver))
            (window (yunge-reader--place-window window)))
       (when (and location window)
-        (condition-case error-data
-            (when-let* ((position
-                         (funcall location yunge-reader-document window)))
-              (unless (yunge-reader-position-p position)
-                (error "Reader driver returned an invalid place: %S"
-                       position))
-              (yunge-reader--store-place
-               (yunge-reader-document-file yunge-reader-document)
-               (yunge-reader--make-place driver position)))
-          (error
-           (display-warning
-            'yunge-reader
-            (format "Could not remember Reader place: %s"
-                    (error-message-string error-data))
-            :warning)))))))
+        (when-let* ((position
+                     (funcall location yunge-reader-document window)))
+          (unless (yunge-reader-position-p position)
+            (error "Reader driver returned an invalid place: %S"
+                   position))
+          (yunge-reader--make-place driver position))))))
+
+(defun yunge-reader-record-place (&optional window)
+  "Record the current durable Reader place as viewed in WINDOW.
+Do nothing until document opening and any prior place restoration commit."
+  (when (and yunge-reader--place-recording-enabled
+             (not yunge-reader--restoring-place)
+             yunge-reader-document)
+    (condition-case error-data
+        (when-let* ((place (yunge-reader--current-place window)))
+          (yunge-reader--store-place
+           (yunge-reader-document-file yunge-reader-document)
+           place))
+      (error
+       (display-warning
+        'yunge-reader
+        (format "Could not remember Reader place: %s"
+                (error-message-string error-data))
+        :warning)))))
 
 (defun yunge-reader--restore-view-state (place)
   "Restore generic zoom state from durable PLACE."
@@ -400,26 +407,57 @@ Do nothing until document opening and any prior place restoration commit."
         (yunge-reader--clamp-scale (plist-get place :scale))
         yunge-reader-effective-scale nil))
 
+(defun yunge-reader--apply-place (place &optional window)
+  "Apply validated Reader PLACE in WINDOW and return whether it succeeded."
+  (let* ((driver
+          (yunge-reader-document-driver yunge-reader-document))
+         (restore (yunge-reader-driver-restore-function driver)))
+    (when (and restore (yunge-reader--place-p place driver))
+      (yunge-reader--restore-view-state place)
+      (yunge-reader-refresh)
+      (and
+       (funcall
+        restore yunge-reader-document
+        (yunge-reader--position-from-data
+         (plist-get place :position))
+        (yunge-reader--place-window window))
+       t))))
+
+(defun yunge-reader--restore-live-place (place window)
+  "Restore live Reader PLACE in WINDOW without committing partial state."
+  (let ((origin (yunge-reader--current-place window))
+        (recording yunge-reader--place-recording-enabled)
+        accepted
+        failure)
+    (let ((yunge-reader--restoring-place t))
+      (setq yunge-reader--place-recording-enabled nil)
+      (unwind-protect
+          (condition-case error-data
+              (setq accepted
+                    (yunge-reader--apply-place place window))
+            (error (setq failure error-data)))
+        (unless accepted
+          (when origin
+            (ignore-errors
+              (yunge-reader--apply-place origin window))))
+        (setq yunge-reader--place-recording-enabled recording)))
+    (when failure
+      (signal (car failure) (cdr failure)))
+    (when accepted
+      (yunge-reader-record-place window))
+    accepted))
+
 (defun yunge-reader--restore-open-place ()
   "Build the opened view, restore its pending place, and permit writes."
   (let* ((place yunge-reader--pending-place)
-         (driver
-          (yunge-reader-document-driver yunge-reader-document))
-         (restore (yunge-reader-driver-restore-function driver))
          (accepted t)
          (yunge-reader--restoring-place t))
     (setq yunge-reader--place-recording-enabled nil)
     (when place
-      (yunge-reader--restore-view-state place))
-    (yunge-reader-refresh)
-    (when place
       (setq accepted
-            (and restore
-                 (funcall
-                  restore yunge-reader-document
-                  (yunge-reader--position-from-data
-                   (plist-get place :position))
-                  (yunge-reader--place-window)))))
+            (yunge-reader--apply-place place)))
+    (unless place
+      (yunge-reader-refresh))
     (setq yunge-reader--pending-place nil)
     (when accepted
       (setq yunge-reader--place-recording-enabled t))
@@ -447,6 +485,138 @@ Do nothing until document opening and any prior place restoration commit."
                 (equal file (expand-file-name buffer-file))))))
    (buffer-list)))
 
+(defun yunge-reader--jump-target (window _position)
+  "Capture the current Reader location as an immutable jump target."
+  (when (and yunge-reader--place-recording-enabled
+             (not yunge-reader--restoring-place)
+             yunge-reader-document)
+    (when-let* ((place (yunge-reader--current-place window)))
+      (list
+       :file (yunge-reader-document-file yunge-reader-document)
+       :place (copy-tree place t)))))
+
+(defun yunge-reader--same-jump-target-p (left right)
+  "Return whether Reader jump targets LEFT and RIGHT are equivalent."
+  (let ((left-file (plist-get left :file))
+        (right-file (plist-get right :file)))
+    (and (stringp left-file)
+         (stringp right-file)
+         (equal
+          (yunge-reader--place-file-key left-file)
+          (yunge-reader--place-file-key right-file))
+         (equal (plist-get left :place) (plist-get right :place)))))
+
+(defun yunge-reader--window-point (window)
+  "Return WINDOW's point, including its live selected-window point."
+  (if (eq window (selected-window))
+      (with-current-buffer (window-buffer window)
+        (point))
+    (window-point window)))
+
+(defun yunge-reader--window-state (window)
+  "Capture WINDOW state needed to undo a failed Reader visit."
+  (list
+   :buffer (window-buffer window)
+   :point (yunge-reader--window-point window)
+   :start (window-start window)
+   :vscroll (window-vscroll window t)
+   :hscroll (window-hscroll window)))
+
+(defun yunge-reader--window-state-current-p (window state)
+  "Return non-nil when WINDOW still has captured STATE."
+  (and
+   (window-live-p window)
+   (eq (window-buffer window) (plist-get state :buffer))
+   (= (yunge-reader--window-point window)
+      (plist-get state :point))
+   (= (window-start window) (plist-get state :start))
+   (= (window-vscroll window t) (plist-get state :vscroll))
+   (= (window-hscroll window) (plist-get state :hscroll))))
+
+(defun yunge-reader--restore-window-state (window state)
+  "Restore WINDOW from captured STATE when its buffer remains live."
+  (let ((buffer (plist-get state :buffer)))
+    (when (and (window-live-p window) (buffer-live-p buffer))
+      (set-window-buffer window buffer)
+      (set-window-point window (plist-get state :point))
+      (set-window-start window (plist-get state :start) t)
+      (set-window-vscroll window (plist-get state :vscroll) t)
+      (set-window-hscroll window (plist-get state :hscroll))
+      t)))
+
+(defun yunge-reader--display-jump-place (buffer place window)
+  "Display live Reader BUFFER at PLACE in WINDOW."
+  (when (and (buffer-live-p buffer) (window-live-p window))
+    (select-window window)
+    (switch-to-buffer buffer)
+    (with-current-buffer buffer
+      (and yunge-reader-document
+           (yunge-reader--restore-live-place place window)))))
+
+(defun yunge-reader--visit-new-jump-target
+    (file driver place window origin-state complete)
+  "Open FILE with DRIVER at PLACE in WINDOW, then call COMPLETE."
+  (let ((buffer
+         (generate-new-buffer
+          (format "*Reader: %s*" (file-name-nondirectory file)))))
+    (with-current-buffer buffer
+      (yunge-reader-mode))
+    (condition-case error-data
+        (yunge-reader--begin-open
+         buffer driver file place
+         (lambda (opened)
+           (let ((window-unchanged
+                  (yunge-reader--window-state-current-p
+                   window origin-state))
+                 displayed)
+             (when (and opened window-unchanged)
+               (condition-case nil
+                   (setq displayed
+                         (yunge-reader--display-jump-place
+                          buffer place window))
+                 (error nil)))
+             (unless displayed
+               (when window-unchanged
+                 (yunge-reader--restore-window-state
+                  window origin-state))
+               (when (buffer-live-p buffer)
+                 (kill-buffer buffer)))
+             (funcall
+              complete
+              (cond
+               (displayed t)
+               ((not window-unchanged) :cancel))))))
+      (error
+       (when (buffer-live-p buffer)
+         (kill-buffer buffer))
+       (signal (car error-data) (cdr error-data))))))
+
+(defun yunge-reader--visit-jump-target (value window complete)
+  "Visit Reader jump target VALUE in WINDOW, then call COMPLETE."
+  (let* ((file (plist-get value :file))
+         (place (plist-get value :place))
+         (driver (and (stringp file)
+                      (yunge-reader-driver-for-file file))))
+    (if (not (and driver
+                  (yunge-reader--place-p place driver)
+                  (window-live-p window)))
+        (funcall complete nil)
+      (let ((origin-state (yunge-reader--window-state window))
+            (existing (yunge-reader--existing-buffer file)))
+        (if existing
+            (let ((displayed
+                   (condition-case nil
+                       (with-current-buffer existing
+                         (and yunge-reader-document
+                              (yunge-reader--display-jump-place
+                               existing place window)))
+                     (error nil))))
+              (unless displayed
+                (yunge-reader--restore-window-state window origin-state))
+              (funcall complete (and displayed t)))
+          (yunge-reader--visit-new-jump-target
+           file driver place window origin-state complete))))))
+
 (defun yunge-reader--display-status (format-string &rest arguments)
   "Replace the current reader buffer with formatted status text."
   (let ((inhibit-read-only t))
@@ -473,13 +643,17 @@ Do nothing until document opening and any prior place restoration commit."
         :warning)))))
 
 (defun yunge-reader--finish-open
-    (buffer generation driver file handle properties error-data)
+    (buffer generation driver file handle properties error-data complete)
   "Finish opening FILE in BUFFER for GENERATION.
-DRIVER produced HANDLE, PROPERTIES, and ERROR-DATA."
+DRIVER produced HANDLE, PROPERTIES, and ERROR-DATA.  Call COMPLETE with
+non-nil after the initial view and pending place are ready."
   (if (not (and (buffer-live-p buffer)
                 (with-current-buffer buffer
                   (= generation yunge-reader--open-generation))))
-      (yunge-reader--close-handle driver file handle properties)
+      (progn
+        (yunge-reader--close-handle driver file handle properties)
+        (when complete
+          (funcall complete nil)))
     (with-current-buffer buffer
       (setq yunge-reader--opening-file nil)
       (if error-data
@@ -488,7 +662,9 @@ DRIVER produced HANDLE, PROPERTIES, and ERROR-DATA."
                   yunge-reader--place-recording-enabled nil)
             (yunge-reader--display-status
              "Could not open %s:\n\n%s"
-             file (error-message-string error-data)))
+             file (error-message-string error-data))
+            (when complete
+              (funcall complete nil)))
         (let ((layout (plist-get properties :layout)))
           (unless (memq layout '(fixed reflow))
             (setq error-data
@@ -503,7 +679,9 @@ DRIVER produced HANDLE, PROPERTIES, and ERROR-DATA."
                  driver file handle properties)
                 (yunge-reader--display-status
                  "Could not open %s:\n\n%s"
-                 file (error-message-string error-data)))
+                 file (error-message-string error-data))
+                (when complete
+                  (funcall complete nil)))
             (setq yunge-reader-document
                   (make-yunge-reader-document
                    :file file
@@ -516,15 +694,37 @@ DRIVER produced HANDLE, PROPERTIES, and ERROR-DATA."
              (file-name-nondirectory file)
              layout
              (yunge-reader-driver-name driver))
-            (when (yunge-reader--restore-open-place)
-              (yunge-reader-record-place))))))))
+            (let (accepted restore-error)
+              (condition-case error-data
+                  (setq accepted
+                        (yunge-reader--restore-open-place))
+                (error (setq restore-error error-data)))
+              (if restore-error
+                  (progn
+                    (setq yunge-reader--pending-place nil
+                          yunge-reader--place-recording-enabled nil)
+                    (yunge-reader--display-status
+                     "Could not prepare %s:\n\n%s"
+                     file (error-message-string restore-error)))
+                (when accepted
+                  (yunge-reader-record-place)))
+              (when complete
+                (funcall complete accepted)))))))))
 
-(defun yunge-reader--begin-open (buffer driver file)
-  "Ask DRIVER to open FILE for reader BUFFER."
+(defun yunge-reader--begin-open
+    (buffer driver file &optional place complete)
+  "Ask DRIVER to open FILE for reader BUFFER.
+Restore explicit PLACE instead of the saved place.  Call COMPLETE with
+non-nil only after opening and restoration succeed."
+  (when (and place (not (yunge-reader--place-p place driver)))
+    (error "Reader jump contains an invalid place: %S" place))
+  (unless (or (null complete) (functionp complete))
+    (error "Reader open completion must be a function: %S" complete))
   (with-current-buffer buffer
     (setq yunge-reader--opening-file file
           yunge-reader--pending-place
-          (yunge-reader--saved-place file driver)
+          (or (and place (copy-tree place t))
+              (yunge-reader--saved-place file driver))
           yunge-reader--place-recording-enabled nil)
     (cl-incf yunge-reader--open-generation)
     (yunge-reader--display-status "Opening %s..." file)
@@ -547,12 +747,13 @@ DRIVER produced HANDLE, PROPERTIES, and ERROR-DATA."
                (setq completed t)
                (yunge-reader--finish-open
                 buffer generation driver file handle properties
-                open-error))))
+                open-error complete))))
         (error
          (unless completed
            (setq completed t)
            (yunge-reader--finish-open
-            buffer generation driver file nil nil error-data)))))))
+            buffer generation driver file nil nil error-data
+            complete)))))))
 
 ;;;###autoload
 (defun yunge-reader-open (file)
@@ -657,6 +858,8 @@ COMPLETE is called exactly once by the driver with a value and error value."
   (let ((result (nth index yunge-reader-search-results)))
     (unless result
       (error "Reader search result index is unavailable: %S" index))
+    (when-let* ((window (get-buffer-window (current-buffer) t)))
+      (yunge-jump-history-record window))
     (setq yunge-reader--search-index index
           yunge-reader-search-result result)
     (run-hooks 'yunge-reader-search-result-hook)
@@ -949,6 +1152,12 @@ Ask the active driver for text when the selection does not already carry it."
                  (when (eq selection yunge-reader-selection)
                    (setf (yunge-reader-selection-text selection) text))
                  (yunge-reader--copy-text text))))))))))
+
+(yunge-jump-history-register-target
+ 'reader
+ :capture #'yunge-reader--jump-target
+ :same #'yunge-reader--same-jump-target-p
+ :visit #'yunge-reader--visit-jump-target)
 
 (provide 'yunge-reader)
 
