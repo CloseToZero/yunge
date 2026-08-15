@@ -9,12 +9,13 @@ databases itself.
 
 The initial tool set belongs to Fangcun:
 
-- =fangcun_list_yiyus= lists the configured note roots by identifier and
-  display name.
+- =fangcun_list_yiyus= lists the configured note roots by identifier,
+  display name, and absolute root path.
 - =fangcun_search_nodes= searches node titles, aliases, tags, yiyu names, and
   relative files.
 - =fangcun_read_node= returns one node's metadata and Org source.
-- =fangcun_list_backlinks= returns every indexed link to one node.
+- =fangcun_list_backlinks= returns every indexed link to one node and can
+  optionally include a one-line source preview for each occurrence.
 - =fangcun_create_file_node= creates, saves, and indexes a new Org file node.
 
 Run =M-x yunge-mcp-setup= to build and install the server, then declare it in

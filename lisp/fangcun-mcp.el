@@ -51,7 +51,8 @@
     (lambda (yiyu)
       (list
        :id (fangcun-yiyu-id yiyu)
-       :name (fangcun-yiyu-name yiyu)))
+       :name (fangcun-yiyu-name yiyu)
+       :root (fangcun-yiyu-root yiyu)))
     (fangcun--configured-yiyus))))
 
 (defun fangcun-mcp--search-nodes (arguments)
@@ -133,19 +134,27 @@
 (defun fangcun-mcp--list-backlinks (arguments)
   "List backlinks described by MCP ARGUMENTS."
   (let* ((id (fangcun-mcp--required-string arguments :id))
-         (target (fangcun-mcp--node-by-id id)))
+         (include-preview (plist-get arguments :includePreview))
+         (target (fangcun-mcp--node-by-id id))
+         (backlinks (fangcun-backlink-occurrence-list id))
+         (previews
+          (when include-preview
+            (fangcun--backlink-previews backlinks))))
     (list
      :target (fangcun-mcp--node-object target)
      :backlinks
      (vconcat
       (mapcar
        (lambda (backlink)
-         (list
-          :source
-          (fangcun-mcp--node-object
-           (fangcun-backlink-node backlink))
-          :position (fangcun-backlink-position backlink)))
-       (fangcun-backlink-occurrence-list id))))))
+         (append
+          (list
+           :source
+           (fangcun-mcp--node-object
+            (fangcun-backlink-node backlink))
+           :position (fangcun-backlink-position backlink))
+          (when include-preview
+            (list :preview (gethash backlink previews)))))
+       backlinks)))))
 
 (defun fangcun-mcp--yiyu-by-id (id yiyus)
   "Return the member of YIYUS named ID."
@@ -211,7 +220,7 @@
  "fangcun_list_yiyus"
  (concat
   "List configured 一隅（yiyu） note roots in 方寸（Fangcun）, "
-  "including their identifiers and display names.")
+  "including their identifiers, display names, and absolute root paths.")
  '(:type "object" :additionalProperties :false)
  #'fangcun-mcp--list-yiyus
  fangcun-mcp--read-only-annotations)
@@ -243,10 +252,17 @@
 
 (yunge-mcp-register-tool
  "fangcun_list_backlinks"
- "List every indexed Org link that points to a 方寸（Fangcun） note node."
+ (concat
+  "List every indexed Org link that points to a 方寸（Fangcun） note node. "
+  "Source-line previews can be included on request.")
  '(:type "object"
    :properties
-   (:id (:type "string" :description "Target 方寸（Fangcun） node ID"))
+   (:id (:type "string" :description "Target 方寸（Fangcun） node ID")
+    :includePreview
+    (:type "boolean"
+     :description
+     "Include a one-line preview for each backlink occurrence"
+     :default :false))
    :required ["id"]
    :additionalProperties :false)
  #'fangcun-mcp--list-backlinks

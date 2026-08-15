@@ -1646,8 +1646,8 @@
     (should
      (equal
       (fangcun-mcp--list-yiyus nil)
-      [(:id "personal" :name "Personal")
-       (:id "work" :name "Work")]))))
+      `[(:id "personal" :name "Personal" :root ,personal-root)
+        (:id "work" :name "Work" :root ,work-root)]))))
 
 (ert-deftest fangcun-mcp-lists-every-backlink-occurrence ()
   (fangcun-test-with-notes
@@ -1666,7 +1666,12 @@
     (fangcun-db-sync)
     (let* ((result
             (fangcun-mcp--list-backlinks '(:id "target")))
-           (backlinks (plist-get result :backlinks)))
+           (backlinks (plist-get result :backlinks))
+           (preview-result
+            (fangcun-mcp--list-backlinks
+             '(:id "target" :includePreview t)))
+           (preview-backlinks
+            (plist-get preview-result :backlinks)))
       (should (= (length backlinks) 2))
       (should
        (seq-every-p
@@ -1674,7 +1679,21 @@
           (equal
            (plist-get (plist-get backlink :source) :id)
            "source"))
-        backlinks)))))
+        backlinks))
+      (should-not
+       (seq-some
+        (lambda (backlink)
+          (plist-member backlink :preview))
+        backlinks))
+      (should (= (length preview-backlinks) 2))
+      (should
+       (seq-every-p
+        (lambda (backlink)
+          (and (plist-member backlink :preview)
+               (string-match-p
+                "id:target"
+                (plist-get backlink :preview))))
+        preview-backlinks)))))
 
 (ert-deftest fangcun-mcp-creates-and-indexes-file-nodes ()
   (fangcun-test-with-notes
