@@ -24,6 +24,17 @@ stopped or Emacs exits."
   :type 'number
   :group 'yunge-reader)
 
+(defcustom yunge-reader-cache-max-bytes (* 1024 1024 1024)
+  "Maximum rendered-page cache size before pruning begins."
+  :type 'integer
+  :group 'yunge-reader)
+
+(defcustom yunge-reader-cache-target-bytes (* 768 1024 1024)
+  "Rendered-page cache size to target when pruning is needed.
+This must not exceed `yunge-reader-cache-max-bytes'."
+  :type 'integer
+  :group 'yunge-reader)
+
 (defconst yunge-reader-native-protocol-version 1
   "Native helper protocol version understood by this client.")
 
@@ -77,6 +88,12 @@ stopped or Emacs exits."
 
 (defvar yunge-reader-native--idle-timer nil
   "Timer that stops an unused native helper, or nil.")
+
+(defvar yunge-reader-native--cache-pruning nil
+  "Whether a cache-prune request is outstanding.")
+
+(defvar yunge-reader-native--cache-prune-stop-after nil
+  "Whether to stop the helper after the current cache prune.")
 
 (defvar yunge-reader-native--force-stop-timer nil
   "Timer enforcing the graceful shutdown deadline, or nil.")
@@ -153,13 +170,15 @@ stopped or Emacs exits."
                  (equal actual expected)
                  (equal (alist-get 'pdfium-api message)
                         yunge-reader-native-pdfium-api)
+                 (member "cache-maintenance"
+                         (alist-get 'capabilities message))
                  (member "lifecycle"
                          (alist-get 'capabilities message))
-                  (member "pdf-render"
-                          (alist-get 'capabilities message))
-                  (member "pdf-search"
-                          (alist-get 'capabilities message))
-                  (member "pdf-text"
+                 (member "pdf-render"
+                         (alist-get 'capabilities message))
+                 (member "pdf-search"
+                         (alist-get 'capabilities message))
+                 (member "pdf-text"
                          (alist-get 'capabilities message)))
       (error
        "Incompatible Yunge Reader helper: expected protocol %d build %s, got %S"
@@ -426,6 +445,7 @@ FORCE."
             'ready)
            (t 'starting))
           :clients yunge-reader-native--client-count
+          :cache-pruning yunge-reader-native--cache-pruning
           :program (yunge-reader-native-program)
           :pdfium (yunge-reader-native-pdfium-library)
           :pdfium-api yunge-reader-native-pdfium-api
@@ -436,6 +456,94 @@ FORCE."
                yunge-reader-native--client-count
                (if (= yunge-reader-native--client-count 1) "" "s")))
     status))
+
+(defun yunge-reader-native--cache-prune-parameters ()
+  "Return validated native cache-prune parameters."
+  (unless (and (integerp yunge-reader-cache-max-bytes)
+               (> yunge-reader-cache-max-bytes 0))
+    (user-error "Yunge Reader cache maximum must be a positive integer"))
+  (unless (and (integerp yunge-reader-cache-target-bytes)
+               (>= yunge-reader-cache-target-bytes 0)
+               (<= yunge-reader-cache-target-bytes
+                   yunge-reader-cache-max-bytes))
+    (user-error
+     "Yunge Reader cache target must be between zero and its maximum"))
+  `((max-bytes . ,yunge-reader-cache-max-bytes)
+    (target-bytes . ,yunge-reader-cache-target-bytes)))
+
+(defun yunge-reader-native--cache-prune-complete
+    (process result error-data notify)
+  "Finish cache pruning by PROCESS with RESULT or ERROR-DATA.
+When NOTIFY is non-nil, report successful cleanup in the echo area."
+  (let ((stop-after yunge-reader-native--cache-prune-stop-after))
+    (setq yunge-reader-native--cache-pruning nil
+          yunge-reader-native--cache-prune-stop-after nil)
+    (unless (and error-data
+                 (process-get process 'yunge-reader-intentional-stop))
+      (if error-data
+          (display-warning
+           'yunge-reader
+           (format "Could not prune the Yunge Reader cache: %s"
+                   (error-message-string error-data))
+           :warning)
+        (let ((failed (or (alist-get 'failed-files result) 0))
+              (remaining (or (alist-get 'after-bytes result) 0)))
+          (when (or (> failed 0) (alist-get 'over-budget result))
+            (display-warning
+             'yunge-reader
+             (format
+              "Yunge Reader cache remains at %d bytes (%d failures)"
+              remaining failed)
+             :warning))
+          (when notify
+            (message
+             "Yunge Reader cache: removed %d files (%d bytes); %d remain"
+             (or (alist-get 'removed-files result) 0)
+             (or (alist-get 'removed-bytes result) 0)
+             remaining)))))
+    (when (and stop-after
+               (zerop yunge-reader-native--client-count)
+               (eq process yunge-reader-native--process)
+               (process-live-p process)
+               (not (process-get process
+                                 'yunge-reader-intentional-stop)))
+      (yunge-reader-native-stop))))
+
+(defun yunge-reader-native--cache-prune-request (stop-after &optional notify)
+  "Request cache pruning and optionally STOP-AFTER it completes.
+When NOTIFY is non-nil, report successful cleanup in the echo area."
+  (if yunge-reader-native--cache-pruning
+      (progn
+        (when stop-after
+          (setq yunge-reader-native--cache-prune-stop-after t))
+        nil)
+    (let ((parameters (yunge-reader-native--cache-prune-parameters))
+          process)
+      (setq yunge-reader-native--cache-pruning t
+            yunge-reader-native--cache-prune-stop-after stop-after)
+      (condition-case error-data
+          (progn
+            (yunge-reader-native-request
+             "cache-prune" parameters
+             (lambda (result request-error)
+               (yunge-reader-native--cache-prune-complete
+                process result request-error notify)))
+            (setq process yunge-reader-native--process))
+        (error
+         (setq yunge-reader-native--cache-pruning nil
+               yunge-reader-native--cache-prune-stop-after nil)
+         (signal (car error-data) (cdr error-data)))))))
+
+;;;###autoload
+(defun yunge-reader-cache-prune ()
+  "Prune the rendered-page cache while no Reader document is open."
+  (interactive)
+  (unless (zerop yunge-reader-native--client-count)
+    (user-error "Close all Yunge Reader documents before pruning the cache"))
+  (when yunge-reader-native--cache-pruning
+    (user-error "Yunge Reader cache pruning is already in progress"))
+  (yunge-reader-native--cache-prune-request
+   (not (process-live-p yunge-reader-native--process)) t))
 
 (defun yunge-reader-native-acquire ()
   "Retain and start the native service for one reader component."
@@ -448,10 +556,20 @@ FORCE."
      (signal (car error-data) (cdr error-data)))))
 
 (defun yunge-reader-native--idle-stop ()
-  "Stop the native helper when it still has no clients."
+  "Prune cached pages, then stop a helper with no clients."
   (setq yunge-reader-native--idle-timer nil)
   (when (zerop yunge-reader-native--client-count)
-    (yunge-reader-native-stop)))
+    (if (not (process-live-p yunge-reader-native--process))
+        (setq yunge-reader-native--process nil)
+      (condition-case error-data
+          (yunge-reader-native--cache-prune-request t)
+        (error
+         (display-warning
+          'yunge-reader
+          (format "Could not start Yunge Reader cache pruning: %s"
+                  (error-message-string error-data))
+          :warning)
+         (yunge-reader-native-stop))))))
 
 (defun yunge-reader-native-release ()
   "Release one reader component's native service reference."

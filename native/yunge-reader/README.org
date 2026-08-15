@@ -18,7 +18,8 @@ The helper writes one message immediately after startup:
 #+begin_src json
 {"kind":"ready","protocol":1,"build-id":"HASH",
  "pdfium-api":"7881",
- "capabilities":["lifecycle","pdf-render","pdf-search","pdf-text"]}
+ "capabilities":["cache-maintenance","lifecycle","pdf-render",
+                 "pdf-search","pdf-text"]}
 #+end_src
 
 Emacs requires the protocol, build ID, PDFium API, and all capabilities to
@@ -35,7 +36,7 @@ reject unknown fields.
 {"id":1,"op":"ping"}
 {"id":1,"ok":true,
  "result":{"protocol":1,"backend":"pdfium",
-           "capabilities":["lifecycle","pdf-render",
+           "capabilities":["cache-maintenance","lifecycle","pdf-render",
                            "pdf-search","pdf-text"]}}
 #+end_src
 
@@ -46,6 +47,34 @@ Failures have a stable code and diagnostic message:
  "error":{"code":"unknown-document",
           "message":"unknown document handle: 99"}}
 #+end_src
+
+* Cache maintenance
+
+=cache-prune= accepts a positive =max-bytes= and a nonnegative
+=target-bytes= no greater than the maximum.  When recognized cached pages
+exceed the maximum, the helper removes the oldest entries until their total
+is at or below the target.  A successful =render-page= cache hit updates the
+entry's modification time, making this a filesystem-backed LRU
+approximation.
+
+#+begin_src json
+{"id":3,"op":"cache-prune",
+ "params":{"max-bytes":1073741824,"target-bytes":805306368}}
+{"id":3,"ok":true,
+ "result":{"scanned":120,"before-bytes":1200000000,
+           "after-bytes":800000000,"removed-files":40,
+           "removed-bytes":400000000,"failed-files":0,
+           "over-budget":false}}
+#+end_src
+
+The operation is permitted only while the helper has no open documents.
+It recognizes only ordinary files directly under =YUNGE_READER_CACHE= whose
+names are exactly 64 lowercase hexadecimal characters followed by =.png=.
+Unknown files, temporary files, directories, and symbolic links are ignored
+and never removed.  The configured cache root itself must be an absolute,
+real directory rather than a symbolic link.  Individual removal failures do
+not stop the scan; =failed-files= and =over-budget= let Emacs report an
+incomplete cleanup.
 
 * PDF operations
 
@@ -147,7 +176,8 @@ newline separates adjacent page fragments.  Invalid pages or offsets return
 =render-page= additionally accepts pixel =width= from 16 through 8192 and a
 64-character lowercase hexadecimal =cache-key=.  The helper alone maps that
 key to =YUNGE_READER_CACHE/<key>.png=.  It returns the absolute path, pixel
-dimensions, and whether an existing valid cache entry was reused.
+dimensions, and whether an existing valid cache entry was reused.  Reusing an
+entry refreshes its cache-pruning recency on a best-effort basis.
 
 #+begin_src json
 {"id":8,"op":"render-page",

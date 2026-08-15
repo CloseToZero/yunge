@@ -20,7 +20,8 @@ The current PDF adapter provides:
 - canonical bounds and rotated glyph quadrilaterals for local hit testing;
 - cross-page drag, polygonal SVG highlights, and exact text copying;
 - bounded Unicode literal search, repeat navigation, and glyph-level jumping;
-- immutable render cache keys and stale-response rejection; and
+- immutable render keys, stale-response rejection, and bounded disk cache
+  eviction; and
 - graceful, forced, idle, EOF, and Emacs-exit service shutdown paths.
 
 The reader uses one key vocabulary with or without Evil.  Shared keys are
@@ -32,7 +33,7 @@ prompt, and Page Down or Page Up for screen scrolling.  Evil starts Reader
 buffers in Normal state and leaves Visual =y= as =evil-yank=.
 =M-x yunge-reader-clear-search= removes the active match highlight.
 
-Cache eviction and durable location restoration remain to be implemented.
+Durable location restoration remains to be implemented.
 
 * Library boundary
 
@@ -41,7 +42,8 @@ The implementation is divided into four pieces:
 - =yunge-reader.el= owns drivers, documents, stable positions, logical
   selections, bounded search state, reader buffers, and zoom state.
 - =yunge-reader-native.el= owns subprocess requests, build identity,
-  reference counting, idle shutdown, and explicit lifecycle commands.
+  reference counting, cache policy, idle shutdown, and explicit lifecycle
+  commands.
 - =yunge-reader-setup.el= owns the pinned engine manifest and verified,
   operation-private installation transaction.
 - =yunge-reader-pdf.el= maps the format-independent interface onto PDFium,
@@ -124,6 +126,14 @@ from that 64-character key; an Emacs client cannot ask it to overwrite an
 arbitrary path.  Page and width keyed results prevent an obsolete completion
 from replacing a different page or scale.
 
+The rendered-page cache starts pruning only after its recognized files exceed
+=yunge-reader-cache-max-bytes=, which defaults to 1 GiB.  It then removes the
+oldest entries until =yunge-reader-cache-target-bytes=, 768 MiB by default.
+A cache hit best-effort updates the file modification time, so eviction
+approximates LRU without a second cache index.  The helper operates only on
+ordinary files named by exact render keys.  It never removes unknown files,
+temporary files, directories, or symbolic links.
+
 Text geometry is cached by page because it does not change with zoom.  After
 a click or drag, Emacs embeds each visible selected PNG in an SVG and projects
 that page's part of the logical range over it.  Rotated characters use SVG
@@ -154,10 +164,16 @@ and avoiding process startup for every page.  It remains owned by Emacs:
 - =M-x yunge-reader-native-restart= replaces it after graceful shutdown.
 - =M-x yunge-reader-native-status= reports state, clients, paths, PDFium API,
   and native build identity.
+- =M-x yunge-reader-cache-prune= prunes cached pages while no Reader document
+  is open.
 
 PDF documents acquire a service lease at open and release it after their
 native =close= response.  Releasing the last lease schedules configurable
-idle shutdown.  Setup refuses to interrupt active reader documents.
+idle shutdown.  At the end of that delay, Emacs asks the helper to prune the
+cache before shutting it down.  A new lease acquired during pruning prevents
+shutdown.  The helper independently refuses pruning while it has an open
+document, so Lisp reference counting is not the sole safety boundary.  Setup
+refuses to interrupt active reader documents.
 
 The helper also exits when stdin reaches EOF.  This covers forced Emacs exit
 where Lisp cannot complete an ordinary request.  =kill-emacs-hook= sends a
@@ -204,8 +220,8 @@ selection, and annotation conformance tests.
 
 The next implementation slices should add, in order:
 
-1. cache size limits and eviction;
-2. durable location restoration and jump-history integration; and
+1. durable location restoration and jump-history integration;
+2. document outlines and internal or external links; and
 3. annotation anchors and independent decoration layers.
 
 * Testing
@@ -216,8 +232,9 @@ lease balance, fit calculations, stable roll slots, visible-page
 virtualization, prefetch bounds, text caching, cross-page hit testing, copying,
 rotated polygon painting, rectangle fallback, bounded search continuation,
 stale search rejection, independent match painting, precise match scrolling,
-and keyed render completions.  Rust tests cover the handshake, strict
-parameters, Unicode literal matching, byte-to-PDFium-index mapping, search
+keyed render completions, cache limits, prune-before-stop ordering, and lease
+races.  Rust tests cover the handshake, strict parameters, safe cache
+eviction, Unicode literal matching, byte-to-PDFium-index mapping, search
 cursors and limits, regular and singular-angle quadrilateral recovery,
 cross-page inclusive ranges, protocol errors, shutdown ordering, and EOF.
 

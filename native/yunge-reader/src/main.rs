@@ -9,17 +9,23 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::collections::HashMap;
 use std::env;
-use std::fs;
+use std::fs::{self, File};
 use std::io::{self, BufRead, Write};
 use std::path::{Path, PathBuf};
+use std::time::SystemTime;
 
 type Error = Box<dyn std::error::Error>;
 
 const PROTOCOL_VERSION: u32 = 1;
 const PDFIUM_API: &str = "7881";
 const BUILD_ID: &str = env!("YUNGE_READER_BUILD_ID");
-const CAPABILITIES: [&str; 4] =
-    ["lifecycle", "pdf-render", "pdf-search", "pdf-text"];
+const CAPABILITIES: [&str; 5] = [
+    "cache-maintenance",
+    "lifecycle",
+    "pdf-render",
+    "pdf-search",
+    "pdf-text",
+];
 const SEARCH_CONTEXT_CHARACTERS: usize = 24;
 const SEARCH_MAX_MATCHES: u32 = 200;
 const SEARCH_MAX_PAGES: u32 = 64;
@@ -42,7 +48,7 @@ struct Ready<'a> {
     build_id: &'a str,
     #[serde(rename = "pdfium-api")]
     pdfium_api: &'static str,
-    capabilities: [&'static str; 4],
+    capabilities: [&'static str; 5],
 }
 
 #[derive(Debug, Serialize)]
@@ -114,6 +120,22 @@ struct RenderParams {
     width: i32,
     #[serde(rename = "cache-key")]
     cache_key: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CachePruneParams {
+    #[serde(rename = "max-bytes")]
+    max_bytes: u64,
+    #[serde(rename = "target-bytes")]
+    target_bytes: u64,
+}
+
+#[derive(Debug)]
+struct CacheEntry {
+    path: PathBuf,
+    size: u64,
+    modified: Option<SystemTime>,
 }
 
 #[derive(
@@ -443,6 +465,17 @@ fn ready_message() -> Ready<'static> {
         pdfium_api: PDFIUM_API,
         capabilities: CAPABILITIES,
     }
+}
+
+fn valid_cache_key(value: &str) -> bool {
+    value.len() == 64
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+}
+
+fn valid_cache_file_name(value: &str) -> bool {
+    value.strip_suffix(".png").is_some_and(valid_cache_key)
 }
 
 impl Response {
@@ -880,6 +913,144 @@ impl Service {
         }))
     }
 
+    fn cache_prune(&self, params: Value) -> Result<Value, ServiceError> {
+        let params: CachePruneParams = Self::parse(params)?;
+        if params.max_bytes == 0 || params.target_bytes > params.max_bytes {
+            return Err(ServiceError::new(
+                "invalid-cache-limit",
+                "cache target must not exceed a positive maximum",
+            ));
+        }
+        if !self.documents.is_empty() {
+            return Err(ServiceError::new(
+                "cache-in-use",
+                "cache pruning requires all documents to be closed",
+            ));
+        }
+        let cache = self.cache_directory.as_ref().ok_or_else(|| {
+            ServiceError::new(
+                "cache-unavailable",
+                "YUNGE_READER_CACHE is not set",
+            )
+        })?;
+        if !cache.is_absolute() {
+            return Err(ServiceError::new(
+                "cache-unavailable",
+                "YUNGE_READER_CACHE must be an absolute path",
+            ));
+        }
+        let root_metadata = match fs::symlink_metadata(cache) {
+            Ok(metadata) => metadata,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                return Ok(json!({
+                    "scanned": 0,
+                    "before-bytes": 0,
+                    "after-bytes": 0,
+                    "removed-files": 0,
+                    "removed-bytes": 0,
+                    "failed-files": 0,
+                    "over-budget": false,
+                }));
+            }
+            Err(error) => {
+                return Err(ServiceError::new(
+                    "cache-unavailable",
+                    format!("could not inspect render cache: {error}"),
+                ));
+            }
+        };
+        if root_metadata.file_type().is_symlink() || !root_metadata.is_dir() {
+            return Err(ServiceError::new(
+                "cache-unavailable",
+                "YUNGE_READER_CACHE must be a real directory",
+            ));
+        }
+
+        let directory = fs::read_dir(cache).map_err(|error| {
+            ServiceError::new(
+                "cache-unavailable",
+                format!("could not read render cache: {error}"),
+            )
+        })?;
+        let mut entries = Vec::new();
+        let mut failed_files = 0_u64;
+        let mut before_bytes = 0_u64;
+        for entry in directory {
+            let entry = match entry {
+                Ok(entry) => entry,
+                Err(_) => {
+                    failed_files += 1;
+                    continue;
+                }
+            };
+            let Some(name) = entry.file_name().to_str().map(str::to_owned)
+            else {
+                continue;
+            };
+            if !valid_cache_file_name(&name) {
+                continue;
+            }
+            let file_type = match entry.file_type() {
+                Ok(file_type) => file_type,
+                Err(_) => {
+                    failed_files += 1;
+                    continue;
+                }
+            };
+            if !file_type.is_file() {
+                continue;
+            }
+            let metadata = match entry.metadata() {
+                Ok(metadata) => metadata,
+                Err(_) => {
+                    failed_files += 1;
+                    continue;
+                }
+            };
+            let size = metadata.len();
+            before_bytes = before_bytes.saturating_add(size);
+            entries.push(CacheEntry {
+                path: entry.path(),
+                size,
+                modified: metadata.modified().ok(),
+            });
+        }
+        let scanned = entries.len() as u64;
+        let mut after_bytes = before_bytes;
+        let mut removed_files = 0_u64;
+        let mut removed_bytes = 0_u64;
+        if before_bytes > params.max_bytes {
+            entries.sort_by(|left, right| {
+                left.modified
+                    .cmp(&right.modified)
+                    .then_with(|| left.path.cmp(&right.path))
+            });
+            for entry in entries {
+                if after_bytes <= params.target_bytes {
+                    break;
+                }
+                match fs::remove_file(entry.path) {
+                    Ok(()) => {
+                        after_bytes = after_bytes.saturating_sub(entry.size);
+                        removed_bytes =
+                            removed_bytes.saturating_add(entry.size);
+                        removed_files += 1;
+                    }
+                    Err(_) => failed_files += 1,
+                }
+            }
+        }
+        Ok(json!({
+            "scanned": scanned,
+            "before-bytes": before_bytes,
+            "after-bytes": after_bytes,
+            "removed-files": removed_files,
+            "removed-bytes": removed_bytes,
+            "failed-files": failed_files,
+            "over-budget": after_bytes > params.max_bytes,
+        }))
+    }
+
     fn render_page(&self, params: Value) -> Result<Value, ServiceError> {
         let params: RenderParams = Self::parse(params)?;
         if !(16..=8192).contains(&params.width) {
@@ -888,11 +1059,7 @@ impl Service {
                 "render width must be between 16 and 8192 pixels",
             ));
         }
-        if params.cache_key.len() != 64
-            || !params.cache_key.bytes().all(|byte| {
-                byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte)
-            })
-        {
+        if !valid_cache_key(&params.cache_key) {
             return Err(ServiceError::new(
                 "invalid-cache-key",
                 "cache key must be 64 lowercase hexadecimal characters",
@@ -933,6 +1100,10 @@ impl Service {
                         format!("could not inspect cached page: {error}"),
                     )
                 })?;
+            let _ = File::options()
+                .write(true)
+                .open(&output)
+                .and_then(|file| file.set_modified(SystemTime::now()));
             return Ok(render_result(output, width, height, true));
         }
         let config = PdfRenderConfig::new().set_target_width(params.width);
@@ -996,6 +1167,7 @@ impl Service {
             "close" => self.close(request.params),
             "page-info" => self.page_info(request.params),
             "page-text" => self.page_text(request.params),
+            "cache-prune" => self.cache_prune(request.params),
             "search" => self.search(request.params),
             "render-page" => self.render_page(request.params),
             "selection-text" => self.selection_text(request.params),
@@ -1134,6 +1306,30 @@ fn main() {
 mod tests {
     use super::*;
     use std::io::Cursor;
+    use std::time::{Duration, UNIX_EPOCH};
+
+    struct TempDirectory(PathBuf);
+
+    impl TempDirectory {
+        fn new(name: &str) -> Self {
+            let unique = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos();
+            let path = env::temp_dir().join(format!(
+                "yunge-reader-{name}-{}-{unique}",
+                std::process::id(),
+            ));
+            fs::create_dir(&path).unwrap();
+            Self(path)
+        }
+    }
+
+    impl Drop for TempDirectory {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.0);
+        }
+    }
 
     fn messages(input: &str) -> Vec<Value> {
         let mut output = Vec::new();
@@ -1202,12 +1398,90 @@ mod tests {
             "\n",
             r#"{"id":5,"op":"search","params":{"document":1,"#,
             r#""query":"x","page-limit":0}}"#,
+            "\n",
+            r#"{"id":6,"op":"cache-prune","params":{"#,
+            r#""max-bytes":0,"target-bytes":0}}"#,
+            "\n",
+            r#"{"id":7,"op":"cache-prune","params":{"#,
+            r#""max-bytes":10,"target-bytes":5,"extra":true}}"#,
         ));
         assert_eq!(output[1]["error"]["code"], "invalid-params");
         assert_eq!(output[2]["error"]["code"], "invalid-render-size");
         assert_eq!(output[3]["error"]["code"], "invalid-params");
         assert_eq!(output[4]["error"]["code"], "invalid-search-query");
         assert_eq!(output[5]["error"]["code"], "invalid-search-limit");
+        assert_eq!(output[6]["error"]["code"], "invalid-cache-limit");
+        assert_eq!(output[7]["error"]["code"], "invalid-params");
+    }
+
+    #[test]
+    fn cache_prune_removes_oldest_recognized_files_only() {
+        let directory = TempDirectory::new("cache-prune");
+        let names = [
+            format!("{}.png", "a".repeat(64)),
+            format!("{}.png", "b".repeat(64)),
+            format!("{}.png", "c".repeat(64)),
+        ];
+        for (index, name) in names.iter().enumerate() {
+            let path = directory.0.join(name);
+            fs::write(&path, b"123456").unwrap();
+            File::options()
+                .write(true)
+                .open(path)
+                .unwrap()
+                .set_modified(
+                    UNIX_EPOCH
+                        + Duration::from_secs(1_700_000_000 + index as u64),
+                )
+                .unwrap();
+        }
+        let unknown = directory.0.join("keep-me.png");
+        let temporary =
+            directory.0.join(format!("{}.123.tmp", "d".repeat(64),));
+        let directory_entry =
+            directory.0.join(format!("{}.png", "e".repeat(64),));
+        fs::write(&unknown, b"unknown").unwrap();
+        fs::write(&temporary, b"temporary").unwrap();
+        fs::create_dir(&directory_entry).unwrap();
+
+        let service = Service {
+            pdfium: None,
+            pdfium_library: None,
+            cache_directory: Some(directory.0.clone()),
+            documents: HashMap::new(),
+            next_document: 1,
+        };
+        let result = service
+            .cache_prune(json!({
+                "max-bytes": 15,
+                "target-bytes": 10,
+            }))
+            .unwrap();
+
+        assert_eq!(result["scanned"], 3);
+        assert_eq!(result["before-bytes"], 18);
+        assert_eq!(result["after-bytes"], 6);
+        assert_eq!(result["removed-files"], 2);
+        assert_eq!(result["removed-bytes"], 12);
+        assert_eq!(result["failed-files"], 0);
+        assert_eq!(result["over-budget"], false);
+        assert!(!directory.0.join(&names[0]).exists());
+        assert!(!directory.0.join(&names[1]).exists());
+        assert!(directory.0.join(&names[2]).exists());
+        assert!(unknown.exists());
+        assert!(temporary.exists());
+        assert!(directory_entry.is_dir());
+
+        let below_maximum = service
+            .cache_prune(json!({
+                "max-bytes": 7,
+                "target-bytes": 0,
+            }))
+            .unwrap();
+        assert_eq!(below_maximum["before-bytes"], 6);
+        assert_eq!(below_maximum["after-bytes"], 6);
+        assert_eq!(below_maximum["removed-files"], 0);
+        assert!(directory.0.join(&names[2]).exists());
     }
 
     #[test]
