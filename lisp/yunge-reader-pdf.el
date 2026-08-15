@@ -71,6 +71,9 @@
 (defvar-local yunge-reader-pdf--updating-visible nil
   "Non-nil while PDF roll virtualization is updating display slots.")
 
+(defvar-local yunge-reader-pdf--pending-location nil
+  "Stable PDF position waiting for a live viewport window.")
+
 (defvar-local yunge-reader-pdf--text-cache nil
   "Page-indexed cache of canonical PDF text geometry.")
 
@@ -117,6 +120,7 @@
                     (make-hash-table :test #'eql))
         (setq-local yunge-reader-pdf--text-pending
                     (make-hash-table :test #'eql))
+        (setq-local yunge-reader-pdf--pending-location nil)
         (add-hook 'yunge-reader-refresh-hook
                   #'yunge-reader-pdf--refresh nil t)
         (add-hook 'yunge-reader-search-result-hook
@@ -139,6 +143,7 @@
           yunge-reader-pdf--render-results nil
           yunge-reader-pdf--render-pending nil
           yunge-reader-pdf--displayed-pages nil
+          yunge-reader-pdf--pending-location nil
           yunge-reader-pdf--text-cache nil
           yunge-reader-pdf--text-pending nil)))
 
@@ -342,7 +347,9 @@
    :match #'yunge-reader-pdf--match-p
    :open #'yunge-reader-pdf--open
    :close #'yunge-reader-pdf--close
-   :request #'yunge-reader-pdf--request))
+   :request #'yunge-reader-pdf--request
+   :location #'yunge-reader-pdf--location
+   :restore #'yunge-reader-pdf--restore-location))
 
 ;;;###autoload
 (defun yunge-reader-pdf-open (file)
@@ -425,6 +432,118 @@ When SUPPRESS-SCALE is non-nil, do not update the shared effective scale."
                  (numberp page-height) (> page-height 0))
       (error "PDF page geometry must be positive"))
     (cons width (max 1 (round (* width (/ page-height page-width)))))))
+
+(defun yunge-reader-pdf--location (_document window)
+  "Return the stable PDF position visible at the top left of WINDOW."
+  (when (and (window-live-p window)
+             (eq (window-buffer window) (current-buffer))
+             (> (yunge-reader-pdf--page-count) 0)
+             yunge-reader-pdf--page-positions)
+    (let* ((page
+            (or (yunge-reader-pdf--page-at-position
+                 (window-start window))
+                yunge-reader-pdf-page))
+           (page
+            (max 0 (min (1- (yunge-reader-pdf--page-count)) page)))
+           (page-info (yunge-reader-pdf--page-info page))
+           (width (yunge-reader-pdf--page-width page window))
+           (size (yunge-reader-pdf--pixel-size page-info width))
+           (pixel-width (car size))
+           (pixel-height (cdr size))
+           (page-width (alist-get 'width page-info))
+           (page-height (alist-get 'height page-info))
+           (vertical
+            (max 0 (min pixel-height
+                        (or (window-vscroll window t) 0))))
+           (column-width
+            (max 1 (frame-char-width (window-frame window))))
+           (horizontal
+            (max 0
+                 (min pixel-width
+                      (* (window-hscroll window) column-width)))))
+      (make-yunge-reader-position
+       :unit page
+       :x (* page-width (/ (float horizontal) pixel-width))
+       :y (* page-height
+             (- 1.0 (/ (float vertical) pixel-height)))))))
+
+(defun yunge-reader-pdf--apply-pending-location (window)
+  "Apply a pending stable PDF location to live WINDOW."
+  (when (and yunge-reader-pdf--pending-location
+             (window-live-p window)
+             (eq (window-buffer window) (current-buffer))
+             (> (yunge-reader-pdf--page-count) 0)
+             yunge-reader-pdf--page-positions)
+    (let* ((location yunge-reader-pdf--pending-location)
+           (page
+            (max
+             0
+             (min (1- (yunge-reader-pdf--page-count))
+                  (yunge-reader-position-unit location))))
+           (page-info (yunge-reader-pdf--page-info page))
+           (page-width (alist-get 'width page-info))
+           (page-height (alist-get 'height page-info))
+           (width (yunge-reader-pdf--page-width page window))
+           (size (yunge-reader-pdf--pixel-size page-info width))
+           (pixel-width (car size))
+           (pixel-height (cdr size))
+           (x
+            (max 0.0
+                 (min page-width
+                      (or (yunge-reader-position-x location) 0.0))))
+           (y
+            (max 0.0
+                 (min page-height
+                      (or (yunge-reader-position-y location)
+                          page-height))))
+           (body-width (window-body-width window t))
+           (body-height (window-body-height window t))
+           (vertical
+            (max
+             0
+             (min (max 0 (- pixel-height body-height))
+                  (round
+                   (* pixel-height (- 1.0 (/ y page-height)))))))
+           (horizontal-pixels
+            (max
+             0
+             (min (max 0 (- pixel-width body-width))
+                  (round (* pixel-width (/ x page-width))))))
+           (column-width
+            (max 1 (frame-char-width (window-frame window))))
+           (position (yunge-reader-pdf--page-position page)))
+      (setq yunge-reader-pdf--pending-location nil
+            yunge-reader-pdf-page page)
+      (goto-char position)
+      (set-window-start window position t)
+      (set-window-vscroll window vertical t)
+      (set-window-hscroll
+       window (floor (/ (float horizontal-pixels) column-width)))
+      t)))
+
+(defun yunge-reader-pdf--restore-location
+    (_document location window)
+  "Accept stable PDF LOCATION for restoration in WINDOW."
+  (when (and (yunge-reader-position-p location)
+             (natnump (yunge-reader-position-unit location))
+             (> (yunge-reader-pdf--page-count) 0)
+             yunge-reader-pdf--page-positions)
+    (let* ((page
+            (max
+             0
+             (min (1- (yunge-reader-pdf--page-count))
+                  (yunge-reader-position-unit location))))
+           (position (yunge-reader-pdf--page-position page))
+           (restored (copy-yunge-reader-position location))
+           (live-window (yunge-reader--place-window window)))
+      (setf (yunge-reader-position-unit restored) page)
+      (setq yunge-reader-pdf--pending-location restored
+            yunge-reader-pdf-page page)
+      (goto-char position)
+      (when live-window
+        (set-window-start live-window position t))
+      (yunge-reader-pdf--update-visible-pages live-window)
+      t)))
 
 (defun yunge-reader-pdf--cache-key (page width)
   "Return an immutable render cache key for PAGE at WIDTH."
@@ -998,15 +1117,20 @@ When SUPPRESS-SCALE is non-nil, do not update the shared effective scale."
              yunge-reader-document
              yunge-reader-pdf--page-positions
              (not yunge-reader-pdf--updating-visible))
-    (let ((yunge-reader-pdf--updating-visible t))
-      (yunge-reader-pdf--sync-current-page window)
+    (let ((yunge-reader-pdf--updating-visible t)
+          (window
+           (or window (get-buffer-window (current-buffer) t))))
+      (unless (yunge-reader-pdf--apply-pending-location window)
+        (yunge-reader-pdf--sync-current-page window))
       (yunge-reader-pdf--target-width
-       (yunge-reader-pdf--page-info yunge-reader-pdf-page))
+       (yunge-reader-pdf--page-info yunge-reader-pdf-page)
+       window)
       (let ((visible (yunge-reader-pdf--visible-pages)))
         (yunge-reader-pdf--paint-pages visible)
         (yunge-reader-pdf--queue-pages
          (yunge-reader-pdf--prefetch-range visible)))
-      (yunge-reader-pdf--update-header))))
+      (yunge-reader-pdf--update-header)
+      (yunge-reader-record-place window))))
 
 (defun yunge-reader-pdf--refresh ()
   "Refresh the continuous PDF roll at the current zoom."
@@ -1264,7 +1388,8 @@ When SINGLE is non-nil, use the event start for both points."
   (let ((count (yunge-reader-pdf--page-count)))
     (unless (> count 0)
       (user-error "This PDF has no pages"))
-    (setq yunge-reader-pdf-page
+    (setq yunge-reader-pdf--pending-location nil
+          yunge-reader-pdf-page
           (max 0 (min (1- count) page)))
     (let ((position
            (yunge-reader-pdf--page-position yunge-reader-pdf-page))

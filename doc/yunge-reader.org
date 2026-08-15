@@ -20,6 +20,7 @@ The current PDF adapter provides:
 - canonical bounds and rotated glyph quadrilaterals for local hit testing;
 - cross-page drag, polygonal SVG highlights, and exact text copying;
 - bounded Unicode literal search, repeat navigation, and glyph-level jumping;
+- versioned per-document places with zoom-aware PDF viewport restoration;
 - immutable render keys, stale-response rejection, and bounded disk cache
   eviction; and
 - graceful, forced, idle, EOF, and Emacs-exit service shutdown paths.
@@ -32,8 +33,6 @@ next or previous page, =gg/G= for the first or last page, =gp= for a page
 prompt, and Page Down or Page Up for screen scrolling.  Evil starts Reader
 buffers in Normal state and leaves Visual =y= as =evil-yank=.
 =M-x yunge-reader-clear-search= removes the active match highlight.
-
-Durable location restoration remains to be implemented.
 
 * Library boundary
 
@@ -71,6 +70,28 @@ A =yunge-reader-position= contains a document unit, a stable text offset or
 driver anchor, and optional unscaled coordinates.  PDF coordinates remain in
 the page coordinate system; zoom only changes their screen projection.  A
 reflowable backend can instead store a spine item and CFI-like anchor.
+
+The core persists a bounded, most-recently-used place alist through
+=savehist=.  Each value is plain printable data containing a format version,
+driver name, stable position, zoom mode, and manual scale.  It does not
+serialize Lisp structures that may be undefined when =savehist= first loads.
+A driver that supports places supplies location and restore functions as a
+pair.  Future reflowable drivers can use the same contract without storing an
+Emacs buffer point.
+
+Opening treats an old place as pending data.  Place recording remains disabled
+through native document opening, the initial view refresh, and restoration.
+Only a successful restore permits the current view to replace the old record.
+An unavailable or unbuilt helper, an open or refresh failure, an invalid
+layout, or a rejected restore therefore leaves the prior place untouched.  In
+particular, a transient initial PDF page zero cannot become durable state.
+
+PDF places store a zero-based page and the canonical page coordinates visible
+at the viewport's top left.  Zoom state is restored before building the view;
+the coordinates are then projected into the current render size.  A page past
+the new document end is clamped to the last page.  If the Reader buffer has no
+live window, the PDF adapter retains the position and applies it before the
+next visible-page update and before recording any replacement.
 
 A logical selection contains two positions and optional resolved text.  Its
 painted rectangles are disposable view state, not the source of truth.
@@ -220,7 +241,7 @@ selection, and annotation conformance tests.
 
 The next implementation slices should add, in order:
 
-1. durable location restoration and jump-history integration;
+1. back and forward jump-history integration;
 2. document outlines and internal or external links; and
 3. annotation anchors and independent decoration layers.
 
@@ -232,6 +253,8 @@ lease balance, fit calculations, stable roll slots, visible-page
 virtualization, prefetch bounds, text caching, cross-page hit testing, copying,
 rotated polygon painting, rectangle fallback, bounded search continuation,
 stale search rejection, independent match painting, precise match scrolling,
+canonical viewport capture, cross-scale place restoration, page clamping,
+deferred window restoration, failed-open place protection, rejected restores,
 keyed render completions, cache limits, prune-before-stop ordering, and lease
 races.  Rust tests cover the handshake, strict parameters, safe cache
 eviction, Unicode literal matching, byte-to-PDFium-index mapping, search

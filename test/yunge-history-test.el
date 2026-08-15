@@ -12,6 +12,9 @@
   (should history-delete-duplicates)
   (should savehist-mode)
   (should (= savehist-autosave-interval (* 5 60)))
+  (should
+   (memq 'yunge-reader-saved-places
+         savehist-additional-variables))
   (should recentf-mode)
   (should (= recentf-max-saved-items 1000))
   (should (= recentf-auto-cleanup (* 10 60)))

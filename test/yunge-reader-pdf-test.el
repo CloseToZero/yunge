@@ -289,6 +289,100 @@
       (should (= (car point) 50.0))
       (should (= (cdr point) 150.0)))))
 
+(ert-deftest yunge-reader-pdf-captures-canonical-viewport-location ()
+  (with-temp-buffer
+    (let ((buffer (current-buffer)))
+      (setq yunge-reader-document
+            (yunge-reader-pdf-test--document
+             '((width . 100.0) (height . 200.0))
+             '((width . 100.0) (height . 200.0)))
+            yunge-reader-pdf--page-infos
+            [((width . 100.0) (height . 200.0))
+             ((width . 100.0) (height . 200.0))]
+            yunge-reader-pdf--page-positions [1 3])
+      (cl-letf (((symbol-function 'window-live-p)
+                 (lambda (_window) t))
+                ((symbol-function 'window-buffer)
+                 (lambda (_window) buffer))
+                ((symbol-function 'window-start)
+                 (lambda (_window) 3))
+                ((symbol-function 'window-vscroll)
+                 (lambda (_window &optional _pixels) 500))
+                ((symbol-function 'window-hscroll)
+                 (lambda (_window) 20))
+                ((symbol-function 'window-frame)
+                 (lambda (_window) 'frame))
+                ((symbol-function 'frame-char-width)
+                 (lambda (_frame) 10))
+                ((symbol-function 'yunge-reader-pdf--page-at-position)
+                 (lambda (_position) 1))
+                ((symbol-function 'yunge-reader-pdf--page-width)
+                 (lambda (_page &optional _window) 1000)))
+        (let ((location
+               (yunge-reader-pdf--location nil 'window)))
+          (should (= (yunge-reader-position-unit location) 1))
+          (should (= (yunge-reader-position-x location) 20.0))
+          (should (= (yunge-reader-position-y location) 150.0)))))))
+
+(ert-deftest yunge-reader-pdf-defers-and-rescales-restored-location ()
+  (with-temp-buffer
+    (let ((buffer (current-buffer))
+          window-start
+          vertical
+          horizontal)
+      (insert " \n ")
+      (setq yunge-reader-document
+            (yunge-reader-pdf-test--document
+             '((width . 100.0) (height . 200.0))
+             '((width . 100.0) (height . 200.0)))
+            yunge-reader-pdf--page-infos
+            [((width . 100.0) (height . 200.0))
+             ((width . 100.0) (height . 200.0))]
+            yunge-reader-pdf--page-positions [1 3])
+      (cl-letf (((symbol-function 'yunge-reader--place-window)
+                 (lambda (&optional _window) nil))
+                ((symbol-function 'yunge-reader-pdf--update-visible-pages)
+                 #'ignore))
+        (should
+         (yunge-reader-pdf--restore-location
+          nil
+          (make-yunge-reader-position
+           :unit 9 :x 20.0 :y 150.0)
+          nil)))
+      (should yunge-reader-pdf--pending-location)
+      (should (= yunge-reader-pdf-page 1))
+      (cl-letf (((symbol-function 'window-live-p)
+                 (lambda (_window) t))
+                ((symbol-function 'window-buffer)
+                 (lambda (_window) buffer))
+                ((symbol-function 'window-body-width)
+                 (lambda (_window pixelwise) (and pixelwise 800)))
+                ((symbol-function 'window-body-height)
+                 (lambda (_window pixelwise) (and pixelwise 600)))
+                ((symbol-function 'window-frame)
+                 (lambda (_window) 'frame))
+                ((symbol-function 'frame-char-width)
+                 (lambda (_frame) 10))
+                ((symbol-function 'yunge-reader-pdf--page-width)
+                 (lambda (_page &optional _window) 1000))
+                ((symbol-function 'set-window-start)
+                 (lambda (_window position &optional _noforce)
+                   (setq window-start position)))
+                ((symbol-function 'set-window-vscroll)
+                 (lambda (_window value &optional _pixels)
+                   (setq vertical value)))
+                ((symbol-function 'set-window-hscroll)
+                 (lambda (_window value)
+                   (setq horizontal value))))
+        (should
+         (yunge-reader-pdf--apply-pending-location 'window)))
+      (should-not yunge-reader-pdf--pending-location)
+      (should (= yunge-reader-pdf-page 1))
+      (should (= (point) 3))
+      (should (= window-start 3))
+      (should (= vertical 500))
+      (should (= horizontal 20)))))
+
 (ert-deftest yunge-reader-pdf-hit-testing-creates-cross-page-selection ()
   (with-temp-buffer
     (yunge-reader-mode)

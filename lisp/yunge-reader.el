@@ -43,6 +43,14 @@
   :type '(integer :tag "Units" 1 64)
   :group 'yunge-reader)
 
+(defcustom yunge-reader-place-limit 1000
+  "Maximum number of durable document places to retain."
+  :type '(integer :tag "Places" 1)
+  :group 'yunge-reader)
+
+(defconst yunge-reader-place-version 1
+  "Current durable Reader place format version.")
+
 (define-error 'yunge-reader-no-driver
   "No Yunge Reader driver accepts the document")
 
@@ -53,12 +61,17 @@ MATCH-FUNCTION receives an absolute file name.  OPEN-FUNCTION receives that
 file and a completion function, which it calls with HANDLE, a properties
 plist, and an error value.  CLOSE-FUNCTION receives a `yunge-reader-document'.
 REQUEST-FUNCTION receives a document, operation, argument plist, and a
-completion function, which it calls with a value and an error value."
+completion function, which it calls with a value and an error value.
+LOCATION-FUNCTION receives a document and window and returns a stable
+`yunge-reader-position'.  RESTORE-FUNCTION receives a document, position,
+and window and returns non-nil after accepting the location."
   name
   match-function
   open-function
   close-function
-  request-function)
+  request-function
+  location-function
+  restore-function)
 
 (cl-defstruct yunge-reader-document
   "An open document owned by one reader driver."
@@ -101,6 +114,10 @@ unscaled coordinate system of UNIT."
 (defvar yunge-reader-drivers nil
   "Registered `yunge-reader-driver' objects in precedence order.")
 
+(defvar yunge-reader-saved-places nil
+  "Most recently used durable Reader places.
+Each entry maps a canonical file name to versioned, printable place data.")
+
 (defvar-local yunge-reader-document nil
   "Document displayed by the current reader buffer.")
 
@@ -109,6 +126,15 @@ unscaled coordinate system of UNIT."
 
 (defvar-local yunge-reader--open-generation 0
   "Generation used to reject late document-open completions.")
+
+(defvar-local yunge-reader--pending-place nil
+  "Durable place waiting for the current document to finish opening.")
+
+(defvar-local yunge-reader--place-recording-enabled nil
+  "Whether the current document may replace its durable place.")
+
+(defvar-local yunge-reader--restoring-place nil
+  "Whether the current view is restoring a durable place.")
 
 (defvar-local yunge-reader-zoom-mode 'fit-width
   "Current zoom mode: `manual', `fit-width', or `fit-page'.")
@@ -199,14 +225,21 @@ artifacts.  Functions run in the reader buffer without arguments.")
                          yunge-reader-normal-bindings))
 
 (cl-defun yunge-reader-register-driver
-    (name &key match open close request)
+    (name &key match open close request location restore)
   "Register a reader driver NAME.
 MATCH, OPEN, CLOSE, and REQUEST follow the contracts documented by
-`yunge-reader-driver'.  Registering NAME again atomically replaces its old
-definition and gives the new definition highest precedence."
+`yunge-reader-driver'.  LOCATION and RESTORE are an optional pair.
+Registering NAME again atomically replaces its old definition and gives the
+new definition highest precedence."
   (unless (symbolp name)
     (error "Reader driver name must be a symbol: %S" name))
   (dolist (function (list match open close request))
+    (unless (functionp function)
+      (error "Reader driver %s has a non-function member: %S"
+             name function)))
+  (unless (eq (null location) (null restore))
+    (error "Reader driver %s must define both location functions" name))
+  (dolist (function (delq nil (list location restore)))
     (unless (functionp function)
       (error "Reader driver %s has a non-function member: %S"
              name function)))
@@ -216,7 +249,9 @@ definition and gives the new definition highest precedence."
           :match-function match
           :open-function open
           :close-function close
-          :request-function request)))
+          :request-function request
+          :location-function location
+          :restore-function restore)))
     (setq yunge-reader-drivers
           (cons
            driver
@@ -241,6 +276,154 @@ definition and gives the new definition highest precedence."
      (lambda (driver)
        (funcall (yunge-reader-driver-match-function driver) absolute))
      yunge-reader-drivers)))
+
+(defun yunge-reader--place-file-key (file)
+  "Return the canonical durable-place key for FILE."
+  (let ((absolute (expand-file-name file)))
+    (or (ignore-errors (file-truename absolute)) absolute)))
+
+(defun yunge-reader--position-data (position)
+  "Return printable durable data for reader POSITION."
+  (list
+   :unit (copy-tree (yunge-reader-position-unit position) t)
+   :offset (copy-tree (yunge-reader-position-offset position) t)
+   :x (yunge-reader-position-x position)
+   :y (yunge-reader-position-y position)))
+
+(defun yunge-reader--position-data-p (data)
+  "Return whether DATA represents a durable reader position."
+  (and (listp data)
+       (plist-member data :unit)
+       (let ((x (plist-get data :x))
+             (y (plist-get data :y)))
+         (and (or (null x) (numberp x))
+              (or (null y) (numberp y))))))
+
+(defun yunge-reader--position-from-data (data)
+  "Return the reader position represented by durable DATA."
+  (when (yunge-reader--position-data-p data)
+    (make-yunge-reader-position
+     :unit (copy-tree (plist-get data :unit) t)
+     :offset (copy-tree (plist-get data :offset) t)
+     :x (plist-get data :x)
+     :y (plist-get data :y))))
+
+(defun yunge-reader--make-place (driver position)
+  "Return a printable place for DRIVER at POSITION."
+  (list
+   :version yunge-reader-place-version
+   :driver (yunge-reader-driver-name driver)
+   :position (yunge-reader--position-data position)
+   :zoom-mode yunge-reader-zoom-mode
+   :scale yunge-reader-scale))
+
+(defun yunge-reader--place-p (place driver)
+  "Return whether PLACE is valid for DRIVER."
+  (and (listp place)
+       (equal (plist-get place :version)
+              yunge-reader-place-version)
+       (eq (plist-get place :driver)
+           (yunge-reader-driver-name driver))
+       (yunge-reader--position-data-p
+        (plist-get place :position))
+       (memq (plist-get place :zoom-mode)
+             '(manual fit-width fit-page))
+       (let ((scale (plist-get place :scale)))
+         (and (numberp scale) (> scale 0)))))
+
+(defun yunge-reader--saved-place (file driver)
+  "Return the valid durable place for FILE and DRIVER, or nil."
+  (let* ((key (yunge-reader--place-file-key file))
+         (place (cdr (assoc key yunge-reader-saved-places))))
+    (when (yunge-reader--place-p place driver)
+      (copy-tree place t))))
+
+(defun yunge-reader--store-place (file place)
+  "Store durable PLACE for FILE as the most recent Reader place."
+  (let ((key (yunge-reader--place-file-key file)))
+    (setq yunge-reader-saved-places
+          (cons
+           (cons key (copy-tree place t))
+           (seq-remove
+            (lambda (entry) (equal (car-safe entry) key))
+            yunge-reader-saved-places)))
+    (when (> (length yunge-reader-saved-places)
+             yunge-reader-place-limit)
+      (setcdr (nthcdr (1- yunge-reader-place-limit)
+                      yunge-reader-saved-places)
+              nil))))
+
+(defun yunge-reader--place-window (&optional window)
+  "Return a live WINDOW displaying the current Reader buffer."
+  (let ((window
+         (or window
+             (and (eq (window-buffer (selected-window))
+                      (current-buffer))
+                  (selected-window))
+             (get-buffer-window (current-buffer) t))))
+    (and (window-live-p window)
+         (eq (window-buffer window) (current-buffer))
+         window)))
+
+(defun yunge-reader-record-place (&optional window)
+  "Record the current durable Reader place as viewed in WINDOW.
+Do nothing until document opening and any prior place restoration commit."
+  (when (and yunge-reader--place-recording-enabled
+             (not yunge-reader--restoring-place)
+             yunge-reader-document)
+    (let* ((driver
+            (yunge-reader-document-driver yunge-reader-document))
+           (location
+            (yunge-reader-driver-location-function driver))
+           (window (yunge-reader--place-window window)))
+      (when (and location window)
+        (condition-case error-data
+            (when-let* ((position
+                         (funcall location yunge-reader-document window)))
+              (unless (yunge-reader-position-p position)
+                (error "Reader driver returned an invalid place: %S"
+                       position))
+              (yunge-reader--store-place
+               (yunge-reader-document-file yunge-reader-document)
+               (yunge-reader--make-place driver position)))
+          (error
+           (display-warning
+            'yunge-reader
+            (format "Could not remember Reader place: %s"
+                    (error-message-string error-data))
+            :warning)))))))
+
+(defun yunge-reader--restore-view-state (place)
+  "Restore generic zoom state from durable PLACE."
+  (setq yunge-reader-zoom-mode (plist-get place :zoom-mode)
+        yunge-reader-scale
+        (yunge-reader--clamp-scale (plist-get place :scale))
+        yunge-reader-effective-scale nil))
+
+(defun yunge-reader--restore-open-place ()
+  "Build the opened view, restore its pending place, and permit writes."
+  (let* ((place yunge-reader--pending-place)
+         (driver
+          (yunge-reader-document-driver yunge-reader-document))
+         (restore (yunge-reader-driver-restore-function driver))
+         (accepted t)
+         (yunge-reader--restoring-place t))
+    (setq yunge-reader--place-recording-enabled nil)
+    (when place
+      (yunge-reader--restore-view-state place))
+    (yunge-reader-refresh)
+    (when place
+      (setq accepted
+            (and restore
+                 (funcall
+                  restore yunge-reader-document
+                  (yunge-reader--position-from-data
+                   (plist-get place :position))
+                  (yunge-reader--place-window)))))
+    (setq yunge-reader--pending-place nil)
+    (when accepted
+      (setq yunge-reader--place-recording-enabled t))
+    accepted))
 
 (defun yunge-reader--buffer-file (buffer)
   "Return the document file associated with reader BUFFER."
@@ -300,9 +483,12 @@ DRIVER produced HANDLE, PROPERTIES, and ERROR-DATA."
     (with-current-buffer buffer
       (setq yunge-reader--opening-file nil)
       (if error-data
-          (yunge-reader--display-status
-           "Could not open %s:\n\n%s"
-           file (error-message-string error-data))
+          (progn
+            (setq yunge-reader--pending-place nil
+                  yunge-reader--place-recording-enabled nil)
+            (yunge-reader--display-status
+             "Could not open %s:\n\n%s"
+             file (error-message-string error-data)))
         (let ((layout (plist-get properties :layout)))
           (unless (memq layout '(fixed reflow))
             (setq error-data
@@ -311,6 +497,8 @@ DRIVER produced HANDLE, PROPERTIES, and ERROR-DATA."
                                 layout))))
           (if error-data
               (progn
+                (setq yunge-reader--pending-place nil
+                      yunge-reader--place-recording-enabled nil)
                 (yunge-reader--close-handle
                  driver file handle properties)
                 (yunge-reader--display-status
@@ -328,12 +516,16 @@ DRIVER produced HANDLE, PROPERTIES, and ERROR-DATA."
              (file-name-nondirectory file)
              layout
              (yunge-reader-driver-name driver))
-            (yunge-reader-refresh)))))))
+            (when (yunge-reader--restore-open-place)
+              (yunge-reader-record-place))))))))
 
 (defun yunge-reader--begin-open (buffer driver file)
   "Ask DRIVER to open FILE for reader BUFFER."
   (with-current-buffer buffer
-    (setq yunge-reader--opening-file file)
+    (setq yunge-reader--opening-file file
+          yunge-reader--pending-place
+          (yunge-reader--saved-place file driver)
+          yunge-reader--place-recording-enabled nil)
     (cl-incf yunge-reader--open-generation)
     (yunge-reader--display-status "Opening %s..." file)
     (let ((generation yunge-reader--open-generation)
@@ -390,9 +582,12 @@ asynchronously."
   (cl-incf yunge-reader--open-generation)
   (cl-incf yunge-reader--search-generation)
   (when yunge-reader-document
+    (yunge-reader-record-place)
     (let* ((document yunge-reader-document)
            (driver (yunge-reader-document-driver document)))
-      (setq yunge-reader-document nil)
+      (setq yunge-reader-document nil
+            yunge-reader--pending-place nil
+            yunge-reader--place-recording-enabled nil)
       (condition-case error-data
           (funcall (yunge-reader-driver-close-function driver) document)
         (error
