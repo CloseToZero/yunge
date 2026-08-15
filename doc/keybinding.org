@@ -147,6 +147,19 @@ the sequence's established meaning.  For example, using ~gf~ to visit package
 source still means visiting an associated file.  An unrelated override
 requires stronger evidence of frequent use.
 
+* Window-local jump history
+
+~C-o~ and ~C-i~ traverse older and newer locations in the selected window.
+Each window owns its branch and copies that branch when it is split.  A new
+successful navigation after moving backward discards only the newer branch in
+that window.
+
+Ordinary buffers use markers, with file and directory data for reopening dead
+buffers.  Other location types can register capture, comparison, and visit
+functions.  Their values remain opaque to the history.  A visit may complete
+asynchronously; the history moves its index only after success, rejects a
+second traversal while completion is pending, and skips failed targets.
+
 * Leader
 
 Reserve ~SPC~ as the global leader and ~SPC m~ as the major-mode local leader.

@@ -1,4 +1,4 @@
-;;; yunge-jump-history-test.el --- Jump history tests -*- lexical-binding: t; -*-
+;;; yunge-jump-history-test.el --- Jump tests -*- lexical-binding: t; -*-
 ;; SPDX-FileCopyrightText: 2026 Chen Zhexuan
 ;; SPDX-License-Identifier: MIT
 
@@ -10,6 +10,8 @@
 (declare-function yunge-jump-history-track-command "yunge-jump-history")
 
 (defvar evil--jumps-jump-command)
+
+(defvar-local yunge-jump-history-test--custom-target nil)
 
 (defun yunge-jump-history-test--buffer (name)
   "Return a non-file buffer named NAME with test content."
@@ -38,6 +40,29 @@
 (defun yunge-jump-history-test--navigate (action)
   "Run ACTION as a navigation command."
   (funcall action))
+
+(ert-deftest yunge-jump-history-registers-and-replaces-target-providers ()
+  (let ((yunge-jump-history--providers
+         (copy-sequence yunge-jump-history--providers)))
+    (should-error
+     (yunge-jump-history-register-target
+      "invalid" :capture #'ignore :same #'ignore :visit #'ignore))
+    (should-error
+     (yunge-jump-history-register-target
+      'invalid :capture #'ignore :same #'ignore :visit nil))
+    (yunge-jump-history-register-target
+     'test :capture #'ignore :same #'ignore :visit #'ignore)
+    (let ((replacement
+           (yunge-jump-history-register-target
+            'test
+            :capture (lambda (&rest _arguments) 'replacement)
+            :same #'equal :visit #'ignore)))
+      (should (eq (car yunge-jump-history--providers) replacement))
+      (should
+       (= (cl-count
+           'test yunge-jump-history--providers
+           :key #'yunge-jump-history--provider-name)
+          1)))))
 
 (ert-deftest yunge-jump-history-tracks-successful-navigation ()
   (yunge-test-enable-evil)
@@ -117,7 +142,8 @@
           (let ((destination-window (split-window-right)))
             (set-window-buffer destination-window destination)
             (set-window-point destination-window 8)
-            (yunge-jump-history-track-command 'yunge-jump-history-test--navigate)
+            (yunge-jump-history-track-command
+             'yunge-jump-history-test--navigate)
 
             (yunge-jump-history-test--navigate
              (lambda ()
@@ -244,6 +270,123 @@
             (yunge-jump-history-backward)
             (should (eq (current-buffer) origin))))
       (yunge-jump-history-test--kill origin current)
+      (yunge-jump-history-test--reset))))
+
+(ert-deftest yunge-jump-history-records-an-explicit-window-location ()
+  (yunge-test-enable-evil)
+  (yunge-jump-history-test--reset)
+  (let ((origin (yunge-jump-history-test--buffer " *yunge-jump-origin*"))
+        (current (yunge-jump-history-test--buffer " *yunge-jump-current*")))
+    (unwind-protect
+        (save-window-excursion
+          (switch-to-buffer origin)
+          (goto-char 6)
+          (yunge-jump-history-record)
+          (switch-to-buffer current)
+          (goto-char 4)
+
+          (yunge-jump-history-backward)
+          (should (eq (current-buffer) origin))
+          (should (= (point) 6)))
+      (yunge-jump-history-test--kill origin current)
+      (yunge-jump-history-test--reset))))
+
+(ert-deftest yunge-jump-history-commits-an-asynchronous-target-on-success ()
+  (yunge-test-enable-evil)
+  (yunge-jump-history-test--reset)
+  (let ((origin (yunge-jump-history-test--buffer " *yunge-jump-origin*"))
+        (current (yunge-jump-history-test--buffer " *yunge-jump-current*"))
+        finish)
+    (unwind-protect
+        (save-window-excursion
+          (yunge-jump-history-register-target
+           'test-custom
+           :capture
+           (lambda (_window position)
+             (when yunge-jump-history-test--custom-target
+               (cons (current-buffer) position)))
+           :same #'equal
+           :visit
+           (lambda (value window complete)
+             (setq finish
+                   (lambda (success)
+                     (when success
+                       (select-window window)
+                       (switch-to-buffer (car value))
+                       (goto-char (cdr value)))
+                     (funcall complete success)))))
+          (with-current-buffer origin
+            (setq-local yunge-jump-history-test--custom-target t))
+          (switch-to-buffer current)
+          (goto-char 4)
+          (yunge-jump-history-test--record origin 7)
+
+          (yunge-jump-history-backward)
+          (let ((history (yunge-jump-history--history)))
+            (should finish)
+            (should (yunge-jump-history--history-pending history))
+            (should (= (yunge-jump-history--history-index history) 0))
+            (should-error
+             (yunge-jump-history-backward) :type 'user-error)
+            (let ((length
+                   (length
+                    (yunge-jump-history--history-entries history))))
+              (evil-set-jump)
+              (should
+               (= (length
+                   (yunge-jump-history--history-entries history))
+                  length)))
+            (funcall finish t)
+            (should-not (yunge-jump-history--history-pending history))
+            (should (= (yunge-jump-history--history-index history) 1)))
+          (should (eq (current-buffer) origin))
+          (should (= (point) 7))
+
+          (yunge-jump-history-forward)
+          (should (eq (current-buffer) current))
+          (should (= (point) 4)))
+      (yunge-jump-history-unregister-target 'test-custom)
+      (yunge-jump-history-test--kill origin current)
+      (yunge-jump-history-test--reset))))
+
+(ert-deftest yunge-jump-history-skips-a-failed-asynchronous-target ()
+  (yunge-test-enable-evil)
+  (yunge-jump-history-test--reset)
+  (let ((older (yunge-jump-history-test--buffer " *yunge-jump-older*"))
+        (failed (yunge-jump-history-test--buffer " *yunge-jump-failed*"))
+        (current (yunge-jump-history-test--buffer " *yunge-jump-current*"))
+        finish)
+    (unwind-protect
+        (save-window-excursion
+          (yunge-jump-history-register-target
+           'test-custom
+           :capture
+           (lambda (_window position)
+             (when yunge-jump-history-test--custom-target
+               (cons (current-buffer) position)))
+           :same #'equal
+           :visit
+           (lambda (_value _window complete)
+             (setq finish complete)))
+          (with-current-buffer failed
+            (setq-local yunge-jump-history-test--custom-target t))
+          (switch-to-buffer current)
+          (goto-char 8)
+          (yunge-jump-history-test--record older 3)
+          (yunge-jump-history-test--record failed 5)
+
+          (yunge-jump-history-backward)
+          (let ((history (yunge-jump-history--history)))
+            (should finish)
+            (should (yunge-jump-history--history-pending history))
+            (should (= (yunge-jump-history--history-index history) 0))
+            (funcall finish nil)
+            (should-not (yunge-jump-history--history-pending history))
+            (should (= (yunge-jump-history--history-index history) 2)))
+          (should (eq (current-buffer) older))
+          (should (= (point) 3)))
+      (yunge-jump-history-unregister-target 'test-custom)
+      (yunge-jump-history-test--kill older failed current)
       (yunge-jump-history-test--reset))))
 
 ;;; yunge-jump-history-test.el ends here
