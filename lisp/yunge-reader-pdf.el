@@ -5,6 +5,7 @@
 (require 'cl-lib)
 (require 'svg)
 (require 'subr-x)
+(require 'yunge-key)
 (require 'yunge-reader)
 (require 'yunge-reader-native)
 
@@ -80,14 +81,24 @@
   "<mouse-1>" #'yunge-reader-pdf-select-at-mouse
   "<drag-mouse-1>" #'yunge-reader-pdf-select-with-mouse)
 
+(defconst yunge-reader-pdf-normal-bindings
+  '(("G" yunge-reader-pdf-last-page "last page")
+    ("J" yunge-reader-pdf-next-page "next page")
+    ("K" yunge-reader-pdf-previous-page "previous page")
+    ("gg" yunge-reader-pdf-first-page "first page")
+    ("gp" yunge-reader-pdf-goto-page "go to page")
+    ("gr" yunge-reader-refresh "refresh"))
+  "Normal-state bindings for the PDF view adapter.")
+
 (defvar-keymap yunge-reader-pdf-view-mode-map
-  "n" #'yunge-reader-pdf-next-page
-  "]" #'yunge-reader-pdf-next-page
+  "G" #'yunge-reader-pdf-last-page
+  "J" #'yunge-reader-pdf-next-page
+  "K" #'yunge-reader-pdf-previous-page
   "<next>" #'scroll-up-command
-  "b" #'yunge-reader-pdf-previous-page
-  "[" #'yunge-reader-pdf-previous-page
   "<prior>" #'scroll-down-command
-  "G" #'yunge-reader-pdf-goto-page)
+  "g g" #'yunge-reader-pdf-first-page
+  "g p" #'yunge-reader-pdf-goto-page
+  "g r" #'yunge-reader-refresh)
 
 (define-minor-mode yunge-reader-pdf-view-mode
   "Display a fixed-layout PDF through the Yunge Reader PDF driver."
@@ -130,6 +141,11 @@
           yunge-reader-pdf--displayed-pages nil
           yunge-reader-pdf--text-cache nil
           yunge-reader-pdf--text-pending nil)))
+
+(with-eval-after-load 'evil
+  (yunge-key-evil-define-minor-mode
+   'normal 'yunge-reader-pdf-view-mode
+   yunge-reader-pdf-normal-bindings))
 
 (defun yunge-reader-pdf--match-p (file)
   "Return whether FILE has a PDF extension."
@@ -1271,6 +1287,17 @@ When SINGLE is non-nil, use the event start for both points."
   "Move backward COUNT PDF pages, defaulting to one."
   (interactive "p")
   (yunge-reader-pdf-next-page (- (or count 1))))
+
+(defun yunge-reader-pdf-first-page ()
+  "Move to the first page in the PDF view."
+  (interactive)
+  (yunge-reader-pdf--set-page 0))
+
+(defun yunge-reader-pdf-last-page ()
+  "Move to the last page in the PDF view."
+  (interactive)
+  (yunge-reader-pdf--set-page
+   (1- (yunge-reader-pdf--page-count))))
 
 (defun yunge-reader-pdf-goto-page (page)
   "Go to one-based PDF PAGE."

@@ -5,6 +5,53 @@
 (require 'yunge-test-helper)
 (require 'yunge-reader)
 
+(yunge-test-deftest-lazy-load yunge-reader
+  (evil which-key))
+
+(ert-deftest yunge-reader-exposes-one-viewer-key-vocabulary ()
+  (yunge-test-keymap-keys
+   yunge-reader-mode-map
+   '(("+" . yunge-reader-zoom-in)
+     ("-" . yunge-reader-zoom-out)
+     ("=" . yunge-reader-zoom-reset)
+     ("/" . yunge-reader-search)
+     ("N" . yunge-reader-search-previous)
+     ("P" . yunge-reader-fit-page)
+     ("W" . yunge-reader-fit-width)
+     ("gr" . yunge-reader-refresh)
+     ("n" . yunge-reader-search-next)
+     ("q" . quit-window)
+     ("y" . yunge-reader-copy-selection)))
+  (should-not
+   (eq (lookup-key yunge-reader-mode-map (kbd "M-w"))
+       #'yunge-reader-copy-selection))
+  (should-not
+   (eq (lookup-key yunge-reader-mode-map (kbd "s"))
+       #'yunge-reader-search-next)))
+
+(ert-deftest yunge-reader-integrates-with-evil-states ()
+  (yunge-test-enable-evil)
+  (require 'which-key)
+  (yunge-test-evil-normal-keys
+   'yunge-reader-mode
+   '(("/" . yunge-reader-search)
+     ("N" . yunge-reader-search-previous)
+     ("P" . yunge-reader-fit-page)
+     ("W" . yunge-reader-fit-width)
+     ("gr" . yunge-reader-refresh)
+     ("n" . yunge-reader-search-next)
+     ("q" . quit-window)
+     ("y" . yunge-reader-copy-selection)
+     ("0" . evil-beginning-of-line)
+     ("b" . evil-backward-word-begin)
+     ("p" . evil-paste-after)
+     ("w" . evil-forward-word-begin)))
+  (yunge-test-which-key-prefix-bindings
+   'yunge-reader-mode "g" '(("r" nil "refresh")))
+  (yunge-test-evil-visual-keys
+   'yunge-reader-mode
+   '(("y" . evil-yank))))
+
 (ert-deftest yunge-reader-registers-replaces-and-resolves-drivers ()
   (let ((yunge-reader-drivers nil))
     (yunge-reader-register-driver

@@ -5,6 +5,9 @@
 (require 'cl-lib)
 (require 'seq)
 (require 'subr-x)
+(require 'yunge-key)
+
+(declare-function evil-set-initial-state "evil-core" (mode state))
 
 (defgroup yunge-reader nil
   "Read fixed-layout and reflowable documents."
@@ -154,18 +157,34 @@ unscaled coordinate system of UNIT."
 Drivers or view adapters use this buffer-local hook to request visible
 artifacts.  Functions run in the reader buffer without arguments.")
 
+(defconst yunge-reader-normal-bindings
+  '(("+" yunge-reader-zoom-in "zoom in")
+    ("-" yunge-reader-zoom-out "zoom out")
+    ("=" yunge-reader-zoom-reset "reset zoom")
+    ("/" yunge-reader-search "search")
+    ("N" yunge-reader-search-previous "previous match")
+    ("P" yunge-reader-fit-page "fit page")
+    ("W" yunge-reader-fit-width "fit width")
+    ("gr" yunge-reader-refresh "refresh")
+    ("n" yunge-reader-search-next "next match")
+    ("q" quit-window "quit")
+    ("y" yunge-reader-copy-selection "copy selection"))
+  "Normal-state bindings shared by Yunge Reader adapters.")
+
 (defvar-keymap yunge-reader-mode-map
   :parent special-mode-map
   "+" #'yunge-reader-zoom-in
-  "=" #'yunge-reader-zoom-in
   "-" #'yunge-reader-zoom-out
-  "0" #'yunge-reader-zoom-reset
-  "w" #'yunge-reader-fit-width
-  "p" #'yunge-reader-fit-page
-  "g" #'yunge-reader-refresh
-  "M-w" #'yunge-reader-copy-selection
+  "=" #'yunge-reader-zoom-reset
+  "/" #'yunge-reader-search
+  "N" #'yunge-reader-search-previous
+  "P" #'yunge-reader-fit-page
+  "W" #'yunge-reader-fit-width
   "C-g" #'yunge-reader-clear-selection
-  "q" #'quit-window)
+  "g r" #'yunge-reader-refresh
+  "n" #'yunge-reader-search-next
+  "q" #'quit-window
+  "y" #'yunge-reader-copy-selection)
 
 (define-derived-mode yunge-reader-mode special-mode "Yunge Reader"
   "Major mode shared by Yunge Reader document adapters."
@@ -173,6 +192,11 @@ artifacts.  Functions run in the reader buffer without arguments.")
   (setq-local truncate-lines t)
   (setq-local yunge-reader-scale yunge-reader-default-scale)
   (add-hook 'kill-buffer-hook #'yunge-reader--close-document nil t))
+
+(with-eval-after-load 'evil
+  (evil-set-initial-state 'yunge-reader-mode 'normal)
+  (yunge-key-evil-define 'normal yunge-reader-mode-map
+                         yunge-reader-normal-bindings))
 
 (cl-defun yunge-reader-register-driver
     (name &key match open close request)

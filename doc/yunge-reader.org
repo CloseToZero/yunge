@@ -18,18 +18,18 @@ The current PDF adapter provides:
 - next, previous, direct page, screen, mouse wheel, and ordinary scrolling;
 - fit-width, fit-page, and bounded manual zoom;
 - canonical bounds and rotated glyph quadrilaterals for local hit testing;
-- cross-page drag, polygonal SVG highlights, and exact =M-w= copying;
+- cross-page drag, polygonal SVG highlights, and exact text copying;
 - bounded Unicode literal search, repeat navigation, and glyph-level jumping;
 - immutable render cache keys and stale-response rejection; and
 - graceful, forced, idle, EOF, and Emacs-exit service shutdown paths.
 
-The PDF view binds =n= and =]= to the next page; =b= and =[= to the previous
-page; =G= to a page prompt; and Page Down and Page Up to screen scrolling.
-Shared reader keys use =+= and =-= for zoom, =0= for scale one, =w= for
-fit-width, =p= for fit-page, =g= to refresh, and =q= to quit the window.
-Use =M-x yunge-reader-search= to start a search, then
-=M-x yunge-reader-search-next= or =M-x yunge-reader-search-previous= to move
-between matches.
+The reader uses one key vocabulary with or without Evil.  Shared keys are
+=y= to copy the logical selection, =/= to start a search, =n/N= to visit the
+next or previous match, =gr= to refresh, =+/-= to zoom, === to reset zoom,
+=W/P= to fit width or page, and =q= to quit.  PDF views use =J/K= for the
+next or previous page, =gg/G= for the first or last page, =gp= for a page
+prompt, and Page Down or Page Up for screen scrolling.  Evil starts Reader
+buffers in Normal state and leaves Visual =y= as =evil-yank=.
 =M-x yunge-reader-clear-search= removes the active match highlight.
 
 Cache eviction and durable location restoration remain to be implemented.
@@ -73,13 +73,14 @@ reflowable backend can instead store a spine item and CFI-like anchor.
 A logical selection contains two positions and optional resolved text.  Its
 painted rectangles are disposable view state, not the source of truth.
 Rerendering or evicting an image therefore need not invalidate the text range.
-=M-w= copies resolved text or asks the driver for =selection-text=.
+=yunge-reader-copy-selection= copies resolved text or asks the driver for
+=selection-text=.
 
 A search result uses the same stable endpoints, but its transient highlight is
 independent of the copy selection.  Search preview can therefore move and
-repaint without changing the text copied by =M-w=.  The distinction also
-leaves room for later decoration layers whose durable records use the same
-position contract.
+repaint without changing the text copied from the logical selection.  The
+distinction also leaves room for later decoration layers whose durable
+records use the same position contract.
 
 For PDF, =unit= is a zero-based page and =offset= is PDFium's zero-based
 character index.  A selected range includes both endpoint characters and is

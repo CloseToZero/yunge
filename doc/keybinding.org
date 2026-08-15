@@ -307,6 +307,26 @@ contextual action such as diff.
 Document-oriented buffers retain Evil movement and text search and use the
 common ~q~, ~RET~, ~TAB~, and ~S-TAB~ conventions.
 
+* Document readers
+
+Document readers use one viewer vocabulary whether or not Evil is available.
+Do not maintain a second set of Emacs-specific fallback keys.
+
+Shared reader bindings are:
+
+- ~y~ copies the reader's logical text selection in Normal state.  Visual ~y~
+  remains ~evil-yank~.
+- ~/~ starts a literal document search and ~n/N~ visits the next or previous
+  match.
+- ~+/-~ zoom in or out, ~=~ resets zoom, and ~W/P~ fit the document width or
+  page to the window.
+- ~gr~ refreshes the rendered view and ~q~ quits its window.
+
+In fixed-layout readers, ~J/K~ move to the next or previous page, ~gg/G~ move
+to the first or last page, and ~gp~ prompts for a page.  Page Down and Page Up
+retain screen-scrolling behavior.  These page keys stay separate from search
+repeat keys.
+
 * Cross-platform rules
 
 Give every essential function at least one binding that works without Super,

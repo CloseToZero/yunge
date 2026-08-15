@@ -10,6 +10,45 @@
   (make-yunge-reader-document
    :metadata (list :page-count (length pages) :pages pages)))
 
+(ert-deftest yunge-reader-pdf-uses-viewer-page-bindings ()
+  (yunge-test-keymap-keys
+   yunge-reader-pdf-view-mode-map
+   '(("G" . yunge-reader-pdf-last-page)
+     ("J" . yunge-reader-pdf-next-page)
+     ("K" . yunge-reader-pdf-previous-page)
+     ("gg" . yunge-reader-pdf-first-page)
+     ("gp" . yunge-reader-pdf-goto-page)
+     ("gr" . yunge-reader-refresh)))
+  (should-not
+   (eq (lookup-key yunge-reader-pdf-view-mode-map (kbd "n"))
+       #'yunge-reader-pdf-next-page))
+  (should-not
+   (eq (lookup-key yunge-reader-pdf-view-mode-map (kbd "b"))
+       #'yunge-reader-pdf-previous-page)))
+
+(ert-deftest yunge-reader-pdf-integrates-page-bindings-with-evil ()
+  (yunge-test-enable-evil)
+  (require 'which-key)
+  (with-temp-buffer
+    (yunge-reader-mode)
+    (yunge-reader-pdf-view-mode 1)
+    (yunge-test-evil-keys
+     'normal
+     '(("/" . yunge-reader-search)
+       ("G" . yunge-reader-pdf-last-page)
+       ("J" . yunge-reader-pdf-next-page)
+       ("K" . yunge-reader-pdf-previous-page)
+       ("gg" . yunge-reader-pdf-first-page)
+       ("gp" . yunge-reader-pdf-goto-page)
+       ("gr" . yunge-reader-refresh)
+       ("n" . yunge-reader-search-next)
+       ("y" . yunge-reader-copy-selection)
+       ("b" . evil-backward-word-begin)))
+    (yunge-test-which-key-prefix
+     "g" '(("g" nil "first page")
+           ("p" nil "go to page")
+           ("r" nil "refresh")))))
+
 (ert-deftest yunge-reader-pdf-registers-only-when-requested ()
   (let ((yunge-reader-drivers nil)
         (modes auto-mode-alist))
@@ -668,6 +707,25 @@
       (should (= yunge-reader-pdf-page 2))
       (should (= (point) 5))
       (should (eq yunge-reader-selection selection)))))
+
+(ert-deftest yunge-reader-pdf-jumps-to-first-and-last-pages ()
+  (with-temp-buffer
+    (yunge-reader-mode)
+    (yunge-reader-pdf-view-mode 1)
+    (setq yunge-reader-document
+          (yunge-reader-pdf-test--document
+           '((page . 0) (width . 100.0) (height . 200.0))
+           '((page . 1) (width . 100.0) (height . 200.0))
+           '((page . 2) (width . 100.0) (height . 200.0))))
+    (yunge-reader-pdf--load-page-infos)
+    (yunge-reader-pdf--build-roll)
+    (cl-letf (((symbol-function
+                'yunge-reader-pdf--update-visible-pages)
+               #'ignore))
+      (yunge-reader-pdf-last-page)
+      (should (= yunge-reader-pdf-page 2))
+      (yunge-reader-pdf-first-page)
+      (should (zerop yunge-reader-pdf-page)))))
 
 (ert-deftest yunge-reader-pdf-coalesces-identical-render-requests ()
   (with-temp-buffer
