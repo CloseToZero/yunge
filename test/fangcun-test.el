@@ -331,6 +331,93 @@
          '((remote :name "Remote" :root "/ssh:host:/notes"))))
     (should-error (fangcun--configured-yiyus) :type 'user-error)))
 
+(ert-deftest fangcun-rejects-duplicate-yiyu-ids-and-overlapping-roots ()
+  (let* ((root (make-temp-file "fangcun-yiyu-test-" t))
+         (nested (expand-file-name "nested/" root)))
+    (unwind-protect
+        (progn
+          (make-directory nested)
+          (let ((fangcun-yiyus
+                 `((notes :name "Notes" :root ,root)
+                   (notes :name "Other" :root ,nested))))
+            (should-error
+             (fangcun--configured-yiyus) :type 'user-error))
+          (let ((fangcun-yiyus
+                 `((notes :name "Notes" :root ,root)
+                   (nested :name "Nested" :root ,nested))))
+            (should-error
+             (fangcun--configured-yiyus) :type 'user-error)))
+      (delete-directory root t))))
+
+(ert-deftest fangcun-adds-and-persists-a-yiyu ()
+  (let* ((root (make-temp-file "fangcun-yiyu-test-" t))
+         (expected-root (file-name-as-directory root))
+         (fangcun-yiyus nil)
+         saved
+         applied)
+    (unwind-protect
+        (cl-letf
+            (((symbol-function 'customize-save-variable)
+              (lambda (symbol value &optional _comment)
+                (should (eq symbol 'fangcun-yiyus))
+                (setq fangcun-yiyus value
+                      saved value)))
+             ((symbol-function 'fangcun--apply-yiyu-configuration)
+              (lambda () (setq applied t))))
+          (fangcun-yiyu-add "jingwei" "经纬" root)
+          (should
+           (equal
+            saved
+            `((jingwei :name "经纬" :root ,expected-root))))
+          (should applied))
+      (delete-directory root t))))
+
+(ert-deftest fangcun-removes-a-yiyu-without-deleting-its-root ()
+  (let* ((root (make-temp-file "fangcun-yiyu-test-" t))
+         (other-root (make-temp-file "fangcun-yiyu-test-" t))
+         (fangcun-yiyus
+          `((personal :name "Personal" :root ,root)
+            (work :name "Work" :root ,other-root)))
+         saved
+         applied)
+    (unwind-protect
+        (cl-letf
+            (((symbol-function 'customize-save-variable)
+              (lambda (symbol value &optional _comment)
+                (should (eq symbol 'fangcun-yiyus))
+                (setq fangcun-yiyus value
+                      saved value)))
+             ((symbol-function 'fangcun--apply-yiyu-configuration)
+              (lambda () (setq applied t))))
+          (fangcun-yiyu-remove 'personal)
+          (should
+           (equal saved `((work :name "Work" :root ,other-root))))
+          (should applied)
+          (should (file-directory-p root)))
+      (delete-directory root t)
+      (delete-directory other-root t))))
+
+(ert-deftest fangcun-removing-the-last-yiyu-clears-the-index ()
+  (fangcun-test-with-notes
+    (setq fangcun-yiyus
+          `((personal :name "Personal" :root ,personal-root)))
+    (fangcun-db-sync)
+    (should (fangcun-node-from-id "personal-file"))
+    (cl-letf
+        (((symbol-function 'customize-save-variable)
+          (lambda (_symbol value &optional _comment)
+            (setq fangcun-yiyus value))))
+      (fangcun-yiyu-remove 'personal))
+    (should-not fangcun--session-active-p)
+    (should-not fangcun--session-yiyus)
+    (fangcun--call-with-database
+     (lambda (database)
+       (should
+        (equal (fangcun--database-counts database)
+               '(:yiyus 0 :files 0 :nodes 0 :aliases 0 :tags 0
+                 :links 0)))))
+    (should (file-exists-p personal-file))))
+
 (ert-deftest fangcun-records-files-without-nodes ()
   (fangcun-test-with-notes
     (let ((empty-file

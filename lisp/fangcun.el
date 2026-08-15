@@ -145,27 +145,155 @@ When the helper is unavailable, synchronization falls back to Emacs."
 
 (defun fangcun--configured-yiyus ()
   "Return normalized entries from `fangcun-yiyus'."
-  (mapcar
-   (lambda (entry)
-     (let ((id (car entry))
-           (name (plist-get (cdr entry) :name))
-           (root (plist-get (cdr entry) :root)))
-       (unless (and (symbolp id)
-                    (stringp name)
-                    (not (string-empty-p name))
-                    (stringp root)
-                    (not (string-empty-p root)))
-         (user-error "Invalid Fangcun yiyu: %S" entry))
-       (setq root
-             (file-name-as-directory (expand-file-name root)))
-       (when (file-remote-p root)
-         (user-error "Remote Fangcun yiyus are not supported: %s"
-                     root))
-       (make-fangcun-yiyu
-        :id (symbol-name id)
-        :name name
-        :root root)))
-   fangcun-yiyus))
+  (let ((yiyus
+         (mapcar
+          (lambda (entry)
+            (let ((id (car entry))
+                  (name (plist-get (cdr entry) :name))
+                  (root (plist-get (cdr entry) :root)))
+              (unless (and (symbolp id)
+                           (stringp name)
+                           (not (string-empty-p name))
+                           (stringp root)
+                           (not (string-empty-p root)))
+                (user-error "Invalid Fangcun yiyu: %S" entry))
+              (setq root
+                    (file-name-as-directory (expand-file-name root)))
+              (when (file-remote-p root)
+                (user-error
+                 "Remote Fangcun yiyus are not supported: %s" root))
+              (make-fangcun-yiyu
+               :id (symbol-name id)
+               :name name
+               :root root)))
+          fangcun-yiyus))
+        (ids (make-hash-table :test #'equal)))
+    (dolist (yiyu yiyus)
+      (let ((id (fangcun-yiyu-id yiyu)))
+        (when (gethash id ids)
+          (user-error "Duplicate Fangcun yiyu ID: %s" id))
+        (puthash id t ids)))
+    (cl-loop
+     for (yiyu . rest) on yiyus
+     do (dolist (other rest)
+          (let ((root (fangcun-yiyu-root yiyu))
+                (other-root (fangcun-yiyu-root other)))
+            (when (or (file-in-directory-p root other-root)
+                      (file-in-directory-p other-root root))
+              (user-error
+               "Fangcun yiyu roots overlap: %s and %s"
+               root other-root)))))
+    yiyus))
+
+(defun fangcun--normalize-yiyu-id (id)
+  "Return ID as a valid Fangcun yiyu symbol."
+  (let ((name
+         (string-trim
+          (cond
+           ((symbolp id) (symbol-name id))
+           ((stringp id) id)
+           (t "")))))
+    (unless (string-match-p
+             "\\`[[:alnum:]][[:alnum:]_-]*\\'" name)
+      (user-error
+       (concat
+        "Fangcun yiyu ID must start with a letter or number and contain "
+        "only letters, numbers, underscores, or hyphens: %S")
+       id))
+    (intern name)))
+
+(defun fangcun--apply-yiyu-configuration ()
+  "Synchronize Fangcun after `fangcun-yiyus' changes."
+  (let ((yiyus (fangcun--configured-yiyus)))
+    (fangcun--shutdown-native-helper)
+    (if yiyus
+        (prog1 (fangcun--sync-yiyus yiyus t)
+          (fangcun--activate-session yiyus))
+      (setq fangcun--session-yiyus nil)
+      (fangcun--rebuild-database nil nil t))))
+
+(defun fangcun--read-new-yiyu ()
+  "Read arguments for `fangcun-yiyu-add'."
+  (let* ((root
+          (file-name-as-directory
+           (expand-file-name
+            (read-directory-name "Yiyu root: " nil nil t))))
+         (basename
+          (file-name-nondirectory (directory-file-name root)))
+         (id (read-string "Yiyu ID: " nil nil basename))
+         (name (read-string "Yiyu display name: " nil nil basename)))
+    (list id name root)))
+
+;;;###autoload
+(defun fangcun-yiyu-add (id name root)
+  "Add and persist a Fangcun yiyu named ID, NAME, and ROOT.
+ROOT must be an existing local directory which does not overlap another
+configured yiyu.  Synchronize the Fangcun index after saving the setting."
+  (interactive (fangcun--read-new-yiyu))
+  (setq id (fangcun--normalize-yiyu-id id)
+        name (and (stringp name) (string-trim name))
+        root (and (stringp root)
+                  (file-name-as-directory (expand-file-name root))))
+  (unless (and name (not (string-empty-p name)))
+    (user-error "Fangcun yiyu display name cannot be empty"))
+  (when (file-remote-p root)
+    (user-error "Remote Fangcun yiyus are not supported: %s" root))
+  (unless (and root (file-directory-p root))
+    (user-error "Fangcun yiyu root does not exist: %s" root))
+  (let ((value
+         (append fangcun-yiyus
+                 (list (list id :name name :root root)))))
+    (let ((fangcun-yiyus value))
+      (fangcun--configured-yiyus))
+    (customize-save-variable 'fangcun-yiyus value)
+    (fangcun--apply-yiyu-configuration)
+    (message "Added Fangcun yiyu %s (%s)" name id)))
+
+(defun fangcun--read-yiyu-to-remove ()
+  "Read arguments for `fangcun-yiyu-remove'."
+  (let* ((yiyus (fangcun--configured-yiyus))
+         (_ (unless yiyus
+              (user-error "No Fangcun yiyus are configured")))
+         (candidates
+          (mapcar
+           (lambda (yiyu)
+             (cons
+              (format "%s (%s) — %s"
+                      (fangcun-yiyu-name yiyu)
+                      (fangcun-yiyu-id yiyu)
+                      (abbreviate-file-name (fangcun-yiyu-root yiyu)))
+              yiyu))
+           yiyus))
+         (choice
+          (completing-read "Remove yiyu: " candidates nil t))
+         (yiyu (cdr (assoc choice candidates))))
+    (unless
+        (yes-or-no-p
+         (format
+          "Remove %s from Fangcun?  Notes in %s will not be deleted. "
+          (fangcun-yiyu-name yiyu)
+          (abbreviate-file-name (fangcun-yiyu-root yiyu))))
+      (user-error "Removing Fangcun yiyu cancelled"))
+    (list (fangcun-yiyu-id yiyu))))
+
+;;;###autoload
+(defun fangcun-yiyu-remove (id)
+  "Stop indexing and forget the configured Fangcun yiyu ID.
+When called interactively, ask for confirmation.  Never delete the root
+directory or any notes below it."
+  (interactive (fangcun--read-yiyu-to-remove))
+  (let* ((id (symbol-name (fangcun--normalize-yiyu-id id)))
+         (entry
+          (seq-find
+           (lambda (candidate)
+             (equal (symbol-name (car candidate)) id))
+           fangcun-yiyus)))
+    (unless entry
+      (user-error "Unknown Fangcun yiyu ID: %s" id))
+    (let ((value (delq entry (copy-sequence fangcun-yiyus))))
+      (customize-save-variable 'fangcun-yiyus value)
+      (fangcun--apply-yiyu-configuration)
+      (message "Removed Fangcun yiyu %s; notes were not deleted" id))))
 
 (defun fangcun--yiyu-containing-file (file yiyus)
   "Return the member of YIYUS containing FILE, or nil."

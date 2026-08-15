@@ -10,6 +10,12 @@ yiyu with an identifier, display name, and root directory:
         (work :name "Work" :root "~/notes/work")))
 #+end_src
 
+=M-x fangcun-yiyu-add= selects an existing local directory, records its ID and
+display name in the Custom file, and immediately synchronizes the index.
+=M-x fangcun-yiyu-remove= removes a selected yiyu from the saved configuration
+and index after confirmation.  It never deletes the root directory or its
+notes.  Yiyu IDs must be unique, and yiyu roots cannot overlap.
+
 =M-x fangcun-file-node-create= opens a new unsaved Org file with a file-level
 ID.  It uses the current file's yiyu and directory when possible, otherwise it
 selects a configured yiyu.  An optional title is used verbatim as the suggested
