@@ -162,6 +162,28 @@
     (should-not live)
     (should-not sent)))
 
+(ert-deftest yunge-reader-native-intentional-stop-fails-without-restart ()
+  (yunge-reader-native-test--with-fake-process
+    (let (request-error
+          restart-function)
+      (should (= (yunge-reader-native-acquire) 1))
+      (process-put 'fake-reader-process 'yunge-reader-ready t)
+      (yunge-reader-native-request
+       "ping" nil
+       (lambda (_result error-data)
+         (setq request-error error-data)))
+      (yunge-reader-native-stop t)
+      (cl-letf (((symbol-function 'run-at-time)
+                 (lambda (_delay _repeat function &rest _arguments)
+                   (setq restart-function function)
+                   'fake-timer)))
+        (yunge-reader-native--sentinel
+         'fake-reader-process "killed"))
+      (should
+       (eq (car request-error)
+           'yunge-reader-native-session-stopped))
+      (should-not restart-function))))
+
 (ert-deftest yunge-reader-native-reference-count-schedules-idle-stop ()
   (yunge-reader-native-test--with-fake-process
     (let ((yunge-reader-native-idle-seconds 42)

@@ -60,7 +60,12 @@
 (cl-defstruct yunge-reader-pdf-handle
   "A process-local PDF document bound to one native helper session."
   session
-  id)
+  id
+  identity
+  buffer
+  recovering
+  waiters
+  closed)
 
 (cl-defstruct yunge-reader-pdf-link
   "One PDF page link with disposable hit geometry."
@@ -441,44 +446,33 @@
    (list :page-count (alist-get 'page-count result)
          :pages (alist-get 'pages result))))
 
-(defun yunge-reader-pdf--open (file complete)
-  "Open PDF FILE and call COMPLETE using the reader driver contract."
-  (yunge-reader-pdf-view-mode 1)
-  (let* ((buffer (current-buffer))
-         (generation yunge-reader--open-generation)
-         (window (yunge-reader--place-window))
-         (state (and window (yunge-reader--window-state window)))
-         (key (yunge-reader-pdf--password-cache-key file))
+(defun yunge-reader-pdf--file-identity (file)
+  "Return the stable local-file identity used to recover PDF FILE."
+  (let* ((absolute (expand-file-name file))
+         (attributes (file-attributes absolute 'string)))
+    (list
+     (or (ignore-errors (file-truename absolute)) absolute)
+     (and attributes (file-attribute-size attributes))
+     (and attributes (file-attribute-modification-time attributes))
+     (and attributes (file-attribute-file-identifier attributes)))))
+
+(defun yunge-reader-pdf--open-in-session
+    (file session buffer generation window state complete)
+  "Open PDF FILE in native SESSION and call COMPLETE.
+BUFFER, GENERATION, WINDOW, and STATE guard any password prompt.  COMPLETE
+receives the raw native open result and nil, or nil and an error value."
+  (let* ((key (yunge-reader-pdf--password-cache-key file))
          (cached-password (password-read-from-cache key))
-         session
-         acquired
          finished)
     (cl-labels
         ((finish (result error-data password owned)
            (unless finished
              (setq finished t)
-             (if error-data
-                 (progn
-                   (when acquired
-                     (setq acquired nil)
-                     (yunge-reader-native-release))
-                   (when (and owned (stringp password))
-                     (clear-string password))
-                   (funcall complete nil nil error-data))
-               (when (and owned (stringp password))
-                 (if password-cache
-                     (password-cache-add key password)
-                   (clear-string password)))
-               (when (buffer-live-p buffer)
-                 (with-current-buffer buffer
-                   (setq yunge-reader-pdf-page 0)))
-               (funcall
-                complete
-                (make-yunge-reader-pdf-handle
-                 :session session
-                 :id (alist-get 'document result))
-                (yunge-reader-pdf--open-properties result)
-                nil))))
+             (when (and owned (stringp password))
+               (if (and (not error-data) password-cache)
+                   (password-cache-add key password)
+                 (clear-string password)))
+             (funcall complete result error-data)))
          (prompt (attempt last-error)
            (if (or (>= attempt yunge-reader-pdf-password-attempts)
                    (not
@@ -519,12 +513,178 @@
                     (finish nil native-error password owned))
                    (t (finish result nil password owned)))))
              (error (finish nil request-error password owned)))))
+      (request cached-password 0 (and cached-password t) nil))))
+
+(defun yunge-reader-pdf--open (file complete)
+  "Open PDF FILE and call COMPLETE using the reader driver contract."
+  (yunge-reader-pdf-view-mode 1)
+  (let* ((buffer (current-buffer))
+         (generation yunge-reader--open-generation)
+         (window (yunge-reader--place-window))
+         (state (and window (yunge-reader--window-state window)))
+         identity
+         session
+         acquired
+         finished)
+    (cl-labels
+        ((finish (result error-data)
+           (unless finished
+             (setq finished t)
+             (if error-data
+                 (progn
+                   (when acquired
+                     (setq acquired nil)
+                     (yunge-reader-native-release))
+                   (funcall complete nil nil error-data))
+               (when (buffer-live-p buffer)
+                 (with-current-buffer buffer
+                   (setq yunge-reader-pdf-page 0)))
+               (funcall
+                complete
+                (make-yunge-reader-pdf-handle
+                 :session session
+                 :id (alist-get 'document result)
+                 :identity identity
+                 :buffer buffer)
+                (yunge-reader-pdf--open-properties result)
+                nil)))))
       (condition-case acquire-error
           (progn
+            (setq identity (yunge-reader-pdf--file-identity file))
             (setq session (yunge-reader-native-acquire))
             (setq acquired t)
-            (request cached-password 0 (and cached-password t) nil))
-        (error (finish nil acquire-error nil nil))))))
+            (yunge-reader-pdf--open-in-session
+             file session buffer generation window state #'finish))
+        (error (finish nil acquire-error))))))
+
+(defun yunge-reader-pdf--session-error-p (error-data)
+  "Return whether ERROR-DATA reports a lost native helper session."
+  (eq (car-safe error-data) 'yunge-reader-native-session-lost))
+
+(defun yunge-reader-pdf--recovery-error (message)
+  "Return a native-session recovery error containing MESSAGE."
+  (list 'yunge-reader-native-session-lost message))
+
+(defun yunge-reader-pdf--finish-recovery (handle error-data)
+  "Finish HANDLE recovery and notify every waiter with ERROR-DATA."
+  (let ((waiters (nreverse (yunge-reader-pdf-handle-waiters handle))))
+    (setf (yunge-reader-pdf-handle-recovering handle) nil
+          (yunge-reader-pdf-handle-waiters handle) nil)
+    (dolist (waiter waiters)
+      (condition-case callback-error
+          (funcall waiter error-data)
+        (error
+         (display-warning
+          'yunge-reader
+          (format "PDF recovery callback failed: %s"
+                  (error-message-string callback-error))
+          :warning))))))
+
+(defun yunge-reader-pdf--close-native (session id)
+  "Best-effort close native PDF ID belonging to SESSION."
+  (when (and (integerp id)
+             (yunge-reader-native-session-live-p session))
+    (condition-case nil
+        (yunge-reader-native-request-in-session
+         session "close" (list (cons 'document id)) #'ignore)
+      (error nil))))
+
+(defun yunge-reader-pdf--owns-document-p (handle document)
+  "Return whether HANDLE's buffer still owns DOCUMENT."
+  (let ((buffer (yunge-reader-pdf-handle-buffer handle)))
+    (and (not (yunge-reader-pdf-handle-closed handle))
+         (buffer-live-p buffer)
+         (with-current-buffer buffer
+           (eq yunge-reader-document document)))))
+
+(defun yunge-reader-pdf--recovery-context (handle)
+  "Return password-prompt context for HANDLE's Reader buffer."
+  (let ((buffer (yunge-reader-pdf-handle-buffer handle)))
+    (with-current-buffer buffer
+      (let ((window (yunge-reader--place-window)))
+        (list
+         buffer
+         yunge-reader--open-generation
+         window
+         (and window (yunge-reader--window-state window)))))))
+
+(defun yunge-reader-pdf--recover-complete
+    (document handle session identity result error-data)
+  "Finish reopening DOCUMENT's HANDLE in SESSION.
+IDENTITY is the file identity accepted before the open request."
+  (if error-data
+      (yunge-reader-pdf--finish-recovery handle error-data)
+    (let ((id (alist-get 'document result)))
+      (condition-case recovery-error
+          (progn
+            (unless (integerp id)
+              (error "Recovered PDF has an invalid native handle: %S" id))
+            (unless (yunge-reader-pdf--owns-document-p handle document)
+              (error "The Reader buffer closed during PDF recovery"))
+            (unless
+                (equal
+                 identity
+                 (yunge-reader-pdf--file-identity
+                  (yunge-reader-document-file document)))
+              (error "The PDF changed on disk during recovery"))
+            (setf (yunge-reader-pdf-handle-session handle) session
+                  (yunge-reader-pdf-handle-id handle) id)
+            (yunge-reader-pdf--finish-recovery handle nil))
+        (error
+         (yunge-reader-pdf--close-native session id)
+         (yunge-reader-pdf--finish-recovery
+          handle recovery-error))))))
+
+(defun yunge-reader-pdf--start-recovery (document handle)
+  "Start one coalesced native recovery for DOCUMENT and HANDLE."
+  (condition-case recovery-error
+      (progn
+        (unless (yunge-reader-pdf--owns-document-p handle document)
+          (error "The Reader buffer no longer owns this PDF"))
+        (let* ((file (yunge-reader-document-file document))
+               (identity (yunge-reader-pdf--file-identity file)))
+          (unless (equal identity
+                         (yunge-reader-pdf-handle-identity handle))
+            (error "The PDF changed on disk; close and reopen it"))
+          (yunge-reader-native-start)
+          (let* ((session (yunge-reader-native-current-session))
+                 (context (yunge-reader-pdf--recovery-context handle)))
+            (unless session
+              (error "The Yunge Reader helper did not start"))
+            (apply
+             #'yunge-reader-pdf--open-in-session
+             file session
+             (append
+              context
+              (list
+               (lambda (result error-data)
+                 (yunge-reader-pdf--recover-complete
+                  document handle session identity result error-data))))))))
+    (error
+     (yunge-reader-pdf--finish-recovery handle recovery-error))))
+
+(defun yunge-reader-pdf--ensure-handle (document complete)
+  "Call COMPLETE after DOCUMENT has a live native handle.
+COMPLETE receives nil on success or an error value.  Concurrent recovery
+requests for the same document share one native open."
+  (let ((handle (yunge-reader-document-handle document)))
+    (cond
+     ((not (yunge-reader-pdf-handle-p handle))
+      (funcall complete '(error "Invalid PDF document handle")))
+     ((yunge-reader-pdf-handle-closed handle)
+      (funcall
+       complete
+       (yunge-reader-pdf--recovery-error
+        "The PDF document is already closed")))
+     ((yunge-reader-native-session-live-p
+       (yunge-reader-pdf-handle-session handle))
+      (funcall complete nil))
+     ((yunge-reader-pdf-handle-recovering handle)
+      (push complete (yunge-reader-pdf-handle-waiters handle)))
+     (t
+      (setf (yunge-reader-pdf-handle-recovering handle) t
+            (yunge-reader-pdf-handle-waiters handle) (list complete))
+      (yunge-reader-pdf--start-recovery document handle)))))
 
 (defun yunge-reader-pdf--close (document)
   "Close PDF DOCUMENT and release its native service lease."
@@ -534,12 +694,17 @@
            (unless released
              (setq released t)
              (yunge-reader-native-release))))
-      (if (not (yunge-reader-native-live-p))
-          (release)
-        (condition-case error-data
-            (let ((handle (yunge-reader-document-handle document)))
-              (unless (yunge-reader-pdf-handle-p handle)
-                (error "Invalid PDF document handle: %S" handle))
+      (condition-case error-data
+          (let ((handle (yunge-reader-document-handle document)))
+            (unless (yunge-reader-pdf-handle-p handle)
+              (error "Invalid PDF document handle: %S" handle))
+            (unless (yunge-reader-pdf-handle-closed handle)
+              (setf (yunge-reader-pdf-handle-closed handle) t)
+              (when (yunge-reader-pdf-handle-recovering handle)
+                (yunge-reader-pdf--finish-recovery
+                 handle
+                 (yunge-reader-pdf--recovery-error
+                  "The PDF closed during native recovery")))
               (if (not
                    (yunge-reader-native-session-live-p
                     (yunge-reader-pdf-handle-session handle)))
@@ -551,14 +716,14 @@
                   (cons 'document
                         (yunge-reader-pdf-handle-id handle)))
                  (lambda (_result _native-error)
-                   (release)))))
-          (error
-           (release)
-           (signal (car error-data) (cdr error-data))))))))
+                   (release))))))
+        (error
+         (release)
+         (signal (car error-data) (cdr error-data)))))))
 
-(defun yunge-reader-pdf--request
+(defun yunge-reader-pdf--dispatch
     (document operation arguments complete)
-  "Dispatch PDF DOCUMENT OPERATION with ARGUMENTS to COMPLETE."
+  "Dispatch one PDF DOCUMENT OPERATION with ARGUMENTS to COMPLETE."
   (let* ((handle (yunge-reader-document-handle document))
          (valid (yunge-reader-pdf-handle-p handle))
          (session
@@ -676,6 +841,33 @@
         complete nil
         (yunge-reader-pdf--native-error
          (format "Unsupported PDF operation: %S" operation)))))))
+
+(defun yunge-reader-pdf--request
+    (document operation arguments complete)
+  "Dispatch a recoverable PDF DOCUMENT OPERATION to COMPLETE."
+  (let (finished)
+    (cl-labels
+        ((finish (value error-data)
+           (unless finished
+             (setq finished t)
+             (funcall complete value error-data)))
+         (send (retry)
+           (yunge-reader-pdf--ensure-handle
+            document
+            (lambda (recovery-error)
+              (if recovery-error
+                  (finish nil recovery-error)
+                (condition-case request-error
+                    (yunge-reader-pdf--dispatch
+                     document operation arguments
+                     (lambda (value error-data)
+                       (if (and retry
+                                (yunge-reader-pdf--session-error-p
+                                 error-data))
+                           (send nil)
+                         (finish value error-data))))
+                  (error (finish nil request-error))))))))
+      (send t))))
 
 (defun yunge-reader-pdf-register ()
   "Register the PDF driver without changing `auto-mode-alist'."

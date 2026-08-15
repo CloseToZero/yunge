@@ -14,7 +14,9 @@
   "Return a native PDF handle for ID in SESSION."
   (make-yunge-reader-pdf-handle
    :session (or session 17)
-   :id id))
+   :id id
+   :identity 'test-identity
+   :buffer (current-buffer)))
 
 (defun yunge-reader-pdf-test--link
     (page index bounds target &optional label)
@@ -418,6 +420,32 @@
     (should (zerop leases))
     (should-not requested)))
 
+(ert-deftest yunge-reader-pdf-close-is-idempotent ()
+  (let* ((handle (yunge-reader-pdf-test--handle 7))
+         (document (make-yunge-reader-document :handle handle))
+         complete
+         (releases 0)
+         (requests 0))
+    (cl-letf
+        (((symbol-function 'yunge-reader-native-session-live-p)
+          (lambda (session) (= session 17)))
+         ((symbol-function 'yunge-reader-native-release)
+          (lambda () (cl-incf releases)))
+         ((symbol-function 'yunge-reader-native-request-in-session)
+          (lambda (_session operation _parameters callback)
+            (should (equal operation "close"))
+            (cl-incf requests)
+            (setq complete callback))))
+      (yunge-reader-pdf--close document)
+      (yunge-reader-pdf--close document)
+      (should (= requests 1))
+      (should (zerop releases))
+      (funcall complete '((closed . t)) nil)
+      (should (= releases 1))
+      (yunge-reader-pdf--close document))
+    (should (= requests 1))
+    (should (= releases 1))))
+
 (ert-deftest yunge-reader-pdf-does-not-close-a-colliding-new-session-handle ()
   (let ((leases 1)
         requested)
@@ -438,13 +466,325 @@
     (should (zerop leases))
     (should-not requested)))
 
+(ert-deftest yunge-reader-pdf-coalesces-stale-handle-recovery ()
+  (with-temp-buffer
+    (yunge-reader-mode)
+    (let* ((file "C:/books/test.pdf")
+           (handle (yunge-reader-pdf-test--handle 7))
+           (document
+            (make-yunge-reader-document :file file :handle handle))
+           (yunge-reader-document document)
+           (yunge-reader-pdf-page 4)
+           (yunge-reader-zoom-mode 'manual)
+           (yunge-reader-scale 1.5)
+           (saved-places '(("saved.pdf" :version 1)))
+           (yunge-reader-saved-places (copy-tree saved-places))
+           open-complete
+           (open-count 0)
+           requests
+           results)
+      (cl-letf
+          (((symbol-function 'yunge-reader-pdf--file-identity)
+            (lambda (_file) 'test-identity))
+           ((symbol-function 'yunge-reader-native-session-live-p)
+            (lambda (session) (= session 22)))
+           ((symbol-function 'yunge-reader-native-start) #'ignore)
+           ((symbol-function 'yunge-reader-native-current-session)
+            (lambda () 22))
+           ((symbol-function 'yunge-reader-pdf--open-in-session)
+            (lambda (_file session _buffer _generation _window _state
+                     complete)
+              (should (= session 22))
+              (cl-incf open-count)
+              (setq open-complete complete)))
+           ((symbol-function 'yunge-reader-native-request-in-session)
+            (lambda (session operation parameters complete)
+              (should (= session 22))
+              (should (equal operation "page-info"))
+              (should (= (alist-get 'document parameters) 9))
+              (push parameters requests)
+              (funcall complete '((page . 4)) nil))))
+        (dotimes (index 2)
+          (yunge-reader-pdf--request
+           document 'page-info '(:page 4)
+           (lambda (value error-data)
+             (push (list index value error-data) results))))
+        (should (= open-count 1))
+        (should-not requests)
+        (should (= (yunge-reader-pdf-handle-session handle) 17))
+        (should (= (yunge-reader-pdf-handle-id handle) 7))
+        (funcall open-complete '((document . 9)) nil))
+      (should (= (length requests) 2))
+      (should (= (length results) 2))
+      (should-not (seq-some #'caddr results))
+      (should (= (yunge-reader-pdf-handle-session handle) 22))
+      (should (= (yunge-reader-pdf-handle-id handle) 9))
+      (should (= yunge-reader-pdf-page 4))
+      (should (eq yunge-reader-zoom-mode 'manual))
+      (should (= yunge-reader-scale 1.5))
+      (should (equal yunge-reader-saved-places saved-places)))))
+
+(ert-deftest yunge-reader-pdf-does-not-prompt-for-background-recovery ()
+  (with-temp-buffer
+    (yunge-reader-mode)
+    (let* ((file "C:/books/locked.pdf")
+           (handle (yunge-reader-pdf-test--handle 7))
+           (document
+            (make-yunge-reader-document :file file :handle handle))
+           (yunge-reader-document document)
+           prompted
+           completion-error)
+      (cl-letf
+          (((symbol-function 'yunge-reader-pdf--file-identity)
+            (lambda (_file) 'test-identity))
+           ((symbol-function 'yunge-reader-native-session-live-p)
+            (lambda (session) (= session 22)))
+           ((symbol-function 'yunge-reader-native-start) #'ignore)
+           ((symbol-function 'yunge-reader-native-current-session)
+            (lambda () 22))
+           ((symbol-function 'password-read-from-cache)
+            (lambda (_key) "wrong"))
+           ((symbol-function 'password-cache-remove) #'ignore)
+           ((symbol-function 'read-passwd)
+            (lambda (&rest _arguments)
+              (setq prompted t)
+              "secret"))
+           ((symbol-function 'yunge-reader-native-request-in-session)
+            (lambda (session operation _parameters complete)
+              (should (= session 22))
+              (should (equal operation "open"))
+              (funcall
+               complete nil
+               '(yunge-reader-native-pdf-password-error)))))
+        (yunge-reader-pdf--request
+         document 'page-info '(:page 0)
+         (lambda (_value error-data)
+           (setq completion-error error-data))))
+      (should-not prompted)
+      (should
+       (eq (car completion-error)
+           'yunge-reader-native-pdf-password-error))
+      (should (= (yunge-reader-pdf-handle-session handle) 17))
+      (should (= (yunge-reader-pdf-handle-id handle) 7)))))
+
+(ert-deftest yunge-reader-pdf-does-not-retry-an-intentional-stop ()
+  (let ((document
+         (make-yunge-reader-document
+          :handle (yunge-reader-pdf-test--handle 7)))
+        (dispatches 0)
+        calls
+        completion-error)
+    (cl-letf
+        (((symbol-function 'yunge-reader-pdf--ensure-handle)
+          (lambda (_document complete) (funcall complete nil)))
+         ((symbol-function 'yunge-reader-pdf--dispatch)
+          (lambda (_document _operation _arguments complete)
+            (cl-incf dispatches)
+            (funcall
+             complete nil
+             '(yunge-reader-native-session-stopped "stopped")))))
+      (yunge-reader-pdf--request
+       document 'page-info '(:page 3)
+       (lambda (_value error-data)
+         (setq calls (1+ (or calls 0))
+               completion-error error-data))))
+    (should (= dispatches 1))
+    (should (= calls 1))
+    (should
+     (eq (car completion-error)
+         'yunge-reader-native-session-stopped))))
+
+(ert-deftest yunge-reader-pdf-retries-one-interrupted-request ()
+  (let ((document
+         (make-yunge-reader-document
+          :handle (yunge-reader-pdf-test--handle 7)))
+        (ensures 0)
+        (dispatches 0)
+        (calls 0)
+        result
+        completion-error)
+    (cl-letf
+        (((symbol-function 'yunge-reader-pdf--ensure-handle)
+          (lambda (_document complete)
+            (cl-incf ensures)
+            (funcall complete nil)))
+         ((symbol-function 'yunge-reader-pdf--dispatch)
+          (lambda (_document _operation _arguments complete)
+            (cl-incf dispatches)
+            (if (= dispatches 1)
+                (funcall
+                 complete nil
+                 '(yunge-reader-native-session-lost "crashed"))
+              (funcall complete '((page . 3)) nil)))))
+      (yunge-reader-pdf--request
+       document 'page-info '(:page 3)
+       (lambda (value error-data)
+         (cl-incf calls)
+         (setq result value
+               completion-error error-data))))
+    (should (= ensures 2))
+    (should (= dispatches 2))
+    (should (= calls 1))
+    (should (equal result '((page . 3))))
+    (should-not completion-error)))
+
+(ert-deftest yunge-reader-pdf-does-not-retry-session-loss-twice ()
+  (let ((document
+        (make-yunge-reader-document
+          :handle (yunge-reader-pdf-test--handle 7)))
+        (dispatches 0)
+        (calls 0)
+        completion-error)
+    (cl-letf
+        (((symbol-function 'yunge-reader-pdf--ensure-handle)
+          (lambda (_document complete) (funcall complete nil)))
+         ((symbol-function 'yunge-reader-pdf--dispatch)
+          (lambda (_document _operation _arguments complete)
+            (cl-incf dispatches)
+            (funcall
+             complete nil
+             '(yunge-reader-native-session-lost "crashed")))))
+      (yunge-reader-pdf--request
+       document 'page-info '(:page 3)
+       (lambda (_value error-data)
+         (cl-incf calls)
+         (setq completion-error error-data))))
+    (should (= dispatches 2))
+    (should (= calls 1))
+    (should
+     (eq (car completion-error)
+         'yunge-reader-native-session-lost))))
+
+(ert-deftest yunge-reader-pdf-refuses-to-recover-a-changed-file ()
+  (with-temp-buffer
+    (yunge-reader-mode)
+    (let* ((file "C:/books/test.pdf")
+           (handle (yunge-reader-pdf-test--handle 7))
+           (document
+            (make-yunge-reader-document :file file :handle handle))
+           (yunge-reader-document document)
+           (yunge-reader-pdf-page 4)
+           (saved-places '(("saved.pdf" :version 1)))
+           (yunge-reader-saved-places (copy-tree saved-places))
+           started
+           completion-error)
+      (cl-letf
+          (((symbol-function 'yunge-reader-pdf--file-identity)
+            (lambda (_file) 'changed-identity))
+           ((symbol-function 'yunge-reader-native-session-live-p)
+            (lambda (_session) nil))
+           ((symbol-function 'yunge-reader-native-start)
+            (lambda () (setq started t))))
+        (yunge-reader-pdf--request
+         document 'page-info '(:page 4)
+         (lambda (_value error-data)
+           (setq completion-error error-data))))
+      (should-not started)
+      (should (string-match-p "changed on disk"
+                              (error-message-string completion-error)))
+      (should (= (yunge-reader-pdf-handle-session handle) 17))
+      (should (= (yunge-reader-pdf-handle-id handle) 7))
+      (should (= yunge-reader-pdf-page 4))
+      (should (equal yunge-reader-saved-places saved-places)))))
+
+(ert-deftest yunge-reader-pdf-rejects-a-file-changed-during-recovery ()
+  (with-temp-buffer
+    (yunge-reader-mode)
+    (let* ((file "C:/books/test.pdf")
+           (handle (yunge-reader-pdf-test--handle 7))
+           (document
+            (make-yunge-reader-document :file file :handle handle))
+           (yunge-reader-document document)
+           (identities '(test-identity changed-identity))
+           open-complete
+           closed
+           completion-error)
+      (cl-letf
+          (((symbol-function 'yunge-reader-pdf--file-identity)
+            (lambda (_file) (pop identities)))
+           ((symbol-function 'yunge-reader-native-session-live-p)
+            (lambda (session) (= session 22)))
+           ((symbol-function 'yunge-reader-native-start) #'ignore)
+           ((symbol-function 'yunge-reader-native-current-session)
+            (lambda () 22))
+           ((symbol-function 'yunge-reader-pdf--open-in-session)
+            (lambda (_file _session _buffer _generation _window _state
+                     complete)
+              (setq open-complete complete)))
+           ((symbol-function 'yunge-reader-native-request-in-session)
+            (lambda (session operation parameters _complete)
+              (setq closed (list session operation parameters)))))
+        (yunge-reader-pdf--request
+         document 'page-info '(:page 4)
+         (lambda (_value error-data)
+           (setq completion-error error-data)))
+        (funcall open-complete '((document . 9)) nil))
+      (should (string-match-p "changed on disk"
+                              (error-message-string completion-error)))
+      (should (equal (butlast closed) '(22 "close")))
+      (should (= (alist-get 'document (car (last closed))) 9))
+      (should (= (yunge-reader-pdf-handle-session handle) 17))
+      (should (= (yunge-reader-pdf-handle-id handle) 7)))))
+
+(ert-deftest yunge-reader-pdf-cleans-up-a-late-recovery-after-close ()
+  (with-temp-buffer
+    (yunge-reader-mode)
+    (let* ((file "C:/books/test.pdf")
+           (handle (yunge-reader-pdf-test--handle 7))
+           (document
+            (make-yunge-reader-document :file file :handle handle))
+           (yunge-reader-document document)
+           open-complete
+           closed
+           (releases 0)
+           (calls 0)
+           completion-error)
+      (cl-letf
+          (((symbol-function 'yunge-reader-pdf--file-identity)
+            (lambda (_file) 'test-identity))
+           ((symbol-function 'yunge-reader-native-session-live-p)
+            (lambda (session) (= session 22)))
+           ((symbol-function 'yunge-reader-native-start) #'ignore)
+           ((symbol-function 'yunge-reader-native-current-session)
+            (lambda () 22))
+           ((symbol-function 'yunge-reader-native-release)
+            (lambda () (cl-incf releases)))
+           ((symbol-function 'yunge-reader-pdf--open-in-session)
+            (lambda (_file _session _buffer _generation _window _state
+                     complete)
+              (setq open-complete complete)))
+           ((symbol-function 'yunge-reader-native-request-in-session)
+            (lambda (session operation parameters _complete)
+              (setq closed (list session operation parameters)))))
+        (yunge-reader-pdf--request
+         document 'page-info '(:page 4)
+         (lambda (_value error-data)
+           (cl-incf calls)
+           (setq completion-error error-data)))
+        (yunge-reader-pdf--close document)
+        (should (= calls 1))
+        (should (= releases 1))
+        (should
+         (eq (car completion-error)
+             'yunge-reader-native-session-lost))
+        (funcall open-complete '((document . 9)) nil))
+      (should (= calls 1))
+      (should (= releases 1))
+      (should (equal (butlast closed) '(22 "close")))
+      (should (= (alist-get 'document (car (last closed))) 9))
+      (should (yunge-reader-pdf-handle-closed handle))
+      (should (= (yunge-reader-pdf-handle-session handle) 17))
+      (should (= (yunge-reader-pdf-handle-id handle) 7)))))
+
 (ert-deftest yunge-reader-pdf-maps-reader-requests-to-native-operations ()
   (let ((document
          (make-yunge-reader-document
           :handle (yunge-reader-pdf-test--handle 11)))
         calls)
     (cl-letf
-        (((symbol-function 'yunge-reader-native-request-in-session)
+        (((symbol-function 'yunge-reader-native-session-live-p)
+          (lambda (session) (= session 17)))
+         ((symbol-function 'yunge-reader-native-request-in-session)
           (lambda (session operation parameters _complete)
             (should (= session 17))
             (push (cons operation parameters) calls))))
@@ -743,7 +1083,9 @@
          request
          result)
     (cl-letf
-        (((symbol-function 'yunge-reader-native-request-in-session)
+        (((symbol-function 'yunge-reader-native-session-live-p)
+          (lambda (session) (= session 17)))
+         ((symbol-function 'yunge-reader-native-request-in-session)
           (lambda (session operation parameters complete)
             (should (= session 17))
             (setq request (cons operation parameters))

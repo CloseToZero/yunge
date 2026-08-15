@@ -299,6 +299,22 @@ Closing a stale handle releases its service lease without starting or writing
 to the replacement helper.  The wire format is documented in
 [[file:../native/yunge-reader/README.org][the native protocol document]].
 
+After an unexpected helper exit, the first affected PDF request starts or
+joins one document-local reopen.  Recovery verifies the canonical file path,
+size, modification time, and file identity before and after native open, then
+publishes the replacement handle atomically.  Concurrent page, text, render,
+search, link, and outline requests share that reopen.  A request interrupted by
+the crash is retried once; another session loss is reported instead of
+looping.  Page, viewport, zoom, selection, search state, and saved places remain
+owned by Emacs and are not reset during recovery.  A changed or closed file is
+never attached to the old Reader document.
+
+Password-protected documents reuse the ordinary bounded password and cache
+path.  Recovery never raises a password prompt from a background or obsolete
+view.  An explicit =yunge-reader-native-stop= ends pending work without
+triggering transparent recovery, so the stop command remains authoritative.
+The next document operation may start the helper and recover on demand.
+
 * Setup and PDF engine
 
 The tracked manifest pins PDFium =151.0.7881.0= and records a SHA-256 for x64
@@ -332,9 +348,8 @@ selection, and annotation conformance tests.
 
 The next implementation slices should add, in order:
 
-1. transparent PDF reopening after a real helper crash;
-2. large-document stress coverage; and
-3. a second format driver to exercise the reflow contract.
+1. large-document stress coverage; and
+2. a second format driver to exercise the reflow contract.
 
 Annotation anchors and independent decoration layers remain a planned
 extension of the stable position contract, after the reading path is hardened.
@@ -356,14 +371,17 @@ completions, bounded link mapping and hit testing, tagged URI validation,
 allowlisted explicit activation, link request coalescing, late link caching,
 password retry, cancellation, attempt bounds, late-prompt rejection, cache
 replacement, lease balance, cache limits, prune-before-stop ordering, and
-lease races.  Native lifecycle tests additionally cover unique helper session
-identities, one-shot callback failure, stale-session request rejection, and
-process-local handle collisions.  Rust tests cover the handshake, strict
-parameters, stable PDF password errors, bounded outline, link labels, and
-URIs, destination view mapping, safe cache eviction, Unicode literal matching,
-byte-to-PDFium-index mapping, search cursors and limits, regular and
-singular-angle quadrilateral recovery, cross-page inclusive ranges, protocol
-errors, shutdown ordering, and EOF.
+lease races.  Recovery tests cover shared reopen, file replacement before and
+during open, a single interrupted-request retry, late close cleanup, background
+password rejection, view and saved-place preservation, and authoritative
+explicit stop.  Native lifecycle tests additionally cover unique helper
+session identities, one-shot callback failure, stale-session request rejection,
+intentional-stop errors, and process-local handle collisions.  Rust tests cover
+the handshake, strict parameters, stable PDF password errors, bounded outline,
+link labels, and URIs, destination view mapping, safe cache eviction, Unicode
+literal matching, byte-to-PDFium-index mapping, search cursors and limits,
+regular and singular-angle quadrilateral recovery, cross-page inclusive
+ranges, protocol errors, shutdown ordering, and EOF.
 
 The integration path installs the pinned Windows library through the public
 setup command, runs its =pdfium-info= smoke test, opens a five-page A4 fixture,
@@ -404,3 +422,10 @@ the helper, waits for a distinct replacement session, and opens the fixture as
 document 1 again.  A request bound to the old session is rejected locally;
 the same page request succeeds in the new session before its document closes
 and the replacement helper shuts down cleanly.
+
+A Reader-level recovery smoke check opens the public five-page fixture, moves
+the Emacs-side view to page 3 at manual scale 1.5, and forcibly terminates the
+helper.  The same Reader document reopens in a distinct session and completes a
+page 3 information request without changing its page, zoom, place-recording
+state, or saved places.  Its replacement native document then closes and
+releases the original service lease normally.

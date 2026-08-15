@@ -18,6 +18,10 @@
 (define-error 'yunge-reader-native-session-lost
   "Yunge Reader native session ended")
 
+(define-error 'yunge-reader-native-session-stopped
+  "Yunge Reader native session was stopped"
+  'yunge-reader-native-session-lost)
+
 (defcustom yunge-reader-native-idle-seconds 300
   "Seconds with no native clients before stopping the helper.
 Set this to nil to keep an explicitly acquired helper alive until it is
@@ -264,8 +268,9 @@ This must not exceed `yunge-reader-cache-max-bytes'."
                (yunge-reader-native-stop t)))))))
     (process-put process 'yunge-reader-output pending)))
 
-(defun yunge-reader-native--fail-callbacks (reason)
-  "Complete every pending native callback after session loss REASON."
+(defun yunge-reader-native--fail-callbacks (reason &optional stopped)
+  "Complete pending callbacks after session loss REASON.
+When STOPPED is non-nil, report an intentional service stop."
   (let (callbacks)
     (maphash
      (lambda (_id callback)
@@ -276,7 +281,11 @@ This must not exceed `yunge-reader-cache-max-bytes'."
     (dolist (callback callbacks)
       (funcall
        callback nil
-       (list 'yunge-reader-native-session-lost reason)))))
+       (list
+        (if stopped
+            'yunge-reader-native-session-stopped
+          'yunge-reader-native-session-lost)
+        reason)))))
 
 (defun yunge-reader-native--start-after-crash ()
   "Restart the helper once after an unexpected exit."
@@ -307,7 +316,8 @@ This must not exceed `yunge-reader-cache-max-bytes'."
       (yunge-reader-native--fail-callbacks
        (if intentional
            "The Yunge Reader native helper stopped"
-         "The Yunge Reader native helper exited unexpectedly"))
+         "The Yunge Reader native helper exited unexpectedly")
+       intentional)
       (cond
        ((eq build 'setup)
         (require 'yunge-reader-setup)
