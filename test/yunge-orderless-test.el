@@ -5,7 +5,7 @@
 (require 'yunge-test-helper)
 
 (yunge-test-deftest-lazy-load yunge-orderless
-  (orderless orderless-kwd pyim pyim-cregexp))
+  (orderless orderless-kwd yunge-pinyin-data))
 
 (ert-deftest yunge-orderless-configures-completion ()
   (yunge-test-run-package-config

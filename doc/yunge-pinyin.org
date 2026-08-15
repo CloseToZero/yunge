@@ -1,0 +1,64 @@
+#+title: Yunge Pinyin search compiler
+# SPDX-FileCopyrightText: 2026 Chen Zhexuan
+# SPDX-License-Identifier: MIT
+
+* Scope
+
+=yunge-pinyin= is a Pinyin query compiler shared by Evil search, Orderless,
+Avy, and any other Emacs code that accepts a regexp.
+
+The public entry points are:
+
+- =yunge-pinyin-normalize= for tone and ü normalization;
+- =yunge-pinyin-segmentations= for ranked syllable segmentation;
+- =yunge-pinyin-regexp= for a literal-or-Pinyin search regexp;
+- =yunge-pinyin-clear-cache= for clearing generated character classes.
+
+The regexp compiler uses a bounded syllable DAG.  It supports full syllables,
+an incomplete final syllable, initial abbreviations, and apostrophes as forced
+syllable boundaries.  A complexity budget based on the expanded character
+sets and abbreviated initials prevents broad queries from producing an
+expensive regexp.  A query always remains searchable literally.
+
+* Data
+
+The committed =lisp/yunge-pinyin-data.el= is the runtime Pinyin-to-Hanzi index.
+It is generated from Unicode Unihan 17.0.0 and loaded lazily on the first
+Pinyin query.  Users do not need to download or generate anything during
+installation or startup.
+
+The generated data uses these Unihan properties:
+
+- =kMandarin=, =kHanyuPinyin=, and =kTGHZ2013= for readings;
+- =kHanyuPinlu=, =kGradeLevel=, and =kTGH= for five frequency buckets.
+
+The data is licensed under Unicode-3.0; see
+=LICENSES/Unicode-3.0.txt=.  The compiler and generator are MIT-licensed
+original code.
+
+* Regenerating the data
+
+Only maintainers updating the Unicode version need the original files.
+Download the official archive from:
+
+https://www.unicode.org/Public/17.0.0/ucd/Unihan.zip
+
+Extract these files from the archive:
+
+- =Unihan_Readings.txt=
+- =Unihan_DictionaryLikeData.txt=
+- =Unihan_OtherMappings.txt=
+
+Then run, from the repository root:
+
+#+begin_src shell
+emacs --batch -Q --script script/generate-yunge-pinyin-data.el \
+  /path/to/Unihan_Readings.txt \
+  /path/to/Unihan_DictionaryLikeData.txt \
+  /path/to/Unihan_OtherMappings.txt \
+  lisp/yunge-pinyin-data.el
+#+end_src
+
+The large original Unihan text files are deliberately not committed.  The
+generated =.el= file is committed so a clean checkout works without a package
+build step or network access.

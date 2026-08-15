@@ -11,6 +11,8 @@
            '("early-init.el" "init.el"))
    (directory-files (expand-file-name "lisp" yunge-test-root)
                     t "\\.el\\'")
+   (directory-files (expand-file-name "script" yunge-test-root)
+                    t "\\.el\\'")
    (directory-files (expand-file-name "test" yunge-test-root)
                     t "\\.el\\'")))
 

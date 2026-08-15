@@ -39,7 +39,7 @@
   (yunge-test-load-package-config 'yunge-avy))
 
 (yunge-test-deftest-lazy-load yunge-avy
-  (avy pyim pyim-cregexp))
+  (avy yunge-pinyin-data))
 
 (ert-deftest yunge-avy-configures-after-package-is-ready ()
   (yunge-test-run-package-config

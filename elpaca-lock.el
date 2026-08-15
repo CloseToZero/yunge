@@ -236,21 +236,6 @@
    :fetcher github
    :files (:defaults)
    :ref "0ffd9d6903714c1f6d8fcbb6a20941fb33dd7ae5"))
- (pyim
-  :source "elpaca-menu-lock-file"
-  :recipe
-  (:package "pyim"
-   :repo "tumashu/pyim"
-   :fetcher github
-   :files
-   ("*.el" "*.el.in" "dir" "*.info" "*.texi" "*.texinfo"
-    "doc/dir" "doc/*.info" "doc/*.texi" "doc/*.texinfo"
-    "lisp/*.el" "docs/dir" "docs/*.info" "docs/*.texi"
-    "docs/*.texinfo"
-    (:exclude ".dir-locals.el" "test.el" "tests.el" "*-test.el"
-              "*-tests.el" "LICENSE" "README*" "*-pkg.el"))
-   :source "MELPA"
-   :ref "a56c8d992c872addcfc295c409a7bae70d00af87"))
  (slime
   :source "elpaca-menu-lock-file"
   :recipe
