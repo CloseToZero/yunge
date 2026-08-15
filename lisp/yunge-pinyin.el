@@ -29,6 +29,17 @@
 The literal query is returned even when it alone exceeds this value."
   :type 'integer)
 
+(defcustom yunge-pinyin-max-frequency-level 4
+  "Highest character-frequency level used automatically.
+Levels 1 through 4 cover progressively less common modern-use characters.
+Level 5 additionally includes the rare and historical remainder of Unihan."
+  :type 'integer)
+
+(defcustom yunge-pinyin-regexp-cache-size 256
+  "Maximum number of complete query regexps retained in memory.
+Set this to zero to disable the complete-query cache."
+  :type 'integer)
+
 (defcustom yunge-pinyin-max-segmentations 4
   "Maximum number of ranked Pinyin segmentations compiled for one run."
   :type 'integer)
@@ -77,7 +88,9 @@ This models the high false-positive cost of broad initial character classes."
 (cl-defstruct (yunge-pinyin--path
                (:constructor yunge-pinyin--make-path))
   tokens
-  cost)
+  cost
+  (cached-signature 'uncomputed)
+  (cached-order-key 'uncomputed))
 
 (defvar yunge-pinyin--syllable-table nil)
 (defvar yunge-pinyin--prefix-table nil)
@@ -85,6 +98,9 @@ This models the high false-positive cost of broad initial character classes."
 (defvar yunge-pinyin--class-cache (make-hash-table :test #'equal))
 (defvar yunge-pinyin--character-count-cache
   (make-hash-table :test #'equal))
+(defvar yunge-pinyin--regexp-cache (make-hash-table :test #'equal))
+(defvar yunge-pinyin--regexp-cache-order nil)
+(defvar yunge-pinyin--regexp-cache-tail nil)
 
 (defvar yunge-pinyin-data)
 
@@ -117,17 +133,32 @@ This models the high false-positive cost of broad initial character classes."
                      yunge-pinyin--prefix-table)))))))
 
 (defun yunge-pinyin-clear-cache ()
-  "Clear compiled Pinyin character-class caches."
+  "Clear compiled Pinyin character-class and complete-query caches."
   (interactive)
   (clrhash yunge-pinyin--class-cache)
-  (clrhash yunge-pinyin--character-count-cache))
+  (clrhash yunge-pinyin--character-count-cache)
+  (clrhash yunge-pinyin--regexp-cache)
+  (setq yunge-pinyin--regexp-cache-order nil
+        yunge-pinyin--regexp-cache-tail nil))
 
 (defun yunge-pinyin--path-signature (path)
   "Return a stable deduplication signature for PATH."
-  (mapcar (lambda (token)
-            (cons (yunge-pinyin--token-prefixp token)
-                  (yunge-pinyin--token-text token)))
-          (yunge-pinyin--path-tokens path)))
+  (let ((signature (yunge-pinyin--path-cached-signature path)))
+    (if (eq signature 'uncomputed)
+        (setf (yunge-pinyin--path-cached-signature path)
+              (mapcar (lambda (token)
+                        (cons (yunge-pinyin--token-prefixp token)
+                              (yunge-pinyin--token-text token)))
+                      (yunge-pinyin--path-tokens path)))
+      signature)))
+
+(defun yunge-pinyin--path-order-key (path)
+  "Return a cached lexical ordering key for PATH."
+  (let ((key (yunge-pinyin--path-cached-order-key path)))
+    (if (eq key 'uncomputed)
+        (setf (yunge-pinyin--path-cached-order-key path)
+              (prin1-to-string (yunge-pinyin--path-signature path)))
+      key)))
 
 (defun yunge-pinyin--path-less-p (left right)
   "Return non-nil when LEFT ranks before RIGHT."
@@ -135,8 +166,8 @@ This models the high false-positive cost of broad initial character classes."
         (right-cost (yunge-pinyin--path-cost right)))
     (if (/= left-cost right-cost)
         (< left-cost right-cost)
-      (string< (prin1-to-string (yunge-pinyin--path-signature left))
-               (prin1-to-string (yunge-pinyin--path-signature right))))))
+      (string< (yunge-pinyin--path-order-key left)
+               (yunge-pinyin--path-order-key right)))))
 
 (defun yunge-pinyin--prune-paths (paths limit)
   "Sort, deduplicate, and retain at most LIMIT members of PATHS."
@@ -295,20 +326,34 @@ Each result is a list of strings.  Apostrophes force syllable boundaries."
         (yunge-pinyin--token-text token)
         level))
 
-(defun yunge-pinyin--token-character-count (token level)
-  "Return the uncompressed character count for TOKEN at LEVEL."
-  (let* ((key (yunge-pinyin--token-cache-key token level))
+(defun yunge-pinyin--token-base-cache-key (token)
+  "Return a frequency-independent cache key for TOKEN."
+  (cons (yunge-pinyin--token-prefixp token)
+        (yunge-pinyin--token-text token)))
+
+(defun yunge-pinyin--token-character-counts (token)
+  "Return cumulative character counts for every frequency level of TOKEN."
+  (let* ((key (yunge-pinyin--token-base-cache-key token))
          (cached (gethash key yunge-pinyin--character-count-cache 'missing)))
     (if (not (eq cached 'missing))
         cached
-      (let ((count 0))
+      (let ((bucket-counts (make-vector 5 0))
+            (counts (make-vector 6 0)))
         (dolist (syllable (yunge-pinyin--token-syllables token))
           (when-let* ((buckets
                        (gethash syllable yunge-pinyin--syllable-table)))
-            (dotimes (index level)
-              (cl-incf count (length (aref buckets index))))))
-        (puthash key count yunge-pinyin--character-count-cache)
-        count))))
+            (dotimes (index (length buckets))
+              (cl-incf (aref bucket-counts index)
+                       (length (aref buckets index))))))
+        (dotimes (index (length bucket-counts))
+          (aset counts (1+ index)
+                (+ (aref counts index) (aref bucket-counts index))))
+        (puthash key counts yunge-pinyin--character-count-cache)
+        counts))))
+
+(defun yunge-pinyin--token-character-count (token level)
+  "Return the uncompressed character count for TOKEN at LEVEL."
+  (aref (yunge-pinyin--token-character-counts token) level))
 
 (defun yunge-pinyin--token-regexp (token level)
   "Return a compact character regexp for TOKEN at LEVEL."
@@ -323,22 +368,57 @@ Each result is a list of strings.  Apostrophes force syllable boundaries."
         (puthash key regexp yunge-pinyin--class-cache)
         regexp))))
 
-(defun yunge-pinyin--path-estimated-cost (path level)
-  "Return the estimated regexp and matching cost for PATH at LEVEL."
-  (+
-   (yunge-pinyin--path-cost path)
-   (cl-loop for token in (yunge-pinyin--path-tokens path)
-            sum (yunge-pinyin--token-character-count token level))))
+(defun yunge-pinyin--path-character-stats (path level)
+  "Return (TOTAL . MAXIMUM) character counts for PATH at LEVEL."
+  (let ((total 0)
+        (maximum 0))
+    (dolist (token (yunge-pinyin--path-tokens path))
+      (let ((count (yunge-pinyin--token-character-count token level)))
+        (cl-incf total count)
+        (setq maximum (max maximum count))))
+    (cons total maximum)))
+
+(defun yunge-pinyin--path-populated-p (path level)
+  "Return non-nil when every token in PATH has characters at LEVEL."
+  (cl-every
+   (lambda (token)
+     (> (yunge-pinyin--token-character-count token level) 0))
+   (yunge-pinyin--path-tokens path)))
+
+(defun yunge-pinyin--minimum-populated-level (paths maximum-level)
+  "Return the first usable frequency level for any member of PATHS."
+  (cl-loop
+   for level from 1 to maximum-level
+   when (cl-some (lambda (path)
+                   (yunge-pinyin--path-populated-p path level))
+                 paths)
+   return level))
+
+(defun yunge-pinyin--repeat-character-regexp (regexp count)
+  "Return REGEXP repeated exactly COUNT times."
+  (if (= count 1)
+      regexp
+    (format "\\(?:%s\\)\\{%d\\}" regexp count)))
 
 (defun yunge-pinyin--compile-path (path level)
   "Compile PATH at frequency LEVEL, or return nil."
-  (let (parts valid)
+  (let (regexps parts valid)
     (setq valid t)
     (dolist (token (yunge-pinyin--path-tokens path))
       (if-let* ((regexp (yunge-pinyin--token-regexp token level)))
-          (push regexp parts)
+          (push regexp regexps)
         (setq valid nil)))
-    (and valid (apply #'concat (nreverse parts)))))
+    (when valid
+      (setq regexps (nreverse regexps))
+      (while regexps
+        (let ((regexp (pop regexps))
+              (count 1))
+          (while (and regexps (equal (car regexps) regexp))
+            (pop regexps)
+            (cl-incf count))
+          (push (yunge-pinyin--repeat-character-regexp regexp count)
+                parts)))
+      (apply #'concat (nreverse parts)))))
 
 (defun yunge-pinyin--alternation (regexps)
   "Return a noncapturing alternation of REGEXPS."
@@ -351,11 +431,18 @@ Each result is a list of strings.  Apostrophes force syllable boundaries."
   (let ((remaining (- limit (length literal) 7))
         expansions)
     (dolist (path paths)
-      (let ((regexp
-             (and (> remaining 0)
-                  (<= (yunge-pinyin--path-estimated-cost path level)
-                      (* 2 remaining))
-                  (yunge-pinyin--compile-path path level))))
+      (let* ((stats (yunge-pinyin--path-character-stats path level))
+             (total (car stats))
+             (maximum (cdr stats))
+             (regexp
+              (and (> remaining 0)
+                   ;; Do not build a single character class that cannot fit
+                   ;; by itself.  regexp-opt-charset on such rare tails is a
+                   ;; large cold-cache cost whose result is then discarded.
+                   (<= maximum remaining)
+                   (<= (+ (yunge-pinyin--path-cost path) total)
+                       (* 2 remaining))
+                   (yunge-pinyin--compile-path path level))))
         (if (and regexp (<= (+ (length regexp) 2) remaining))
             (progn
               (push regexp expansions)
@@ -371,12 +458,27 @@ Each result is a list of strings.  Apostrophes force syllable boundaries."
         (paths (yunge-pinyin--segment-run run))
         result)
     (when paths
-      (cl-loop
-       for level downfrom 5 to 1
-       until result
-       do (setq result
-                (yunge-pinyin--compile-run-at-level
-                 literal paths level limit))))
+      ;; Start at the first level where a complete path has characters.  If
+      ;; that smallest semantic expansion cannot fit, every broader level is
+      ;; more expensive and the run should stay literal.
+      (let* ((maximum-level
+              (max 1 (min 5 yunge-pinyin-max-frequency-level)))
+             (minimum-level
+              (yunge-pinyin--minimum-populated-level paths maximum-level))
+             (minimum
+              (and minimum-level
+                   (yunge-pinyin--compile-run-at-level
+                    literal paths minimum-level limit))))
+        (when minimum
+          (setq result
+                (or
+                 (cl-loop
+                  for level downfrom maximum-level above minimum-level
+                  for candidate =
+                  (yunge-pinyin--compile-run-at-level
+                   literal paths level limit)
+                  when candidate return candidate)
+                 minimum)))))
     (or result literal)))
 
 (defun yunge-pinyin--valid-regexp-p (regexp)
@@ -387,37 +489,75 @@ Each result is a list of strings.  Apostrophes force syllable boundaries."
         t)
     (invalid-regexp nil)))
 
+(defun yunge-pinyin--regexp-cache-key (text)
+  "Return a complete-query cache key for TEXT and compiler settings."
+  (list text
+        yunge-pinyin-regexp-budget
+        yunge-pinyin-max-frequency-level
+        yunge-pinyin-max-segmentations
+        yunge-pinyin-segmentation-cost-slack
+        yunge-pinyin-initial-penalty))
+
+(defun yunge-pinyin--cache-regexp (key regexp)
+  "Store REGEXP under KEY in the bounded complete-query cache."
+  (let ((limit (max 0 yunge-pinyin-regexp-cache-size)))
+    (when (> limit 0)
+      (while (and yunge-pinyin--regexp-cache-order
+                  (>= (hash-table-count yunge-pinyin--regexp-cache) limit))
+        (let ((oldest (pop yunge-pinyin--regexp-cache-order)))
+          (unless yunge-pinyin--regexp-cache-order
+            (setq yunge-pinyin--regexp-cache-tail nil))
+          (remhash oldest yunge-pinyin--regexp-cache)))
+      (puthash key regexp yunge-pinyin--regexp-cache)
+      (let ((cell (list key)))
+        (if yunge-pinyin--regexp-cache-tail
+            (setcdr yunge-pinyin--regexp-cache-tail cell)
+          (setq yunge-pinyin--regexp-cache-order cell))
+        (setq yunge-pinyin--regexp-cache-tail cell))))
+  regexp)
+
+(defun yunge-pinyin--regexp-uncached (text)
+  "Return a bounded literal-or-Pinyin regexp for nonempty TEXT."
+  (let* ((literal-regexp (regexp-quote text))
+         (remaining-extra
+          (max 0 (- yunge-pinyin-regexp-budget
+                    (length literal-regexp))))
+         (position 0)
+         (expandedp nil)
+         parts)
+    (while (string-match yunge-pinyin--letter-run-regexp text position)
+      (let* ((beginning (match-beginning 0))
+             (end (match-end 0))
+             (run (substring text beginning end))
+             (literal-run (regexp-quote run))
+             (compiled
+              (yunge-pinyin--compile-run
+               run (+ (length literal-run) remaining-extra)))
+             (extra (max 0 (- (length compiled) (length literal-run)))))
+        (push (regexp-quote (substring text position beginning)) parts)
+        (push compiled parts)
+        (setq expandedp (or expandedp (> extra 0))
+              remaining-extra (- remaining-extra extra)
+              position end)))
+    (push (regexp-quote (substring text position)) parts)
+    (let ((regexp (apply #'concat (nreverse parts))))
+      (if (and expandedp (yunge-pinyin--valid-regexp-p regexp))
+          regexp
+        literal-regexp))))
+
 (defun yunge-pinyin-regexp (text)
   "Return a bounded regexp matching TEXT literally or through Pinyin.
 Pinyin letter runs are independently expanded.  Other characters are quoted.
 When expansion would be too broad, only the affected literal run is kept."
   (unless (string-empty-p text)
-    (let* ((literal-regexp (regexp-quote text))
-           (remaining-extra
-            (max 0 (- yunge-pinyin-regexp-budget
-                      (length literal-regexp))))
-           (position 0)
-           (expandedp nil)
-           parts)
-      (while (string-match yunge-pinyin--letter-run-regexp text position)
-        (let* ((beginning (match-beginning 0))
-               (end (match-end 0))
-               (run (substring text beginning end))
-               (literal-run (regexp-quote run))
-               (compiled
-                (yunge-pinyin--compile-run
-                 run (+ (length literal-run) remaining-extra)))
-               (extra (max 0 (- (length compiled) (length literal-run)))))
-          (push (regexp-quote (substring text position beginning)) parts)
-          (push compiled parts)
-          (setq expandedp (or expandedp (> extra 0))
-                remaining-extra (- remaining-extra extra)
-                position end)))
-      (push (regexp-quote (substring text position)) parts)
-      (let ((regexp (apply #'concat (nreverse parts))))
-        (if (and expandedp (yunge-pinyin--valid-regexp-p regexp))
-            regexp
-          literal-regexp)))))
+    (let* ((plain-text (substring-no-properties text))
+           (key (yunge-pinyin--regexp-cache-key plain-text))
+           (cached (and (> yunge-pinyin-regexp-cache-size 0)
+                        (gethash key yunge-pinyin--regexp-cache 'missing))))
+      (if (and cached (not (eq cached 'missing)))
+          cached
+        (yunge-pinyin--cache-regexp
+         key (yunge-pinyin--regexp-uncached plain-text))))))
 
 (provide 'yunge-pinyin)
 

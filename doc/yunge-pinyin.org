@@ -20,6 +20,15 @@ syllable boundaries.  A complexity budget based on the expanded character
 sets and abbreviated initials prevents broad queries from producing an
 expensive regexp.  A query always remains searchable literally.
 
+The compiler normally stops at frequency level 4.  This keeps ordinary
+queries focused on modern-use characters instead of expanding them with the
+rare Unihan tail.  Set =yunge-pinyin-max-frequency-level= to 5 when exhaustive
+coverage is more important than interactive search speed.
+
+Compiled character classes, cumulative character counts, and a bounded set of
+complete query regexps are cached in memory.  =yunge-pinyin-clear-cache=
+clears those caches without unloading the generated data.
+
 * Data
 
 The committed =lisp/yunge-pinyin-data.el= is the runtime Pinyin-to-Hanzi index.
