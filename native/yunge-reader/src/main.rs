@@ -17,7 +17,7 @@ type Error = Box<dyn std::error::Error>;
 const PROTOCOL_VERSION: u32 = 1;
 const PDFIUM_API: &str = "7881";
 const BUILD_ID: &str = env!("YUNGE_READER_BUILD_ID");
-const CAPABILITIES: [&str; 2] = ["lifecycle", "pdf-render"];
+const CAPABILITIES: [&str; 3] = ["lifecycle", "pdf-render", "pdf-text"];
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -36,7 +36,7 @@ struct Ready<'a> {
     build_id: &'a str,
     #[serde(rename = "pdfium-api")]
     pdfium_api: &'static str,
-    capabilities: [&'static str; 2],
+    capabilities: [&'static str; 3],
 }
 
 #[derive(Debug, Serialize)]
@@ -108,6 +108,15 @@ struct RenderParams {
     width: i32,
     #[serde(rename = "cache-key")]
     cache_key: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SelectionParams {
+    document: u64,
+    page: u32,
+    start: u32,
+    end: u32,
 }
 
 fn ready_message() -> Ready<'static> {
@@ -316,6 +325,93 @@ impl Service {
         }))
     }
 
+    fn page_text(&self, params: Value) -> Result<Value, ServiceError> {
+        let params: PageParams = Self::parse(params)?;
+        let document = self.document(params.document)?;
+        let index = Self::page_index(document, params.page)?;
+        let page = document.pages().get(index).map_err(|error| {
+            ServiceError::new(
+                "invalid-page",
+                format!("could not load page {}: {error}", params.page),
+            )
+        })?;
+        let text = page.text().map_err(|error| {
+            ServiceError::new(
+                "text-unavailable",
+                format!("could not load page text: {error}"),
+            )
+        })?;
+        let chars = text.chars();
+        let mut complete_text = String::new();
+        let mut characters = Vec::with_capacity(chars.len());
+        for character in chars.iter() {
+            let value = character.unicode_string().unwrap_or_default();
+            complete_text.push_str(&value);
+            let bounds = character
+                .loose_bounds()
+                .or_else(|_| character.tight_bounds())
+                .ok()
+                .map(|bounds| {
+                    json!({
+                        "left": bounds.left().value,
+                        "bottom": bounds.bottom().value,
+                        "right": bounds.right().value,
+                        "top": bounds.top().value,
+                    })
+                });
+            characters.push(json!({
+                "index": character.index(),
+                "text": value,
+                "bounds": bounds,
+                "generated": character.is_generated().unwrap_or(false),
+                "hyphen": character.is_hyphen().unwrap_or(false),
+            }));
+        }
+        Ok(json!({
+            "page": params.page,
+            "text": complete_text,
+            "characters": characters,
+        }))
+    }
+
+    fn selection_text(&self, params: Value) -> Result<Value, ServiceError> {
+        let params: SelectionParams = Self::parse(params)?;
+        let document = self.document(params.document)?;
+        let index = Self::page_index(document, params.page)?;
+        let page = document.pages().get(index).map_err(|error| {
+            ServiceError::new(
+                "invalid-page",
+                format!("could not load page {}: {error}", params.page),
+            )
+        })?;
+        let page_text = page.text().map_err(|error| {
+            ServiceError::new(
+                "text-unavailable",
+                format!("could not load page text: {error}"),
+            )
+        })?;
+        let chars = page_text.chars();
+        let range = selection_range(chars.len(), params.start, params.end)?;
+        let mut text = String::new();
+        for char_index in range.clone() {
+            let character = chars.get(char_index).map_err(|error| {
+                ServiceError::new(
+                    "invalid-selection",
+                    format!("could not read selected character: {error}"),
+                )
+            })?;
+            if let Some(value) = character.unicode_string() {
+                text.push_str(&value);
+            }
+        }
+        Ok(json!({
+            "page": params.page,
+            "start": range.start(),
+            "end": range.end(),
+            "text": text,
+        }))
+    }
+
     fn render_page(&self, params: Value) -> Result<Value, ServiceError> {
         let params: RenderParams = Self::parse(params)?;
         if !(16..=8192).contains(&params.width) {
@@ -431,7 +527,9 @@ impl Service {
             "open" => self.open(request.params),
             "close" => self.close(request.params),
             "page-info" => self.page_info(request.params),
+            "page-text" => self.page_text(request.params),
             "render-page" => self.render_page(request.params),
+            "selection-text" => self.selection_text(request.params),
             _ => Err(ServiceError::new(
                 "unsupported-operation",
                 format!("unsupported operation: {}", request.op),
@@ -439,6 +537,30 @@ impl Service {
         };
         response(request.id, result, Control::Continue)
     }
+}
+
+fn selection_range(
+    length: usize,
+    start: u32,
+    end: u32,
+) -> Result<std::ops::RangeInclusive<usize>, ServiceError> {
+    let start = start as usize;
+    let end = end as usize;
+    let first = start.min(end);
+    let last = start.max(end);
+    if first >= length || last >= length {
+        return Err(ServiceError::new(
+            "invalid-selection",
+            format!(
+                concat!(
+                    "character range {} through {} exceeds ",
+                    "{} characters"
+                ),
+                first, last, length
+            ),
+        ));
+    }
+    Ok(first..=last)
 }
 
 fn response(
@@ -580,6 +702,16 @@ mod tests {
         assert_eq!(output[1]["error"]["code"], "invalid-params");
         assert_eq!(output[2]["error"]["code"], "invalid-render-size");
         assert_eq!(output[3]["error"]["code"], "invalid-params");
+    }
+
+    #[test]
+    fn selection_ranges_are_inclusive_and_direction_independent() {
+        assert_eq!(selection_range(5, 1, 3).unwrap(), 1..=3);
+        assert_eq!(selection_range(5, 3, 1).unwrap(), 1..=3);
+        assert_eq!(
+            selection_range(5, 0, 5).unwrap_err().code,
+            "invalid-selection"
+        );
     }
 
     #[test]

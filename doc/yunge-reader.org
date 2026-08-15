@@ -16,6 +16,8 @@ The current PDF adapter provides:
 - open, close, page count, labels, and page geometry;
 - one-page PNG rendering with next, previous, and direct page navigation;
 - fit-width, fit-page, and bounded manual zoom;
+- canonical character geometry, mouse hit testing, and drag selection;
+- zoom-independent SVG selection highlights and exact =M-w= copying;
 - immutable render cache keys and stale-response rejection; and
 - graceful, forced, idle, EOF, and Emacs-exit service shutdown paths.
 
@@ -24,10 +26,9 @@ Page Up to the previous page; and =G= to a page prompt.  Shared reader keys
 use =+= and =-= for zoom, =0= for scale one, =w= for fit-width, =p= for
 fit-page, =g= to refresh, and =q= to quit the window.
 
-This slice is intentionally a single-page reader.  Continuous roll, text
-geometry, mouse selection, copying, search, and cache eviction remain to be
-implemented.  The shared selection commands exist, but the PDF driver reports
-that selection text is unavailable instead of returning inaccurate text.
+This slice is intentionally a single-page reader.  Continuous roll,
+cross-page selection, search, rotated glyph quadrilaterals, and cache eviction
+remain to be implemented.
 
 * Library boundary
 
@@ -70,6 +71,12 @@ painted rectangles are disposable view state, not the source of truth.
 Rerendering or evicting an image therefore need not invalidate the text range.
 =M-w= copies resolved text or asks the driver for =selection-text=.
 
+For PDF, =unit= is a zero-based page and =offset= is PDFium's zero-based
+character index.  A selected range includes both endpoint characters and is
+independent of drag direction.  The helper returns Unicode and loose character
+bounds in canonical PDF points.  Emacs performs hit testing locally, stores
+only the stable endpoints, and asks PDFium to resolve the exact range text.
+
 The same boundary can carry later annotations.  Durable annotation data can
 store document identity, stable endpoints, quoted text, color, and provenance
 outside the renderer.  A PDF backend may additionally write native PDF
@@ -94,6 +101,11 @@ key; an Emacs client cannot ask it to overwrite an arbitrary path.
 Each refresh advances a buffer generation.  Geometry and image completions
 capture their buffer and generation, so a response from an earlier page or
 window size cannot replace the current view.
+
+Text geometry is cached by page because it does not change with zoom.  After
+a click or drag, Emacs embeds the cached PNG in an SVG and projects selected
+character bounds over it.  The source PNG cache remains independent of
+ephemeral selection paint.
 
 * Native service lifecycle
 
@@ -154,23 +166,25 @@ selection, and annotation conformance tests.
 
 * Next PDF slices
 
-The next implementation slice should add, in order:
+The next implementation slices should add, in order:
 
-1. text runs, character bounds, and reading order in page coordinates;
-2. mouse hit testing and drag selection on one page;
-3. exact copying through the logical selection interface;
-4. cross-page selection and a continuous vertical page roll;
-5. search and jump over the same text layer; and
-6. cache size limits and eviction.
+1. a continuous vertical page roll;
+2. cross-page selection and copying;
+3. rotated glyph quadrilaterals;
+4. search and jump over the existing text layer; and
+5. cache size limits and eviction.
 
 * Testing
 
 ERT tests cover driver precedence, asynchronous cleanup, zoom, logical
 selection, native lifecycle, strict setup validation, PDF request mapping,
-lease balance, fit calculations, and stale renders.  Rust tests cover the
-handshake, strict parameters, protocol errors, shutdown ordering, and EOF.
+lease balance, fit calculations, text caching, hit testing, copying, and stale
+renders.  Rust tests cover the handshake, strict parameters, inclusive
+selection ranges, protocol errors, shutdown ordering, and EOF.
 
 The integration path installs the pinned Windows library through the public
 setup command, runs its =pdfium-info= smoke test, opens a five-page A4 fixture,
 checks page geometry, renders a 1000 by 1414 PNG, closes the handle, and shuts
-down.  The rendered page has also been compared visually with Poppler output.
+down.  It also extracts 1,938 indexed characters from that page, selects the
+range =3..14= in either direction, copies =Introduction=, and paints the
+selection as SVG.  The rendered page has been compared visually with Poppler.

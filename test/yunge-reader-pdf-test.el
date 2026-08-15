@@ -103,15 +103,40 @@
       (yunge-reader-pdf--request
        document 'page-info '(:page 2) #'ignore)
       (yunge-reader-pdf--request
+       document 'page-text '(:page 2) #'ignore)
+      (yunge-reader-pdf--request
        document 'render-page
        '(:page 2 :width 900 :cache-key "key") #'ignore))
     (setq calls (nreverse calls))
     (should (equal (caar calls) "page-info"))
     (should (equal (cdr (assq 'document (cdar calls))) 11))
     (should (equal (cdr (assq 'page (cdar calls))) 2))
-    (should (equal (caadr calls) "render-page"))
-    (should (equal (cdr (assq 'width (cdadr calls))) 900))
-    (should (equal (cdr (assq 'cache-key (cdadr calls))) "key"))))
+    (should (equal (caadr calls) "page-text"))
+    (should (equal (caaddr calls) "render-page"))
+    (should (equal (cdr (assq 'width (cdaddr calls))) 900))
+    (should (equal (cdr (assq 'cache-key (cdaddr calls))) "key"))))
+
+(ert-deftest yunge-reader-pdf-resolves-selection-text-natively ()
+  (let* ((document (make-yunge-reader-document :handle 11))
+         (start (make-yunge-reader-position :unit 2 :offset 9))
+         (end (make-yunge-reader-position :unit 2 :offset 4))
+         request
+         result)
+    (cl-letf (((symbol-function 'yunge-reader-native-request)
+               (lambda (operation parameters complete)
+                 (setq request (cons operation parameters))
+                 (funcall complete '((text . "exact text")) nil))))
+      (yunge-reader-pdf--request
+       document 'selection-text
+       (list :start start :end end)
+       (lambda (value error-data)
+         (should-not error-data)
+         (setq result value))))
+    (should (equal (car request) "selection-text"))
+    (should (equal (cdr (assq 'page (cdr request))) 2))
+    (should (equal (cdr (assq 'start (cdr request))) 9))
+    (should (equal (cdr (assq 'end (cdr request))) 4))
+    (should (equal result "exact text"))))
 
 (ert-deftest yunge-reader-pdf-resolves-fit-and-manual-widths ()
   (with-temp-buffer
@@ -144,5 +169,112 @@
         (yunge-reader-pdf--display-image
          1 0 '((path . "stale.png")) nil))
       (should-not created))))
+
+(ert-deftest yunge-reader-pdf-converts-display-to-page-coordinates ()
+  (with-temp-buffer
+    (setq yunge-reader-pdf--page-info
+          '((width . 100.0) (height . 200.0)))
+    (let ((point
+           (yunge-reader-pdf--pixel-to-page-point
+            500 250 1000 1000)))
+      (should (= (car point) 50.0))
+      (should (= (cdr point) 150.0)))))
+
+(ert-deftest yunge-reader-pdf-hit-testing-creates-logical-selection ()
+  (with-temp-buffer
+    (yunge-reader-mode)
+    (yunge-reader-pdf-view-mode 1)
+    (setq yunge-reader-pdf-page 0
+          yunge-reader-pdf--page-info
+          '((width . 100.0) (height . 200.0)))
+    (puthash
+     0
+     '((characters
+        . (((index . 4)
+            (text . "A")
+            (bounds . ((left . 10.0) (bottom . 10.0)
+                       (right . 20.0) (top . 20.0))))
+           ((index . 5)
+            (text . "B")
+            (bounds . ((left . 22.0) (bottom . 10.0)
+                       (right . 32.0) (top . 20.0)))))))
+     yunge-reader-pdf--text-cache)
+    (cl-letf (((symbol-function 'yunge-reader-pdf--paint-image)
+               #'ignore))
+      (yunge-reader-pdf--select-points
+       '(15.0 . 15.0) '(27.0 . 15.0)))
+    (should (= (yunge-reader-position-offset
+                (yunge-reader-selection-start
+                 yunge-reader-selection))
+               4))
+    (should (= (yunge-reader-position-offset
+                (yunge-reader-selection-end
+                 yunge-reader-selection))
+               5))))
+
+(ert-deftest yunge-reader-pdf-caches-page-text-once ()
+  (with-temp-buffer
+    (yunge-reader-mode)
+    (yunge-reader-pdf-view-mode 1)
+    (let ((requests 0)
+          (result '((page . 0) (characters . ()))))
+      (cl-letf (((symbol-function 'yunge-reader-request)
+                 (lambda (operation arguments complete)
+                   (cl-incf requests)
+                   (should (eq operation 'page-text))
+                   (should (= (plist-get arguments :page) 0))
+                   (funcall complete result nil))))
+        (yunge-reader-pdf--request-text 0)
+        (yunge-reader-pdf--request-text 0))
+      (should (= requests 1))
+      (should (eq (gethash 0 yunge-reader-pdf--text-cache)
+                  result)))))
+
+(ert-deftest yunge-reader-pdf-prioritizes-image-before-text-layer ()
+  (with-temp-buffer
+    (yunge-reader-mode)
+    (yunge-reader-pdf-view-mode 1)
+    (setq yunge-reader-pdf--generation 1)
+    (let (operations)
+      (cl-letf (((symbol-function 'yunge-reader-pdf--target-width)
+                 (lambda (_page-info &optional _window) 900))
+                ((symbol-function 'yunge-reader-pdf--cache-key)
+                 (lambda (_page _width) "key"))
+                ((symbol-function 'yunge-reader-request)
+                 (lambda (operation _arguments _complete)
+                   (push operation operations))))
+        (yunge-reader-pdf--render-with-info
+         1 0 '((width . 100.0) (height . 200.0)) nil))
+      (should (equal (nreverse operations)
+                     '(render-page page-text))))))
+
+(ert-deftest yunge-reader-pdf-paints-selection-in-svg-coordinates ()
+  (with-temp-buffer
+    (setq yunge-reader-pdf-page 0
+          yunge-reader-pdf--page-info
+          '((width . 100.0) (height . 200.0))
+          yunge-reader-selection
+          (make-yunge-reader-selection
+           :start (make-yunge-reader-position
+                   :unit 0 :offset 5)
+           :end (make-yunge-reader-position
+                 :unit 0 :offset 4)))
+    (let ((svg (svg-create 1000 1000)))
+      (yunge-reader-pdf--paint-selection
+       svg
+       '((characters
+          . (((index . 4)
+              (bounds . ((left . 10.0) (bottom . 10.0)
+                         (right . 20.0) (top . 20.0))))
+             ((index . 5)
+              (bounds . ((left . 22.0) (bottom . 10.0)
+                         (right . 32.0) (top . 20.0)))))))
+       1000 1000)
+      (let ((rectangles (dom-by-tag svg 'rect)))
+        (should (= (length rectangles) 2))
+        (should (= (dom-attr (car rectangles) 'x) 100.0))
+        (should (= (dom-attr (car rectangles) 'y) 900.0))
+        (should (= (dom-attr (car rectangles) 'width) 100.0))
+        (should (= (dom-attr (car rectangles) 'height) 50.0))))))
 
 ;;; yunge-reader-pdf-test.el ends here

@@ -62,7 +62,7 @@
          (protocol . 1)
          (build-id . "test-build")
          (pdfium-api . "7881")
-         (capabilities . ("lifecycle" "pdf-render"))))
+         (capabilities . ("lifecycle" "pdf-render" "pdf-text"))))
       (should (= (length sent) 1))
       (let ((request
              (json-parse-string
@@ -84,7 +84,7 @@
         (protocol . 1)
         (build-id . "old-build")
         (pdfium-api . "7881")
-        (capabilities . ("lifecycle" "pdf-render"))))
+        (capabilities . ("lifecycle" "pdf-render" "pdf-text"))))
      :type 'error)
     (should-error
      (yunge-reader-native--validate-ready
@@ -92,7 +92,7 @@
         (protocol . 2)
         (build-id . "test-build")
         (pdfium-api . "7881")
-        (capabilities . ("lifecycle" "pdf-render"))))
+        (capabilities . ("lifecycle" "pdf-render" "pdf-text"))))
      :type 'error)))
 
 (ert-deftest yunge-reader-native-stop-requests-shutdown-then-arms-timeout ()

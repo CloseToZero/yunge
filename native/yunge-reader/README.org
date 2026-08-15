@@ -18,10 +18,10 @@ The helper writes one message immediately after startup:
 #+begin_src json
 {"kind":"ready","protocol":1,"build-id":"HASH",
  "pdfium-api":"7881",
- "capabilities":["lifecycle","pdf-render"]}
+ "capabilities":["lifecycle","pdf-render","pdf-text"]}
 #+end_src
 
-Emacs requires the protocol, build ID, PDFium API, and both capabilities to
+Emacs requires the protocol, build ID, PDFium API, and all capabilities to
 match.  The build ID hashes the Cargo manifest and lock, build script, PDFium
 manifest, and Rust sources.
 
@@ -35,7 +35,7 @@ reject unknown fields.
 {"id":1,"op":"ping"}
 {"id":1,"ok":true,
  "result":{"protocol":1,"backend":"pdfium",
-           "capabilities":["lifecycle","pdf-render"]}}
+           "capabilities":["lifecycle","pdf-render","pdf-text"]}}
 #+end_src
 
 Failures have a stable code and diagnostic message:
@@ -70,16 +70,42 @@ PDF point width and height plus the page label.
  "result":{"page":0,"width":595.276,"height":841.89,"label":"1"}}
 #+end_src
 
+=page-text= accepts =document= and =page=.  It returns the complete Unicode
+text plus characters in PDFium index order.  Each character has a zero-based
+=index=, Unicode =text=, optional canonical point =bounds=, and =generated=
+and =hyphen= flags.  PDF coordinates start at the bottom left.
+
+#+begin_src json
+{"id":5,"op":"page-text","params":{"document":1,"page":0}}
+{"id":5,"ok":true,
+ "result":{"page":0,"text":"Introduction",
+           "characters":[{"index":0,"text":"I",
+             "bounds":{"left":72,"bottom":700,
+                       "right":78,"top":712},
+             "generated":false,"hyphen":false}]}}
+#+end_src
+
+=selection-text= accepts one page and two inclusive character indices.  The
+helper normalizes backward selections and returns text in PDFium index order.
+Indices outside the page return =invalid-selection=.
+
+#+begin_src json
+{"id":6,"op":"selection-text",
+ "params":{"document":1,"page":0,"start":14,"end":3}}
+{"id":6,"ok":true,
+ "result":{"page":0,"start":3,"end":14,"text":"Introduction"}}
+#+end_src
+
 =render-page= additionally accepts pixel =width= from 16 through 8192 and a
 64-character lowercase hexadecimal =cache-key=.  The helper alone maps that
 key to =YUNGE_READER_CACHE/<key>.png=.  It returns the absolute path, pixel
 dimensions, and whether an existing valid cache entry was reused.
 
 #+begin_src json
-{"id":5,"op":"render-page",
+{"id":7,"op":"render-page",
  "params":{"document":1,"page":0,"width":1000,
 "cache-key":"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"}}
-{"id":5,"ok":true,
+{"id":7,"ok":true,
  "result":{"path":"C:/cache/0123456789abcdef....png",
            "pixel-width":1000,"pixel-height":1414,"cached":false}}
 #+end_src
@@ -91,8 +117,8 @@ dimensions, and whether an existing valid cache entry was reused.
 Emacs requests graceful shutdown with:
 
 #+begin_src json
-{"id":6,"op":"shutdown"}
-{"id":6,"ok":true,"result":{"stopped":true}}
+{"id":8,"op":"shutdown"}
+{"id":8,"ok":true,"result":{"stopped":true}}
 #+end_src
 
 Before responding, the helper drops all open documents.  It then flushes the
