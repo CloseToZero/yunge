@@ -155,9 +155,11 @@ stopped or Emacs exits."
                         yunge-reader-native-pdfium-api)
                  (member "lifecycle"
                          (alist-get 'capabilities message))
-                 (member "pdf-render"
-                         (alist-get 'capabilities message))
-                 (member "pdf-text"
+                  (member "pdf-render"
+                          (alist-get 'capabilities message))
+                  (member "pdf-search"
+                          (alist-get 'capabilities message))
+                  (member "pdf-text"
                          (alist-get 'capabilities message)))
       (error
        "Incompatible Yunge Reader helper: expected protocol %d build %s, got %S"

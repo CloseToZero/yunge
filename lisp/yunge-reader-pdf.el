@@ -33,6 +33,16 @@
   :type 'number
   :group 'yunge-reader)
 
+(defcustom yunge-reader-pdf-search-color "#ff7800"
+  "Color painted behind the current PDF search match."
+  :type 'color
+  :group 'yunge-reader)
+
+(defcustom yunge-reader-pdf-search-opacity 0.46
+  "Opacity used to paint the current PDF search match."
+  :type 'number
+  :group 'yunge-reader)
+
 (defconst yunge-reader-pdf--points-to-pixels (/ 96.0 72.0)
   "Nominal conversion from PDF points to screen pixels at scale one.")
 
@@ -98,12 +108,16 @@
                     (make-hash-table :test #'eql))
         (add-hook 'yunge-reader-refresh-hook
                   #'yunge-reader-pdf--refresh nil t)
+        (add-hook 'yunge-reader-search-result-hook
+                  #'yunge-reader-pdf--search-result-changed nil t)
         (add-hook 'window-size-change-functions
                   #'yunge-reader-pdf--window-size-change nil t)
         (add-hook 'window-scroll-functions
                   #'yunge-reader-pdf--window-scrolled nil t))
     (remove-hook 'yunge-reader-refresh-hook
                  #'yunge-reader-pdf--refresh t)
+    (remove-hook 'yunge-reader-search-result-hook
+                 #'yunge-reader-pdf--search-result-changed t)
     (remove-hook 'window-size-change-functions
                  #'yunge-reader-pdf--window-size-change t)
     (remove-hook 'window-scroll-functions
@@ -124,6 +138,42 @@
 (defun yunge-reader-pdf--native-error (message)
   "Return an Emacs error value containing MESSAGE."
   (list 'error message))
+
+(defun yunge-reader-pdf--native-position (value)
+  "Return a stable reader position represented by native VALUE."
+  (let ((page (alist-get 'page value))
+        (offset (alist-get 'offset value)))
+    (when (and (natnump page) (natnump offset))
+      (make-yunge-reader-position :unit page :offset offset))))
+
+(defun yunge-reader-pdf--native-search-result (value)
+  "Return a generic search result represented by native VALUE."
+  (let ((start
+         (yunge-reader-pdf--native-position
+          (alist-get 'start value)))
+        (end
+         (yunge-reader-pdf--native-position
+          (alist-get 'end value))))
+    (when (and start end)
+      (make-yunge-reader-search-result
+       :start start
+       :end end
+       :text (alist-get 'text value)
+       :before (alist-get 'before value)
+       :after (alist-get 'after value)))))
+
+(defun yunge-reader-pdf--native-search-batch (value)
+  "Return a generic search batch represented by native VALUE."
+  (let ((results
+         (mapcar #'yunge-reader-pdf--native-search-result
+                 (alist-get 'matches value)))
+        (cursor-value (alist-get 'cursor value)))
+    (when (cl-every #'identity results)
+      (make-yunge-reader-search-batch
+       :results results
+       :cursor (and cursor-value
+                    (yunge-reader-pdf--native-position cursor-value))
+       :done (eq (alist-get 'done value) t)))))
 
 (defun yunge-reader-pdf--open (file complete)
   "Open PDF FILE and call COMPLETE using the reader driver contract."
@@ -208,7 +258,32 @@
               (cons 'width (plist-get arguments :width))
               (cons 'cache-key
                     (plist-get arguments :cache-key)))
-        complete))
+         complete))
+      ('search
+       (let ((cursor (plist-get arguments :cursor)))
+         (yunge-reader-native-request
+          "search"
+          (append
+           (list
+            (cons 'document handle)
+            (cons 'query (plist-get arguments :query))
+            (cons 'case-sensitive
+                  (if (plist-get arguments :case-sensitive) t :false))
+            (cons 'match-limit (plist-get arguments :match-limit))
+            (cons 'page-limit (plist-get arguments :page-limit)))
+           (when cursor
+             (list
+              (cons
+               'cursor
+               (list
+                (cons 'page (yunge-reader-position-unit cursor))
+                (cons 'offset
+                      (yunge-reader-position-offset cursor)))))))
+          (lambda (result native-error)
+            (funcall complete
+                     (and result
+                          (yunge-reader-pdf--native-search-batch result))
+                     native-error)))))
       ('selection-text
        (let* ((start (plist-get arguments :start))
               (end (plist-get arguments :end))
@@ -363,35 +438,52 @@ When SUPPRESS-SCALE is non-nil, do not update the shared effective scale."
 (defun yunge-reader-pdf--ordered-selection ()
   "Return the current selection endpoints in document order."
   (when yunge-reader-selection
-    (let ((start
-           (yunge-reader-selection-start yunge-reader-selection))
-          (end (yunge-reader-selection-end yunge-reader-selection)))
-      (if (yunge-reader-pdf--position-before-p start end)
-          (cons start end)
-        (cons end start)))))
+    (yunge-reader-pdf--ordered-range
+     (yunge-reader-selection-start yunge-reader-selection)
+     (yunge-reader-selection-end yunge-reader-selection))))
+
+(defun yunge-reader-pdf--ordered-range (start end)
+  "Return document positions START and END in document order."
+  (if (yunge-reader-pdf--position-before-p start end)
+      (cons start end)
+    (cons end start)))
+
+(defun yunge-reader-pdf--range-offsets
+    (page text-layer start end)
+  "Return inclusive START through END offsets on PAGE and TEXT-LAYER."
+  (pcase-let* ((`(,start . ,end)
+                (yunge-reader-pdf--ordered-range start end))
+               (start-page (yunge-reader-position-unit start))
+               (end-page (yunge-reader-position-unit end))
+               (characters (alist-get 'characters text-layer)))
+    (when (and (<= start-page page)
+               (<= page end-page)
+               characters)
+      (cons
+       (if (= page start-page)
+           (yunge-reader-position-offset start)
+         0)
+       (if (= page end-page)
+           (yunge-reader-position-offset end)
+         (apply #'max
+                (mapcar
+                 (lambda (character)
+                   (alist-get 'index character))
+                 characters)))))))
 
 (defun yunge-reader-pdf--selection-offsets (page text-layer)
   "Return selected inclusive offsets for PAGE and TEXT-LAYER."
   (when-let* ((selection (yunge-reader-pdf--ordered-selection)))
-    (let* ((start (car selection))
-           (end (cdr selection))
-           (start-page (yunge-reader-position-unit start))
-           (end-page (yunge-reader-position-unit end))
-           (characters (alist-get 'characters text-layer)))
-      (when (and (<= start-page page)
-                 (<= page end-page)
-                 characters)
-        (cons
-         (if (= page start-page)
-             (yunge-reader-position-offset start)
-           0)
-         (if (= page end-page)
-             (yunge-reader-position-offset end)
-           (apply #'max
-                  (mapcar
-                   (lambda (character)
-                     (alist-get 'index character))
-                   characters))))))))
+    (yunge-reader-pdf--range-offsets
+     page text-layer (car selection) (cdr selection))))
+
+(defun yunge-reader-pdf--search-offsets (page text-layer)
+  "Return current search match offsets for PAGE and TEXT-LAYER."
+  (when yunge-reader-search-result
+    (yunge-reader-pdf--range-offsets
+     page text-layer
+     (yunge-reader-search-result-start yunge-reader-search-result)
+     (yunge-reader-search-result-end yunge-reader-search-result))))
 
 (defun yunge-reader-pdf--convex-quad-p (quad)
   "Return non-nil when QUAD is strictly convex and outline-ordered."
@@ -447,7 +539,8 @@ When SUPPRESS-SCALE is non-nil, do not update the shared effective scale."
    quad))
 
 (defun yunge-reader-pdf--paint-bounds
-    (svg bounds page-width page-height pixel-width pixel-height)
+    (svg bounds page-width page-height pixel-width pixel-height
+         &optional color opacity)
   "Paint canonical BOUNDS onto SVG."
   (let* ((left (alist-get 'left bounds))
          (bottom (alist-get 'bottom bounds))
@@ -461,38 +554,57 @@ When SUPPRESS-SCALE is non-nil, do not update the shared effective scale."
           (max 1 (* pixel-height (/ (- top bottom) page-height)))))
     (svg-rectangle
      svg x y width height
-     :fill-color yunge-reader-pdf-selection-color
-     :fill-opacity yunge-reader-pdf-selection-opacity)))
+     :fill-color (or color yunge-reader-pdf-selection-color)
+     :fill-opacity (or opacity yunge-reader-pdf-selection-opacity))))
 
 (defun yunge-reader-pdf--paint-character
-    (svg character page-width page-height pixel-width pixel-height)
+    (svg character page-width page-height pixel-width pixel-height
+         &optional color opacity)
   "Paint CHARACTER geometry onto SVG."
   (if-let* ((quad (yunge-reader-pdf--quad-points character)))
       (svg-polygon
        svg
        (yunge-reader-pdf--svg-quad
         quad page-width page-height pixel-width pixel-height)
-       :fill-color yunge-reader-pdf-selection-color
-       :fill-opacity yunge-reader-pdf-selection-opacity)
+       :fill-color (or color yunge-reader-pdf-selection-color)
+       :fill-opacity (or opacity yunge-reader-pdf-selection-opacity))
     (when-let* ((bounds (alist-get 'bounds character)))
       (yunge-reader-pdf--paint-bounds
-       svg bounds page-width page-height pixel-width pixel-height))))
+       svg bounds page-width page-height pixel-width pixel-height
+       color opacity))))
+
+(defun yunge-reader-pdf--paint-range
+    (svg range text-layer page-info pixel-width pixel-height color opacity)
+  "Paint inclusive text RANGE onto SVG with COLOR and OPACITY."
+  (let ((page-width (alist-get 'width page-info))
+        (page-height (alist-get 'height page-info)))
+    (dolist (character (alist-get 'characters text-layer))
+      (let ((index (alist-get 'index character)))
+        (when (and (<= (car range) index)
+                   (<= index (cdr range))
+                   (not (alist-get 'generated character)))
+          (yunge-reader-pdf--paint-character
+           svg character page-width page-height
+           pixel-width pixel-height color opacity))))))
 
 (defun yunge-reader-pdf--paint-selection
     (svg page page-info text-layer pixel-width pixel-height)
   "Paint PAGE selection onto SVG using PAGE-INFO and TEXT-LAYER."
   (when-let* ((range
                (yunge-reader-pdf--selection-offsets page text-layer)))
-    (let ((page-width (alist-get 'width page-info))
-          (page-height (alist-get 'height page-info)))
-      (dolist (character (alist-get 'characters text-layer))
-        (let ((index (alist-get 'index character)))
-          (when (and (<= (car range) index)
-                     (<= index (cdr range))
-                     (not (alist-get 'generated character)))
-            (yunge-reader-pdf--paint-character
-             svg character page-width page-height
-             pixel-width pixel-height)))))))
+    (yunge-reader-pdf--paint-range
+     svg range text-layer page-info pixel-width pixel-height
+     yunge-reader-pdf-selection-color
+     yunge-reader-pdf-selection-opacity)))
+
+(defun yunge-reader-pdf--paint-search
+    (svg page page-info text-layer pixel-width pixel-height)
+  "Paint PAGE's current search match onto SVG."
+  (when-let* ((range
+               (yunge-reader-pdf--search-offsets page text-layer)))
+    (yunge-reader-pdf--paint-range
+     svg range text-layer page-info pixel-width pixel-height
+     yunge-reader-pdf-search-color yunge-reader-pdf-search-opacity)))
 
 (defun yunge-reader-pdf--render-key (page width)
   "Return the in-memory render key for PAGE and WIDTH."
@@ -511,13 +623,16 @@ When SUPPRESS-SCALE is non-nil, do not update the shared effective scale."
           (and yunge-reader-pdf--text-cache
                (gethash page yunge-reader-pdf--text-cache))))
     (if (and text-layer
-             (yunge-reader-pdf--selection-offsets page text-layer))
+             (or (yunge-reader-pdf--selection-offsets page text-layer)
+                 (yunge-reader-pdf--search-offsets page text-layer)))
         (let ((svg (svg-create pixel-width pixel-height)))
           (svg-embed svg path "image/png" nil
                      :x 0 :y 0
                      :width pixel-width
                      :height pixel-height)
           (yunge-reader-pdf--paint-selection
+           svg page page-info text-layer pixel-width pixel-height)
+          (yunge-reader-pdf--paint-search
            svg page page-info text-layer pixel-width pixel-height)
           (svg-image svg))
       (create-image path nil nil))))
@@ -542,6 +657,119 @@ When SUPPRESS-SCALE is non-nil, do not update the shared effective scale."
        (natnump page)
        (< page (length yunge-reader-pdf--page-positions))
        (aref yunge-reader-pdf--page-positions page)))
+
+(defun yunge-reader-pdf--search-page-p (page)
+  "Return non-nil when the current search result intersects PAGE."
+  (when yunge-reader-search-result
+    (let* ((range
+            (yunge-reader-pdf--ordered-range
+             (yunge-reader-search-result-start
+              yunge-reader-search-result)
+             (yunge-reader-search-result-end
+              yunge-reader-search-result)))
+           (start-page (yunge-reader-position-unit (car range)))
+           (end-page (yunge-reader-position-unit (cdr range))))
+      (and (<= start-page page) (<= page end-page)))))
+
+(defun yunge-reader-pdf--character-center (character)
+  "Return canonical center of CHARACTER geometry, or nil."
+  (if-let* ((quad (yunge-reader-pdf--quad-points character)))
+      (cons
+       (/ (apply #'+
+                 (mapcar (lambda (point) (alist-get 'x point)) quad))
+          4.0)
+       (/ (apply #'+
+                 (mapcar (lambda (point) (alist-get 'y point)) quad))
+          4.0))
+    (when-let* ((bounds (alist-get 'bounds character)))
+      (cons
+       (/ (+ (alist-get 'left bounds)
+             (alist-get 'right bounds))
+          2.0)
+       (/ (+ (alist-get 'bottom bounds)
+             (alist-get 'top bounds))
+          2.0)))))
+
+(defun yunge-reader-pdf--search-character (page text-layer)
+  "Return the first drawable search character on PAGE's TEXT-LAYER."
+  (when-let* ((range
+               (yunge-reader-pdf--search-offsets page text-layer)))
+    (seq-find
+     (lambda (character)
+       (let ((index (alist-get 'index character)))
+         (and (<= (car range) index)
+              (<= index (cdr range))
+              (not (alist-get 'generated character))
+              (yunge-reader-pdf--character-center character))))
+     (alist-get 'characters text-layer))))
+
+(defun yunge-reader-pdf--scroll-to-search-result ()
+  "Align the current PDF search result inside its reader window."
+  (when yunge-reader-search-result
+    (let* ((page
+            (yunge-reader-position-unit
+             (yunge-reader-search-result-start
+              yunge-reader-search-result)))
+           (text-layer
+            (and yunge-reader-pdf--text-cache
+                 (gethash page yunge-reader-pdf--text-cache)))
+           (character
+            (and text-layer
+                 (yunge-reader-pdf--search-character page text-layer)))
+           (center
+            (and character
+                 (yunge-reader-pdf--character-center character)))
+           (page-info (and center (yunge-reader-pdf--page-info page)))
+           (position (and center (yunge-reader-pdf--page-position page)))
+           (window (get-buffer-window (current-buffer) t)))
+      (when (and (= page yunge-reader-pdf-page)
+                 page-info position (window-live-p window))
+        (let* ((width (yunge-reader-pdf--page-width page window))
+               (size (yunge-reader-pdf--pixel-size page-info width))
+               (pixel-width (car size))
+               (pixel-height (cdr size))
+               (page-width (alist-get 'width page-info))
+               (page-height (alist-get 'height page-info))
+               (target-x (* pixel-width (/ (car center) page-width)))
+               (target-y
+                (* pixel-height
+                   (- 1.0 (/ (cdr center) page-height))))
+               (body-width (window-body-width window t))
+               (body-height (window-body-height window t))
+               (vertical
+                (max 0
+                     (min (max 0 (- pixel-height body-height))
+                          (round (- target-y (/ body-height 3.0))))))
+               (horizontal-pixels
+                (max 0
+                     (min (max 0 (- pixel-width body-width))
+                          (round (- target-x (/ body-width 3.0))))))
+               (column-width
+                (max 1 (frame-char-width (window-frame window)))))
+          (goto-char position)
+          (set-window-start window position t)
+          (set-window-vscroll window vertical t)
+          (set-window-hscroll
+           window
+           (floor (/ (float horizontal-pixels) column-width))))))))
+
+(defun yunge-reader-pdf--search-result-changed ()
+  "Repaint and visit the current PDF search result."
+  (if (not yunge-reader-search-result)
+      (when yunge-reader-pdf--displayed-pages
+        (yunge-reader-pdf--paint-pages
+         yunge-reader-pdf--displayed-pages))
+    (let ((page
+           (yunge-reader-position-unit
+            (yunge-reader-search-result-start
+             yunge-reader-search-result))))
+      (when (and (natnump page)
+                 (< page (yunge-reader-pdf--page-count)))
+        (yunge-reader-pdf--set-page page)
+        (yunge-reader-pdf--request-text page)
+        (yunge-reader-pdf--paint-pages
+         yunge-reader-pdf--displayed-pages)
+        (yunge-reader-pdf--scroll-to-search-result)))))
 
 (defun yunge-reader-pdf--paint-page (page)
   "Paint PAGE as an image when visible, otherwise as a placeholder."
@@ -674,7 +902,9 @@ When SUPPRESS-SCALE is non-nil, do not update the shared effective scale."
                    (yunge-reader-pdf--page-info page)
                    (memq page yunge-reader-pdf--displayed-pages)
                    (= width (yunge-reader-pdf--page-width page)))
-          (yunge-reader-pdf--paint-page page))))))
+          (yunge-reader-pdf--paint-page page)
+          (when (yunge-reader-pdf--search-page-p page)
+            (yunge-reader-pdf--scroll-to-search-result)))))))
 
 (defun yunge-reader-pdf--request-render (generation page)
   "Request a render of PAGE for GENERATION unless it is cached."
@@ -709,8 +939,11 @@ When SUPPRESS-SCALE is non-nil, do not update the shared effective scale."
         (when (hash-table-p yunge-reader-pdf--text-cache)
           (puthash page result yunge-reader-pdf--text-cache))
         (when (and (memq page yunge-reader-pdf--displayed-pages)
-                   yunge-reader-selection)
-          (yunge-reader-pdf--paint-page page))))))
+                   (or yunge-reader-selection
+                       (yunge-reader-pdf--search-page-p page)))
+          (yunge-reader-pdf--paint-page page))
+        (when (yunge-reader-pdf--search-page-p page)
+          (yunge-reader-pdf--scroll-to-search-result))))))
 
 (defun yunge-reader-pdf--request-text (page)
   "Request and cache canonical text geometry for PAGE."
@@ -772,7 +1005,8 @@ When SUPPRESS-SCALE is non-nil, do not update the shared effective scale."
       (setq yunge-reader-pdf--displayed-pages nil)
       (dotimes (page (yunge-reader-pdf--page-count))
         (yunge-reader-pdf--paint-page page))
-      (yunge-reader-pdf--update-visible-pages))))
+      (yunge-reader-pdf--update-visible-pages)
+      (yunge-reader-pdf--scroll-to-search-result))))
 
 (defun yunge-reader-pdf--pixel-to-page-point
     (page x y display-width display-height)

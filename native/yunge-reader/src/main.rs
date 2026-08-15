@@ -3,6 +3,7 @@
 
 use image::GenericImageView;
 use pdfium_render::prelude::*;
+use regex::{Regex, RegexBuilder};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -17,7 +18,12 @@ type Error = Box<dyn std::error::Error>;
 const PROTOCOL_VERSION: u32 = 1;
 const PDFIUM_API: &str = "7881";
 const BUILD_ID: &str = env!("YUNGE_READER_BUILD_ID");
-const CAPABILITIES: [&str; 3] = ["lifecycle", "pdf-render", "pdf-text"];
+const CAPABILITIES: [&str; 4] =
+    ["lifecycle", "pdf-render", "pdf-search", "pdf-text"];
+const SEARCH_CONTEXT_CHARACTERS: usize = 24;
+const SEARCH_MAX_MATCHES: u32 = 200;
+const SEARCH_MAX_PAGES: u32 = 64;
+const SEARCH_MAX_QUERY_CHARACTERS: usize = 256;
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -36,7 +42,7 @@ struct Ready<'a> {
     build_id: &'a str,
     #[serde(rename = "pdfium-api")]
     pdfium_api: &'static str,
-    capabilities: [&'static str; 3],
+    capabilities: [&'static str; 4],
 }
 
 #[derive(Debug, Serialize)]
@@ -125,6 +131,147 @@ struct SelectionParams {
     document: u64,
     start: SelectionPosition,
     end: SelectionPosition,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SearchParams {
+    document: u64,
+    query: String,
+    #[serde(default, rename = "case-sensitive")]
+    case_sensitive: bool,
+    #[serde(default)]
+    cursor: Option<SelectionPosition>,
+    #[serde(default = "default_search_match_limit", rename = "match-limit")]
+    match_limit: u32,
+    #[serde(default = "default_search_page_limit", rename = "page-limit")]
+    page_limit: u32,
+}
+
+#[derive(Debug)]
+struct SearchCharacter {
+    index: u32,
+    text: String,
+    start: usize,
+    end: usize,
+}
+
+#[derive(Debug, Serialize)]
+struct SearchMatch {
+    start: SelectionPosition,
+    end: SelectionPosition,
+    text: String,
+    before: String,
+    after: String,
+}
+
+fn default_search_match_limit() -> u32 {
+    64
+}
+
+fn default_search_page_limit() -> u32 {
+    8
+}
+
+fn compile_search_pattern(
+    query: &str,
+    case_sensitive: bool,
+) -> Result<Regex, ServiceError> {
+    if query.is_empty() {
+        return Err(ServiceError::new(
+            "invalid-search-query",
+            "search query must not be empty",
+        ));
+    }
+    if query.chars().count() > SEARCH_MAX_QUERY_CHARACTERS {
+        return Err(ServiceError::new(
+            "invalid-search-query",
+            format!(
+                concat!("search query must not exceed ", "{} characters"),
+                SEARCH_MAX_QUERY_CHARACTERS
+            ),
+        ));
+    }
+    RegexBuilder::new(&regex::escape(query))
+        .case_insensitive(!case_sensitive)
+        .unicode(true)
+        .build()
+        .map_err(|error| {
+            ServiceError::new(
+                "invalid-search-query",
+                format!("could not compile search query: {error}"),
+            )
+        })
+}
+
+fn search_context(characters: &[SearchCharacter]) -> String {
+    let mut context = String::new();
+    for character in characters {
+        context.push_str(&character.text);
+    }
+    context
+}
+
+fn search_character_range(
+    characters: &[SearchCharacter],
+    start: usize,
+    end: usize,
+) -> Option<(usize, usize)> {
+    let first = characters
+        .iter()
+        .position(|character| character.end > start)?;
+    let last = characters
+        .iter()
+        .rposition(|character| character.start < end)?;
+    (first <= last).then_some((first, last))
+}
+
+fn search_page_text(
+    page: u32,
+    text: &str,
+    characters: &[SearchCharacter],
+    pattern: &Regex,
+    minimum_offset: u32,
+    limit: usize,
+) -> Vec<SearchMatch> {
+    let mut matches = Vec::new();
+    for found in pattern.find_iter(text) {
+        let Some((first, last)) =
+            search_character_range(characters, found.start(), found.end())
+        else {
+            continue;
+        };
+        if characters[first].index < minimum_offset {
+            continue;
+        }
+        let before_start = first.saturating_sub(SEARCH_CONTEXT_CHARACTERS);
+        let after_end =
+            characters.len().min(last + 1 + SEARCH_CONTEXT_CHARACTERS);
+        let start = SelectionPosition {
+            page,
+            offset: characters[first].index,
+        };
+        let end = SelectionPosition {
+            page,
+            offset: characters[last].index,
+        };
+        if matches.last().is_some_and(|previous: &SearchMatch| {
+            previous.start == start && previous.end == end
+        }) {
+            continue;
+        }
+        matches.push(SearchMatch {
+            start,
+            end,
+            text: found.as_str().to_owned(),
+            before: search_context(&characters[before_start..first]),
+            after: search_context(&characters[last + 1..after_end]),
+        });
+        if matches.len() >= limit {
+            break;
+        }
+    }
+    matches
 }
 
 #[derive(Clone, Copy, Debug, Serialize)]
@@ -564,6 +711,127 @@ impl Service {
         }))
     }
 
+    fn search(&self, params: Value) -> Result<Value, ServiceError> {
+        let params: SearchParams = Self::parse(params)?;
+        if !(1..=SEARCH_MAX_MATCHES).contains(&params.match_limit) {
+            return Err(ServiceError::new(
+                "invalid-search-limit",
+                format!(
+                    concat!("search match limit must be between 1 and ", "{}"),
+                    SEARCH_MAX_MATCHES
+                ),
+            ));
+        }
+        if !(1..=SEARCH_MAX_PAGES).contains(&params.page_limit) {
+            return Err(ServiceError::new(
+                "invalid-search-limit",
+                format!(
+                    "search page limit must be between 1 and {SEARCH_MAX_PAGES}"
+                ),
+            ));
+        }
+        let pattern =
+            compile_search_pattern(&params.query, params.case_sensitive)?;
+        let document = self.document(params.document)?;
+        let page_count = document.pages().len() as u32;
+        let mut page_number = params.cursor.map_or(0, |cursor| cursor.page);
+        let mut minimum_offset =
+            params.cursor.map_or(0, |cursor| cursor.offset);
+        if page_number >= page_count {
+            return Ok(json!({
+                "matches": [],
+                "cursor": null,
+                "done": true,
+            }));
+        }
+        let mut matches = Vec::new();
+        let mut pages_scanned = 0;
+        while page_number < page_count && pages_scanned < params.page_limit {
+            let index = Self::page_index(document, page_number)?;
+            let page = document.pages().get(index).map_err(|error| {
+                ServiceError::new(
+                    "invalid-page",
+                    format!("could not load page {page_number}: {error}"),
+                )
+            })?;
+            let page_text = page.text().map_err(|error| {
+                ServiceError::new(
+                    "text-unavailable",
+                    format!("could not load page {page_number} text: {error}"),
+                )
+            })?;
+            let chars = page_text.chars();
+            if minimum_offset > chars.len() as u32 {
+                return Err(ServiceError::new(
+                    "invalid-search-cursor",
+                    format!(
+                        concat!(
+                            "search offset {} exceeds {} characters ",
+                            "on page {}"
+                        ),
+                        minimum_offset,
+                        chars.len(),
+                        page_number
+                    ),
+                ));
+            }
+            let mut complete_text = String::new();
+            let mut characters = Vec::with_capacity(chars.len());
+            for character in chars.iter() {
+                let start = complete_text.len();
+                let value = character.unicode_string().unwrap_or_default();
+                complete_text.push_str(&value);
+                characters.push(SearchCharacter {
+                    index: character.index() as u32,
+                    text: value,
+                    start,
+                    end: complete_text.len(),
+                });
+            }
+            let remaining = params.match_limit as usize - matches.len();
+            let page_matches = search_page_text(
+                page_number,
+                &complete_text,
+                &characters,
+                &pattern,
+                minimum_offset,
+                remaining,
+            );
+            matches.extend(page_matches);
+            pages_scanned += 1;
+            if matches.len() >= params.match_limit as usize {
+                let last = matches.last().expect("search limit is positive");
+                let next_offset = last.end.offset.saturating_add(1);
+                let (next_page, next_offset) =
+                    if next_offset < chars.len() as u32 {
+                        (page_number, next_offset)
+                    } else {
+                        (page_number + 1, 0)
+                    };
+                let done = next_page >= page_count;
+                return Ok(json!({
+                    "matches": matches,
+                    "cursor": (!done).then_some(SelectionPosition {
+                        page: next_page,
+                        offset: next_offset,
+                    }),
+                    "done": done,
+                }));
+            }
+            page_number += 1;
+            minimum_offset = 0;
+        }
+        let done = page_number >= page_count;
+        Ok(json!({
+            "matches": matches,
+            "cursor": (!done).then_some(SelectionPosition {
+                page: page_number,
+                offset: 0,
+            }),
+            "done": done,
+        }))
+    }
+
     fn selection_text(&self, params: Value) -> Result<Value, ServiceError> {
         let params: SelectionParams = Self::parse(params)?;
         let document = self.document(params.document)?;
@@ -728,6 +996,7 @@ impl Service {
             "close" => self.close(request.params),
             "page-info" => self.page_info(request.params),
             "page-text" => self.page_text(request.params),
+            "search" => self.search(request.params),
             "render-page" => self.render_page(request.params),
             "selection-text" => self.selection_text(request.params),
             _ => Err(ServiceError::new(
@@ -928,10 +1197,17 @@ mod tests {
             r#""document":1,"page":0,"width":1,"cache-key":"x"}}"#,
             "\n",
             r#"{"id":3,"op":"ping","params":{"extra":true}}"#,
+            "\n",
+            r#"{"id":4,"op":"search","params":{"document":1,"query":""}}"#,
+            "\n",
+            r#"{"id":5,"op":"search","params":{"document":1,"#,
+            r#""query":"x","page-limit":0}}"#,
         ));
         assert_eq!(output[1]["error"]["code"], "invalid-params");
         assert_eq!(output[2]["error"]["code"], "invalid-render-size");
         assert_eq!(output[3]["error"]["code"], "invalid-params");
+        assert_eq!(output[4]["error"]["code"], "invalid-search-query");
+        assert_eq!(output[5]["error"]["code"], "invalid-search-limit");
     }
 
     #[test]
@@ -985,6 +1261,112 @@ mod tests {
             offset: 99,
         };
         assert_eq!(ordered_positions(later, earlier), (earlier, later));
+    }
+
+    fn searchable_characters(
+        values: &[(u32, &str)],
+    ) -> (String, Vec<SearchCharacter>) {
+        let mut text = String::new();
+        let mut characters = Vec::new();
+        for (index, value) in values {
+            let start = text.len();
+            text.push_str(value);
+            characters.push(SearchCharacter {
+                index: *index,
+                text: (*value).to_owned(),
+                start,
+                end: text.len(),
+            });
+        }
+        (text, characters)
+    }
+
+    #[test]
+    fn literal_search_maps_unicode_bytes_to_pdfium_indices() {
+        let (text, characters) = searchable_characters(&[
+            (7, "A"),
+            (8, "你"),
+            (9, "好"),
+            (10, "ffi"),
+            (11, "."),
+        ]);
+        let pattern = compile_search_pattern("好ff", true).unwrap();
+        let matches = search_page_text(3, &text, &characters, &pattern, 0, 10);
+        assert_eq!(matches.len(), 1);
+        assert_eq!(matches[0].start, SelectionPosition { page: 3, offset: 9 });
+        assert_eq!(
+            matches[0].end,
+            SelectionPosition {
+                page: 3,
+                offset: 10
+            }
+        );
+        assert_eq!(matches[0].text, "好ff");
+        assert_eq!(matches[0].before, "A你");
+        assert_eq!(matches[0].after, ".");
+        let ligature_pattern = compile_search_pattern("f", true).unwrap();
+        let ligature_matches =
+            search_page_text(3, &text, &characters, &ligature_pattern, 0, 10);
+        assert_eq!(ligature_matches.len(), 1);
+        assert_eq!(
+            ligature_matches[0].start,
+            SelectionPosition {
+                page: 3,
+                offset: 10
+            }
+        );
+        assert_eq!(ligature_matches[0].end, ligature_matches[0].start);
+    }
+
+    #[test]
+    fn literal_search_supports_case_folding_and_escaped_syntax() {
+        let (text, characters) = searchable_characters(&[
+            (0, "I"),
+            (1, "n"),
+            (2, "t"),
+            (3, "r"),
+            (4, "o"),
+            (5, "."),
+            (6, "*"),
+        ]);
+        let folded = compile_search_pattern("intro", false).unwrap();
+        let folded_matches =
+            search_page_text(0, &text, &characters, &folded, 0, 10);
+        assert_eq!(folded_matches.len(), 1);
+        let literal = compile_search_pattern(".*", true).unwrap();
+        let literal_matches =
+            search_page_text(0, &text, &characters, &literal, 0, 10);
+        assert_eq!(literal_matches.len(), 1);
+        assert_eq!(literal_matches[0].start.offset, 5);
+        assert_eq!(literal_matches[0].end.offset, 6);
+    }
+
+    #[test]
+    fn literal_search_respects_cursor_and_match_limits() {
+        let (text, characters) = searchable_characters(&[
+            (0, "a"),
+            (1, " "),
+            (2, "a"),
+            (3, " "),
+            (4, "a"),
+        ]);
+        let pattern = compile_search_pattern("a", true).unwrap();
+        let matches = search_page_text(0, &text, &characters, &pattern, 2, 1);
+        assert_eq!(matches.len(), 1);
+        assert_eq!(matches[0].start.offset, 2);
+    }
+
+    #[test]
+    fn literal_search_rejects_empty_and_oversized_queries() {
+        assert_eq!(
+            compile_search_pattern("", true).unwrap_err().code,
+            "invalid-search-query"
+        );
+        let oversized = "x".repeat(SEARCH_MAX_QUERY_CHARACTERS + 1);
+        assert_eq!(
+            compile_search_pattern(&oversized, true).unwrap_err().code,
+            "invalid-search-query"
+        );
     }
 
     fn assert_close(actual: f32, expected: f32) {

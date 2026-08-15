@@ -19,6 +19,7 @@ The current PDF adapter provides:
 - fit-width, fit-page, and bounded manual zoom;
 - canonical bounds and rotated glyph quadrilaterals for local hit testing;
 - cross-page drag, polygonal SVG highlights, and exact =M-w= copying;
+- bounded Unicode literal search, repeat navigation, and glyph-level jumping;
 - immutable render cache keys and stale-response rejection; and
 - graceful, forced, idle, EOF, and Emacs-exit service shutdown paths.
 
@@ -26,16 +27,19 @@ The PDF view binds =n= and =]= to the next page; =b= and =[= to the previous
 page; =G= to a page prompt; and Page Down and Page Up to screen scrolling.
 Shared reader keys use =+= and =-= for zoom, =0= for scale one, =w= for
 fit-width, =p= for fit-page, =g= to refresh, and =q= to quit the window.
+Use =M-x yunge-reader-search= to start a search, then
+=M-x yunge-reader-search-next= or =M-x yunge-reader-search-previous= to move
+between matches.
+=M-x yunge-reader-clear-search= removes the active match highlight.
 
-Search, cache eviction, and durable location restoration remain to be
-implemented.
+Cache eviction and durable location restoration remain to be implemented.
 
 * Library boundary
 
 The implementation is divided into four pieces:
 
 - =yunge-reader.el= owns drivers, documents, stable positions, logical
-  selections, reader buffers, and zoom state.
+  selections, bounded search state, reader buffers, and zoom state.
 - =yunge-reader-native.el= owns subprocess requests, build identity,
   reference counting, idle shutdown, and explicit lifecycle commands.
 - =yunge-reader-setup.el= owns the pinned engine manifest and verified,
@@ -70,6 +74,12 @@ A logical selection contains two positions and optional resolved text.  Its
 painted rectangles are disposable view state, not the source of truth.
 Rerendering or evicting an image therefore need not invalidate the text range.
 =M-w= copies resolved text or asks the driver for =selection-text=.
+
+A search result uses the same stable endpoints, but its transient highlight is
+independent of the copy selection.  Search preview can therefore move and
+repaint without changing the text copied by =M-w=.  The distinction also
+leaves room for later decoration layers whose durable records use the same
+position contract.
 
 For PDF, =unit= is a zero-based page and =offset= is PDFium's zero-based
 character index.  A selected range includes both endpoint characters and is
@@ -118,6 +128,19 @@ a click or drag, Emacs embeds each visible selected PNG in an SVG and projects
 that page's part of the logical range over it.  Rotated characters use SVG
 polygons; older or exceptional geometry uses rectangles.  The source PNG
 cache remains independent of ephemeral selection paint.
+
+Document search is cooperatively paged.  One native request scans at most a
+configured number of document units and returns a bounded match list plus the
+first unscanned stable position.  Emacs stops after the first useful batch and
+requests another only for repeat navigation.  An obsolete query generation
+cannot publish results, and each native batch is short enough to let render
+requests run between batches.
+
+The PDF adapter requests text geometry only for ordinary visible prefetch or a
+target search page.  It projects the first drawable match character into
+display pixels, then adjusts window vertical and horizontal scrolling.  The
+match stays correctly anchored across zoom changes because its source of truth
+is the PDFium page and character range, not the image or buffer position.
 
 * Native service lifecycle
 
@@ -180,9 +203,9 @@ selection, and annotation conformance tests.
 
 The next implementation slices should add, in order:
 
-1. search and jump over the existing text layer;
-2. cache size limits and eviction; and
-3. durable location restoration and annotation anchors.
+1. cache size limits and eviction;
+2. durable location restoration and jump-history integration; and
+3. annotation anchors and independent decoration layers.
 
 * Testing
 
@@ -190,10 +213,12 @@ ERT tests cover driver precedence, asynchronous cleanup, zoom, logical
 selection, native lifecycle, strict setup validation, PDF request mapping,
 lease balance, fit calculations, stable roll slots, visible-page
 virtualization, prefetch bounds, text caching, cross-page hit testing, copying,
-rotated polygon painting, rectangle fallback, and keyed render completions.
-Rust tests cover the handshake, strict parameters, regular and singular-angle
-quadrilateral recovery, cross-page inclusive ranges, protocol errors,
-shutdown ordering, and EOF.
+rotated polygon painting, rectangle fallback, bounded search continuation,
+stale search rejection, independent match painting, precise match scrolling,
+and keyed render completions.  Rust tests cover the handshake, strict
+parameters, Unicode literal matching, byte-to-PDFium-index mapping, search
+cursors and limits, regular and singular-angle quadrilateral recovery,
+cross-page inclusive ranges, protocol errors, shutdown ordering, and EOF.
 
 The integration path installs the pinned Windows library through the public
 setup command, runs its =pdfium-info= smoke test, opens a five-page A4 fixture,
@@ -206,3 +231,8 @@ that an offscreen page returns to a same-size placeholder.  Rendered pages
 have been compared visually with Poppler.  A generated fixture with 0, 30, 45,
 and 90 degree text verifies native quadrilaterals, local hit testing, and
 polygon highlights against the rendered glyphs.
+
+A real PDF search check finds case-sensitive =SLIME= at offsets =0..4= in the
+reference-card fixture.  A case-insensitive =compile= query returns two bounded
+results, resumes at cursor =1485= without duplication, and returns the final
+match before reporting =done=.

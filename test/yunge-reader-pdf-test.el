@@ -125,7 +125,16 @@
        document 'page-text '(:page 2) #'ignore)
       (yunge-reader-pdf--request
        document 'render-page
-       '(:page 2 :width 900 :cache-key "key") #'ignore))
+       '(:page 2 :width 900 :cache-key "key") #'ignore)
+      (yunge-reader-pdf--request
+       document 'search
+       (list
+        :query "Needle"
+        :case-sensitive t
+        :cursor (make-yunge-reader-position :unit 3 :offset 4)
+        :match-limit 25
+        :page-limit 6)
+       #'ignore))
     (setq calls (nreverse calls))
     (should (equal (caar calls) "page-info"))
     (should (equal (cdr (assq 'document (cdar calls))) 11))
@@ -133,7 +142,39 @@
     (should (equal (caadr calls) "page-text"))
     (should (equal (caaddr calls) "render-page"))
     (should (equal (cdr (assq 'width (cdaddr calls))) 900))
-    (should (equal (cdr (assq 'cache-key (cdaddr calls))) "key"))))
+    (should (equal (cdr (assq 'cache-key (cdaddr calls))) "key"))
+    (let ((search (nth 3 calls)))
+      (should (equal (car search) "search"))
+      (should (eq (cdr (assq 'case-sensitive (cdr search))) t))
+      (should (equal (cdr (assq 'cursor (cdr search)))
+                     '((page . 3) (offset . 4))))
+      (should (= (cdr (assq 'match-limit (cdr search))) 25))
+      (should (= (cdr (assq 'page-limit (cdr search))) 6)))))
+
+(ert-deftest yunge-reader-pdf-converts-native-search-batches ()
+  (let* ((value
+          '((matches
+             . (((start . ((page . 2) (offset . 4)))
+                 (end . ((page . 2) (offset . 9)))
+                 (text . "Needle")
+                 (before . "before ")
+                 (after . " after"))))
+            (cursor . ((page . 3) (offset . 0)))
+            (done . nil)))
+         (batch (yunge-reader-pdf--native-search-batch value))
+         (result (car (yunge-reader-search-batch-results batch))))
+    (should (yunge-reader-search-batch-p batch))
+    (should-not (yunge-reader-search-batch-done batch))
+    (should (= (yunge-reader-position-unit
+                (yunge-reader-search-result-start result))
+               2))
+    (should (= (yunge-reader-position-offset
+                (yunge-reader-search-result-end result))
+               9))
+    (should (equal (yunge-reader-search-result-text result) "Needle"))
+    (should (= (yunge-reader-position-unit
+                (yunge-reader-search-batch-cursor batch))
+               3))))
 
 (ert-deftest yunge-reader-pdf-resolves-cross-page-selection-natively ()
   (let* ((document (make-yunge-reader-document :handle 11))
@@ -338,7 +379,99 @@
         (should (= (dom-attr (car rectangles) 'x) 100.0))
         (should (= (dom-attr (car rectangles) 'y) 900.0))
         (should (= (dom-attr (car rectangles) 'width) 100.0))
-        (should (= (dom-attr (car rectangles) 'height) 50.0))))))
+         (should (= (dom-attr (car rectangles) 'height) 50.0))))))
+
+(ert-deftest yunge-reader-pdf-paints-search-independently-from-selection ()
+  (with-temp-buffer
+    (setq yunge-reader-selection
+          (make-yunge-reader-selection
+           :start (make-yunge-reader-position :unit 0 :offset 1)
+           :end (make-yunge-reader-position :unit 0 :offset 1))
+          yunge-reader-search-result
+          (make-yunge-reader-search-result
+           :start (make-yunge-reader-position :unit 0 :offset 4)
+           :end (make-yunge-reader-position :unit 0 :offset 4)))
+    (let* ((page-info '((width . 100.0) (height . 100.0)))
+           (text-layer
+            '((characters
+               . (((index . 1)
+                   (bounds . ((left . 10.0) (bottom . 10.0)
+                              (right . 20.0) (top . 20.0))))
+                  ((index . 4)
+                   (bounds . ((left . 40.0) (bottom . 40.0)
+                              (right . 50.0) (top . 50.0))))))))
+           (svg (svg-create 1000 1000)))
+      (yunge-reader-pdf--paint-selection
+       svg 0 page-info text-layer 1000 1000)
+      (yunge-reader-pdf--paint-search
+       svg 0 page-info text-layer 1000 1000)
+      (let ((rectangles (dom-by-tag svg 'rect)))
+        (should (= (length rectangles) 2))
+        (should
+         (member yunge-reader-pdf-selection-color
+                 (mapcar (lambda (node) (dom-attr node 'fill))
+                         rectangles)))
+        (should
+         (member yunge-reader-pdf-search-color
+                 (mapcar (lambda (node) (dom-attr node 'fill))
+                         rectangles)))))))
+
+(ert-deftest yunge-reader-pdf-scrolls-to-search-character-geometry ()
+  (with-temp-buffer
+    (yunge-reader-mode)
+    (yunge-reader-pdf-view-mode 1)
+    (setq yunge-reader-pdf--page-infos
+          [((width . 100.0) (height . 200.0))]
+          yunge-reader-pdf--page-positions [1]
+          yunge-reader-search-result
+          (make-yunge-reader-search-result
+           :start (make-yunge-reader-position :unit 0 :offset 7)
+           :end (make-yunge-reader-position :unit 0 :offset 7)))
+    (puthash
+     0
+     '((characters
+        . (((index . 7)
+            (bounds . ((left . 85.0) (bottom . 20.0)
+                       (right . 95.0) (top . 30.0)))))))
+     yunge-reader-pdf--text-cache)
+    (let (window-start vertical horizontal)
+      (cl-letf (((symbol-function 'get-buffer-window)
+                 (lambda (&rest _arguments) 'window))
+                ((symbol-function 'window-live-p) (lambda (_window) t))
+                ((symbol-function 'window-body-width)
+                 (lambda (_window pixelwise) (and pixelwise 800)))
+                ((symbol-function 'window-body-height)
+                 (lambda (_window pixelwise) (and pixelwise 600)))
+                ((symbol-function 'window-frame)
+                 (lambda (_window) 'frame))
+                ((symbol-function 'frame-char-width)
+                 (lambda (_frame) 10))
+                ((symbol-function 'yunge-reader-pdf--page-width)
+                 (lambda (_page &optional _window) 1000))
+                ((symbol-function 'set-window-start)
+                 (lambda (_window position &optional _noforce)
+                   (setq window-start position)))
+                ((symbol-function 'set-window-vscroll)
+                 (lambda (_window value &optional _pixels)
+                   (setq vertical value)))
+                ((symbol-function 'set-window-hscroll)
+                 (lambda (_window value)
+                   (setq horizontal value))))
+        (yunge-reader-pdf--scroll-to-search-result))
+      (should (= window-start 1))
+      (should (= vertical 1400))
+      (should (= horizontal 20))
+      (setq yunge-reader-pdf-page 1
+            window-start nil
+            vertical nil
+            horizontal nil)
+      (cl-letf (((symbol-function 'get-buffer-window)
+                 (lambda (&rest _arguments) 'window))
+                ((symbol-function 'window-live-p) (lambda (_window) t)))
+        (yunge-reader-pdf--scroll-to-search-result))
+      (should-not window-start)
+      (should-not vertical)
+      (should-not horizontal))))
 
 (ert-deftest yunge-reader-pdf-paints-rotated-selection-as-polygon ()
   (with-temp-buffer
