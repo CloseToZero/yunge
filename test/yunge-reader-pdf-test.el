@@ -193,6 +193,178 @@
       (should (zerop leases))
       (should (equal completion-error '(error "cannot open"))))))
 
+(ert-deftest yunge-reader-pdf-retries-and-caches-a-valid-password ()
+  (with-temp-buffer
+    (yunge-reader-mode)
+    (let ((password-cache t)
+          (leases 0)
+          (answers (list (copy-sequence "wrong")
+                         (copy-sequence "secret")))
+          requests
+          prompts
+          removed
+          cached
+          opened
+          properties
+          completion-error)
+      (cl-letf
+          (((symbol-function 'yunge-reader-native-acquire)
+            (lambda () (cl-incf leases)))
+           ((symbol-function 'yunge-reader-native-release)
+            (lambda () (cl-decf leases)))
+           ((symbol-function 'password-read-from-cache)
+            (lambda (_key) (copy-sequence "stale")))
+           ((symbol-function 'password-cache-remove)
+            (lambda (key) (setq removed key)))
+           ((symbol-function 'password-cache-add)
+            (lambda (key password)
+              (setq cached (list key (copy-sequence password)))))
+           ((symbol-function
+             'yunge-reader-pdf--password-prompt-current-p)
+            (lambda (&rest _arguments) t))
+           ((symbol-function 'read-passwd)
+            (lambda (prompt &rest _arguments)
+              (push prompt prompts)
+              (pop answers)))
+           ((symbol-function 'yunge-reader-native-request)
+            (lambda (_operation parameters complete)
+              (let ((password (alist-get 'password parameters)))
+                (push (and password (copy-sequence password)) requests)
+                (if (equal password "secret")
+                    (funcall
+                     complete
+                     '((document . 9)
+                       (page-count . 1)
+                       (pages
+                        . (((page . 0)
+                            (width . 612.0)
+                            (height . 792.0)))))
+                     nil)
+                  (funcall
+                   complete nil
+                   '(yunge-reader-native-pdf-password-error)))))))
+        (yunge-reader-pdf--open
+         "C:/books/locked.pdf"
+         (lambda (handle value error-data)
+           (setq opened handle
+                 properties value
+                 completion-error error-data))))
+      (setq requests (nreverse requests)
+            prompts (nreverse prompts))
+      (should (= leases 1))
+      (should (= opened 9))
+      (should-not completion-error)
+      (should (equal requests '("stale" "wrong" "secret")))
+      (should (= (length prompts) 2))
+      (should (string-prefix-p "Password for" (car prompts)))
+      (should (string-prefix-p "Incorrect password" (cadr prompts)))
+      (should (equal removed (car cached)))
+      (should (equal (cadr cached) "secret"))
+      (should-not (plist-member properties :password)))))
+
+(ert-deftest yunge-reader-pdf-password-cancel-releases-native-lease ()
+  (with-temp-buffer
+    (yunge-reader-mode)
+    (let ((leases 0)
+          completion-error)
+      (cl-letf
+          (((symbol-function 'yunge-reader-native-acquire)
+            (lambda () (cl-incf leases)))
+           ((symbol-function 'yunge-reader-native-release)
+            (lambda () (cl-decf leases)))
+           ((symbol-function 'password-read-from-cache)
+            (lambda (_key) nil))
+           ((symbol-function
+             'yunge-reader-pdf--password-prompt-current-p)
+            (lambda (&rest _arguments) t))
+           ((symbol-function 'read-passwd)
+            (lambda (&rest _arguments) (signal 'quit nil)))
+           ((symbol-function 'yunge-reader-native-request)
+            (lambda (_operation _parameters complete)
+              (funcall
+               complete nil
+               '(yunge-reader-native-pdf-password-error)))))
+        (yunge-reader-pdf--open
+         "C:/books/locked.pdf"
+         (lambda (_handle _properties error-data)
+           (setq completion-error error-data))))
+      (should (zerop leases))
+      (should
+       (equal completion-error
+              '(error "PDF password entry cancelled"))))))
+
+(ert-deftest yunge-reader-pdf-late-password-error-does-not-prompt ()
+  (with-temp-buffer
+    (yunge-reader-mode)
+    (let ((leases 0)
+          prompted
+          completion-error)
+      (cl-letf
+          (((symbol-function 'yunge-reader-native-acquire)
+            (lambda () (cl-incf leases)))
+           ((symbol-function 'yunge-reader-native-release)
+            (lambda () (cl-decf leases)))
+           ((symbol-function 'password-read-from-cache)
+            (lambda (_key) nil))
+           ((symbol-function
+             'yunge-reader-pdf--password-prompt-current-p)
+            (lambda (&rest _arguments) nil))
+           ((symbol-function 'read-passwd)
+            (lambda (&rest _arguments) (setq prompted t)))
+           ((symbol-function 'yunge-reader-native-request)
+            (lambda (_operation _parameters complete)
+              (funcall
+               complete nil
+               '(yunge-reader-native-pdf-password-error)))))
+        (yunge-reader-pdf--open
+         "C:/books/locked.pdf"
+         (lambda (_handle _properties error-data)
+           (setq completion-error error-data))))
+      (should (zerop leases))
+      (should-not prompted)
+      (should
+       (eq (car completion-error)
+           'yunge-reader-native-pdf-password-error)))))
+
+(ert-deftest yunge-reader-pdf-bounds-password-attempts ()
+  (with-temp-buffer
+    (yunge-reader-mode)
+    (let ((yunge-reader-pdf-password-attempts 2)
+          (leases 0)
+          (requests 0)
+          (prompts 0)
+          completion-error)
+      (cl-letf
+          (((symbol-function 'yunge-reader-native-acquire)
+            (lambda () (cl-incf leases)))
+           ((symbol-function 'yunge-reader-native-release)
+            (lambda () (cl-decf leases)))
+           ((symbol-function 'password-read-from-cache)
+            (lambda (_key) nil))
+           ((symbol-function
+             'yunge-reader-pdf--password-prompt-current-p)
+            (lambda (&rest _arguments) t))
+           ((symbol-function 'read-passwd)
+            (lambda (&rest _arguments)
+              (cl-incf prompts)
+              (copy-sequence "wrong")))
+           ((symbol-function 'yunge-reader-native-request)
+            (lambda (_operation _parameters complete)
+              (cl-incf requests)
+              (funcall
+               complete nil
+               '(yunge-reader-native-pdf-password-error)))))
+        (yunge-reader-pdf--open
+         "C:/books/locked.pdf"
+         (lambda (_handle _properties error-data)
+           (setq completion-error error-data))))
+      (should (zerop leases))
+      (should (= requests 3))
+      (should (= prompts 2))
+      (should
+       (eq (car completion-error)
+           'yunge-reader-native-pdf-password-error)))))
+
 (ert-deftest yunge-reader-pdf-close-does-not-restart-a-stopped-helper ()
   (let ((leases 1)
         requested)

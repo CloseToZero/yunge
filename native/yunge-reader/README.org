@@ -87,6 +87,10 @@ an opaque process-local =document= handle, =fixed= layout, =page-count=, and
 canonical geometry for every page.  Lightweight geometry lets Emacs build a
 stable virtual roll without rasterizing the complete document.
 
+If PDFium rejects an absent or incorrect password, =open= fails with the
+stable code =pdf-password-error=.  The password is request-only data: the
+helper neither returns it in a response nor writes it to diagnostics.
+
 #+begin_src json
 {"id":3,"op":"open",
  "params":{"path":"C:/books/example.pdf"}}

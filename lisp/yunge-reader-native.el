@@ -12,6 +12,9 @@
 (declare-function yunge-reader-setup "yunge-reader-setup" ())
 (declare-function yunge-reader-setup--begin "yunge-reader-setup" ())
 
+(define-error 'yunge-reader-native-pdf-password-error
+  "PDF password is missing or incorrect")
+
 (defcustom yunge-reader-native-idle-seconds 300
   "Seconds with no native clients before stopping the helper.
 Set this to nil to keep an explicitly acquired helper alive until it is
@@ -200,11 +203,14 @@ This must not exceed `yunge-reader-cache-max-bytes'."
 
 (defun yunge-reader-native--response-error (message)
   "Return an Emacs error value represented by response MESSAGE."
-  (let ((error-object (alist-get 'error message)))
-    (list
-     'error
-     (or (alist-get 'message error-object)
-         "The Yunge Reader native helper failed"))))
+  (let* ((error-object (alist-get 'error message))
+         (code (alist-get 'code error-object)))
+    (if (equal code "pdf-password-error")
+        '(yunge-reader-native-pdf-password-error)
+      (list
+       'error
+       (or (alist-get 'message error-object)
+           "The Yunge Reader native helper failed")))))
 
 (defun yunge-reader-native--handle-message (process message)
   "Handle one parsed native MESSAGE from PROCESS."

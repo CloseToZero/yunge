@@ -22,6 +22,7 @@ The current PDF adapter provides:
 - bounded Unicode literal search, repeat navigation, and glyph-level jumping;
 - bounded document outlines with stable internal destinations;
 - bounded internal and external page links with local hit testing;
+- bounded password prompting with short-lived in-memory credential reuse;
 - versioned per-document places with zoom-aware PDF viewport restoration;
 - window-local back and forward history for semantic Reader jumps;
 - immutable render keys, stale-response rejection, and bounded disk cache
@@ -111,6 +112,16 @@ Only a successful restore permits the current view to replace the old record.
 An unavailable or unbuilt helper, an open or refresh failure, an invalid
 layout, or a rejected restore therefore leaves the prior place untouched.  In
 particular, a transient initial PDF page zero cannot become durable state.
+
+An encrypted PDF first tries a password from Emacs's standard
+=password-cache=.  A rejected cached password is removed before prompting.
+Yunge Reader permits a bounded number of attempts and remembers a successful
+password only in that short-lived memory cache, which expires after 16 seconds
+by default.  Passwords never enter document metadata, saved places, or helper
+responses.  Cancellation and exhausted attempts release the native lease and
+leave an older saved place unchanged.  An asynchronous password failure opens
+a minibuffer only while the originating Reader window and view are still
+current; a late response cannot interrupt unrelated work.
 
 PDF places store a zero-based page and the canonical page coordinates visible
 at the viewport's top left.  Zoom state is restored before building the view;
@@ -313,8 +324,8 @@ selection, and annotation conformance tests.
 
 The next implementation slices should add, in order:
 
-1. password prompting and retry for encrypted PDFs;
-2. helper crash recovery and large-document stress coverage; and
+1. real helper crash recovery coverage;
+2. large-document stress coverage; and
 3. a second format driver to exercise the reflow contract.
 
 Annotation anchors and independent decoration layers remain a planned
@@ -335,12 +346,14 @@ late-window protection, semantic page tracking, outline caching, unique
 outline completion labels, outline-place restoration, keyed render
 completions, bounded link mapping and hit testing, tagged URI validation,
 allowlisted explicit activation, link request coalescing, late link caching,
-cache limits, prune-before-stop ordering, and lease races.  Rust tests cover
-the handshake, strict parameters, bounded outline, link labels, and URIs,
-destination view mapping, safe cache eviction, Unicode literal matching,
-byte-to-PDFium-index mapping, search cursors and limits, regular and
-singular-angle quadrilateral recovery, cross-page inclusive ranges, protocol
-errors, shutdown ordering, and EOF.
+password retry, cancellation, attempt bounds, late-prompt rejection, cache
+replacement, lease balance, cache limits, prune-before-stop ordering, and
+lease races.  Rust tests cover the handshake, strict parameters, stable PDF
+password errors, bounded outline, link labels, and URIs, destination view
+mapping, safe cache eviction, Unicode literal matching, byte-to-PDFium-index
+mapping, search cursors and limits, regular and singular-angle quadrilateral
+recovery, cross-page inclusive ranges, protocol errors, shutdown ordering,
+and EOF.
 
 The integration path installs the pinned Windows library through the public
 setup command, runs its =pdfium-info= smoke test, opens a five-page A4 fixture,
@@ -369,3 +382,9 @@ one URI link on its first page.  The helper returns both tagged actions and no
 links for the second page.  The public =links-test.pdf= fixture independently
 returns its HTTPS action and label before the document and helper close
 cleanly.
+
+A generated encrypted PDF smoke fixture rejects both a missing password and
+an incorrect password with =pdf-password-error=.  Its correct password opens
+the document, returns the expected page geometry, and permits an orderly
+document close and helper shutdown.  The temporary credential and fixture are
+not retained.

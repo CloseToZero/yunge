@@ -3,6 +3,7 @@
 ;; SPDX-License-Identifier: MIT
 
 (require 'cl-lib)
+(require 'password-cache)
 (require 'seq)
 (require 'svg)
 (require 'subr-x)
@@ -43,6 +44,11 @@
 (defcustom yunge-reader-pdf-search-opacity 0.46
   "Opacity used to paint the current PDF search match."
   :type 'number
+  :group 'yunge-reader)
+
+(defcustom yunge-reader-pdf-password-attempts 3
+  "Maximum number of passwords prompted for one PDF open."
+  :type 'natnum
   :group 'yunge-reader)
 
 (defconst yunge-reader-pdf--points-to-pixels (/ 96.0 72.0)
@@ -402,41 +408,114 @@
        :links links
        :truncated (eq (alist-get 'truncated value) t)))))
 
+(defun yunge-reader-pdf--password-cache-key (file)
+  "Return the in-memory password cache key for PDF FILE."
+  (list 'yunge-reader-pdf (file-truename file)))
+
+(defun yunge-reader-pdf--password-error-p (error-data)
+  "Return non-nil when ERROR-DATA requests a PDF password."
+  (eq (car-safe error-data)
+      'yunge-reader-native-pdf-password-error))
+
+(defun yunge-reader-pdf--password-prompt-current-p
+    (buffer generation window state)
+  "Return whether a password prompt still belongs to BUFFER's open."
+  (and (buffer-live-p buffer)
+       (window-live-p window)
+       (eq (selected-window) window)
+       (not (active-minibuffer-window))
+       (with-current-buffer buffer
+         (and (= generation yunge-reader--open-generation)
+              (yunge-reader--window-state-current-p window state)))))
+
+(defun yunge-reader-pdf--open-properties (result)
+  "Return Reader document properties represented by native RESULT."
+  (list
+   :layout 'fixed
+   :metadata
+   (list :page-count (alist-get 'page-count result)
+         :pages (alist-get 'pages result))))
+
 (defun yunge-reader-pdf--open (file complete)
   "Open PDF FILE and call COMPLETE using the reader driver contract."
-  (let ((buffer (current-buffer))
-        acquired)
-    (yunge-reader-pdf-view-mode 1)
-    (condition-case error-data
-        (progn
-          (yunge-reader-native-acquire)
-          (setq acquired t)
-          (yunge-reader-native-request
-           "open" (list (cons 'path file))
-           (lambda (result native-error)
-             (if native-error
+  (yunge-reader-pdf-view-mode 1)
+  (let* ((buffer (current-buffer))
+         (generation yunge-reader--open-generation)
+         (window (yunge-reader--place-window))
+         (state (and window (yunge-reader--window-state window)))
+         (key (yunge-reader-pdf--password-cache-key file))
+         (cached-password (password-read-from-cache key))
+         acquired
+         finished)
+    (cl-labels
+        ((finish (result error-data password owned)
+           (unless finished
+             (setq finished t)
+             (if error-data
                  (progn
                    (when acquired
                      (setq acquired nil)
                      (yunge-reader-native-release))
-                   (funcall complete nil nil native-error))
+                   (when (and owned (stringp password))
+                     (clear-string password))
+                   (funcall complete nil nil error-data))
+               (when (and owned (stringp password))
+                 (if password-cache
+                     (password-cache-add key password)
+                   (clear-string password)))
                (when (buffer-live-p buffer)
                  (with-current-buffer buffer
                    (setq yunge-reader-pdf-page 0)))
                (funcall
                 complete
                 (alist-get 'document result)
-                (list
-                 :layout 'fixed
-                 :metadata
-                 (list :page-count
-                       (alist-get 'page-count result)
-                       :pages (alist-get 'pages result)))
-                nil)))))
-      (error
-       (when acquired
-         (yunge-reader-native-release))
-       (funcall complete nil nil error-data)))))
+                (yunge-reader-pdf--open-properties result)
+                nil))))
+         (prompt (attempt last-error)
+           (if (or (>= attempt yunge-reader-pdf-password-attempts)
+                   (not
+                    (yunge-reader-pdf--password-prompt-current-p
+                     buffer generation window state)))
+               (finish nil last-error nil nil)
+             (condition-case prompt-error
+                 (let ((password
+                        (read-passwd
+                         (if (zerop attempt)
+                             (format "Password for %s: "
+                                     (file-name-nondirectory file))
+                           (format "Incorrect password for %s: "
+                                   (file-name-nondirectory file))))))
+                   (request password (1+ attempt) nil t))
+               (quit
+                (finish
+                 nil '(error "PDF password entry cancelled") nil nil))
+               (error (finish nil prompt-error nil nil)))))
+         (request (password attempt cached owned)
+           (condition-case request-error
+               (yunge-reader-native-request
+                "open"
+                (append
+                 (list (cons 'path file))
+                 (when password (list (cons 'password password))))
+                (lambda (result native-error)
+                  (cond
+                   ((and native-error
+                         (yunge-reader-pdf--password-error-p native-error))
+                    (when cached
+                      (password-cache-remove key))
+                    (when (and owned (stringp password))
+                      (clear-string password))
+                    (prompt attempt native-error))
+                   (native-error
+                    (finish nil native-error password owned))
+                   (t (finish result nil password owned)))))
+             (error (finish nil request-error password owned)))))
+      (condition-case acquire-error
+          (progn
+            (yunge-reader-native-acquire)
+            (setq acquired t)
+            (request cached-password 0 (and cached-password t) nil))
+        (error (finish nil acquire-error nil nil))))))
 
 (defun yunge-reader-pdf--close (document)
   "Close PDF DOCUMENT and release its native service lease."

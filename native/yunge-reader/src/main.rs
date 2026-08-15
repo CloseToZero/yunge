@@ -370,6 +370,19 @@ fn page_link_uri(value: String) -> Option<String> {
     Some(value)
 }
 
+fn pdf_open_error_code(error: &PdfiumError) -> &'static str {
+    if matches!(
+        error,
+        PdfiumError::PdfiumLibraryInternalError(
+            PdfiumInternalError::PasswordError
+        )
+    ) {
+        "pdf-password-error"
+    } else {
+        "pdf-open-failed"
+    }
+}
+
 fn page_link_action(link: &PdfLink<'_>) -> Option<PageLinkAction> {
     match link.action() {
         Some(action) => {
@@ -828,7 +841,7 @@ impl Service {
             .load_pdf_from_file(&path, params.password.as_deref())
             .map_err(|error| {
                 ServiceError::new(
-                    "pdf-open-failed",
+                    pdf_open_error_code(&error),
                     format!("could not open {}: {error}", path.display()),
                 )
             })?;
@@ -1797,6 +1810,18 @@ mod tests {
             page_link_uri("x".repeat(PAGE_LINK_MAX_URI_BYTES + 1)),
             None
         );
+    }
+
+    #[test]
+    fn pdf_password_errors_have_a_stable_protocol_code() {
+        let password = PdfiumError::PdfiumLibraryInternalError(
+            PdfiumInternalError::PasswordError,
+        );
+        let format = PdfiumError::PdfiumLibraryInternalError(
+            PdfiumInternalError::FormatError,
+        );
+        assert_eq!(pdf_open_error_code(&password), "pdf-password-error");
+        assert_eq!(pdf_open_error_code(&format), "pdf-open-failed");
     }
 
     #[test]

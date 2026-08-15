@@ -113,6 +113,22 @@
              "pdf-render" "pdf-search" "pdf-text"))))
      :type 'error)))
 
+(ert-deftest yunge-reader-native-preserves-pdf-password-errors ()
+  (should
+   (equal
+    (yunge-reader-native--response-error
+     '((error
+        . ((code . "pdf-password-error")
+           (message . "wrong password")))))
+    '(yunge-reader-native-pdf-password-error)))
+  (should
+   (equal
+    (yunge-reader-native--response-error
+     '((error
+        . ((code . "pdf-open-failed")
+           (message . "broken PDF")))))
+    '(error "broken PDF"))))
+
 (ert-deftest yunge-reader-native-stop-requests-shutdown-then-arms-timeout ()
   (yunge-reader-native-test--with-fake-process
     (let (timer-arguments)
