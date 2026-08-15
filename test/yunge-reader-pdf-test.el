@@ -340,6 +340,82 @@
         (should (= (dom-attr (car rectangles) 'width) 100.0))
         (should (= (dom-attr (car rectangles) 'height) 50.0))))))
 
+(ert-deftest yunge-reader-pdf-paints-rotated-selection-as-polygon ()
+  (with-temp-buffer
+    (setq yunge-reader-selection
+          (make-yunge-reader-selection
+           :start (make-yunge-reader-position :unit 0 :offset 4)
+           :end (make-yunge-reader-position :unit 0 :offset 5)))
+    (let* ((character
+            '((index . 4)
+              (bounds . ((left . 0.0) (bottom . 0.0)
+                         (right . 100.0) (top . 100.0)))
+              (quad . (((x . 0.0) (y . 50.0))
+                       ((x . 50.0) (y . 100.0))
+                       ((x . 100.0) (y . 50.0))
+                       ((x . 50.0) (y . 0.0))))))
+           (svg (svg-create 1000 1000)))
+      (yunge-reader-pdf--paint-selection
+       svg 0 '((width . 100.0) (height . 100.0))
+       `((characters
+          . (,character
+             ((index . 5) (generated . t)
+              (bounds . ((left . 10.0) (bottom . 10.0)
+                         (right . 20.0) (top . 20.0)))))))
+       1000 1000)
+      (should-not (dom-by-tag svg 'rect))
+      (let ((polygons (dom-by-tag svg 'polygon)))
+        (should (= (length polygons) 1))
+        (should
+         (equal
+          (dom-attr (car polygons) 'points)
+          "0.0 500.0, 500.0 0.0, 1000.0 500.0, 500.0 1000.0"))))))
+
+(ert-deftest yunge-reader-pdf-hits-rotated-character-quads ()
+  (with-temp-buffer
+    (setq yunge-reader-pdf--page-infos
+          [((width . 100.0) (height . 100.0))])
+    (let* ((character
+            '((index . 7)
+              (text . "R")
+              (bounds . ((left . 0.0) (bottom . 0.0)
+                         (right . 100.0) (top . 100.0)))
+              (quad . (((x . 0.0) (y . 50.0))
+                       ((x . 50.0) (y . 100.0))
+                       ((x . 100.0) (y . 50.0))
+                       ((x . 50.0) (y . 0.0))))))
+           (layer `((characters . (,character)))))
+      (should
+       (= (alist-get
+           'index
+           (yunge-reader-pdf--hit-character
+            0 '(50.0 . 50.0) layer))
+          7))
+      (should-not
+       (yunge-reader-pdf--hit-character
+        0 '(0.0 . 0.0) layer)))))
+
+(ert-deftest yunge-reader-pdf-falls-back-from-invalid-quads ()
+  (with-temp-buffer
+    (setq yunge-reader-pdf--page-infos
+          [((width . 100.0) (height . 100.0))])
+    (let* ((character
+            '((index . 9)
+              (text . "F")
+              (bounds . ((left . 10.0) (bottom . 10.0)
+                         (right . 20.0) (top . 20.0)))
+              (quad . (((x . 10.0) (y . 10.0))
+                       ((x . 12.0) (y . 12.0))
+                       ((x . 14.0) (y . 14.0))
+                       ((x . 16.0) (y . 16.0))))))
+           (layer `((characters . (,character)))))
+      (should
+       (= (alist-get
+           'index
+           (yunge-reader-pdf--hit-character
+            0 '(15.0 . 15.0) layer))
+          9)))))
+
 (ert-deftest yunge-reader-pdf-builds-one-stable-slot-per-page ()
   (with-temp-buffer
     (yunge-reader-mode)

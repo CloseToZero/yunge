@@ -76,8 +76,10 @@ PDF point width and height plus the page label.
 
 =page-text= accepts =document= and =page=.  It returns the complete Unicode
 text plus characters in PDFium index order.  Each character has a zero-based
-=index=, Unicode =text=, optional canonical point =bounds=, and =generated=
-and =hyphen= flags.  PDF coordinates start at the bottom left.
+=index=, Unicode =text=, optional canonical point =bounds= and =quad=, plus
+=generated= and =hyphen= flags.  PDF coordinates start at the bottom left.
+The four =quad= vertices follow the transformed glyph axes in outline order.
+Clients use =bounds= when =quad= is null or invalid.
 
 #+begin_src json
 {"id":5,"op":"page-text","params":{"document":1,"page":0}}
@@ -86,8 +88,16 @@ and =hyphen= flags.  PDF coordinates start at the bottom left.
            "characters":[{"index":0,"text":"I",
              "bounds":{"left":72,"bottom":700,
                        "right":78,"top":712},
+             "quad":[{"x":72,"y":700},{"x":78,"y":700},
+                     {"x":78,"y":712},{"x":72,"y":712}],
              "generated":false,"hyphen":false}]}}
 #+end_src
+
+PDFium exposes axis-aligned character bounds and a separate effective text
+matrix.  The helper combines their extents to recover the oriented rectangle.
+At singular absolute-axis angles such as 45 degrees, font ascent and descent
+constrain the otherwise ambiguous width and height.  Generated separators and
+unrecoverable geometry keep =quad= null without removing their text index.
 
 =selection-text= accepts two inclusive document positions.  Each position has
 a zero-based =page= and PDFium character =offset=.  The helper normalizes

@@ -127,6 +127,167 @@ struct SelectionParams {
     end: SelectionPosition,
 }
 
+#[derive(Clone, Copy, Debug, Serialize)]
+struct TextPoint {
+    x: f32,
+    y: f32,
+}
+
+#[derive(Clone, Copy, Debug, Serialize)]
+struct TextBounds {
+    left: f32,
+    bottom: f32,
+    right: f32,
+    top: f32,
+}
+
+impl TextBounds {
+    fn from_pdfium(bounds: PdfRect) -> Self {
+        Self {
+            left: bounds.left().value,
+            bottom: bounds.bottom().value,
+            right: bounds.right().value,
+            top: bounds.top().value,
+        }
+    }
+
+    fn width(self) -> f32 {
+        self.right - self.left
+    }
+
+    fn height(self) -> f32 {
+        self.top - self.bottom
+    }
+}
+
+fn character_font_height(character: &PdfPageTextChar<'_>) -> f32 {
+    let font_size = character.unscaled_font_size();
+    character
+        .text_object()
+        .ok()
+        .and_then(|object| {
+            let font = object.font();
+            let ascent = font.ascent(font_size).ok()?.value;
+            let descent = font.descent(font_size).ok()?.value;
+            let height = ascent - descent;
+            (height.is_finite() && height > 0.0).then_some(height)
+        })
+        .unwrap_or(font_size.value.abs())
+}
+
+fn regular_dimensions(
+    bounds: TextBounds,
+    matrix: PdfMatrix,
+) -> Option<(f32, f32)> {
+    let a = matrix.a().abs();
+    let b = matrix.b().abs();
+    let c = matrix.c().abs();
+    let d = matrix.d().abs();
+    let determinant = a * d - b * c;
+    let scale = a * d + b * c;
+    if determinant.abs() <= f32::EPSILON.max(scale * 0.0001) {
+        return None;
+    }
+    let width = (bounds.width() * d - c * bounds.height()) / determinant;
+    let height = (a * bounds.height() - b * bounds.width()) / determinant;
+    (width.is_finite()
+        && height.is_finite()
+        && width > f32::EPSILON
+        && height > f32::EPSILON)
+        .then_some((width, height))
+}
+
+fn singular_dimensions(
+    bounds: TextBounds,
+    matrix: PdfMatrix,
+    preferred_height: f32,
+) -> Option<(f32, f32)> {
+    let a = matrix.a().abs();
+    let b = matrix.b().abs();
+    let c = matrix.c().abs();
+    let d = matrix.d().abs();
+    let mut maximum_height = f32::INFINITY;
+    if c > f32::EPSILON {
+        maximum_height = maximum_height.min(bounds.width() / c);
+    }
+    if d > f32::EPSILON {
+        maximum_height = maximum_height.min(bounds.height() / d);
+    }
+    let height = preferred_height.abs().min(maximum_height);
+    if !height.is_finite() || height <= f32::EPSILON {
+        return None;
+    }
+    let mut widths = Vec::with_capacity(2);
+    if a > f32::EPSILON {
+        widths.push((bounds.width() - c * height) / a);
+    }
+    if b > f32::EPSILON {
+        widths.push((bounds.height() - d * height) / b);
+    }
+    widths.retain(|width| width.is_finite() && *width > f32::EPSILON);
+    if widths.is_empty() {
+        None
+    } else {
+        Some((widths.iter().sum::<f32>() / widths.len() as f32, height))
+    }
+}
+
+fn character_quad(
+    bounds: TextBounds,
+    matrix: PdfMatrix,
+    preferred_height: impl FnOnce() -> f32,
+) -> Option<[TextPoint; 4]> {
+    if ![
+        bounds.left,
+        bounds.bottom,
+        bounds.right,
+        bounds.top,
+        matrix.a(),
+        matrix.b(),
+        matrix.c(),
+        matrix.d(),
+    ]
+    .iter()
+    .all(|value| value.is_finite())
+        || bounds.width() <= f32::EPSILON
+        || bounds.height() <= f32::EPSILON
+    {
+        return None;
+    }
+    let determinant = matrix.a() * matrix.d() - matrix.b() * matrix.c();
+    if determinant.abs() <= f32::EPSILON {
+        return None;
+    }
+    let (width, height) = regular_dimensions(bounds, matrix)
+        .or_else(|| singular_dimensions(bounds, matrix, preferred_height()))?;
+    let point = |x: f32, y: f32| TextPoint {
+        x: matrix.a() * x + matrix.c() * y,
+        y: matrix.b() * x + matrix.d() * y,
+    };
+    let lower_left = point(0.0, 0.0);
+    let lower_right = point(width, 0.0);
+    let upper_right = point(width, height);
+    let upper_left = point(0.0, height);
+    let mut points = if determinant > 0.0 {
+        [lower_left, lower_right, upper_right, upper_left]
+    } else {
+        [lower_left, upper_left, upper_right, lower_right]
+    };
+    let minimum_x = points
+        .iter()
+        .map(|point| point.x)
+        .fold(f32::INFINITY, f32::min);
+    let minimum_y = points
+        .iter()
+        .map(|point| point.y)
+        .fold(f32::INFINITY, f32::min);
+    for point in &mut points {
+        point.x += bounds.left - minimum_x;
+        point.y += bounds.bottom - minimum_y;
+    }
+    Some(points)
+}
+
 fn ready_message() -> Ready<'static> {
     Ready {
         kind: "ready",
@@ -379,18 +540,19 @@ impl Service {
                 .loose_bounds()
                 .or_else(|_| character.tight_bounds())
                 .ok()
-                .map(|bounds| {
-                    json!({
-                        "left": bounds.left().value,
-                        "bottom": bounds.bottom().value,
-                        "right": bounds.right().value,
-                        "top": bounds.top().value,
+                .map(TextBounds::from_pdfium);
+            let quad = bounds.and_then(|bounds| {
+                character.matrix().ok().and_then(|matrix| {
+                    character_quad(bounds, matrix, || {
+                        character_font_height(&character)
                     })
-                });
+                })
+            });
             characters.push(json!({
                 "index": character.index(),
                 "text": value,
                 "bounds": bounds,
+                "quad": quad,
                 "generated": character.is_generated().unwrap_or(false),
                 "hyphen": character.is_hyphen().unwrap_or(false),
             }));
@@ -823,6 +985,89 @@ mod tests {
             offset: 99,
         };
         assert_eq!(ordered_positions(later, earlier), (earlier, later));
+    }
+
+    fn assert_close(actual: f32, expected: f32) {
+        assert!(
+            (actual - expected).abs() < 0.001,
+            "expected {expected}, got {actual}"
+        );
+    }
+
+    fn quad_extents(points: [TextPoint; 4]) -> TextBounds {
+        TextBounds {
+            left: points
+                .iter()
+                .map(|point| point.x)
+                .fold(f32::INFINITY, f32::min),
+            bottom: points
+                .iter()
+                .map(|point| point.y)
+                .fold(f32::INFINITY, f32::min),
+            right: points
+                .iter()
+                .map(|point| point.x)
+                .fold(f32::NEG_INFINITY, f32::max),
+            top: points
+                .iter()
+                .map(|point| point.y)
+                .fold(f32::NEG_INFINITY, f32::max),
+        }
+    }
+
+    #[test]
+    fn character_quads_follow_rotated_matrix_axes() {
+        let cosine = 30.0_f32.to_radians().cos();
+        let sine = 30.0_f32.to_radians().sin();
+        let bounds = TextBounds {
+            left: 10.0,
+            bottom: 20.0,
+            right: 10.0 + 20.0 * cosine + 10.0 * sine,
+            top: 20.0 + 20.0 * sine + 10.0 * cosine,
+        };
+        let matrix = PdfMatrix::new(cosine, sine, -sine, cosine, 0.0, 0.0);
+        let mut used_font_metrics = false;
+        let quad = character_quad(bounds, matrix, || {
+            used_font_metrics = true;
+            10.0
+        })
+        .unwrap();
+        assert!(!used_font_metrics);
+        assert_close(quad[0].x, 15.0);
+        assert_close(quad[0].y, 20.0);
+        assert_close(quad[1].x, 15.0 + 20.0 * cosine);
+        assert_close(quad[1].y, 30.0);
+        let extents = quad_extents(quad);
+        assert_close(extents.left, bounds.left);
+        assert_close(extents.bottom, bounds.bottom);
+        assert_close(extents.right, bounds.right);
+        assert_close(extents.top, bounds.top);
+    }
+
+    #[test]
+    fn character_quads_use_font_height_at_singular_angles() {
+        let cosine = 45.0_f32.to_radians().cos();
+        let sine = 45.0_f32.to_radians().sin();
+        let extent = 30.0 * cosine;
+        let bounds = TextBounds {
+            left: 5.0,
+            bottom: 7.0,
+            right: 5.0 + extent,
+            top: 7.0 + extent,
+        };
+        let matrix = PdfMatrix::new(cosine, sine, -sine, cosine, 0.0, 0.0);
+        let mut used_font_metrics = false;
+        let quad = character_quad(bounds, matrix, || {
+            used_font_metrics = true;
+            10.0
+        })
+        .unwrap();
+        assert!(used_font_metrics);
+        let extents = quad_extents(quad);
+        assert_close(extents.left, bounds.left);
+        assert_close(extents.bottom, bounds.bottom);
+        assert_close(extents.right, bounds.right);
+        assert_close(extents.top, bounds.top);
     }
 
     #[test]

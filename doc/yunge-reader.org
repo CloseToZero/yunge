@@ -17,8 +17,8 @@ The current PDF adapter provides:
 - a continuous, virtualized page roll with bounded image residency;
 - next, previous, direct page, screen, mouse wheel, and ordinary scrolling;
 - fit-width, fit-page, and bounded manual zoom;
-- canonical character geometry and cross-page mouse drag selection;
-- multi-page SVG selection highlights and exact =M-w= copying;
+- canonical bounds and rotated glyph quadrilaterals for local hit testing;
+- cross-page drag, polygonal SVG highlights, and exact =M-w= copying;
 - immutable render cache keys and stale-response rejection; and
 - graceful, forced, idle, EOF, and Emacs-exit service shutdown paths.
 
@@ -27,7 +27,7 @@ page; =G= to a page prompt; and Page Down and Page Up to screen scrolling.
 Shared reader keys use =+= and =-= for zoom, =0= for scale one, =w= for
 fit-width, =p= for fit-page, =g= to refresh, and =q= to quit the window.
 
-Search, rotated glyph quadrilaterals, and cache eviction remain to be
+Search, cache eviction, and durable location restoration remain to be
 implemented.
 
 * Library boundary
@@ -74,10 +74,12 @@ Rerendering or evicting an image therefore need not invalidate the text range.
 For PDF, =unit= is a zero-based page and =offset= is PDFium's zero-based
 character index.  A selected range includes both endpoint characters and is
 independent of drag direction, including when the drag crosses page slots.
-The helper returns Unicode and loose character bounds in canonical PDF points.
-Emacs performs hit testing locally, stores only the stable endpoints, and asks
-PDFium to resolve the exact range text.  Cross-page copy preserves each exact
-page fragment and inserts one newline at every page boundary.
+The helper returns Unicode, loose character bounds, and optional oriented
+quadrilaterals in canonical PDF points.  Emacs performs polygon hit testing
+locally, stores only the stable endpoints, and asks PDFium to resolve the exact
+range text.  Missing or malformed quadrilaterals fall back to bounds.
+Cross-page copy preserves each exact page fragment and inserts one newline at
+every page boundary.
 
 The same boundary can carry later annotations.  Durable annotation data can
 store document identity, stable endpoints, quoted text, color, and provenance
@@ -113,8 +115,9 @@ from replacing a different page or scale.
 
 Text geometry is cached by page because it does not change with zoom.  After
 a click or drag, Emacs embeds each visible selected PNG in an SVG and projects
-that page's part of the logical range over it.  The source PNG cache remains
-independent of ephemeral selection paint.
+that page's part of the logical range over it.  Rotated characters use SVG
+polygons; older or exceptional geometry uses rectangles.  The source PNG
+cache remains independent of ephemeral selection paint.
 
 * Native service lifecycle
 
@@ -177,10 +180,9 @@ selection, and annotation conformance tests.
 
 The next implementation slices should add, in order:
 
-1. rotated glyph quadrilaterals;
-2. search and jump over the existing text layer;
-3. cache size limits and eviction; and
-4. durable location restoration and annotation anchors.
+1. search and jump over the existing text layer;
+2. cache size limits and eviction; and
+3. durable location restoration and annotation anchors.
 
 * Testing
 
@@ -188,9 +190,10 @@ ERT tests cover driver precedence, asynchronous cleanup, zoom, logical
 selection, native lifecycle, strict setup validation, PDF request mapping,
 lease balance, fit calculations, stable roll slots, visible-page
 virtualization, prefetch bounds, text caching, cross-page hit testing, copying,
-and keyed render completions.  Rust tests cover the handshake, strict
-parameters, cross-page inclusive ranges, protocol errors, shutdown ordering,
-and EOF.
+rotated polygon painting, rectangle fallback, and keyed render completions.
+Rust tests cover the handshake, strict parameters, regular and singular-angle
+quadrilateral recovery, cross-page inclusive ranges, protocol errors,
+shutdown ordering, and EOF.
 
 The integration path installs the pinned Windows library through the public
 setup command, runs its =pdfium-info= smoke test, opens a five-page A4 fixture,
@@ -200,4 +203,6 @@ selects =3..14= in either direction, copies =Introduction=, and paints the
 selection as SVG.  A second integration selects across the first two pages,
 verifies the explicit page separator, paints both slots as SVG, then confirms
 that an offscreen page returns to a same-size placeholder.  Rendered pages
-have been compared visually with Poppler.
+have been compared visually with Poppler.  A generated fixture with 0, 30, 45,
+and 90 degree text verifies native quadrilaterals, local hit testing, and
+polygon highlights against the rendered glyphs.

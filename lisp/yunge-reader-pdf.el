@@ -393,6 +393,91 @@ When SUPPRESS-SCALE is non-nil, do not update the shared effective scale."
                      (alist-get 'index character))
                    characters))))))))
 
+(defun yunge-reader-pdf--convex-quad-p (quad)
+  "Return non-nil when QUAD is strictly convex and outline-ordered."
+  (let ((orientation 0)
+        (valid t))
+    (dotimes (index 4)
+      (let* ((first (nth index quad))
+             (second (nth (mod (1+ index) 4) quad))
+             (third (nth (mod (+ index 2) 4) quad))
+             (cross
+              (- (* (- (alist-get 'x second)
+                       (alist-get 'x first))
+                    (- (alist-get 'y third)
+                       (alist-get 'y second)))
+                 (* (- (alist-get 'y second)
+                       (alist-get 'y first))
+                    (- (alist-get 'x third)
+                       (alist-get 'x second))))))
+        (if (< (abs cross) 0.000001)
+            (setq valid nil)
+          (let ((sign (if (> cross 0) 1 -1)))
+            (if (= orientation 0)
+                (setq orientation sign)
+              (unless (= orientation sign)
+                (setq valid nil)))))))
+    valid))
+
+(defun yunge-reader-pdf--quad-points (character)
+  "Return CHARACTER's valid canonical quadrilateral, or nil."
+  (let ((quad (alist-get 'quad character)))
+    (when (and (listp quad)
+               (ignore-errors (= (length quad) 4))
+               (cl-every
+                (lambda (point)
+                  (and (listp point)
+                       (numberp (alist-get 'x point))
+                       (numberp (alist-get 'y point))))
+                quad)
+               (yunge-reader-pdf--convex-quad-p quad))
+      quad)))
+
+(defun yunge-reader-pdf--svg-quad
+    (quad page-width page-height pixel-width pixel-height)
+  "Project canonical QUAD to SVG coordinates."
+  (mapcar
+   (lambda (point)
+     (cons
+      (* pixel-width
+         (/ (alist-get 'x point) page-width))
+      (* pixel-height
+         (/ (- page-height (alist-get 'y point))
+            page-height))))
+   quad))
+
+(defun yunge-reader-pdf--paint-bounds
+    (svg bounds page-width page-height pixel-width pixel-height)
+  "Paint canonical BOUNDS onto SVG."
+  (let* ((left (alist-get 'left bounds))
+         (bottom (alist-get 'bottom bounds))
+         (right (alist-get 'right bounds))
+         (top (alist-get 'top bounds))
+         (x (* pixel-width (/ left page-width)))
+         (y (* pixel-height (/ (- page-height top) page-height)))
+         (width
+          (max 1 (* pixel-width (/ (- right left) page-width))))
+         (height
+          (max 1 (* pixel-height (/ (- top bottom) page-height)))))
+    (svg-rectangle
+     svg x y width height
+     :fill-color yunge-reader-pdf-selection-color
+     :fill-opacity yunge-reader-pdf-selection-opacity)))
+
+(defun yunge-reader-pdf--paint-character
+    (svg character page-width page-height pixel-width pixel-height)
+  "Paint CHARACTER geometry onto SVG."
+  (if-let* ((quad (yunge-reader-pdf--quad-points character)))
+      (svg-polygon
+       svg
+       (yunge-reader-pdf--svg-quad
+        quad page-width page-height pixel-width pixel-height)
+       :fill-color yunge-reader-pdf-selection-color
+       :fill-opacity yunge-reader-pdf-selection-opacity)
+    (when-let* ((bounds (alist-get 'bounds character)))
+      (yunge-reader-pdf--paint-bounds
+       svg bounds page-width page-height pixel-width pixel-height))))
+
 (defun yunge-reader-pdf--paint-selection
     (svg page page-info text-layer pixel-width pixel-height)
   "Paint PAGE selection onto SVG using PAGE-INFO and TEXT-LAYER."
@@ -401,29 +486,13 @@ When SUPPRESS-SCALE is non-nil, do not update the shared effective scale."
     (let ((page-width (alist-get 'width page-info))
           (page-height (alist-get 'height page-info)))
       (dolist (character (alist-get 'characters text-layer))
-        (let ((index (alist-get 'index character))
-              (bounds (alist-get 'bounds character)))
-          (when (and bounds
-                     (<= (car range) index)
-                     (<= index (cdr range)))
-            (let* ((left (alist-get 'left bounds))
-                   (bottom (alist-get 'bottom bounds))
-                   (right (alist-get 'right bounds))
-                   (top (alist-get 'top bounds))
-                   (x (* pixel-width (/ left page-width)))
-                   (y (* pixel-height
-                         (/ (- page-height top) page-height)))
-                   (width
-                    (max 1 (* pixel-width
-                              (/ (- right left) page-width))))
-                   (height
-                    (max 1 (* pixel-height
-                              (/ (- top bottom) page-height)))))
-              (svg-rectangle
-               svg x y width height
-               :fill-color yunge-reader-pdf-selection-color
-               :fill-opacity
-               yunge-reader-pdf-selection-opacity))))))))
+        (let ((index (alist-get 'index character)))
+          (when (and (<= (car range) index)
+                     (<= index (cdr range))
+                     (not (alist-get 'generated character)))
+            (yunge-reader-pdf--paint-character
+             svg character page-width page-height
+             pixel-width pixel-height)))))))
 
 (defun yunge-reader-pdf--render-key (page width)
   "Return the in-memory render key for PAGE and WIDTH."
@@ -736,6 +805,73 @@ When SUPPRESS-SCALE is non-nil, do not update the shared effective scale."
                    (t 0.0))))
     (+ (* dx dx) (* dy dy))))
 
+(defun yunge-reader-pdf--segment-distance (x y start end)
+  "Return squared distance from X and Y to segment START through END."
+  (let* ((start-x (alist-get 'x start))
+         (start-y (alist-get 'y start))
+         (delta-x (- (alist-get 'x end) start-x))
+         (delta-y (- (alist-get 'y end) start-y))
+         (length-squared
+          (+ (* delta-x delta-x) (* delta-y delta-y)))
+         (ratio
+          (if (> length-squared 0)
+              (max 0.0
+                   (min 1.0
+                        (/ (+ (* (- x start-x) delta-x)
+                              (* (- y start-y) delta-y))
+                           length-squared)))
+            0.0))
+         (nearest-x (+ start-x (* ratio delta-x)))
+         (nearest-y (+ start-y (* ratio delta-y)))
+         (distance-x (- x nearest-x))
+         (distance-y (- y nearest-y)))
+    (+ (* distance-x distance-x)
+       (* distance-y distance-y))))
+
+(defun yunge-reader-pdf--quad-contains-p (x y quad)
+  "Return non-nil when canonical point X and Y lies in convex QUAD."
+  (let ((orientation 0)
+        (inside t))
+    (dotimes (index 4)
+      (let* ((start (nth index quad))
+             (end (nth (mod (1+ index) 4) quad))
+             (cross
+              (- (* (- (alist-get 'x end)
+                       (alist-get 'x start))
+                    (- y (alist-get 'y start)))
+                 (* (- (alist-get 'y end)
+                       (alist-get 'y start))
+                    (- x (alist-get 'x start))))))
+        (unless (< (abs cross) 0.000001)
+          (let ((sign (if (> cross 0) 1 -1)))
+            (if (= orientation 0)
+                (setq orientation sign)
+              (unless (= orientation sign)
+                (setq inside nil)))))))
+    inside))
+
+(defun yunge-reader-pdf--quad-distance (x y quad)
+  "Return squared distance from canonical X and Y to convex QUAD."
+  (if (yunge-reader-pdf--quad-contains-p x y quad)
+      0.0
+    (let ((distance most-positive-fixnum))
+      (dotimes (index 4)
+        (setq distance
+              (min
+               distance
+               (yunge-reader-pdf--segment-distance
+                x y
+                (nth index quad)
+                (nth (mod (1+ index) 4) quad)))))
+      distance)))
+
+(defun yunge-reader-pdf--character-distance (x y character)
+  "Return squared distance from X and Y to CHARACTER geometry."
+  (if-let* ((quad (yunge-reader-pdf--quad-points character)))
+      (yunge-reader-pdf--quad-distance x y quad)
+    (when-let* ((bounds (alist-get 'bounds character)))
+      (yunge-reader-pdf--bounds-distance x y bounds))))
+
 (defun yunge-reader-pdf--hit-character (page point text-layer)
   "Return PAGE's TEXT-LAYER character nearest canonical POINT."
   (let* ((x (car point))
@@ -748,13 +884,14 @@ When SUPPRESS-SCALE is non-nil, do not update the shared effective scale."
          best
          best-distance)
     (dolist (character (alist-get 'characters text-layer))
-      (when-let* (((not (string-empty-p
-                         (or (alist-get 'text character) ""))))
-                  (bounds (alist-get 'bounds character)))
+      (unless (or (alist-get 'generated character)
+                  (string-empty-p
+                   (or (alist-get 'text character) "")))
         (let ((distance
-               (yunge-reader-pdf--bounds-distance x y bounds)))
-          (when (or (null best-distance)
-                    (< distance best-distance))
+               (yunge-reader-pdf--character-distance x y character)))
+          (when (and distance
+                     (or (null best-distance)
+                         (< distance best-distance)))
             (setq best character
                   best-distance distance)))))
     (when (and best-distance
