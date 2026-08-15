@@ -52,7 +52,7 @@
   "Maximum number of links accepted from one PDF page response.")
 
 (cl-defstruct yunge-reader-pdf-link
-  "One internal PDF page link with disposable hit geometry."
+  "One PDF page link with disposable hit geometry."
   page
   index
   bounds
@@ -60,7 +60,7 @@
   action)
 
 (cl-defstruct yunge-reader-pdf-link-data
-  "One bounded page of internal PDF links."
+  "One bounded page of PDF links."
   page
   links
   truncated)
@@ -99,10 +99,10 @@
   "Page-indexed set of outstanding PDF text requests.")
 
 (defvar-local yunge-reader-pdf--link-cache nil
-  "Page-indexed cache of internal PDF links.")
+  "Page-indexed cache of PDF links.")
 
 (defvar-local yunge-reader-pdf--link-pending nil
-  "Page-indexed map of callbacks awaiting internal PDF links.")
+  "Page-indexed map of callbacks awaiting PDF links.")
 
 (defvar-local yunge-reader-pdf--link-activation-generation 0
   "Generation used to reject late interactive PDF link completions.")
@@ -338,22 +338,37 @@
        (cons 'right right)
        (cons 'top top)))))
 
+(defun yunge-reader-pdf--native-link-action (document value)
+  "Return a generic Reader action represented by native link VALUE."
+  (let ((action
+         (pcase (alist-get 'type value)
+           ("location"
+            (when-let* ((destination
+                         (alist-get 'destination value)))
+              (yunge-reader-pdf--native-location-action
+               document destination)))
+           ("uri"
+            (make-yunge-reader-action
+             :type 'uri
+             :uri (alist-get 'uri value))))))
+    (and (yunge-reader--action-valid-p action) action)))
+
 (defun yunge-reader-pdf--native-page-link
     (document page index value)
   "Return PAGE link INDEX represented by native VALUE in DOCUMENT."
   (let ((bounds
          (yunge-reader-pdf--native-link-bounds
           (alist-get 'bounds value)))
-        (destination (alist-get 'destination value))
+        (native-action (alist-get 'action value))
         (label (alist-get 'label value)))
     (when (and bounds
-               (listp destination)
+               (listp native-action)
                (or (null label)
                    (and (stringp label)
                         (not (string-empty-p label)))))
       (when-let* ((action
-                   (yunge-reader-pdf--native-location-action
-                    document destination)))
+                   (yunge-reader-pdf--native-link-action
+                    document native-action)))
         (make-yunge-reader-pdf-link
          :page page
          :index index
@@ -363,7 +378,7 @@
 
 (defun yunge-reader-pdf--native-page-links
     (document expected-page value)
-  "Return internal links for EXPECTED-PAGE represented by native VALUE."
+  "Return PDF links for EXPECTED-PAGE represented by native VALUE."
   (let* ((page (alist-get 'page value))
          (links-entry (assq 'links value))
          (native-links (cdr links-entry))
@@ -1166,7 +1181,7 @@ When SUPPRESS-SCALE is non-nil, do not update the shared effective scale."
         'pointer 'hand
         'help-echo
         (concat
-         "Mouse-1 follows an internal link or selects a character; "
+         "Mouse-1 follows a link or selects a character; "
          "drag selects across pages")))
       (unless (= page (1- count))
         (insert (propertize "\n" 'yunge-reader-pdf-page page))))
@@ -1341,7 +1356,7 @@ When SUPPRESS-SCALE is non-nil, do not update the shared effective scale."
                 :warning)))))))))
 
 (defun yunge-reader-pdf--request-links (page &optional complete)
-  "Request and cache internal links for PAGE, then call COMPLETE."
+  "Request and cache PDF links for PAGE, then call COMPLETE."
   (if-let* ((cached
              (and (hash-table-p yunge-reader-pdf--link-cache)
                   (gethash page yunge-reader-pdf--link-cache))))
@@ -1571,21 +1586,31 @@ When SUPPRESS-SCALE is non-nil, do not update the shared effective scale."
   (or (alist-get 'label (yunge-reader-pdf--page-info page))
       (number-to-string (1+ page))))
 
+(defun yunge-reader-pdf--link-target-label (action)
+  "Return a compact target label for PDF link ACTION."
+  (pcase (yunge-reader-action-type action)
+    ('location
+     (format "page %s"
+             (yunge-reader-pdf--page-label
+              (yunge-reader-position-unit
+               (yunge-reader-action-position action)))))
+    ('uri
+     (truncate-string-to-width
+      (yunge-reader-action-uri action) 80 nil nil t))))
+
 (defun yunge-reader-pdf--link-label (link)
-  "Return one completion label for internal PDF LINK."
+  "Return one completion label for PDF LINK."
   (let* ((action (yunge-reader-pdf-link-action link))
-         (destination (yunge-reader-action-position action))
          (source (yunge-reader-pdf-link-page link))
-         (target (yunge-reader-position-unit destination))
          (text
           (or (yunge-reader-pdf-link-label link)
               (format "link %d"
                       (1+ (yunge-reader-pdf-link-index link))))))
     (truncate-string-to-width
-     (format "Page %s: %s -> page %s"
+     (format "Page %s: %s -> %s"
              (yunge-reader-pdf--page-label source)
              text
-             (yunge-reader-pdf--page-label target))
+             (yunge-reader-pdf--link-target-label action))
      120 nil nil t)))
 
 (defun yunge-reader-pdf--link-candidates (pages)
@@ -1619,15 +1644,23 @@ When SUPPRESS-SCALE is non-nil, do not update the shared effective scale."
            (cons unique (cdr candidate)))))
      (nreverse labeled))))
 
-(defun yunge-reader-pdf--follow-link (link)
-  "Follow internal PDF LINK through the generic Reader action layer."
+(defun yunge-reader-pdf--follow-location-link (link)
+  "Follow PDF location LINK through the generic Reader action layer."
   (yunge-reader--follow-action
    (yunge-reader-pdf-link-action link))
+  t)
+
+(defun yunge-reader-pdf--follow-link (link)
+  "Follow PDF LINK through the generic Reader action layer."
+  (let ((action (yunge-reader-pdf-link-action link)))
+    (if (eq (yunge-reader-action-type action) 'location)
+        (yunge-reader-pdf--follow-location-link link)
+      (yunge-reader--follow-action action)))
   (message "Link: %s" (yunge-reader-pdf--link-label link))
   t)
 
 (defun yunge-reader-pdf--select-link (pages)
-  "Choose and follow one cached internal link from PAGES."
+  "Choose and follow one cached PDF link from PAGES."
   (let ((candidates (yunge-reader-pdf--link-candidates pages))
         (truncated
          (seq-some
@@ -1637,7 +1670,7 @@ When SUPPRESS-SCALE is non-nil, do not update the shared effective scale."
               (yunge-reader-pdf-link-data-truncated data)))
           pages)))
     (if (null candidates)
-        (message "The visible PDF pages have no internal links")
+        (message "The visible PDF pages have no links")
       (let* ((completion-extra-properties
               '(:category yunge-reader-link))
              (choice
@@ -1682,7 +1715,7 @@ When SUPPRESS-SCALE is non-nil, do not update the shared effective scale."
             (message "PDF links loaded; press RET to open them")))))))
 
 (defun yunge-reader-pdf-follow-link ()
-  "Choose an internal link from the PDF pages visible in this window."
+  "Choose a link from the PDF pages visible in this window."
   (interactive)
   (unless yunge-reader-document
     (user-error "This reader buffer has no open document"))
@@ -1817,7 +1850,7 @@ When SINGLE is non-nil, use the event start for both points."
       (yunge-reader-pdf--select-points location location))))
 
 (defun yunge-reader-pdf-activate-at-mouse (event)
-  "Follow an internal PDF link at EVENT, or select one character."
+  "Follow a PDF link at EVENT, or select one character."
   (interactive "e")
   (let* ((position (event-start event))
          (window (posn-window position)))
@@ -1932,7 +1965,7 @@ When SINGLE is non-nil, use the event start for both points."
          '(yunge-reader-pdf-first-page
            yunge-reader-pdf-last-page
            yunge-reader-pdf-goto-page
-           yunge-reader-pdf--follow-link))
+           yunge-reader-pdf--follow-location-link))
   (yunge-jump-history-track-command command))
 
 (provide 'yunge-reader-pdf)

@@ -64,6 +64,53 @@
    'yunge-reader-mode
    '(("y" . evil-yank))))
 
+(ert-deftest yunge-reader-opens-only-allowlisted-uri-actions ()
+  (let* ((yunge-reader-uri-schemes '("https" "mailto"))
+         (allowed
+          (make-yunge-reader-action
+           :type 'uri :uri "HTTPS://example.com/book"))
+         (blocked
+          (make-yunge-reader-action
+           :type 'uri :uri "javascript:alert(1)"))
+         opened)
+    (should (yunge-reader--action-valid-p allowed))
+    (should (yunge-reader--action-valid-p blocked))
+    (should-not
+     (yunge-reader--outline-item-valid-p
+      (make-yunge-reader-outline-item
+       :title "Website" :depth 0 :action allowed)))
+    (should-not
+     (yunge-reader--action-valid-p
+      (make-yunge-reader-action
+       :type 'uri :uri "relative/path")))
+    (should-not
+     (yunge-reader--action-valid-p
+      (make-yunge-reader-action
+       :type 'uri :uri "https://example.com/a b")))
+    (should-not
+     (yunge-reader--action-valid-p
+      (make-yunge-reader-action
+       :type 'uri
+       :uri (concat "https:" (make-string 4096 ?a)))))
+    (should-not
+     (yunge-reader--action-valid-p
+      (make-yunge-reader-action
+       :type 'location
+       :position (make-yunge-reader-position :unit 1)
+       :uri "https://example.com")))
+    (require 'browse-url)
+    (cl-letf (((symbol-function 'browse-url)
+               (lambda (uri &rest _arguments)
+                 (setq opened uri))))
+      (let ((inhibit-message t))
+        (should (yunge-reader--follow-action allowed)))
+      (should (equal opened "HTTPS://example.com/book"))
+      (setq opened nil)
+      (should-error
+       (yunge-reader--follow-action blocked)
+       :type 'user-error)
+      (should-not opened))))
+
 (ert-deftest yunge-reader-builds-unique-outline-candidates ()
   (let* ((first
           (make-yunge-reader-outline-item

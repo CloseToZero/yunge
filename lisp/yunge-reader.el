@@ -8,6 +8,7 @@
 (require 'yunge-jump-history)
 (require 'yunge-key)
 
+(declare-function browse-url "browse-url" (url &rest arguments))
 (declare-function evil-set-initial-state "evil-core" (mode state))
 
 (defgroup yunge-reader nil
@@ -48,6 +49,14 @@
   "Maximum number of durable document places to retain."
   :type '(integer :tag "Places" 1)
   :group 'yunge-reader)
+
+(defcustom yunge-reader-uri-schemes '("https" "http" "mailto")
+  "URI schemes that document actions may open through `browse-url'."
+  :type '(repeat (string :tag "Scheme"))
+  :group 'yunge-reader)
+
+(defconst yunge-reader-uri-maximum-bytes 4096
+  "Maximum encoded size accepted for one document URI action.")
 
 (defconst yunge-reader-place-version 1
   "Current durable Reader place format version.")
@@ -117,7 +126,8 @@ unscaled coordinate system of UNIT."
   type
   position
   zoom-mode
-  scale)
+  scale
+  uri)
 
 (cl-defstruct yunge-reader-outline-item
   "One entry in a flattened document outline."
@@ -863,17 +873,56 @@ COMPLETE is called exactly once by the driver with a value and error value."
          (setq completed t)
          (funcall complete nil error-data))))))
 
-(defun yunge-reader--action-valid-p (action)
-  "Return non-nil when ACTION is supported by the Reader core."
-  (and (yunge-reader-action-p action)
-       (eq (yunge-reader-action-type action) 'location)
+(defun yunge-reader--uri-scheme (uri)
+  "Return URI's lowercase explicit scheme, or nil."
+  (when (and (stringp uri)
+             (string-match
+              "\\`\\([A-Za-z][A-Za-z0-9+.-]*\\):" uri))
+    (downcase (match-string 1 uri))))
+
+(defun yunge-reader--uri-valid-p (uri)
+  "Return non-nil when URI is bounded and structurally safe to open."
+  (and (stringp uri)
+       (not (string-empty-p uri))
+       (<= (string-bytes uri) yunge-reader-uri-maximum-bytes)
+       (not (string-match-p "[[:space:][:cntrl:]]" uri))
+       (yunge-reader--uri-scheme uri)))
+
+(defun yunge-reader--uri-allowed-p (uri)
+  "Return non-nil when URI uses an allowed document action scheme."
+  (when-let* ((scheme (yunge-reader--uri-scheme uri)))
+    (seq-some
+     (lambda (allowed)
+       (and (stringp allowed)
+            (string-equal scheme (downcase allowed))))
+     yunge-reader-uri-schemes)))
+
+(defun yunge-reader--location-action-valid-p (action)
+  "Return non-nil when ACTION is a valid location action."
+  (and (eq (yunge-reader-action-type action) 'location)
        (yunge-reader-position-p
         (yunge-reader-action-position action))
        (memq (yunge-reader-action-zoom-mode action)
              '(nil manual fit-width fit-page))
        (let ((scale (yunge-reader-action-scale action)))
          (or (null scale)
-             (and (numberp scale) (> scale 0))))))
+             (and (numberp scale) (> scale 0))))
+       (null (yunge-reader-action-uri action))))
+
+(defun yunge-reader--uri-action-valid-p (action)
+  "Return non-nil when ACTION is a structurally valid URI action."
+  (and (eq (yunge-reader-action-type action) 'uri)
+       (null (yunge-reader-action-position action))
+       (null (yunge-reader-action-zoom-mode action))
+       (null (yunge-reader-action-scale action))
+       (yunge-reader--uri-valid-p
+        (yunge-reader-action-uri action))))
+
+(defun yunge-reader--action-valid-p (action)
+  "Return non-nil when ACTION is supported by the Reader core."
+  (and (yunge-reader-action-p action)
+       (or (yunge-reader--location-action-valid-p action)
+           (yunge-reader--uri-action-valid-p action))))
 
 (defun yunge-reader--outline-item-valid-p (item)
   "Return non-nil when ITEM follows the generic outline contract."
@@ -886,7 +935,8 @@ COMPLETE is called exactly once by the driver with a value and error value."
        (natnump (yunge-reader-outline-item-depth item))
        (let ((action (yunge-reader-outline-item-action item)))
          (or (null action)
-             (yunge-reader--action-valid-p action)))))
+             (and (yunge-reader-action-p action)
+                  (yunge-reader--location-action-valid-p action))))))
 
 (defun yunge-reader--outline-valid-p (outline)
   "Return non-nil when OUTLINE follows the generic outline contract."
@@ -949,11 +999,9 @@ COMPLETE is called exactly once by the driver with a value and error value."
       (setq place (plist-put place :scale scale)))
     place))
 
-(defun yunge-reader--follow-action (action)
-  "Follow supported Reader ACTION and return non-nil on success."
+(defun yunge-reader--follow-location-action (action)
+  "Follow location ACTION and return non-nil on success."
   (let ((window (yunge-reader--place-window)))
-    (unless (yunge-reader--action-valid-p action)
-      (user-error "This document action has no supported destination"))
     (unless window
       (user-error "The Reader buffer is not displayed in a live window"))
     (unless
@@ -961,6 +1009,27 @@ COMPLETE is called exactly once by the driver with a value and error value."
          (yunge-reader--action-place action) window)
       (user-error "The Reader driver rejected the destination"))
     t))
+
+(defun yunge-reader--follow-uri-action (action)
+  "Open URI ACTION through the configured safe scheme policy."
+  (let* ((uri (yunge-reader-action-uri action))
+         (scheme (yunge-reader--uri-scheme uri)))
+    (unless (yunge-reader--uri-allowed-p uri)
+      (user-error "Document URI scheme is not allowed: %s"
+                  (or scheme "none")))
+    (require 'browse-url)
+    (browse-url uri)
+    (message "Opened document URI: %s"
+             (truncate-string-to-width uri 120 nil nil t))
+    t))
+
+(defun yunge-reader--follow-action (action)
+  "Follow supported Reader ACTION and return non-nil on success."
+  (unless (yunge-reader--action-valid-p action)
+    (user-error "This document action has no supported destination"))
+  (pcase (yunge-reader-action-type action)
+    ('location (yunge-reader--follow-location-action action))
+    ('uri (yunge-reader--follow-uri-action action))))
 
 (defun yunge-reader--follow-outline-item (item)
   "Follow the location action carried by outline ITEM."

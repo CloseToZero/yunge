@@ -18,8 +18,8 @@ The helper writes one message immediately after startup:
 #+begin_src json
 {"kind":"ready","protocol":1,"build-id":"HASH",
  "pdfium-api":"7881",
- "capabilities":["cache-maintenance","lifecycle","pdf-outline",
-                 "pdf-render","pdf-search","pdf-text"]}
+ "capabilities":["cache-maintenance","lifecycle","pdf-links",
+                 "pdf-outline","pdf-render","pdf-search","pdf-text"]}
 #+end_src
 
 Emacs requires the protocol, build ID, PDFium API, and all capabilities to
@@ -36,8 +36,9 @@ reject unknown fields.
 {"id":1,"op":"ping"}
 {"id":1,"ok":true,
  "result":{"protocol":1,"backend":"pdfium",
-           "capabilities":["cache-maintenance","lifecycle","pdf-outline",
-                           "pdf-render","pdf-search","pdf-text"]}}
+           "capabilities":["cache-maintenance","lifecycle","pdf-links",
+                           "pdf-outline","pdf-render","pdf-search",
+                           "pdf-text"]}}
 #+end_src
 
 Failures have a stable code and diagnostic message:
@@ -125,6 +126,26 @@ limit or detects a bookmark cycle.  View kinds are =xyz=, =fit=,
 =fit-bounds-horizontal=, =fit-bounds-vertical=, and =unknown=.  Outline
 extraction does not expose or execute URI, remote-document, embedded-document,
 Launch, or unsupported bookmark actions.
+
+=page-links= accepts a =document= and zero-based =page=.  It returns at most
+4,096 links with canonical PDF bounds, an optional label of at most 256
+Unicode characters, and one tagged action.
+
+#+begin_src json
+{"id":6,"op":"page-links","params":{"document":1,"page":0}}
+{"id":6,"ok":true,"result":{"page":0,"links":[
+  {"bounds":{"left":72,"bottom":700,"right":144,"top":712},
+   "action":{"type":"location",
+             "destination":{"page":2,"view":"fit"}}},
+  {"bounds":{"left":72,"bottom":680,"right":180,"top":692},
+   "action":{"type":"uri","uri":"https://example.com"}}],
+  "truncated":false}}
+#+end_src
+
+URI actions require an explicit ASCII scheme, contain no whitespace or control
+characters, and are limited to 4,096 UTF-8 bytes.  The helper does not choose
+allowed schemes and never opens a URI.  Remote-document, embedded-document,
+Launch, and unsupported page actions are filtered.
 
 =page-text= accepts =document= and =page=.  It returns the complete Unicode
 text plus characters in PDFium index order.  Each character has a zero-based

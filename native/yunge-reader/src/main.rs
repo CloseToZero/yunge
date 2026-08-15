@@ -30,6 +30,7 @@ const CAPABILITIES: [&str; 7] = [
 ];
 const PAGE_LINK_MAX_ITEMS: usize = 4_096;
 const PAGE_LINK_MAX_LABEL_CHARACTERS: usize = 256;
+const PAGE_LINK_MAX_URI_BYTES: usize = 4_096;
 const OUTLINE_MAX_ITEMS: usize = 10_000;
 const OUTLINE_MAX_TITLE_CHARACTERS: usize = 1_024;
 const SEARCH_CONTEXT_CHARACTERS: usize = 24;
@@ -245,9 +246,16 @@ impl PageLinkBounds {
 }
 
 #[derive(Debug, Serialize)]
+#[serde(tag = "type", rename_all = "kebab-case")]
+enum PageLinkAction {
+    Location { destination: OutlineDestination },
+    Uri { uri: String },
+}
+
+#[derive(Debug, Serialize)]
 struct PageLink {
     bounds: PageLinkBounds,
-    destination: OutlineDestination,
+    action: PageLinkAction,
     #[serde(skip_serializing_if = "Option::is_none")]
     label: Option<String>,
 }
@@ -340,14 +348,50 @@ fn page_link_label(value: String) -> Option<String> {
     (!label.is_empty()).then_some(label)
 }
 
-fn page_link_destination(link: &PdfLink<'_>) -> Option<OutlineDestination> {
+fn page_link_uri(value: String) -> Option<String> {
+    if value.is_empty()
+        || value.len() > PAGE_LINK_MAX_URI_BYTES
+        || value.chars().any(|character| {
+            character.is_control() || character.is_whitespace()
+        })
+    {
+        return None;
+    }
+    let (scheme, _) = value.split_once(':')?;
+    let mut characters = scheme.chars();
+    if !characters.next()?.is_ascii_alphabetic()
+        || !characters.all(|character| {
+            character.is_ascii_alphanumeric()
+                || matches!(character, '+' | '-' | '.')
+        })
+    {
+        return None;
+    }
+    Some(value)
+}
+
+fn page_link_action(link: &PdfLink<'_>) -> Option<PageLinkAction> {
     match link.action() {
-        Some(action) => action
-            .as_local_destination_action()?
+        Some(action) => {
+            if let Some(local) = action.as_local_destination_action() {
+                local
+                    .destination()
+                    .ok()
+                    .and_then(outline_destination)
+                    .map(|destination| PageLinkAction::Location { destination })
+            } else if let Some(uri) = action.as_uri_action() {
+                uri.uri()
+                    .ok()
+                    .and_then(page_link_uri)
+                    .map(|uri| PageLinkAction::Uri { uri })
+            } else {
+                None
+            }
+        }
+        None => link
             .destination()
-            .ok()
-            .and_then(outline_destination),
-        None => link.destination().and_then(outline_destination),
+            .and_then(outline_destination)
+            .map(|destination| PageLinkAction::Location { destination }),
     }
 }
 
@@ -924,12 +968,12 @@ impl Service {
             else {
                 continue;
             };
-            let Some(destination) = page_link_destination(&link) else {
+            let Some(action) = page_link_action(&link) else {
                 continue;
             };
             links.push(PageLink {
                 bounds,
-                destination,
+                action,
                 label: text.as_ref().and_then(|text| {
                     page_link_label(text.inside_rect(PdfRect::new_from_values(
                         bounds.bottom,
@@ -1735,6 +1779,24 @@ mod tests {
         let label = page_link_label(value).unwrap();
         assert_eq!(label.chars().count(), PAGE_LINK_MAX_LABEL_CHARACTERS);
         assert_eq!(page_link_label(" \n\t ".to_owned()), None);
+    }
+
+    #[test]
+    fn page_link_uris_require_bounded_explicit_schemes() {
+        let https = "HTTPS://example.com/path".to_owned();
+        assert_eq!(page_link_uri(https.clone()), Some(https));
+        assert_eq!(
+            page_link_uri("mailto:user@example.com".to_owned()),
+            Some("mailto:user@example.com".to_owned())
+        );
+        assert_eq!(page_link_uri("relative/path".to_owned()), None);
+        assert_eq!(page_link_uri("https://example.com/a b".to_owned()), None);
+        assert_eq!(page_link_uri("1https://example.com".to_owned()), None);
+        assert_eq!(page_link_uri("javascript:\nalert(1)".to_owned()), None);
+        assert_eq!(
+            page_link_uri("x".repeat(PAGE_LINK_MAX_URI_BYTES + 1)),
+            None
+        );
     }
 
     #[test]

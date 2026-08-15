@@ -23,6 +23,16 @@
     :type 'location
     :position (make-yunge-reader-position :unit target))))
 
+(defun yunge-reader-pdf-test--uri-link
+    (page index bounds uri &optional label)
+  "Return one external PDF URI link fixture from PAGE."
+  (make-yunge-reader-pdf-link
+   :page page
+   :index index
+   :bounds bounds
+   :label label
+   :action (make-yunge-reader-action :type 'uri :uri uri)))
+
 (ert-deftest yunge-reader-pdf-uses-viewer-page-bindings ()
   (yunge-test-keymap-keys
    yunge-reader-pdf-view-mode-map
@@ -52,13 +62,14 @@
            '(yunge-reader-pdf-first-page
              yunge-reader-pdf-last-page
              yunge-reader-pdf-goto-page
-             yunge-reader-pdf--follow-link))
+             yunge-reader-pdf--follow-location-link))
     (should
      (advice-member-p
       #'yunge-jump-history--track-navigation command)))
   (dolist (command
            '(yunge-reader-pdf-next-page
              yunge-reader-pdf-previous-page
+             yunge-reader-pdf--follow-link
              scroll-up-command
              scroll-down-command))
     (should-not
@@ -342,9 +353,11 @@
               . (((bounds
                    . ((left . 10.0) (bottom . 20.0)
                       (right . 30.0) (top . 40.0)))
-                  (destination
-                   . ((page . 1) (x . 12.0) (y . 34.0)
-                      (zoom . 1.5) (view . "xyz")))
+                  (action
+                   . ((type . "location")
+                      (destination
+                       . ((page . 1) (x . 12.0) (y . 34.0)
+                          (zoom . 1.5) (view . "xyz")))))
                   (label . "Details"))))
              (truncated . t))))
          (link (car (yunge-reader-pdf-link-data-links data)))
@@ -363,6 +376,34 @@
                34.0))
     (should (eq (yunge-reader-action-zoom-mode action) 'manual))
     (should (= (yunge-reader-action-scale action) 1.5))))
+
+(ert-deftest yunge-reader-pdf-converts-native-uri-links ()
+  (let* ((document
+          (make-yunge-reader-document
+           :metadata
+           '(:page-count 1
+             :pages
+             (((page . 0) (width . 100.0) (height . 200.0))))))
+         (data
+          (yunge-reader-pdf--native-page-links
+           document 0
+           '((page . 0)
+             (links
+              . (((bounds
+                   . ((left . 10.0) (bottom . 20.0)
+                      (right . 30.0) (top . 40.0)))
+                  (action
+                   . ((type . "uri")
+                      (uri . "https://example.com/book")))
+                  (label . "Website"))))
+             (truncated))))
+         (link (car (yunge-reader-pdf-link-data-links data)))
+         (action (yunge-reader-pdf-link-action link)))
+    (should (eq (yunge-reader-action-type action) 'uri))
+    (should
+     (equal (yunge-reader-action-uri action)
+            "https://example.com/book"))
+    (should (equal (yunge-reader-pdf-link-label link) "Website"))))
 
 (ert-deftest yunge-reader-pdf-rejects-malformed-native-link-pages ()
   (let ((document
@@ -384,7 +425,40 @@
          . (((bounds
               . ((left . 30.0) (bottom . 20.0)
                  (right . 10.0) (top . 40.0)))
-             (destination . ((page . 1) (view . "xyz")))))))))))
+             (action
+              . ((type . "location")
+                 (destination
+                  . ((page . 1) (view . "xyz")))))))))))
+    (should-not
+     (yunge-reader-pdf--native-page-links
+      document 0
+      '((page . 0)
+        (links
+         . (((bounds
+              . ((left . 10.0) (bottom . 20.0)
+                 (right . 30.0) (top . 40.0)))
+             (action
+              . ((type . "uri")
+                 (uri . "https://example.com/a b")))))))))))
+
+(ert-deftest yunge-reader-pdf-opens-uri-links-without-tracking-jumps ()
+  (let* ((yunge-reader-uri-schemes '("https"))
+         (bounds
+          '((left . 0.0) (bottom . 0.0)
+            (right . 10.0) (top . 10.0)))
+         (link
+          (yunge-reader-pdf-test--uri-link
+           0 0 bounds "https://example.com/book" "Website"))
+         opened)
+    (require 'browse-url)
+    (with-temp-buffer
+      (setq yunge-reader-pdf--page-infos [((label . "1"))])
+      (cl-letf (((symbol-function 'browse-url)
+                 (lambda (uri &rest _arguments)
+                   (setq opened uri))))
+        (let ((inhibit-message t))
+          (should (yunge-reader-pdf--follow-link link))))
+      (should (equal opened "https://example.com/book")))))
 
 (ert-deftest yunge-reader-pdf-builds-unique-link-candidates ()
   (with-temp-buffer
