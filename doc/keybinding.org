@@ -344,6 +344,10 @@ repeat keys.  Search-result changes and ~gg/G/gp~ are semantic jumps, so
 ~C-o/C-i~ can revisit them.  Paging and ordinary scrolling do not add jump
 entries.
 
+Mouse-1 selects one character and dragging selects a text range.
+Ctrl-Mouse-1 follows a link at the pointer.  ~RET~ remains the portable primary
+link action and does not require a GUI modifier.
+
 Choosing an outline destination is a semantic jump and participates in
 ~C-o/C-i~.  Loading an outline never opens a late minibuffer after the user
 has changed the originating Reader window.

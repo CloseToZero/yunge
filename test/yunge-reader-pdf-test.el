@@ -51,6 +51,10 @@
        #'yunge-reader-pdf-previous-page))
   (should
    (eq (lookup-key yunge-reader-pdf--image-map (kbd "<mouse-1>"))
+       #'yunge-reader-pdf-select-at-mouse))
+  (should
+   (eq (lookup-key yunge-reader-pdf--image-map
+                   (kbd "C-<mouse-1>"))
        #'yunge-reader-pdf-activate-at-mouse))
   (should
    (eq (lookup-key yunge-reader-pdf--image-map
@@ -758,7 +762,7 @@
         (should (= requests 1))
         (should (= callbacks 3))))))
 
-(ert-deftest yunge-reader-pdf-click-prefers-links-over-selection ()
+(ert-deftest yunge-reader-pdf-modified-click-follows-only-links ()
   (let* ((bounds
           '((left . 10.0) (bottom . 20.0)
             (right . 30.0) (top . 40.0)))
@@ -767,22 +771,18 @@
          (data
           (make-yunge-reader-pdf-link-data
            :page 0 :links (list link)))
-         followed
-         selected)
+         followed)
     (cl-letf (((symbol-function 'yunge-reader-pdf--follow-link)
-               (lambda (value) (setq followed value)))
-              ((symbol-function 'yunge-reader-pdf--select-points)
-               (lambda (start end)
-                 (setq selected (list start end)))))
+               (lambda (value) (setq followed value))))
       (yunge-reader-pdf--activate-page-point
        '(:page 0 :point (15.0 . 25.0)) data)
       (should (eq followed link))
-      (should-not selected)
       (setq followed nil)
-      (yunge-reader-pdf--activate-page-point
-       '(:page 0 :point (5.0 . 5.0)) data)
-      (should-not followed)
-      (should (= (length selected) 2)))))
+      (let ((inhibit-message t))
+        (should-not
+         (yunge-reader-pdf--activate-page-point
+          '(:page 0 :point (5.0 . 5.0)) data)))
+      (should-not followed))))
 
 (ert-deftest yunge-reader-pdf-caches-late-links-without-prompting ()
   (let (completion reader other

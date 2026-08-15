@@ -108,7 +108,8 @@
   "Generation used to reject late interactive PDF link completions.")
 
 (defvar-keymap yunge-reader-pdf--image-map
-  "<mouse-1>" #'yunge-reader-pdf-activate-at-mouse
+  "<mouse-1>" #'yunge-reader-pdf-select-at-mouse
+  "C-<mouse-1>" #'yunge-reader-pdf-activate-at-mouse
   "<drag-mouse-1>" #'yunge-reader-pdf-select-with-mouse)
 
 (defconst yunge-reader-pdf-normal-bindings
@@ -1178,10 +1179,10 @@ When SUPPRESS-SCALE is non-nil, do not update the shared effective scale."
         " "
         'yunge-reader-pdf-page page
         'keymap yunge-reader-pdf--image-map
-        'pointer 'hand
+        'pointer 'text
         'help-echo
         (concat
-         "Mouse-1 follows a link or selects a character; "
+         "Mouse-1 selects text; Ctrl-Mouse-1 follows a link; "
          "drag selects across pages")))
       (unless (= page (1- count))
         (insert (propertize "\n" 'yunge-reader-pdf-page page))))
@@ -1841,16 +1842,17 @@ When SINGLE is non-nil, use the event start for both points."
          start-point end-point)))))
 
 (defun yunge-reader-pdf--activate-page-point (location data)
-  "Follow a link at LOCATION in DATA, or select the character there."
+  "Follow a link at LOCATION in DATA, returning nil when none exists."
   (let* ((page (plist-get location :page))
          (point (plist-get location :point))
          (link (yunge-reader-pdf--link-at-point page point data)))
     (if link
         (yunge-reader-pdf--follow-link link)
-      (yunge-reader-pdf--select-points location location))))
+      (message "There is no PDF link at this position")
+      nil)))
 
 (defun yunge-reader-pdf-activate-at-mouse (event)
-  "Follow a PDF link at EVENT, or select one character."
+  "Follow a PDF link at modified mouse EVENT, if one exists."
   (interactive "e")
   (let* ((position (event-start event))
          (window (posn-window position)))
@@ -1885,7 +1887,7 @@ When SINGLE is non-nil, use the event start for both points."
                      (error
                       (display-warning
                        'yunge-reader
-                       (format "Could not activate PDF pointer: %s"
+                       (format "Could not activate PDF link: %s"
                                (error-message-string error-data))
                        :warning)))))))))))))
 

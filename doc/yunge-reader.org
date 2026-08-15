@@ -34,8 +34,8 @@ search, =n/N= to visit the next or previous match, =gr= to refresh, =+/-= to
 zoom, === to reset zoom, =W/P= to fit width or page, and =q= to quit.  PDF
 views use =J/K= for the next or previous page, =gg/G= for the first or last
 page, =gp= for a page prompt, =RET= for a visible link prompt, and Page Down
-or Page Up for screen scrolling.  Mouse-1 follows a link when hit and
-otherwise selects one character; dragging always selects text.
+or Page Up for screen scrolling.  Mouse-1 selects one character, dragging
+selects text, and Ctrl-Mouse-1 follows a link when hit.
 Evil starts Reader buffers in Normal state and leaves Visual =y= as
 =evil-yank=.
 =M-x yunge-reader-clear-search= removes the active match highlight.
@@ -152,17 +152,18 @@ and stable duplicate suffixes.  Local destinations use guarded live-place
 restoration and the window-local =C-o/C-i= history.  Rejected destinations
 roll back the view and zoom and cannot replace the saved place.
 
-Only an explicit =RET= choice or Mouse-1 hit may pass an external URI to
+Only an explicit =RET= choice or Ctrl-Mouse-1 hit may pass an external URI to
 =browse-url=.  The default =yunge-reader-uri-schemes= policy allows =https=,
 =http=, and =mailto=; other schemes raise a user error unless the user changes
 the allowlist.  Opening an external URI neither records a Reader jump nor
 updates the document's saved place.
 
-Mouse-1 converts the image coordinate to canonical PDF points and tests the
-cached rectangles locally.  When link data is still loading, activation is
-allowed only if the original Reader window, buffer, point, scroll state,
+Ctrl-Mouse-1 converts the image coordinate to canonical PDF points and tests
+the cached rectangles locally.  When link data is still loading, activation
+is allowed only if the original Reader window, buffer, point, scroll state,
 selected window, and minibuffer state remain unchanged.  A late completion is
-cached without taking over another window.  Drag events never follow links.
+cached without taking over another window.  Mouse-1 and drag events never
+follow links.
 
 A logical selection contains two positions and optional resolved text.  Its
 painted rectangles are disposable view state, not the source of truth.
