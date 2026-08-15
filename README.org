@@ -8,4 +8,5 @@
 - [[file:doc/shuying.org][Shuying]]
 - [[file:doc/yunge-mcp.org][Yunge MCP]]
 - [[file:doc/yunge-pinyin.org][Yunge Pinyin search compiler]]
+- [[file:doc/yunge-reader.org][Yunge Reader]]
 - [[file:doc/keybinding.org][Keybinding conventions and workflows]]

@@ -1,0 +1,164 @@
+#+title: Yunge Reader
+
+Yunge Reader is an extensible Emacs document reader.  PDF is the first target,
+but the core models document ownership, location, selection, and view state
+without assuming that every format consists of immutable pages.
+
+The initial implementation is a foundation: it contains the driver boundary,
+reader-buffer lifecycle, zoom and selection state, and a versioned native
+service with graceful shutdown.  It does not yet register itself for PDF files
+or render pages.  Existing PDF behavior therefore remains unchanged while the
+PDFium driver is developed behind this boundary.
+
+* Library boundary
+
+The source layout begins with:
+
+- =yunge-reader.el= owns drivers, open documents, stable positions, logical
+  selections, reader buffers, and zoom state.
+- =yunge-reader-native.el= owns the long-lived subprocess, request matching,
+  build identity, reference counting, idle shutdown, and explicit lifecycle
+  commands.
+- =native/yunge-reader/= implements the versioned NDJSON service.  Its first
+  version deliberately exposes only =ping= and =shutdown=.
+- A later =yunge-reader-pdf.el= will translate core requests to the PDFium
+  protocol and paint visible pages and selection highlights.
+
+The core never depends on PDFium, PDF page objects, or a particular image
+format.  A driver registers five values: its name, a file matcher, an open
+function, a close function, and a request function.  Open and request
+completion may be immediate or asynchronous.  The core guards each completion
+so one driver mistake cannot complete the same operation twice.
+
+Opening a document produces an opaque handle and declares one of two layouts:
+
+- =fixed= documents have stable spatial units, normally pages.  PDF, DjVu, and
+  comic archives fit this model.
+- =reflow= documents derive line and page breaks from the current viewport and
+  typography.  EPUB, HTML, and plain text fit this model.
+
+The shared reader buffer owns navigation and user intent, while layout-specific
+adapters own painting and viewport discovery.  This avoids making an EPUB
+driver emulate permanent PDF pages or making a PDF driver pretend its glyphs
+are ordinary Emacs buffer text.
+
+* Locations and selection
+
+A =yunge-reader-position= contains a document unit, a stable text offset or
+driver anchor, and optional unscaled coordinates.  For PDF, coordinates remain
+in the page's canonical coordinate system; zoom only changes their projection
+to screen pixels.  For EPUB, the unit and offset can hold a spine item and a
+CFI-like text anchor while coordinates remain absent.
+
+A logical selection contains two such positions and optional resolved text.
+Its painted rectangles are disposable view state, not the source of truth.
+Consequently zooming, rerendering, or evicting a page image cannot invalidate
+the text range.  =M-w= copies already resolved text immediately or asks the
+driver for =selection-text= asynchronously.
+
+This model also leaves room for later annotations without adding note-taking
+to the first milestone.  An annotation can store stable start and end
+positions, quoted text, color, and document identity outside the renderer.
+The driver may additionally persist a native PDF annotation, but native object
+identifiers never become the only durable anchor.
+
+* Zoom and views
+
+Every reader buffer has a zoom mode and scale:
+
+- =fit-width= lets its adapter resolve a scale from the visible content width.
+- =fit-page= lets it resolve a scale from both viewport dimensions.
+- =manual= uses an explicit bounded scale.
+
+=+= and =-= enter manual mode, =0= restores the default manual scale, and =w=
+and =p= select fit-width and fit-page.  A view adapter records the effective
+scale that it painted.  A manual zoom following a fit operation therefore
+starts from what the user actually saw, rather than an unrelated default.
+
+Zoom changes run a buffer-local refresh hook.  The PDF adapter will use a
+generation on each visible render request, retain cached results, and discard
+late results whose generation is no longer current.
+
+* Native service lifecycle
+
+The helper is long-lived to retain parsed documents and avoid process startup
+on every page.  It remains fully owned by Emacs:
+
+- =M-x yunge-reader-native-start= starts it explicitly.
+- =M-x yunge-reader-native-stop= sends =shutdown=, waits up to the configured
+  deadline, and then terminates it.
+- A prefix argument to the stop command terminates it immediately.
+- =M-x yunge-reader-native-restart= waits for shutdown before starting the
+  replacement process.
+- =M-x yunge-reader-native-status= reports =stopped=, =starting=, =ready=,
+  =stopping=, or =building= and the number of retaining clients.
+
+Drivers acquire the service when opening their first native document and
+release it when closing.  Closing the last document schedules a configurable
+idle shutdown.  Manual shutdown is still allowed while reader buffers exist;
+a later request can start a new service and reopen driver state from stable
+document locations.
+
+The helper also exits successfully when stdin reaches EOF.  This covers Emacs
+crashes and forced termination, where no Lisp shutdown hook can finish.  The
+=kill-emacs-hook= sends a best-effort shutdown request but never waits long
+enough to delay editor exit.  The subprocess does not spawn grandchildren.
+
+Every startup begins with a =ready= message containing a protocol version,
+source build ID, and capabilities.  Emacs queues requests until it validates
+that handshake.  Request IDs match asynchronous responses to callbacks.  A
+crash fails all outstanding callbacks and permits at most one automatic
+restart while a reader retains the service.  The complete wire format is in
+[[file:../native/yunge-reader/README.org][the native protocol documentation]].
+
+* Setup and PDF engine
+
+=M-x yunge-reader-native-setup= currently performs a locked release build of
+the small Rust helper and verifies it with a =ping= smoke test.  Opening a
+document never invokes setup implicitly.
+
+The PDF stage will extend the same explicit command to:
+
+1. Select a committed PDFium version and platform asset.
+2. Download it into an operation-private temporary directory.
+3. Verify the committed SHA-256 before extraction.
+4. Accept only the expected library and license paths.
+5. Build the Rust helper against its pinned =pdfium-render= API.
+6. Install both pieces atomically below =var/yunge-reader/=.
+7. Render and extract text from a small fixture before activating the version.
+
+Normal users will not build PDFium from Chromium source.  That toolchain is
+too large for an editor setup command.  A maintainer or CI source-build recipe
+can later produce pinned artifacts with build provenance; local setup will
+continue to verify an exact manifest rather than track a moving latest release.
+
+The Rust protocol remains an engine boundary.  A pure-Rust implementation such
+as Hayro can become another backend when it provides the rendering, encryption,
+text geometry, selection, and annotation behavior required by the same
+conformance fixtures.
+
+* First PDF milestone
+
+The first useful PDF driver will provide, in order:
+
+1. Open, close, metadata, and page geometry.
+2. Visible-page rendering for a continuous vertical image roll.
+3. Fit-width, fit-page, and manual zoom with bounded cache keys.
+4. Text runs and glyph quadrilaterals in canonical page coordinates.
+5. Mouse hit testing, drag selection across pages, highlighting, and copying in
+   backend reading order.
+6. Search and jump using the same text layer.
+
+Annotations, side notes, library management, and document editing are outside
+that milestone.  The stable-position and driver boundaries are intended to
+support them later without routing annotation storage through the page cache.
+
+* Testing
+
+Core ERT tests use fake drivers and cover driver precedence, asynchronous open
+cleanup, one-time close, zoom transitions, selection copying, and duplicate
+completion rejection.  Native ERT tests use a fake process to cover handshake
+queuing, build rejection, graceful and forced stop, reference counting, and
+status.  Rust tests cover ready metadata, request errors, shutdown ordering,
+and clean EOF exit.  The PDF driver will add visual fixtures rendered to PNG
+and compare both page appearance and extracted text geometry.

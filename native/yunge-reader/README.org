@@ -1,0 +1,51 @@
+#+title: Yunge Reader native protocol
+
+The helper is a child process owned by Emacs.  Emacs and the helper exchange
+UTF-8 newline-delimited JSON (NDJSON) over stdin and stdout.  Standard output
+is reserved for protocol messages; diagnostics use standard error.
+
+* Handshake
+
+The helper writes one message immediately after startup:
+
+#+begin_src json
+{"kind":"ready","protocol":1,"build-id":"HASH",
+ "capabilities":["lifecycle"]}
+#+end_src
+
+Emacs accepts the process only when both =protocol= and =build-id= match its
+tracked values.  The build ID is a SHA-256 digest of the helper's manifest,
+lock file, build script, and Rust sources.
+
+* Requests and responses
+
+Every request has a positive integer =id=, an =op=, and an optional =params=
+object.  Exactly one response uses the same ID:
+
+#+begin_src json
+{"id":1,"op":"ping","params":{}}
+{"id":1,"ok":true,"result":{"protocol":1,"backend":"none"}}
+
+{"id":2,"op":"render","params":{}}
+{"id":2,"ok":false,
+ "error":{"code":"unsupported-operation",
+          "message":"unsupported operation: render"}}
+#+end_src
+
+The initial executable intentionally implements only lifecycle operations.
+PDFium document, rendering, text, and selection operations will extend this
+versioned protocol without exposing native handles to reader buffers.
+
+* Shutdown
+
+Emacs requests graceful shutdown with:
+
+#+begin_src json
+{"id":3,"op":"shutdown","params":{}}
+{"id":3,"ok":true,"result":{"stopped":true}}
+#+end_src
+
+After flushing that response, the helper stops reading requests, releases its
+state, and exits successfully.  If Emacs closes the pipe without sending a
+request, stdin reaches EOF and the helper also exits successfully.  Emacs may
+terminate a helper that exceeds its configured graceful-shutdown deadline.
