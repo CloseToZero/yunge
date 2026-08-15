@@ -13,22 +13,22 @@ to =auto-mode-alist= while the reader is under development.
 The current PDF adapter provides:
 
 - verified PDFium installation and a locked Rust helper build;
-- open, close, page count, labels, and page geometry;
-- one-page PNG rendering with next, previous, and direct page navigation;
+- open, close, page count, labels, and complete page geometry;
+- a continuous, virtualized page roll with bounded image residency;
+- next, previous, direct page, screen, mouse wheel, and ordinary scrolling;
 - fit-width, fit-page, and bounded manual zoom;
-- canonical character geometry, mouse hit testing, and drag selection;
-- zoom-independent SVG selection highlights and exact =M-w= copying;
+- canonical character geometry and cross-page mouse drag selection;
+- multi-page SVG selection highlights and exact =M-w= copying;
 - immutable render cache keys and stale-response rejection; and
 - graceful, forced, idle, EOF, and Emacs-exit service shutdown paths.
 
-The PDF view binds =n=, =]=, and Page Down to the next page; =b=, =[=, and
-Page Up to the previous page; and =G= to a page prompt.  Shared reader keys
-use =+= and =-= for zoom, =0= for scale one, =w= for fit-width, =p= for
-fit-page, =g= to refresh, and =q= to quit the window.
+The PDF view binds =n= and =]= to the next page; =b= and =[= to the previous
+page; =G= to a page prompt; and Page Down and Page Up to screen scrolling.
+Shared reader keys use =+= and =-= for zoom, =0= for scale one, =w= for
+fit-width, =p= for fit-page, =g= to refresh, and =q= to quit the window.
 
-This slice is intentionally a single-page reader.  Continuous roll,
-cross-page selection, search, rotated glyph quadrilaterals, and cache eviction
-remain to be implemented.
+Search, rotated glyph quadrilaterals, and cache eviction remain to be
+implemented.
 
 * Library boundary
 
@@ -40,8 +40,8 @@ The implementation is divided into four pieces:
   reference counting, idle shutdown, and explicit lifecycle commands.
 - =yunge-reader-setup.el= owns the pinned engine manifest and verified,
   operation-private installation transaction.
-- =yunge-reader-pdf.el= maps the format-independent interface onto PDFium and
-  paints the current page.
+- =yunge-reader-pdf.el= maps the format-independent interface onto PDFium,
+  virtualizes a continuous page roll, and paints visible selections.
 
 The core never depends on PDFium, PDF page objects, or PNG.  A driver supplies
 a name, file matcher, open function, close function, and request function.
@@ -73,9 +73,11 @@ Rerendering or evicting an image therefore need not invalidate the text range.
 
 For PDF, =unit= is a zero-based page and =offset= is PDFium's zero-based
 character index.  A selected range includes both endpoint characters and is
-independent of drag direction.  The helper returns Unicode and loose character
-bounds in canonical PDF points.  Emacs performs hit testing locally, stores
-only the stable endpoints, and asks PDFium to resolve the exact range text.
+independent of drag direction, including when the drag crosses page slots.
+The helper returns Unicode and loose character bounds in canonical PDF points.
+Emacs performs hit testing locally, stores only the stable endpoints, and asks
+PDFium to resolve the exact range text.  Cross-page copy preserves each exact
+page fragment and inserts one newline at every page boundary.
 
 The same boundary can carry later annotations.  Durable annotation data can
 store document identity, stable endpoints, quoted text, color, and provenance
@@ -83,7 +85,7 @@ outside the renderer.  A PDF backend may additionally write native PDF
 annotations, but a PDFium object handle must never be the only durable anchor.
 No note-taking or annotation storage is part of the current milestone.
 
-* Zoom and rendering
+* Continuous roll, zoom, and rendering
 
 Every reader buffer has one of three zoom modes:
 
@@ -91,21 +93,28 @@ Every reader buffer has one of three zoom modes:
 - =fit-page= resolves scale from both viewport dimensions; and
 - =manual= uses an explicit scale between configured bounds.
 
-The PDF adapter requests canonical page geometry before rendering.  It maps
-the chosen zoom to a pixel width between 16 and 8192, records the effective
-scale, and requests a PNG from the helper.  A render key includes the file's
-canonical name, size, modification time, page, width, PDFium API, and native
-source build ID.  The helper derives the output path from that 64-character
-key; an Emacs client cannot ask it to overwrite an arbitrary path.
+Opening returns canonical geometry for every page before rasterization.  Emacs
+creates one stable buffer slot per page and gives each slot a correctly scaled
+space placeholder.  Normal buffer scrolling therefore traverses the complete
+document even though most pages have no live image object.
 
-Each refresh advances a buffer generation.  Geometry and image completions
-capture their buffer and generation, so a response from an earlier page or
-window size cannot replace the current view.
+The adapter rasterizes only pages visible in a live window and a configurable
+number of neighboring pages.  When a page leaves every window, its display
+returns to the equal-size placeholder while its immutable cache path remains
+available for reuse.  Navigation moves to an existing slot rather than
+rebuilding the buffer, so logical positions and window anchors remain stable.
+
+The chosen zoom maps each page to a pixel width between 16 and 8192.  A render
+key includes the file's canonical name, size, modification time, page, width,
+PDFium API, and native source build ID.  The helper derives the output path
+from that 64-character key; an Emacs client cannot ask it to overwrite an
+arbitrary path.  Page and width keyed results prevent an obsolete completion
+from replacing a different page or scale.
 
 Text geometry is cached by page because it does not change with zoom.  After
-a click or drag, Emacs embeds the cached PNG in an SVG and projects selected
-character bounds over it.  The source PNG cache remains independent of
-ephemeral selection paint.
+a click or drag, Emacs embeds each visible selected PNG in an SVG and projects
+that page's part of the logical range over it.  The source PNG cache remains
+independent of ephemeral selection paint.
 
 * Native service lifecycle
 
@@ -168,23 +177,27 @@ selection, and annotation conformance tests.
 
 The next implementation slices should add, in order:
 
-1. a continuous vertical page roll;
-2. cross-page selection and copying;
-3. rotated glyph quadrilaterals;
-4. search and jump over the existing text layer; and
-5. cache size limits and eviction.
+1. rotated glyph quadrilaterals;
+2. search and jump over the existing text layer;
+3. cache size limits and eviction; and
+4. durable location restoration and annotation anchors.
 
 * Testing
 
 ERT tests cover driver precedence, asynchronous cleanup, zoom, logical
 selection, native lifecycle, strict setup validation, PDF request mapping,
-lease balance, fit calculations, text caching, hit testing, copying, and stale
-renders.  Rust tests cover the handshake, strict parameters, inclusive
-selection ranges, protocol errors, shutdown ordering, and EOF.
+lease balance, fit calculations, stable roll slots, visible-page
+virtualization, prefetch bounds, text caching, cross-page hit testing, copying,
+and keyed render completions.  Rust tests cover the handshake, strict
+parameters, cross-page inclusive ranges, protocol errors, shutdown ordering,
+and EOF.
 
 The integration path installs the pinned Windows library through the public
 setup command, runs its =pdfium-info= smoke test, opens a five-page A4 fixture,
-checks page geometry, renders a 1000 by 1414 PNG, closes the handle, and shuts
-down.  It also extracts 1,938 indexed characters from that page, selects the
-range =3..14= in either direction, copies =Introduction=, and paints the
-selection as SVG.  The rendered page has been compared visually with Poppler.
+checks all page geometries, renders neighboring pages, closes the handle, and
+shuts down.  It also extracts 1,938 indexed characters from the first page,
+selects =3..14= in either direction, copies =Introduction=, and paints the
+selection as SVG.  A second integration selects across the first two pages,
+verifies the explicit page separator, paints both slots as SVG, then confirms
+that an offscreen page returns to a same-size placeholder.  Rendered pages
+have been compared visually with Poppler.

@@ -13,6 +13,16 @@
   :type 'natnum
   :group 'yunge-reader)
 
+(defcustom yunge-reader-pdf-page-gap 16
+  "Vertical pixel gap between pages in the continuous PDF roll."
+  :type 'natnum
+  :group 'yunge-reader)
+
+(defcustom yunge-reader-pdf-prefetch-pages 1
+  "Number of pages to prefetch on each side of the visible PDF roll."
+  :type 'natnum
+  :group 'yunge-reader)
+
 (defcustom yunge-reader-pdf-selection-color "#f6d32d"
   "Color painted behind selected PDF characters."
   :type 'color
@@ -32,11 +42,23 @@
 (defvar-local yunge-reader-pdf--generation 0
   "Generation used to reject late PDF rendering completions.")
 
-(defvar-local yunge-reader-pdf--page-info nil
-  "Native geometry for the page currently being rendered.")
+(defvar-local yunge-reader-pdf--page-infos nil
+  "Vector of canonical geometry for every PDF page.")
 
-(defvar-local yunge-reader-pdf--render-result nil
-  "Native image result for the currently displayed PDF page.")
+(defvar-local yunge-reader-pdf--page-positions nil
+  "Vector mapping zero-based PDF pages to buffer positions.")
+
+(defvar-local yunge-reader-pdf--render-results nil
+  "Cache mapping page and pixel width to native render results.")
+
+(defvar-local yunge-reader-pdf--render-pending nil
+  "Map page and width render keys to request generations in flight.")
+
+(defvar-local yunge-reader-pdf--displayed-pages nil
+  "Pages currently painted as images in any live view window.")
+
+(defvar-local yunge-reader-pdf--updating-visible nil
+  "Non-nil while PDF roll virtualization is updating display slots.")
 
 (defvar-local yunge-reader-pdf--text-cache nil
   "Page-indexed cache of canonical PDF text geometry.")
@@ -51,10 +73,10 @@
 (defvar-keymap yunge-reader-pdf-view-mode-map
   "n" #'yunge-reader-pdf-next-page
   "]" #'yunge-reader-pdf-next-page
-  "<next>" #'yunge-reader-pdf-next-page
+  "<next>" #'scroll-up-command
   "b" #'yunge-reader-pdf-previous-page
   "[" #'yunge-reader-pdf-previous-page
-  "<prior>" #'yunge-reader-pdf-previous-page
+  "<prior>" #'scroll-down-command
   "G" #'yunge-reader-pdf-goto-page)
 
 (define-minor-mode yunge-reader-pdf-view-mode
@@ -65,6 +87,11 @@
   (if yunge-reader-pdf-view-mode
       (progn
         (setq-local yunge-reader-pdf-page 0)
+        (setq-local line-spacing yunge-reader-pdf-page-gap)
+        (setq-local yunge-reader-pdf--render-results
+                    (make-hash-table :test #'equal))
+        (setq-local yunge-reader-pdf--render-pending
+                    (make-hash-table :test #'equal))
         (setq-local yunge-reader-pdf--text-cache
                     (make-hash-table :test #'eql))
         (setq-local yunge-reader-pdf--text-pending
@@ -72,12 +99,21 @@
         (add-hook 'yunge-reader-refresh-hook
                   #'yunge-reader-pdf--refresh nil t)
         (add-hook 'window-size-change-functions
-                  #'yunge-reader-pdf--window-size-change nil t))
+                  #'yunge-reader-pdf--window-size-change nil t)
+        (add-hook 'window-scroll-functions
+                  #'yunge-reader-pdf--window-scrolled nil t))
     (remove-hook 'yunge-reader-refresh-hook
                  #'yunge-reader-pdf--refresh t)
     (remove-hook 'window-size-change-functions
                  #'yunge-reader-pdf--window-size-change t)
-    (setq yunge-reader-pdf--render-result nil
+    (remove-hook 'window-scroll-functions
+                 #'yunge-reader-pdf--window-scrolled t)
+    (kill-local-variable 'line-spacing)
+    (setq yunge-reader-pdf--page-infos nil
+          yunge-reader-pdf--page-positions nil
+          yunge-reader-pdf--render-results nil
+          yunge-reader-pdf--render-pending nil
+          yunge-reader-pdf--displayed-pages nil
           yunge-reader-pdf--text-cache nil
           yunge-reader-pdf--text-pending nil)))
 
@@ -117,7 +153,8 @@
                  :layout 'fixed
                  :metadata
                  (list :page-count
-                       (alist-get 'page-count result)))
+                       (alist-get 'page-count result)
+                       :pages (alist-get 'pages result)))
                 nil)))))
       (error
        (when acquired
@@ -176,25 +213,27 @@
        (let* ((start (plist-get arguments :start))
               (end (plist-get arguments :end))
               (start-page (yunge-reader-position-unit start))
-              (end-page (yunge-reader-position-unit end)))
-         (if (not (and (integerp start-page)
-                       (integerp end-page)
-                       (= start-page end-page)
-                       (integerp (yunge-reader-position-offset start))
-                       (integerp (yunge-reader-position-offset end))))
+              (end-page (yunge-reader-position-unit end))
+              (start-offset (yunge-reader-position-offset start))
+              (end-offset (yunge-reader-position-offset end)))
+         (if (not (and (natnump start-page)
+                       (natnump end-page)
+                       (natnump start-offset)
+                       (natnump end-offset)))
              (funcall
               complete nil
               (yunge-reader-pdf--native-error
-               "PDF selection endpoints must be on one page"))
+               "PDF selection endpoints must be indexed positions"))
            (yunge-reader-native-request
             "selection-text"
             (list
              (cons 'document handle)
-             (cons 'page start-page)
              (cons 'start
-                   (yunge-reader-position-offset start))
+                   (list (cons 'page start-page)
+                         (cons 'offset start-offset)))
              (cons 'end
-                   (yunge-reader-position-offset end)))
+                   (list (cons 'page end-page)
+                         (cons 'offset end-offset))))
             (lambda (result native-error)
               (funcall complete
                        (and result (alist-get 'text result))
@@ -231,13 +270,34 @@ This command does not take ownership of ordinary `.pdf' file visits."
          :page-count))
    0))
 
+(defun yunge-reader-pdf--page-info (page)
+  "Return canonical geometry for zero-based PDF PAGE."
+  (and (vectorp yunge-reader-pdf--page-infos)
+       (natnump page)
+       (< page (length yunge-reader-pdf--page-infos))
+       (aref yunge-reader-pdf--page-infos page)))
+
+(defun yunge-reader-pdf--load-page-infos ()
+  "Load and validate page geometry from the current document metadata."
+  (let* ((metadata
+          (yunge-reader-document-metadata yunge-reader-document))
+         (count (plist-get metadata :page-count))
+         (pages (plist-get metadata :pages)))
+    (unless (and (natnump count)
+                 (listp pages)
+                 (= (length pages) count))
+      (error "PDF page geometry metadata is incomplete"))
+    (setq yunge-reader-pdf--page-infos (vconcat pages))))
+
 (defun yunge-reader-pdf--viewport-window ()
   "Return a live window suitable for measuring the current PDF view."
   (or (get-buffer-window (current-buffer) t)
       (selected-window)))
 
-(defun yunge-reader-pdf--target-width (page-info &optional window)
-  "Return target pixel width for PAGE-INFO in WINDOW."
+(defun yunge-reader-pdf--target-width
+    (page-info &optional window suppress-scale)
+  "Return target pixel width for PAGE-INFO in WINDOW.
+When SUPPRESS-SCALE is non-nil, do not update the shared effective scale."
   (let* ((window (or window (yunge-reader-pdf--viewport-window)))
          (page-width (alist-get 'width page-info))
          (page-height (alist-get 'height page-info))
@@ -260,10 +320,20 @@ This command does not take ownership of ordinary `.pdf' file visits."
                  yunge-reader-pdf--points-to-pixels
                  yunge-reader-scale))))))
     (setq width (max 16 (min 8192 width)))
-    (yunge-reader-set-effective-scale
-     (/ width
-        (* page-width yunge-reader-pdf--points-to-pixels)))
+    (unless suppress-scale
+      (yunge-reader-set-effective-scale
+       (/ width
+          (* page-width yunge-reader-pdf--points-to-pixels))))
     width))
+
+(defun yunge-reader-pdf--pixel-size (page-info width)
+  "Return the rendered pixel size for PAGE-INFO at WIDTH."
+  (let ((page-width (alist-get 'width page-info))
+        (page-height (alist-get 'height page-info)))
+    (unless (and (numberp page-width) (> page-width 0)
+                 (numberp page-height) (> page-height 0))
+      (error "PDF page geometry must be positive"))
+    (cons width (max 1 (round (* width (/ page-height page-width)))))))
 
 (defun yunge-reader-pdf--cache-key (page width)
   "Return an immutable render cache key for PAGE at WIDTH."
@@ -280,29 +350,56 @@ This command does not take ownership of ordinary `.pdf' file visits."
        yunge-reader-native-pdfium-api
        (yunge-reader-native--build-id))))))
 
-(defun yunge-reader-pdf--selection-offsets ()
-  "Return ordered selected offsets on the current page, or nil."
+(defun yunge-reader-pdf--position-before-p (left right)
+  "Return non-nil when document position LEFT precedes RIGHT."
+  (let ((left-unit (yunge-reader-position-unit left))
+        (right-unit (yunge-reader-position-unit right))
+        (left-offset (yunge-reader-position-offset left))
+        (right-offset (yunge-reader-position-offset right)))
+    (or (< left-unit right-unit)
+        (and (= left-unit right-unit)
+             (<= left-offset right-offset)))))
+
+(defun yunge-reader-pdf--ordered-selection ()
+  "Return the current selection endpoints in document order."
   (when yunge-reader-selection
-    (let* ((start
-            (yunge-reader-selection-start yunge-reader-selection))
-           (end (yunge-reader-selection-end yunge-reader-selection))
+    (let ((start
+           (yunge-reader-selection-start yunge-reader-selection))
+          (end (yunge-reader-selection-end yunge-reader-selection)))
+      (if (yunge-reader-pdf--position-before-p start end)
+          (cons start end)
+        (cons end start)))))
+
+(defun yunge-reader-pdf--selection-offsets (page text-layer)
+  "Return selected inclusive offsets for PAGE and TEXT-LAYER."
+  (when-let* ((selection (yunge-reader-pdf--ordered-selection)))
+    (let* ((start (car selection))
+           (end (cdr selection))
            (start-page (yunge-reader-position-unit start))
            (end-page (yunge-reader-position-unit end))
-           (start-offset (yunge-reader-position-offset start))
-           (end-offset (yunge-reader-position-offset end)))
-      (when (and (eql start-page yunge-reader-pdf-page)
-                 (eql end-page yunge-reader-pdf-page)
-                 (integerp start-offset)
-                 (integerp end-offset))
-        (cons (min start-offset end-offset)
-              (max start-offset end-offset))))))
+           (characters (alist-get 'characters text-layer)))
+      (when (and (<= start-page page)
+                 (<= page end-page)
+                 characters)
+        (cons
+         (if (= page start-page)
+             (yunge-reader-position-offset start)
+           0)
+         (if (= page end-page)
+             (yunge-reader-position-offset end)
+           (apply #'max
+                  (mapcar
+                   (lambda (character)
+                     (alist-get 'index character))
+                   characters))))))))
 
 (defun yunge-reader-pdf--paint-selection
-    (svg text-layer pixel-width pixel-height)
-  "Paint the current selection onto SVG using TEXT-LAYER geometry."
-  (when-let* ((range (yunge-reader-pdf--selection-offsets)))
-    (let ((page-width (alist-get 'width yunge-reader-pdf--page-info))
-          (page-height (alist-get 'height yunge-reader-pdf--page-info)))
+    (svg page page-info text-layer pixel-width pixel-height)
+  "Paint PAGE selection onto SVG using PAGE-INFO and TEXT-LAYER."
+  (when-let* ((range
+               (yunge-reader-pdf--selection-offsets page text-layer)))
+    (let ((page-width (alist-get 'width page-info))
+          (page-height (alist-get 'height page-info)))
       (dolist (character (alist-get 'characters text-layer))
         (let ((index (alist-get 'index character))
               (bounds (alist-get 'bounds character)))
@@ -316,76 +413,216 @@ This command does not take ownership of ordinary `.pdf' file visits."
                    (x (* pixel-width (/ left page-width)))
                    (y (* pixel-height
                          (/ (- page-height top) page-height)))
-                   (width (max 1 (* pixel-width
-                                    (/ (- right left) page-width))))
-                   (height (max 1 (* pixel-height
-                                     (/ (- top bottom) page-height)))))
+                   (width
+                    (max 1 (* pixel-width
+                              (/ (- right left) page-width))))
+                   (height
+                    (max 1 (* pixel-height
+                              (/ (- top bottom) page-height)))))
               (svg-rectangle
                svg x y width height
                :fill-color yunge-reader-pdf-selection-color
                :fill-opacity
                yunge-reader-pdf-selection-opacity))))))))
 
-(defun yunge-reader-pdf--display-image-object ()
-  "Return an Emacs image object for the current PDF view."
-  (let* ((result yunge-reader-pdf--render-result)
+(defun yunge-reader-pdf--render-key (page width)
+  "Return the in-memory render key for PAGE and WIDTH."
+  (cons page width))
+
+(defun yunge-reader-pdf--display-image-object (page width)
+  "Return an Emacs image object for PAGE rendered at WIDTH."
+  (let* ((result
+          (gethash (yunge-reader-pdf--render-key page width)
+                   yunge-reader-pdf--render-results))
          (path (alist-get 'path result))
          (pixel-width (alist-get 'pixel-width result))
          (pixel-height (alist-get 'pixel-height result))
+         (page-info (yunge-reader-pdf--page-info page))
          (text-layer
           (and yunge-reader-pdf--text-cache
-               (gethash yunge-reader-pdf-page
-                        yunge-reader-pdf--text-cache))))
-    (if (and text-layer (yunge-reader-pdf--selection-offsets))
+               (gethash page yunge-reader-pdf--text-cache))))
+    (if (and text-layer
+             (yunge-reader-pdf--selection-offsets page text-layer))
         (let ((svg (svg-create pixel-width pixel-height)))
           (svg-embed svg path "image/png" nil
                      :x 0 :y 0
                      :width pixel-width
                      :height pixel-height)
           (yunge-reader-pdf--paint-selection
-           svg text-layer pixel-width pixel-height)
+           svg page page-info text-layer pixel-width pixel-height)
           (svg-image svg))
       (create-image path nil nil))))
 
-(defun yunge-reader-pdf--paint-image ()
-  "Paint the current PDF image and logical selection."
-  (when yunge-reader-pdf--render-result
-    (condition-case image-error
-        (let ((image (yunge-reader-pdf--display-image-object)))
-          (unless image
-            (error "Emacs cannot display the rendered PDF page"))
-          (let ((inhibit-read-only t))
-            (erase-buffer)
-            (insert
-             (propertize
-              " "
-              'display image
-              'keymap yunge-reader-pdf--image-map
-              'pointer 'hand
-              'help-echo
-              "Mouse-1 selects a character; drag selects text"))
-            (goto-char (point-min)))
-          (setq header-line-format
-                (format " Page %d/%d  %.0f%% "
-                        (1+ yunge-reader-pdf-page)
-                        (yunge-reader-pdf--page-count)
-                        (* 100 yunge-reader-effective-scale))))
-      (error
-       (yunge-reader--display-status
-        "Could not display page %d:\n\n%s"
-        (1+ yunge-reader-pdf-page)
-        (error-message-string image-error))))))
+(defun yunge-reader-pdf--page-width (page &optional window)
+  "Return the target render width for PAGE in WINDOW."
+  (yunge-reader-pdf--target-width
+   (yunge-reader-pdf--page-info page)
+   window
+   (/= page yunge-reader-pdf-page)))
 
-(defun yunge-reader-pdf--display-image
-    (generation page result error-data)
-  "Display page RESULT for GENERATION and PAGE, or show ERROR-DATA."
-  (when (= generation yunge-reader-pdf--generation)
-    (if error-data
-        (yunge-reader--display-status
-         "Could not render page %d:\n\n%s"
-         (1+ page) (error-message-string error-data))
-      (setq yunge-reader-pdf--render-result result)
-      (yunge-reader-pdf--paint-image))))
+(defun yunge-reader-pdf--placeholder (page width)
+  "Return a stable placeholder display for PAGE at WIDTH."
+  (pcase-let ((`(,_ . ,height)
+               (yunge-reader-pdf--pixel-size
+                (yunge-reader-pdf--page-info page) width)))
+    `(space . (:width (,width) :height (,height)))))
+
+(defun yunge-reader-pdf--page-position (page)
+  "Return the buffer position holding zero-based PDF PAGE."
+  (and (vectorp yunge-reader-pdf--page-positions)
+       (natnump page)
+       (< page (length yunge-reader-pdf--page-positions))
+       (aref yunge-reader-pdf--page-positions page)))
+
+(defun yunge-reader-pdf--paint-page (page)
+  "Paint PAGE as an image when visible, otherwise as a placeholder."
+  (when-let* ((position (yunge-reader-pdf--page-position page)))
+    (let* ((width (yunge-reader-pdf--page-width page))
+           (result
+            (gethash (yunge-reader-pdf--render-key page width)
+                     yunge-reader-pdf--render-results))
+           (display
+            (if (and result
+                     (memq page yunge-reader-pdf--displayed-pages))
+                (condition-case image-error
+                    (or (yunge-reader-pdf--display-image-object page width)
+                        (error "Emacs rejected the rendered PDF image"))
+                  (error
+                   (display-warning
+                    'yunge-reader
+                    (format "Could not display PDF page %d: %s"
+                            (1+ page)
+                            (error-message-string image-error))
+                    :warning)
+                   (yunge-reader-pdf--placeholder page width)))
+              (yunge-reader-pdf--placeholder page width)))
+           (inhibit-read-only t))
+      (put-text-property position (1+ position) 'display display))))
+
+(defun yunge-reader-pdf--paint-pages (pages)
+  "Paint exactly PAGES as live images and virtualize all former pages."
+  (let ((former yunge-reader-pdf--displayed-pages))
+    (setq yunge-reader-pdf--displayed-pages pages)
+    (dolist (page (cl-remove-duplicates (append former pages)))
+      (yunge-reader-pdf--paint-page page))))
+
+(defun yunge-reader-pdf--build-roll ()
+  "Build one stable buffer slot for every PDF page."
+  (let* ((count (yunge-reader-pdf--page-count))
+         (positions (make-vector count nil))
+         (inhibit-read-only t))
+    (erase-buffer)
+    (dotimes (page count)
+      (aset positions page (point))
+      (insert
+       (propertize
+        " "
+        'yunge-reader-pdf-page page
+        'keymap yunge-reader-pdf--image-map
+        'pointer 'hand
+        'help-echo
+        "Mouse-1 selects a character; drag selects across pages"))
+      (unless (= page (1- count))
+        (insert (propertize "\n" 'yunge-reader-pdf-page page))))
+    (setq yunge-reader-pdf--page-positions positions)
+    (set-buffer-modified-p nil)))
+
+(defun yunge-reader-pdf--page-at-position (position)
+  "Return the PDF page associated with buffer POSITION."
+  (when (integer-or-marker-p position)
+    (get-text-property position 'yunge-reader-pdf-page)))
+
+(defun yunge-reader-pdf--window-pages (window)
+  "Return PDF pages intersecting live WINDOW."
+  (when (and (window-live-p window)
+             (eq (window-buffer window) (current-buffer)))
+    (let ((position (window-start window))
+          (end (or (window-end window t) (point-max)))
+          pages)
+      (let ((limit (min (point-max) (1+ end))))
+        (while (< position limit)
+          (when-let* ((page
+                       (yunge-reader-pdf--page-at-position position)))
+            (cl-pushnew page pages))
+          (setq position
+                (or (next-single-property-change
+                     position 'yunge-reader-pdf-page nil limit)
+                    limit))))
+      (nreverse pages))))
+
+(defun yunge-reader-pdf--visible-pages ()
+  "Return sorted PDF pages visible in any window for this buffer."
+  (let (pages)
+    (dolist (window (get-buffer-window-list (current-buffer) nil t))
+      (dolist (page (yunge-reader-pdf--window-pages window))
+        (cl-pushnew page pages)))
+    (sort (or pages (list yunge-reader-pdf-page)) #'<)))
+
+(defun yunge-reader-pdf--prefetch-range (pages)
+  "Expand visible PAGES by `yunge-reader-pdf-prefetch-pages'."
+  (let ((count (yunge-reader-pdf--page-count))
+        expanded)
+    (dolist (page pages)
+      (cl-loop
+       for candidate from (- page yunge-reader-pdf-prefetch-pages)
+       to (+ page yunge-reader-pdf-prefetch-pages)
+       when (and (>= candidate 0) (< candidate count))
+       do (cl-pushnew candidate expanded)))
+    (sort expanded #'<)))
+
+(defun yunge-reader-pdf--update-header ()
+  "Update the continuous PDF roll header."
+  (setq header-line-format
+        (format " Page %d/%d  %.0f%%  Continuous "
+                (1+ yunge-reader-pdf-page)
+                (yunge-reader-pdf--page-count)
+                (* 100 yunge-reader-effective-scale))))
+
+(defun yunge-reader-pdf--render-complete
+    (buffer generation page width result error-data)
+  "Store one rendered PAGE result in BUFFER for GENERATION and WIDTH."
+  (when (buffer-live-p buffer)
+    (with-current-buffer buffer
+      (let ((render-key (yunge-reader-pdf--render-key page width)))
+        (when (and (hash-table-p yunge-reader-pdf--render-pending)
+                   (eql (gethash render-key
+                                 yunge-reader-pdf--render-pending)
+                        generation))
+          (remhash render-key yunge-reader-pdf--render-pending)))
+      (if error-data
+          (when (and yunge-reader-pdf-view-mode
+                     (yunge-reader-pdf--page-info page)
+                     (= width (yunge-reader-pdf--page-width page)))
+            (display-warning
+             'yunge-reader
+             (format "Could not render PDF page %d: %s"
+                     (1+ page) (error-message-string error-data))
+             :warning))
+        (when (hash-table-p yunge-reader-pdf--render-results)
+          (puthash (yunge-reader-pdf--render-key page width)
+                   result yunge-reader-pdf--render-results))
+        (when (and yunge-reader-pdf-view-mode
+                   (yunge-reader-pdf--page-info page)
+                   (memq page yunge-reader-pdf--displayed-pages)
+                   (= width (yunge-reader-pdf--page-width page)))
+          (yunge-reader-pdf--paint-page page))))))
+
+(defun yunge-reader-pdf--request-render (generation page)
+  "Request a render of PAGE for GENERATION unless it is cached."
+  (let* ((width (yunge-reader-pdf--page-width page))
+         (render-key (yunge-reader-pdf--render-key page width)))
+    (unless (or (gethash render-key yunge-reader-pdf--render-results)
+                (gethash render-key yunge-reader-pdf--render-pending))
+      (let ((buffer (current-buffer)))
+        (puthash render-key generation yunge-reader-pdf--render-pending)
+        (yunge-reader-request
+         'render-page
+         (list :page page
+               :width width
+               :cache-key (yunge-reader-pdf--cache-key page width))
+         (lambda (result error-data)
+           (yunge-reader-pdf--render-complete
+            buffer generation page width result error-data)))))))
 
 (defun yunge-reader-pdf--text-complete
     (buffer page result error-data)
@@ -402,9 +639,9 @@ This command does not take ownership of ordinary `.pdf' file visits."
            :warning)
         (when (hash-table-p yunge-reader-pdf--text-cache)
           (puthash page result yunge-reader-pdf--text-cache))
-        (when (and (= page yunge-reader-pdf-page)
+        (when (and (memq page yunge-reader-pdf--displayed-pages)
                    yunge-reader-selection)
-          (yunge-reader-pdf--paint-image))))))
+          (yunge-reader-pdf--paint-page page))))))
 
 (defun yunge-reader-pdf--request-text (page)
   "Request and cache canonical text geometry for PAGE."
@@ -418,50 +655,62 @@ This command does not take ownership of ordinary `.pdf' file visits."
          (yunge-reader-pdf--text-complete
           buffer page result error-data))))))
 
-(defun yunge-reader-pdf--render-with-info
-    (generation page page-info error-data)
-  "Render PAGE for GENERATION using PAGE-INFO, or show ERROR-DATA."
-  (when (= generation yunge-reader-pdf--generation)
-    (if error-data
-        (yunge-reader--display-status
-         "Could not inspect page %d:\n\n%s"
-         (1+ page) (error-message-string error-data))
-      (setq yunge-reader-pdf--page-info page-info)
-      (let ((width (yunge-reader-pdf--target-width page-info))
-            (buffer (current-buffer)))
-        (yunge-reader-request
-         'render-page
-         (list :page page
-               :width width
-               :cache-key
-               (yunge-reader-pdf--cache-key page width))
-         (lambda (result render-error)
-           (when (buffer-live-p buffer)
-             (with-current-buffer buffer
-               (yunge-reader-pdf--display-image
-                generation page result render-error))))))
+(defun yunge-reader-pdf--queue-pages (pages)
+  "Queue render and text work for PAGES in image-first order."
+  (let ((generation yunge-reader-pdf--generation))
+    (dolist (page pages)
+      (yunge-reader-pdf--request-render generation page))
+    (dolist (page pages)
       (yunge-reader-pdf--request-text page))))
 
+(defun yunge-reader-pdf--sync-current-page (&optional window)
+  "Update the current page from WINDOW's topmost roll slot."
+  (let* ((window
+          (or window (get-buffer-window (current-buffer) t)))
+         (page
+          (and window
+               (yunge-reader-pdf--page-at-position
+                (window-start window)))))
+    (when (natnump page)
+      (setq yunge-reader-pdf-page page))))
+
+(defun yunge-reader-pdf--update-visible-pages (&optional window)
+  "Virtualize the PDF roll and queue pages visible around WINDOW."
+  (when (and yunge-reader-pdf-view-mode
+             yunge-reader-document
+             yunge-reader-pdf--page-positions
+             (not yunge-reader-pdf--updating-visible))
+    (let ((yunge-reader-pdf--updating-visible t))
+      (yunge-reader-pdf--sync-current-page window)
+      (yunge-reader-pdf--target-width
+       (yunge-reader-pdf--page-info yunge-reader-pdf-page))
+      (let ((visible (yunge-reader-pdf--visible-pages)))
+        (yunge-reader-pdf--paint-pages visible)
+        (yunge-reader-pdf--queue-pages
+         (yunge-reader-pdf--prefetch-range visible)))
+      (yunge-reader-pdf--update-header))))
+
 (defun yunge-reader-pdf--refresh ()
-  "Request geometry and a rendered image for the current PDF page."
+  "Refresh the continuous PDF roll at the current zoom."
   (when (and yunge-reader-pdf-view-mode yunge-reader-document)
     (cl-incf yunge-reader-pdf--generation)
-    (let ((buffer (current-buffer))
-          (generation yunge-reader-pdf--generation)
-          (page yunge-reader-pdf-page))
-      (yunge-reader-request
-       'page-info (list :page page)
-       (lambda (page-info error-data)
-         (when (buffer-live-p buffer)
-           (with-current-buffer buffer
-             (yunge-reader-pdf--render-with-info
-              generation page page-info error-data))))))))
+    (unless yunge-reader-pdf--page-infos
+      (yunge-reader-pdf--load-page-infos))
+    (if (zerop (yunge-reader-pdf--page-count))
+        (yunge-reader--display-status "This PDF contains no pages")
+      (unless yunge-reader-pdf--page-positions
+        (yunge-reader-pdf--build-roll))
+      (setq yunge-reader-pdf--displayed-pages nil)
+      (dotimes (page (yunge-reader-pdf--page-count))
+        (yunge-reader-pdf--paint-page page))
+      (yunge-reader-pdf--update-visible-pages))))
 
 (defun yunge-reader-pdf--pixel-to-page-point
-    (x y display-width display-height)
-  "Convert display pixel X and Y to canonical PDF page coordinates."
-  (let ((page-width (alist-get 'width yunge-reader-pdf--page-info))
-        (page-height (alist-get 'height yunge-reader-pdf--page-info)))
+    (page x y display-width display-height)
+  "Convert PAGE display pixel X and Y to canonical PDF coordinates."
+  (let* ((page-info (yunge-reader-pdf--page-info page))
+         (page-width (alist-get 'width page-info))
+         (page-height (alist-get 'height page-info)))
     (unless (and (numberp page-width) (> page-width 0)
                  (numberp page-height) (> page-height 0)
                  (numberp display-width) (> display-width 0)
@@ -487,12 +736,13 @@ This command does not take ownership of ordinary `.pdf' file visits."
                    (t 0.0))))
     (+ (* dx dx) (* dy dy))))
 
-(defun yunge-reader-pdf--hit-character (point text-layer)
-  "Return the TEXT-LAYER character nearest canonical POINT."
+(defun yunge-reader-pdf--hit-character (page point text-layer)
+  "Return PAGE's TEXT-LAYER character nearest canonical POINT."
   (let* ((x (car point))
          (y (cdr point))
-         (page-width (alist-get 'width yunge-reader-pdf--page-info))
-         (page-height (alist-get 'height yunge-reader-pdf--page-info))
+         (page-info (yunge-reader-pdf--page-info page))
+         (page-width (alist-get 'width page-info))
+         (page-height (alist-get 'height page-info))
          (tolerance
           (max 12.0 (* 0.03 (min page-width page-height))))
          best
@@ -511,67 +761,81 @@ This command does not take ownership of ordinary `.pdf' file visits."
                (<= best-distance (* tolerance tolerance)))
       best)))
 
+(defun yunge-reader-pdf--event-page-point (position)
+  "Return PAGE and canonical point represented by mouse POSITION."
+  (let* ((buffer-position (posn-point position))
+         (page (yunge-reader-pdf--page-at-position buffer-position))
+         (object-point (posn-object-x-y position))
+         (object-size (posn-object-width-height position)))
+    (unless (and (natnump page) object-point object-size)
+      (user-error "Place both PDF selection endpoints on page images"))
+    (list
+     :page page
+     :point
+     (yunge-reader-pdf--pixel-to-page-point
+      page
+      (car object-point) (cdr object-point)
+      (car object-size) (cdr object-size)))))
+
 (defun yunge-reader-pdf--event-page-points (event single)
   "Return start and end page points for mouse EVENT.
 When SINGLE is non-nil, use the event start for both points."
   (let* ((start (event-start event))
          (end (if single start (or (event-end event) start)))
-         (window (posn-window start))
-         (object-point (posn-object-x-y start))
-         (object-size (posn-object-width-height start))
-         (start-window-point (posn-x-y start))
-         (end-window-point (posn-x-y end)))
+         (window (posn-window start)))
     (unless (and (windowp window)
-                 (eq window (posn-window end))
-                 object-point object-size
-                 start-window-point end-window-point)
-      (user-error "Keep the PDF selection inside one page image"))
-    (let ((origin-x (- (car start-window-point)
-                       (car object-point)))
-          (origin-y (- (cdr start-window-point)
-                       (cdr object-point))))
-      (list
-       (yunge-reader-pdf--pixel-to-page-point
-        (car object-point) (cdr object-point)
-        (car object-size) (cdr object-size))
-       (yunge-reader-pdf--pixel-to-page-point
-        (- (car end-window-point) origin-x)
-        (- (cdr end-window-point) origin-y)
-        (car object-size) (cdr object-size))))))
+                 (eq window (posn-window end)))
+      (user-error "Keep the PDF selection in one reader window"))
+    (list
+     (yunge-reader-pdf--event-page-point start)
+     (yunge-reader-pdf--event-page-point end))))
 
-(defun yunge-reader-pdf--select-points (start-point end-point)
-  "Select PDF characters nearest START-POINT and END-POINT."
-  (let ((text-layer
-         (and yunge-reader-pdf--text-cache
-              (gethash yunge-reader-pdf-page
-                       yunge-reader-pdf--text-cache))))
-    (unless text-layer
+(defun yunge-reader-pdf--select-points (start-location end-location)
+  "Select PDF characters at START-LOCATION and END-LOCATION."
+  (let* ((start-page (plist-get start-location :page))
+         (end-page (plist-get end-location :page))
+         (start-point (plist-get start-location :point))
+         (end-point (plist-get end-location :point))
+         (start-layer
+          (and yunge-reader-pdf--text-cache
+               (gethash start-page yunge-reader-pdf--text-cache)))
+         (end-layer
+          (and yunge-reader-pdf--text-cache
+               (gethash end-page yunge-reader-pdf--text-cache))))
+    (unless (and start-layer end-layer)
       (user-error "PDF text geometry is still loading"))
     (let ((start-character
-           (yunge-reader-pdf--hit-character start-point text-layer))
+           (yunge-reader-pdf--hit-character
+            start-page start-point start-layer))
           (end-character
-           (yunge-reader-pdf--hit-character end-point text-layer)))
+           (yunge-reader-pdf--hit-character
+            end-page end-point end-layer)))
       (unless (and start-character end-character)
         (setq yunge-reader-selection nil)
-        (yunge-reader-pdf--paint-image)
+        (yunge-reader-pdf--paint-pages
+         yunge-reader-pdf--displayed-pages)
         (user-error "No selectable PDF text near the pointer"))
       (let ((start-index (alist-get 'index start-character))
             (end-index (alist-get 'index end-character)))
         (yunge-reader-set-selection
          (make-yunge-reader-position
-          :unit yunge-reader-pdf-page
+          :unit start-page
           :offset start-index
           :x (car start-point)
           :y (cdr start-point))
          (make-yunge-reader-position
-          :unit yunge-reader-pdf-page
+          :unit end-page
           :offset end-index
           :x (car end-point)
           :y (cdr end-point)))
-        (yunge-reader-pdf--paint-image)
-        (message "Selected %d PDF character%s"
-                 (1+ (abs (- start-index end-index)))
-                 (if (= start-index end-index) "" "s"))))))
+        (yunge-reader-pdf--paint-pages
+         yunge-reader-pdf--displayed-pages)
+        (if (= start-page end-page)
+            (message "Selected %d PDF character%s"
+                     (1+ (abs (- start-index end-index)))
+                     (if (= start-index end-index) "" "s"))
+          (message "Selected PDF text across %d pages"
+                   (1+ (abs (- start-page end-page)))))))))
 
 (defun yunge-reader-pdf--select-mouse-event (event single)
   "Handle PDF mouse selection EVENT, using one point when SINGLE."
@@ -602,6 +866,12 @@ When SINGLE is non-nil, use the event start for both points."
              (memq yunge-reader-zoom-mode '(fit-width fit-page)))
     (yunge-reader-refresh)))
 
+(defun yunge-reader-pdf--window-scrolled (window _start)
+  "Update PDF virtualization after WINDOW scrolls."
+  (when (and (window-live-p window)
+             (eq (window-buffer window) (current-buffer)))
+    (yunge-reader-pdf--update-visible-pages window)))
+
 (defun yunge-reader-pdf--set-page (page)
   "Display zero-based PDF PAGE."
   (let ((count (yunge-reader-pdf--page-count)))
@@ -609,8 +879,15 @@ When SINGLE is non-nil, use the event start for both points."
       (user-error "This PDF has no pages"))
     (setq yunge-reader-pdf-page
           (max 0 (min (1- count) page)))
-    (setq yunge-reader-selection nil)
-    (yunge-reader-refresh)
+    (let ((position
+           (yunge-reader-pdf--page-position yunge-reader-pdf-page))
+          (window (get-buffer-window (current-buffer) t)))
+      (when position
+        (goto-char position)
+        (when (window-live-p window)
+          (set-window-start window position t)
+          (set-window-vscroll window 0 t))))
+    (yunge-reader-pdf--update-visible-pages)
     yunge-reader-pdf-page))
 
 (defun yunge-reader-pdf-next-page (&optional count)

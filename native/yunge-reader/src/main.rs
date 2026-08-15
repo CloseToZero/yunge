@@ -110,13 +110,21 @@ struct RenderParams {
     cache_key: String,
 }
 
+#[derive(
+    Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize,
+)]
+#[serde(deny_unknown_fields)]
+struct SelectionPosition {
+    page: u32,
+    offset: u32,
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct SelectionParams {
     document: u64,
-    page: u32,
-    start: u32,
-    end: u32,
+    start: SelectionPosition,
+    end: SelectionPosition,
 }
 
 fn ready_message() -> Ready<'static> {
@@ -276,6 +284,25 @@ impl Service {
                 )
             })?;
         let page_count = document.pages().len();
+        let mut pages = Vec::with_capacity(page_count as usize);
+        for index in 0..page_count {
+            let page = document.pages().get(index).map_err(|error| {
+                ServiceError::new(
+                    "pdf-open-failed",
+                    format!("could not inspect page {index}: {error}"),
+                )
+            })?;
+            let label = page
+                .label()
+                .map(str::to_owned)
+                .unwrap_or_else(|| (index + 1).to_string());
+            pages.push(json!({
+                "page": index,
+                "width": page.width().value,
+                "height": page.height().value,
+                "label": label,
+            }));
+        }
         let handle = self.next_document;
         self.next_document =
             self.next_document.checked_add(1).ok_or_else(|| {
@@ -289,6 +316,7 @@ impl Service {
             "document": handle,
             "layout": "fixed",
             "page-count": page_count,
+            "pages": pages,
         }))
     }
 
@@ -377,37 +405,47 @@ impl Service {
     fn selection_text(&self, params: Value) -> Result<Value, ServiceError> {
         let params: SelectionParams = Self::parse(params)?;
         let document = self.document(params.document)?;
-        let index = Self::page_index(document, params.page)?;
-        let page = document.pages().get(index).map_err(|error| {
-            ServiceError::new(
-                "invalid-page",
-                format!("could not load page {}: {error}", params.page),
-            )
-        })?;
-        let page_text = page.text().map_err(|error| {
-            ServiceError::new(
-                "text-unavailable",
-                format!("could not load page text: {error}"),
-            )
-        })?;
-        let chars = page_text.chars();
-        let range = selection_range(chars.len(), params.start, params.end)?;
+        let (start, end) = ordered_positions(params.start, params.end);
         let mut text = String::new();
-        for char_index in range.clone() {
-            let character = chars.get(char_index).map_err(|error| {
+        for page_number in start.page..=end.page {
+            let index = Self::page_index(document, page_number)?;
+            let page = document.pages().get(index).map_err(|error| {
                 ServiceError::new(
-                    "invalid-selection",
-                    format!("could not read selected character: {error}"),
+                    "invalid-page",
+                    format!("could not load page {page_number}: {error}"),
                 )
             })?;
-            if let Some(value) = character.unicode_string() {
-                text.push_str(&value);
+            let page_text = page.text().map_err(|error| {
+                ServiceError::new(
+                    "text-unavailable",
+                    format!("could not load page {page_number} text: {error}"),
+                )
+            })?;
+            let chars = page_text.chars();
+            if page_number > start.page {
+                text.push('\n');
+            }
+            if let Some(range) =
+                page_selection_range(chars.len(), page_number, start, end)?
+            {
+                for char_index in range {
+                    let character = chars.get(char_index).map_err(|error| {
+                        ServiceError::new(
+                            "invalid-selection",
+                            format!(
+                                "could not read selected character: {error}"
+                            ),
+                        )
+                    })?;
+                    if let Some(value) = character.unicode_string() {
+                        text.push_str(&value);
+                    }
+                }
             }
         }
         Ok(json!({
-            "page": params.page,
-            "start": range.start(),
-            "end": range.end(),
+            "start": start,
+            "end": end,
             "text": text,
         }))
     }
@@ -539,28 +577,58 @@ impl Service {
     }
 }
 
-fn selection_range(
+fn ordered_positions(
+    start: SelectionPosition,
+    end: SelectionPosition,
+) -> (SelectionPosition, SelectionPosition) {
+    if start <= end {
+        (start, end)
+    } else {
+        (end, start)
+    }
+}
+
+fn page_selection_range(
     length: usize,
-    start: u32,
-    end: u32,
-) -> Result<std::ops::RangeInclusive<usize>, ServiceError> {
-    let start = start as usize;
-    let end = end as usize;
-    let first = start.min(end);
-    let last = start.max(end);
+    page: u32,
+    start: SelectionPosition,
+    end: SelectionPosition,
+) -> Result<Option<std::ops::RangeInclusive<usize>>, ServiceError> {
+    if page < start.page || page > end.page {
+        return Ok(None);
+    }
+    if length == 0 {
+        if page == start.page || page == end.page {
+            return Err(ServiceError::new(
+                "invalid-selection",
+                format!("selection endpoint page {page} has no characters"),
+            ));
+        }
+        return Ok(None);
+    }
+    let first = if page == start.page {
+        start.offset as usize
+    } else {
+        0
+    };
+    let last = if page == end.page {
+        end.offset as usize
+    } else {
+        length - 1
+    };
     if first >= length || last >= length {
         return Err(ServiceError::new(
             "invalid-selection",
             format!(
                 concat!(
                     "character range {} through {} exceeds ",
-                    "{} characters"
+                    "{} characters on page {}"
                 ),
-                first, last, length
+                first, last, length, page
             ),
         ));
     }
-    Ok(first..=last)
+    Ok(Some(first..=last))
 }
 
 fn response(
@@ -706,12 +774,55 @@ mod tests {
 
     #[test]
     fn selection_ranges_are_inclusive_and_direction_independent() {
-        assert_eq!(selection_range(5, 1, 3).unwrap(), 1..=3);
-        assert_eq!(selection_range(5, 3, 1).unwrap(), 1..=3);
+        let forward_start = SelectionPosition { page: 0, offset: 1 };
+        let forward_end = SelectionPosition { page: 0, offset: 3 };
+        let (start, end) = ordered_positions(forward_start, forward_end);
         assert_eq!(
-            selection_range(5, 0, 5).unwrap_err().code,
+            page_selection_range(5, 0, start, end).unwrap(),
+            Some(1..=3)
+        );
+        let (start, end) = ordered_positions(forward_end, forward_start);
+        assert_eq!(
+            page_selection_range(5, 0, start, end).unwrap(),
+            Some(1..=3)
+        );
+        let outside = SelectionPosition { page: 0, offset: 5 };
+        assert_eq!(
+            page_selection_range(5, 0, forward_start, outside)
+                .unwrap_err()
+                .code,
             "invalid-selection"
         );
+    }
+
+    #[test]
+    fn page_selection_ranges_cover_cross_page_interiors() {
+        let start = SelectionPosition { page: 2, offset: 3 };
+        let end = SelectionPosition { page: 4, offset: 5 };
+        assert_eq!(
+            page_selection_range(10, 2, start, end).unwrap(),
+            Some(3..=9)
+        );
+        assert_eq!(
+            page_selection_range(8, 3, start, end).unwrap(),
+            Some(0..=7)
+        );
+        assert_eq!(
+            page_selection_range(10, 4, start, end).unwrap(),
+            Some(0..=5)
+        );
+        assert_eq!(page_selection_range(8, 1, start, end).unwrap(), None);
+        assert_eq!(page_selection_range(0, 3, start, end).unwrap(), None);
+    }
+
+    #[test]
+    fn document_positions_are_ordered_by_page_then_offset() {
+        let later = SelectionPosition { page: 4, offset: 1 };
+        let earlier = SelectionPosition {
+            page: 2,
+            offset: 99,
+        };
+        assert_eq!(ordered_positions(later, earlier), (earlier, later));
     }
 
     #[test]

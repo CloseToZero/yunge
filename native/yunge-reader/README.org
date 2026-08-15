@@ -52,13 +52,17 @@ Failures have a stable code and diagnostic message:
 library path.
 
 =open= accepts an absolute local =path= and optional =password=.  It returns
-an opaque process-local =document= handle, =fixed= layout, and =page-count=.
+an opaque process-local =document= handle, =fixed= layout, =page-count=, and
+canonical geometry for every page.  Lightweight geometry lets Emacs build a
+stable virtual roll without rasterizing the complete document.
 
 #+begin_src json
 {"id":3,"op":"open",
  "params":{"path":"C:/books/example.pdf"}}
 {"id":3,"ok":true,
- "result":{"document":1,"layout":"fixed","page-count":12}}
+ "result":{"document":1,"layout":"fixed","page-count":12,
+           "pages":[{"page":0,"width":595.276,"height":841.89,
+                     "label":"1"}]}}
 #+end_src
 
 =page-info= accepts =document= and a zero-based =page=.  It returns canonical
@@ -85,15 +89,21 @@ and =hyphen= flags.  PDF coordinates start at the bottom left.
              "generated":false,"hyphen":false}]}}
 #+end_src
 
-=selection-text= accepts one page and two inclusive character indices.  The
-helper normalizes backward selections and returns text in PDFium index order.
-Indices outside the page return =invalid-selection=.
+=selection-text= accepts two inclusive document positions.  Each position has
+a zero-based =page= and PDFium character =offset=.  The helper normalizes
+backward selections and returns each page fragment in PDFium index order.  One
+newline separates adjacent page fragments.  Invalid pages or offsets return
+=invalid-page= or =invalid-selection=.
 
 #+begin_src json
 {"id":6,"op":"selection-text",
- "params":{"document":1,"page":0,"start":14,"end":3}}
+ "params":{"document":1,
+           "start":{"page":1,"offset":4},
+           "end":{"page":0,"offset":3}}}
 {"id":6,"ok":true,
- "result":{"page":0,"start":3,"end":14,"text":"Introduction"}}
+ "result":{"start":{"page":0,"offset":3},
+           "end":{"page":1,"offset":4},
+           "text":"first page text\nsecond"}}
 #+end_src
 
 =render-page= additionally accepts pixel =width= from 16 through 8192 and a
