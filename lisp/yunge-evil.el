@@ -68,6 +68,22 @@ Restore point if FUNCTION signals an error or quit."
   (when (eq this-command 'evil-force-normal-state)
     (evil-ex-nohighlight)))
 
+(defun yunge-evil--handle-interactive-search-failure
+    (function &rest arguments)
+  "Call FUNCTION with ARGUMENTS, concisely reporting interactive search misses.
+Preserve `search-failed' for non-interactive callers."
+  (let ((interactivep (called-interactively-p 'any)))
+    (condition-case error-data
+        (apply function arguments)
+      (search-failed
+       (if interactivep
+           (let ((query (car evil-ex-search-history)))
+             (if (and (stringp query) (> (length query) 0))
+                 (message "Search failed: %s"
+                          (truncate-string-to-width query 60 nil nil "…"))
+               (message "Search failed")))
+         (signal (car error-data) (cdr error-data)))))))
+
 (defun yunge-evil--pinyin-search-pattern (function regexp)
   "Call FUNCTION for REGEXP using the active search syntax."
   (cond
@@ -273,6 +289,10 @@ Pinyin search is literal, so its `/` and `?` remain part of PATTERN."
   (require 'yunge-comment)
   (advice-add 'evil-force-normal-state :after
               #'yunge-evil--nohighlight-after-force-normal-state)
+  (advice-add 'evil-ex-search-next :around
+              #'yunge-evil--handle-interactive-search-failure)
+  (advice-add 'evil-ex-search-previous :around
+              #'yunge-evil--handle-interactive-search-failure)
   (yunge-key-define yunge-marker-map yunge-marker-bindings)
   (yunge-key-define yunge-jump-map yunge-jump-bindings)
   (yunge-evil--setup-leader)

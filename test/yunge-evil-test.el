@@ -6,6 +6,7 @@
 
 (declare-function evil-ex-make-search-pattern "evil-search" (regexp))
 (declare-function evil-ex-pattern-regex "evil-search" (pattern))
+(declare-function evil-ex-search-next "evil-commands" (count))
 (declare-function evil-ex-split-search-pattern "evil-search"
                   (pattern direction))
 (declare-function evil-force-normal-state "evil-states" ())
@@ -74,7 +75,13 @@
              (advice-member-p #'yunge-evil--pinyin-search-pattern
                               'evil-ex-make-search-pattern)
              (advice-member-p #'yunge-evil--split-pinyin-search-pattern
-                              'evil-ex-split-search-pattern))
+                              'evil-ex-split-search-pattern)
+             (advice-member-p
+              #'yunge-evil--handle-interactive-search-failure
+              'evil-ex-search-next)
+             (advice-member-p
+              #'yunge-evil--handle-interactive-search-failure
+              'evil-ex-search-previous))
       (error "Unexpected Evil configuration"))))
 
 (ert-deftest yunge-evil-search-patterns-do-not-expand-pinyin-by-default ()
@@ -137,6 +144,33 @@
         (switch-to-buffer (current-buffer))
         (execute-kbd-macro (kbd "/ M-p M-p M-n RET"))
         (should (= (point) 7))))))
+
+(ert-deftest yunge-evil-repeat-search-failure-is-concise-only-interactively ()
+  (yunge-test-enable-evil)
+  (with-temp-buffer
+    (insert "present")
+    (goto-char (point-min))
+    (evil-normal-state)
+    (setq evil-ex-search-direction 'forward
+          evil-ex-search-pattern (evil-ex-make-search-pattern "missing")
+          evil-ex-search-history '("missing"))
+    (let (shown-message)
+      (cl-letf (((symbol-function 'message)
+                 (lambda (format-string &rest arguments)
+                   (setq shown-message
+                         (apply #'format format-string arguments)))))
+        (dolist (binding '(("n" . evil-ex-search-next)
+                           ("N" . evil-ex-search-previous)))
+          (yunge-test-key (car binding) (cdr binding))
+          (should
+           (eq (condition-case nil
+                   (progn
+                     (call-interactively (key-binding (kbd (car binding))))
+                     'reported)
+                 (search-failed 'signaled))
+               'reported))
+          (should (equal shown-message "Search failed: missing")))))
+    (should-error (evil-ex-search-next 1) :type 'search-failed)))
 
 (ert-deftest yunge-evil-pinyin-search-requires-a-regexp-prefix ()
   (yunge-test-enable-evil)
