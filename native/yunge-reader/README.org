@@ -1,8 +1,15 @@
 #+title: Yunge Reader native protocol
 
 The helper is a child process owned by Emacs.  Emacs and the helper exchange
-UTF-8 newline-delimited JSON (NDJSON) over stdin and stdout.  Standard output
-is reserved for protocol messages; diagnostics use standard error.
+UTF-8 newline-delimited JSON over stdin and stdout.  Standard output is
+reserved for protocol messages; diagnostics use standard error.
+
+* Environment
+
+=YUNGE_READER_PDFIUM= is the absolute path of the pinned PDFium dynamic
+library.  =YUNGE_READER_CACHE= is the absolute render cache directory.  PDFium
+is loaded lazily by =pdfium-info= or =open=, so lifecycle diagnostics can still
+run when the engine is unavailable.
 
 * Handshake
 
@@ -10,42 +17,89 @@ The helper writes one message immediately after startup:
 
 #+begin_src json
 {"kind":"ready","protocol":1,"build-id":"HASH",
- "capabilities":["lifecycle"]}
+ "pdfium-api":"7881",
+ "capabilities":["lifecycle","pdf-render"]}
 #+end_src
 
-Emacs accepts the process only when both =protocol= and =build-id= match its
-tracked values.  The build ID is a SHA-256 digest of the helper's manifest,
-lock file, build script, and Rust sources.
+Emacs requires the protocol, build ID, PDFium API, and both capabilities to
+match.  The build ID hashes the Cargo manifest and lock, build script, PDFium
+manifest, and Rust sources.
 
 * Requests and responses
 
 Every request has a positive integer =id=, an =op=, and an optional =params=
-object.  Exactly one response uses the same ID:
+object.  Exactly one response uses the same ID.  Operation parameter objects
+reject unknown fields.
 
 #+begin_src json
-{"id":1,"op":"ping","params":{}}
-{"id":1,"ok":true,"result":{"protocol":1,"backend":"none"}}
-
-{"id":2,"op":"render","params":{}}
-{"id":2,"ok":false,
- "error":{"code":"unsupported-operation",
-          "message":"unsupported operation: render"}}
+{"id":1,"op":"ping"}
+{"id":1,"ok":true,
+ "result":{"protocol":1,"backend":"pdfium",
+           "capabilities":["lifecycle","pdf-render"]}}
 #+end_src
 
-The initial executable intentionally implements only lifecycle operations.
-PDFium document, rendering, text, and selection operations will extend this
-versioned protocol without exposing native handles to reader buffers.
+Failures have a stable code and diagnostic message:
 
-* Shutdown
+#+begin_src json
+{"id":2,"ok":false,
+ "error":{"code":"unknown-document",
+          "message":"unknown document handle: 99"}}
+#+end_src
+
+* PDF operations
+
+=pdfium-info= loads the configured library and reports backend, API, and
+library path.
+
+=open= accepts an absolute local =path= and optional =password=.  It returns
+an opaque process-local =document= handle, =fixed= layout, and =page-count=.
+
+#+begin_src json
+{"id":3,"op":"open",
+ "params":{"path":"C:/books/example.pdf"}}
+{"id":3,"ok":true,
+ "result":{"document":1,"layout":"fixed","page-count":12}}
+#+end_src
+
+=page-info= accepts =document= and a zero-based =page=.  It returns canonical
+PDF point width and height plus the page label.
+
+#+begin_src json
+{"id":4,"op":"page-info","params":{"document":1,"page":0}}
+{"id":4,"ok":true,
+ "result":{"page":0,"width":595.276,"height":841.89,"label":"1"}}
+#+end_src
+
+=render-page= additionally accepts pixel =width= from 16 through 8192 and a
+64-character lowercase hexadecimal =cache-key=.  The helper alone maps that
+key to =YUNGE_READER_CACHE/<key>.png=.  It returns the absolute path, pixel
+dimensions, and whether an existing valid cache entry was reused.
+
+#+begin_src json
+{"id":5,"op":"render-page",
+ "params":{"document":1,"page":0,"width":1000,
+"cache-key":"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"}}
+{"id":5,"ok":true,
+ "result":{"path":"C:/cache/0123456789abcdef....png",
+           "pixel-width":1000,"pixel-height":1414,"cached":false}}
+#+end_src
+
+=close= accepts a =document= handle and deterministically drops its PDF state.
+
+* Shutdown and ownership
 
 Emacs requests graceful shutdown with:
 
 #+begin_src json
-{"id":3,"op":"shutdown","params":{}}
-{"id":3,"ok":true,"result":{"stopped":true}}
+{"id":6,"op":"shutdown"}
+{"id":6,"ok":true,"result":{"stopped":true}}
 #+end_src
 
-After flushing that response, the helper stops reading requests, releases its
-state, and exits successfully.  If Emacs closes the pipe without sending a
-request, stdin reaches EOF and the helper also exits successfully.  Emacs may
-terminate a helper that exceeds its configured graceful-shutdown deadline.
+Before responding, the helper drops all open documents.  It then flushes the
+response and exits successfully.  Closing stdin also drops documents and
+exits successfully.
+
+The process owns one lazy PDFium instance.  Documents borrow that instance and
+are explicitly removed on =close= or =shutdown=.  The singleton itself lives
+for the helper process lifetime because the underlying bindings are global;
+the operating system reclaims it at process exit.

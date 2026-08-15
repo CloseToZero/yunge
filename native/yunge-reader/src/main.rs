@@ -1,21 +1,31 @@
 // SPDX-FileCopyrightText: 2026 Chen Zhexuan
 // SPDX-License-Identifier: MIT
 
+use image::GenericImageView;
+use pdfium_render::prelude::*;
+use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
+use std::collections::HashMap;
+use std::env;
+use std::fs;
 use std::io::{self, BufRead, Write};
+use std::path::{Path, PathBuf};
 
 type Error = Box<dyn std::error::Error>;
 
 const PROTOCOL_VERSION: u32 = 1;
+const PDFIUM_API: &str = "7881";
 const BUILD_ID: &str = env!("YUNGE_READER_BUILD_ID");
+const CAPABILITIES: [&str; 2] = ["lifecycle", "pdf-render"];
 
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct Request {
     id: u64,
     op: String,
-    #[serde(default, rename = "params")]
-    _params: Value,
+    #[serde(default)]
+    params: Value,
 }
 
 #[derive(Debug, Serialize)]
@@ -24,7 +34,9 @@ struct Ready<'a> {
     protocol: u32,
     #[serde(rename = "build-id")]
     build_id: &'a str,
-    capabilities: [&'static str; 1],
+    #[serde(rename = "pdfium-api")]
+    pdfium_api: &'static str,
+    capabilities: [&'static str; 2],
 }
 
 #[derive(Debug, Serialize)]
@@ -49,12 +61,62 @@ enum Control {
     Shutdown,
 }
 
+#[derive(Debug)]
+struct ServiceError {
+    code: &'static str,
+    message: String,
+}
+
+struct Service {
+    pdfium: Option<&'static Pdfium>,
+    pdfium_library: Option<PathBuf>,
+    cache_directory: Option<PathBuf>,
+    documents: HashMap<u64, PdfDocument<'static>>,
+    next_document: u64,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct EmptyParams {}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct OpenParams {
+    path: String,
+    #[serde(default)]
+    password: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct DocumentParams {
+    document: u64,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PageParams {
+    document: u64,
+    page: u32,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RenderParams {
+    document: u64,
+    page: u32,
+    width: i32,
+    #[serde(rename = "cache-key")]
+    cache_key: String,
+}
+
 fn ready_message() -> Ready<'static> {
     Ready {
         kind: "ready",
         protocol: PROTOCOL_VERSION,
         build_id: BUILD_ID,
-        capabilities: ["lifecycle"],
+        pdfium_api: PDFIUM_API,
+        capabilities: CAPABILITIES,
     }
 }
 
@@ -85,33 +147,326 @@ impl Response {
     }
 }
 
-fn handle_request(request: Request) -> (Response, Control) {
-    match request.op.as_str() {
-        "ping" => (
-            Response::success(
-                request.id,
+impl ServiceError {
+    fn new(code: &'static str, message: impl Into<String>) -> Self {
+        Self {
+            code,
+            message: message.into(),
+        }
+    }
+}
+
+impl Service {
+    fn new() -> Self {
+        Self {
+            pdfium: None,
+            pdfium_library: env::var_os("YUNGE_READER_PDFIUM")
+                .map(PathBuf::from),
+            cache_directory: env::var_os("YUNGE_READER_CACHE")
+                .map(PathBuf::from),
+            documents: HashMap::new(),
+            next_document: 1,
+        }
+    }
+
+    fn pdfium(&mut self) -> Result<&'static Pdfium, ServiceError> {
+        if let Some(pdfium) = self.pdfium {
+            return Ok(pdfium);
+        }
+        let library = self.pdfium_library.as_ref().ok_or_else(|| {
+            ServiceError::new(
+                "pdfium-unavailable",
+                "YUNGE_READER_PDFIUM is not set",
+            )
+        })?;
+        if !library.is_absolute() || !library.is_file() {
+            return Err(ServiceError::new(
+                "pdfium-unavailable",
+                format!("PDFium library is unavailable: {}", library.display()),
+            ));
+        }
+        let bindings = Pdfium::bind_to_library(library).map_err(|error| {
+            ServiceError::new(
+                "pdfium-unavailable",
+                format!("could not load PDFium: {error}"),
+            )
+        })?;
+        // PdfDocument borrows Pdfium.  The helper owns one process-lifetime
+        // Pdfium instance, while documents are still closed deterministically.
+        let pdfium = Box::leak(Box::new(Pdfium::new(bindings)));
+        self.pdfium = Some(pdfium);
+        Ok(pdfium)
+    }
+
+    fn parse<T: DeserializeOwned>(params: Value) -> Result<T, ServiceError> {
+        let params = if params.is_null() { json!({}) } else { params };
+        serde_json::from_value(params).map_err(|error| {
+            ServiceError::new("invalid-params", error.to_string())
+        })
+    }
+
+    fn document(
+        &self,
+        document: u64,
+    ) -> Result<&PdfDocument<'static>, ServiceError> {
+        self.documents.get(&document).ok_or_else(|| {
+            ServiceError::new(
+                "unknown-document",
+                format!("unknown document handle: {document}"),
+            )
+        })
+    }
+
+    fn page_index(
+        document: &PdfDocument<'_>,
+        page: u32,
+    ) -> Result<i32, ServiceError> {
+        let page_count = document.pages().len();
+        let index = i32::try_from(page).map_err(|_| {
+            ServiceError::new("invalid-page", "page index is too large")
+        })?;
+        if index < 0 || index >= page_count {
+            return Err(ServiceError::new(
+                "invalid-page",
+                format!("page {page} is outside a {page_count}-page document"),
+            ));
+        }
+        Ok(index)
+    }
+
+    fn pdfium_info(&mut self, params: Value) -> Result<Value, ServiceError> {
+        let _: EmptyParams = Self::parse(params)?;
+        self.pdfium()?;
+        let library = self.pdfium_library.as_ref().unwrap();
+        Ok(json!({
+            "backend": "pdfium",
+            "pdfium-api": PDFIUM_API,
+            "library": library,
+        }))
+    }
+
+    fn open(&mut self, params: Value) -> Result<Value, ServiceError> {
+        let params: OpenParams = Self::parse(params)?;
+        let path = PathBuf::from(&params.path);
+        if !path.is_absolute() || !path.is_file() {
+            return Err(ServiceError::new(
+                "pdf-open-failed",
+                format!(
+                    "PDF is not an absolute readable file: {}",
+                    path.display()
+                ),
+            ));
+        }
+        let pdfium = self.pdfium()?;
+        let document = pdfium
+            .load_pdf_from_file(&path, params.password.as_deref())
+            .map_err(|error| {
+                ServiceError::new(
+                    "pdf-open-failed",
+                    format!("could not open {}: {error}", path.display()),
+                )
+            })?;
+        let page_count = document.pages().len();
+        let handle = self.next_document;
+        self.next_document =
+            self.next_document.checked_add(1).ok_or_else(|| {
+                ServiceError::new(
+                    "pdf-open-failed",
+                    "document handle space exhausted",
+                )
+            })?;
+        self.documents.insert(handle, document);
+        Ok(json!({
+            "document": handle,
+            "layout": "fixed",
+            "page-count": page_count,
+        }))
+    }
+
+    fn close(&mut self, params: Value) -> Result<Value, ServiceError> {
+        let params: DocumentParams = Self::parse(params)?;
+        if self.documents.remove(&params.document).is_none() {
+            return Err(ServiceError::new(
+                "unknown-document",
+                format!("unknown document handle: {}", params.document),
+            ));
+        }
+        Ok(json!({ "closed": true }))
+    }
+
+    fn page_info(&self, params: Value) -> Result<Value, ServiceError> {
+        let params: PageParams = Self::parse(params)?;
+        let document = self.document(params.document)?;
+        let index = Self::page_index(document, params.page)?;
+        let page = document.pages().get(index).map_err(|error| {
+            ServiceError::new(
+                "invalid-page",
+                format!("could not load page {}: {error}", params.page),
+            )
+        })?;
+        let label = page
+            .label()
+            .map(str::to_owned)
+            .unwrap_or_else(|| (params.page + 1).to_string());
+        Ok(json!({
+            "page": params.page,
+            "width": page.width().value,
+            "height": page.height().value,
+            "label": label,
+        }))
+    }
+
+    fn render_page(&self, params: Value) -> Result<Value, ServiceError> {
+        let params: RenderParams = Self::parse(params)?;
+        if !(16..=8192).contains(&params.width) {
+            return Err(ServiceError::new(
+                "invalid-render-size",
+                "render width must be between 16 and 8192 pixels",
+            ));
+        }
+        if params.cache_key.len() != 64
+            || !params.cache_key.bytes().all(|byte| {
+                byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte)
+            })
+        {
+            return Err(ServiceError::new(
+                "invalid-cache-key",
+                "cache key must be 64 lowercase hexadecimal characters",
+            ));
+        }
+        let document = self.document(params.document)?;
+        let index = Self::page_index(document, params.page)?;
+        let page = document.pages().get(index).map_err(|error| {
+            ServiceError::new(
+                "invalid-page",
+                format!("could not load page {}: {error}", params.page),
+            )
+        })?;
+        let cache = self.cache_directory.as_ref().ok_or_else(|| {
+            ServiceError::new(
+                "cache-unavailable",
+                "YUNGE_READER_CACHE is not set",
+            )
+        })?;
+        if !cache.is_absolute() {
+            return Err(ServiceError::new(
+                "cache-unavailable",
+                "YUNGE_READER_CACHE must be an absolute path",
+            ));
+        }
+        fs::create_dir_all(cache).map_err(|error| {
+            ServiceError::new(
+                "cache-unavailable",
+                format!("could not create render cache: {error}"),
+            )
+        })?;
+        let output = cache.join(format!("{}.png", params.cache_key));
+        if output.is_file() {
+            let (width, height) =
+                image::image_dimensions(&output).map_err(|error| {
+                    ServiceError::new(
+                        "render-failed",
+                        format!("could not inspect cached page: {error}"),
+                    )
+                })?;
+            return Ok(render_result(output, width, height, true));
+        }
+        let config = PdfRenderConfig::new().set_target_width(params.width);
+        let image = page
+            .render_with_config(&config)
+            .and_then(|bitmap| bitmap.as_image())
+            .map_err(|error| {
+                ServiceError::new(
+                    "render-failed",
+                    format!("could not render page {}: {error}", params.page),
+                )
+            })?;
+        let (width, height) = image.dimensions();
+        let temporary =
+            output.with_extension(format!("{}.tmp", std::process::id()));
+        image
+            .save_with_format(&temporary, image::ImageFormat::Png)
+            .map_err(|error| {
+                ServiceError::new(
+                    "render-failed",
+                    format!("could not write rendered page: {error}"),
+                )
+            })?;
+        if let Err(error) = fs::rename(&temporary, &output) {
+            let _ = fs::remove_file(&temporary);
+            return Err(ServiceError::new(
+                "render-failed",
+                format!("could not publish rendered page: {error}"),
+            ));
+        }
+        Ok(render_result(output, width, height, false))
+    }
+
+    fn handle(&mut self, request: Request) -> (Response, Control) {
+        if request.op == "ping" {
+            let result = Self::parse::<EmptyParams>(request.params).map(|_| {
                 json!({
                     "protocol": PROTOCOL_VERSION,
                     "build-id": BUILD_ID,
-                    "backend": "none",
-                    "capabilities": ["lifecycle"],
-                }),
-            ),
-            Control::Continue,
-        ),
-        "shutdown" => (
-            Response::success(request.id, json!({ "stopped": true })),
-            Control::Shutdown,
-        ),
-        _ => (
-            Response::failure(
-                Some(request.id),
+                    "backend": "pdfium",
+                    "capabilities": CAPABILITIES,
+                })
+            });
+            return response(request.id, result, Control::Continue);
+        }
+        if request.op == "shutdown" {
+            let result = Self::parse::<EmptyParams>(request.params).map(|_| {
+                self.documents.clear();
+                json!({ "stopped": true })
+            });
+            let control = if result.is_ok() {
+                Control::Shutdown
+            } else {
+                Control::Continue
+            };
+            return response(request.id, result, control);
+        }
+        let result = match request.op.as_str() {
+            "pdfium-info" => self.pdfium_info(request.params),
+            "open" => self.open(request.params),
+            "close" => self.close(request.params),
+            "page-info" => self.page_info(request.params),
+            "render-page" => self.render_page(request.params),
+            _ => Err(ServiceError::new(
                 "unsupported-operation",
                 format!("unsupported operation: {}", request.op),
-            ),
+            )),
+        };
+        response(request.id, result, Control::Continue)
+    }
+}
+
+fn response(
+    id: u64,
+    result: Result<Value, ServiceError>,
+    control: Control,
+) -> (Response, Control) {
+    match result {
+        Ok(value) => (Response::success(id, value), control),
+        Err(error) => (
+            Response::failure(Some(id), error.code, error.message),
             Control::Continue,
         ),
     }
+}
+
+fn render_result(
+    path: impl AsRef<Path>,
+    width: u32,
+    height: u32,
+    cached: bool,
+) -> Value {
+    json!({
+        "path": path.as_ref(),
+        "pixel-width": width,
+        "pixel-height": height,
+        "cached": cached,
+    })
 }
 
 fn write_message(
@@ -125,6 +480,7 @@ fn write_message(
 }
 
 fn serve(input: impl BufRead, mut output: impl Write) -> Result<(), Error> {
+    let mut service = Service::new();
     write_message(&mut output, &ready_message())?;
     for line in input.lines() {
         let line = line?;
@@ -132,7 +488,7 @@ fn serve(input: impl BufRead, mut output: impl Write) -> Result<(), Error> {
             continue;
         }
         let (response, control) = match serde_json::from_str(&line) {
-            Ok(request) => handle_request(request),
+            Ok(request) => service.handle(request),
             Err(error) => (
                 Response::failure(None, "invalid-request", error.to_string()),
                 Control::Continue,
@@ -175,16 +531,17 @@ mod tests {
         assert_eq!(value["kind"], "ready");
         assert_eq!(value["protocol"], PROTOCOL_VERSION);
         assert_eq!(value["build-id"], BUILD_ID);
-        assert_eq!(value["capabilities"], json!(["lifecycle"]));
+        assert_eq!(value["pdfium-api"], PDFIUM_API);
+        assert_eq!(value["capabilities"], json!(CAPABILITIES));
     }
 
     #[test]
-    fn ping_reports_the_available_backend() {
+    fn ping_does_not_load_pdfium() {
         let output = messages(r#"{"id":7,"op":"ping","params":{}}"#);
         assert_eq!(output.len(), 2);
         assert_eq!(output[1]["id"], 7);
         assert_eq!(output[1]["ok"], true);
-        assert_eq!(output[1]["result"]["backend"], "none");
+        assert_eq!(output[1]["result"]["backend"], "pdfium");
     }
 
     #[test]
@@ -208,6 +565,21 @@ mod tests {
         let unknown = messages(r#"{"id":3,"op":"render"}"#);
         assert_eq!(unknown[1]["id"], 3);
         assert_eq!(unknown[1]["error"]["code"], "unsupported-operation");
+    }
+
+    #[test]
+    fn operation_parameters_are_strictly_validated() {
+        let output = messages(concat!(
+            r#"{"id":1,"op":"close","params":{}}"#,
+            "\n",
+            r#"{"id":2,"op":"render-page","params":{"#,
+            r#""document":1,"page":0,"width":1,"cache-key":"x"}}"#,
+            "\n",
+            r#"{"id":3,"op":"ping","params":{"extra":true}}"#,
+        ));
+        assert_eq!(output[1]["error"]["code"], "invalid-params");
+        assert_eq!(output[2]["error"]["code"], "invalid-render-size");
+        assert_eq!(output[3]["error"]["code"], "invalid-params");
     }
 
     #[test]

@@ -9,6 +9,9 @@
 (require 'yunge-reader)
 (require 'yunge-state)
 
+(declare-function yunge-reader-setup "yunge-reader-setup" ())
+(declare-function yunge-reader-setup--begin "yunge-reader-setup" ())
+
 (defcustom yunge-reader-native-idle-seconds 300
   "Seconds with no native clients before stopping the helper.
 Set this to nil to keep an explicitly acquired helper alive until it is
@@ -23,6 +26,9 @@ stopped or Emacs exits."
 
 (defconst yunge-reader-native-protocol-version 1
   "Native helper protocol version understood by this client.")
+
+(defconst yunge-reader-native-pdfium-api "7881"
+  "PDFium API release required by the native helper.")
 
 (defconst yunge-reader-native--source-directory
   (file-name-directory
@@ -79,7 +85,7 @@ stopped or Emacs exits."
   "Whether the helper should start after its current process exits.")
 
 (defvar yunge-reader-native--build-after-stop nil
-  "Whether setup should build after the current helper exits.")
+  "Setup continuation requested after the current helper exits.")
 
 (defvar yunge-reader-native--restart-count 0
   "Number of automatic crash restarts attempted this session.")
@@ -95,6 +101,26 @@ stopped or Emacs exits."
            (when (eq system-type 'windows-nt) ".exe"))
    (yunge-reader-native--cargo-target-directory)))
 
+(defun yunge-reader-native-pdfium-directory ()
+  "Return the installed directory for the pinned PDFium API."
+  (expand-file-name
+   yunge-reader-native-pdfium-api
+   (yunge-var-subdirectory "yunge-reader/pdfium")))
+
+(defun yunge-reader-native-pdfium-library ()
+  "Return the expected installed PDFium dynamic library."
+  (expand-file-name
+   (pcase system-type
+     ('windows-nt "bin/pdfium.dll")
+     ('darwin "bin/libpdfium.dylib")
+     ('gnu/linux "bin/libpdfium.so")
+     (_ "bin/pdfium"))
+   (yunge-reader-native-pdfium-directory)))
+
+(defun yunge-reader-native-cache-directory ()
+  "Return the directory containing rendered PDF page artifacts."
+  (yunge-var-subdirectory "yunge-reader/cache"))
+
 (defun yunge-reader-native--build-id ()
   "Return the expected native helper build ID, or nil."
   (when (file-readable-p yunge-reader-native--source-hash-file)
@@ -105,8 +131,9 @@ stopped or Emacs exits."
           build-id)))))
 
 (defun yunge-reader-native--available-p ()
-  "Return whether the native helper executable is available."
-  (file-executable-p (yunge-reader-native-program)))
+  "Return whether the native helper and PDFium library are available."
+  (and (file-executable-p (yunge-reader-native-program))
+       (file-regular-p (yunge-reader-native-pdfium-library))))
 
 (defun yunge-reader-native--cancel-timer (symbol)
   "Cancel the timer stored in SYMBOL and set SYMBOL to nil."
@@ -124,7 +151,11 @@ stopped or Emacs exits."
                  (= (or (alist-get 'protocol message) -1)
                     yunge-reader-native-protocol-version)
                  (equal actual expected)
+                 (equal (alist-get 'pdfium-api message)
+                        yunge-reader-native-pdfium-api)
                  (member "lifecycle"
+                         (alist-get 'capabilities message))
+                 (member "pdf-render"
                          (alist-get 'capabilities message)))
       (error
        "Incompatible Yunge Reader helper: expected protocol %d build %s, got %S"
@@ -208,14 +239,15 @@ stopped or Emacs exits."
 
 (defun yunge-reader-native--start-after-crash ()
   "Restart the helper once after an unexpected exit."
-  (condition-case error-data
-      (yunge-reader-native-start)
-    (error
-     (display-warning
-      'yunge-reader
-      (format "Could not restart Yunge Reader helper: %s"
-              (error-message-string error-data))
-      :warning))))
+  (when (> yunge-reader-native--client-count 0)
+    (condition-case error-data
+        (yunge-reader-native-start)
+      (error
+       (display-warning
+        'yunge-reader
+        (format "Could not restart Yunge Reader helper: %s"
+                (error-message-string error-data))
+        :warning)))))
 
 (defun yunge-reader-native--sentinel (process _event)
   "Finalize native PROCESS after it exits."
@@ -236,6 +268,9 @@ stopped or Emacs exits."
            "The Yunge Reader native helper stopped"
          "The Yunge Reader native helper exited unexpectedly"))
       (cond
+       ((eq build 'setup)
+        (require 'yunge-reader-setup)
+        (yunge-reader-setup--begin))
        (build
         (yunge-reader-native--start-build))
        (restart
@@ -267,16 +302,27 @@ stopped or Emacs exits."
         (let ((inhibit-read-only t))
           (erase-buffer)))
       (setq yunge-reader-native--outbound-queue nil)
-      (let ((process
-             (make-process
-              :name "yunge-reader-native"
-              :command (list (yunge-reader-native-program))
-              :connection-type 'pipe
-              :coding 'utf-8-unix
-              :noquery t
-              :stderr log
-              :filter #'yunge-reader-native--filter
-              :sentinel #'yunge-reader-native--sentinel)))
+      (make-directory (yunge-reader-native-cache-directory) t)
+      (let* ((process-environment
+              (cons
+               (concat
+                "YUNGE_READER_PDFIUM="
+                (yunge-reader-native-pdfium-library))
+               (cons
+                (concat
+                 "YUNGE_READER_CACHE="
+                 (yunge-reader-native-cache-directory))
+                process-environment)))
+             (process
+              (make-process
+               :name "yunge-reader-native"
+               :command (list (yunge-reader-native-program))
+               :connection-type 'pipe
+               :coding 'utf-8-unix
+               :noquery t
+               :stderr log
+               :filter #'yunge-reader-native--filter
+               :sentinel #'yunge-reader-native--sentinel)))
         (process-put process 'yunge-reader-output "")
         (process-put process 'yunge-reader-ready nil)
         (process-put process 'yunge-reader-intentional-stop nil)
@@ -306,6 +352,10 @@ COMPLETE receives a result and nil, or nil and an Emacs error value."
         (yunge-reader-native--send-line process line)
       (push (cons id line) yunge-reader-native--outbound-queue))
     id))
+
+(defun yunge-reader-native-live-p ()
+  "Return whether the Yunge Reader native helper is running."
+  (process-live-p yunge-reader-native--process))
 
 ;;;###autoload
 (defun yunge-reader-native-stop (&optional force)
@@ -373,6 +423,8 @@ FORCE."
            (t 'starting))
           :clients yunge-reader-native--client-count
           :program (yunge-reader-native-program)
+          :pdfium (yunge-reader-native-pdfium-library)
+          :pdfium-api yunge-reader-native-pdfium-api
           :build-id (yunge-reader-native--build-id))))
     (when (called-interactively-p 'interactive)
       (message "Yunge Reader native: %s, %d client%s"
@@ -438,7 +490,8 @@ FORCE."
             (progn
               (yunge-reader-native-start)
               (yunge-reader-native-request
-               "ping" nil #'yunge-reader-native--smoke-test-complete))
+               "pdfium-info" nil
+               #'yunge-reader-native--smoke-test-complete))
           (error
            (display-warning
             'yunge-reader
@@ -487,18 +540,11 @@ FORCE."
 
 ;;;###autoload
 (defun yunge-reader-native-setup ()
-  "Build the native helper and verify its lifecycle protocol.
-The PDFium installation stage will extend this explicit setup command; normal
-document opening never downloads or compiles dependencies implicitly."
+  "Install PDFium, build the native helper, and run a smoke test.
+Normal document opening never downloads or compiles dependencies implicitly."
   (interactive)
-  (when (process-live-p yunge-reader-native--build-process)
-    (user-error "Yunge Reader native helper is already being built"))
-  (if (process-live-p yunge-reader-native--process)
-      (progn
-        (setq yunge-reader-native--build-after-stop t)
-        (yunge-reader-native-stop)
-        (message "Stopping Yunge Reader helper before rebuilding..."))
-    (yunge-reader-native--start-build)))
+  (require 'yunge-reader-setup)
+  (yunge-reader-setup))
 
 (defun yunge-reader-native--shutdown-for-emacs-exit ()
   "End native processes without delaying Emacs shutdown."

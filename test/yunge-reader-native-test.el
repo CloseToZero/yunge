@@ -4,6 +4,7 @@
 
 (require 'yunge-test-helper)
 (require 'yunge-reader-native)
+(require 'yunge-reader-setup)
 
 (defmacro yunge-reader-native-test--with-fake-process (&rest body)
   "Run BODY with an isolated fake native process implementation."
@@ -60,7 +61,8 @@
        '((kind . "ready")
          (protocol . 1)
          (build-id . "test-build")
-         (capabilities . ("lifecycle"))))
+         (pdfium-api . "7881")
+         (capabilities . ("lifecycle" "pdf-render"))))
       (should (= (length sent) 1))
       (let ((request
              (json-parse-string
@@ -81,14 +83,16 @@
       '((kind . "ready")
         (protocol . 1)
         (build-id . "old-build")
-        (capabilities . ("lifecycle"))))
+        (pdfium-api . "7881")
+        (capabilities . ("lifecycle" "pdf-render"))))
      :type 'error)
     (should-error
      (yunge-reader-native--validate-ready
       '((kind . "ready")
         (protocol . 2)
         (build-id . "test-build")
-        (capabilities . ("lifecycle"))))
+        (pdfium-api . "7881")
+        (capabilities . ("lifecycle" "pdf-render"))))
      :type 'error)))
 
 (ert-deftest yunge-reader-native-stop-requests-shutdown-then-arms-timeout ()
@@ -133,6 +137,14 @@
       (should (eq (nth 2 timer-arguments)
                   #'yunge-reader-native--idle-stop)))))
 
+(ert-deftest yunge-reader-native-skips-a-stale-crash-restart ()
+  (yunge-reader-native-test--with-fake-process
+    (let (started)
+      (cl-letf (((symbol-function 'yunge-reader-native-start)
+                 (lambda () (setq started t))))
+        (yunge-reader-native--start-after-crash))
+      (should-not started))))
+
 (ert-deftest yunge-reader-native-status-distinguishes-starting-and-ready ()
   (yunge-reader-native-test--with-fake-process
     (should (eq (plist-get (yunge-reader-native-status) :state)
@@ -144,23 +156,12 @@
     (should (eq (plist-get (yunge-reader-native-status) :state)
                 'ready))))
 
-(ert-deftest yunge-reader-native-setup-builds-when-service-is-stopped ()
+(ert-deftest yunge-reader-native-setup-delegates-to-pdfium-setup ()
   (yunge-reader-native-test--with-fake-process
-    (let (built)
-      (cl-letf (((symbol-function 'yunge-reader-native--start-build)
-                 (lambda () (setq built t))))
+    (let (setup)
+      (cl-letf (((symbol-function 'yunge-reader-setup)
+                 (lambda () (setq setup t))))
         (yunge-reader-native-setup))
-      (should built)
-      (should-not yunge-reader-native--build-after-stop))))
-
-(ert-deftest yunge-reader-native-setup-stops-before-rebuilding ()
-  (yunge-reader-native-test--with-fake-process
-    (let (stopped)
-      (yunge-reader-native-start)
-      (cl-letf (((symbol-function 'yunge-reader-native-stop)
-                 (lambda (&optional _force) (setq stopped t))))
-        (yunge-reader-native-setup))
-      (should stopped)
-      (should yunge-reader-native--build-after-stop))))
+      (should setup))))
 
 ;;; yunge-reader-native-test.el ends here
