@@ -30,6 +30,7 @@
      ("W" . yunge-reader-fit-width)
      ("gr" . yunge-reader-refresh)
      ("n" . yunge-reader-search-next)
+     ("o" . yunge-reader-outline)
      ("q" . quit-window)
      ("y" . yunge-reader-copy-selection)))
   (should-not
@@ -50,6 +51,7 @@
      ("W" . yunge-reader-fit-width)
      ("gr" . yunge-reader-refresh)
      ("n" . yunge-reader-search-next)
+     ("o" . yunge-reader-outline)
      ("q" . quit-window)
      ("y" . yunge-reader-copy-selection)
      ("0" . evil-beginning-of-line)
@@ -61,6 +63,217 @@
   (yunge-test-evil-visual-keys
    'yunge-reader-mode
    '(("y" . evil-yank))))
+
+(ert-deftest yunge-reader-builds-unique-outline-candidates ()
+  (let* ((first
+          (make-yunge-reader-outline-item
+           :title "Chapter"
+           :depth 1
+           :action
+           (make-yunge-reader-action
+            :type 'location
+            :position (make-yunge-reader-position :unit 1))))
+         (second (copy-yunge-reader-outline-item first))
+         (colliding
+          (make-yunge-reader-outline-item
+           :title "Chapter [1]"
+           :depth 1
+           :action
+           (make-yunge-reader-action
+            :type 'location
+            :position (make-yunge-reader-position :unit 2))))
+         (heading
+          (make-yunge-reader-outline-item
+           :title "Part" :depth 0))
+         (outline
+          (make-yunge-reader-outline-data
+           :items (list heading first second colliding)))
+         (candidates
+          (yunge-reader--outline-candidates outline)))
+    (should
+     (equal (mapcar #'car candidates)
+            '("  Chapter [1]"
+              "  Chapter [2]"
+              "  Chapter [1] [2]")))
+    (should (eq (cdar candidates) first))
+    (should (eq (cdadr candidates) second))
+    (should (eq (cdr (nth 2 candidates)) colliding))))
+
+(ert-deftest yunge-reader-caches-a-late-outline-without-opening-it ()
+  (let ((yunge-reader-drivers nil)
+        (requests 0)
+        completion
+        (shown 0)
+        reader
+        other)
+    (unwind-protect
+        (save-window-excursion
+          (setq reader (generate-new-buffer " *reader-outline-late*"))
+          (setq other (generate-new-buffer " *reader-outline-other*"))
+          (switch-to-buffer reader)
+          (yunge-reader-mode)
+          (let ((driver
+                 (yunge-reader-register-driver
+                  'test
+                  :match #'ignore :open #'ignore :close #'ignore
+                  :request
+                  (lambda (_document operation arguments complete)
+                    (should (eq operation 'outline))
+                    (should-not arguments)
+                    (cl-incf requests)
+                    (setq completion complete))
+                  :location
+                  (lambda (_document _window)
+                    (make-yunge-reader-position :unit 0))
+                  :restore (lambda (&rest _arguments) t))))
+            (setq yunge-reader-document
+                  (make-yunge-reader-document
+                   :file "outline.pdf" :driver driver :layout 'fixed)))
+          (cl-letf
+              (((symbol-function 'yunge-reader--select-outline-item)
+                (lambda (_outline) (cl-incf shown))))
+            (yunge-reader-outline)
+            (should yunge-reader--outline-pending)
+            (switch-to-buffer other)
+            (funcall
+             completion
+             (make-yunge-reader-outline-data
+              :items
+              (list
+               (make-yunge-reader-outline-item
+                :title "Chapter" :depth 0)))
+             nil)
+            (should (zerop shown))
+            (with-current-buffer reader
+              (should yunge-reader--outline-loaded)
+              (should-not yunge-reader--outline-pending))
+            (switch-to-buffer reader)
+            (yunge-reader-outline)
+            (should (= shown 1))
+            (should (= requests 1))))
+      (when (buffer-live-p reader)
+        (kill-buffer reader))
+      (when (buffer-live-p other)
+        (kill-buffer other)))))
+
+(ert-deftest yunge-reader-outline-jumps-restore-and-record-places ()
+  (let* ((file (expand-file-name "outline-jump.pdf"))
+         (key (yunge-reader--place-file-key file))
+         (yunge-reader-saved-places nil)
+         (yunge-reader-drivers nil)
+         (current (make-yunge-reader-position :unit 1))
+         buffer)
+    (unwind-protect
+        (save-window-excursion
+          (setq buffer (generate-new-buffer " *reader-outline-jump*"))
+          (switch-to-buffer buffer)
+          (set-window-parameter
+           (selected-window) 'yunge-jump-history nil)
+          (yunge-reader-mode)
+          (let ((driver
+                 (yunge-reader-register-driver
+                  'test
+                  :match #'ignore :open #'ignore :close #'ignore
+                  :request #'ignore
+                  :location (lambda (_document _window) current)
+                  :restore
+                  (lambda (_document position _window)
+                    (setq current position)
+                    t))))
+            (setq yunge-reader-document
+                  (make-yunge-reader-document
+                   :file file :driver driver :layout 'fixed)
+                  yunge-reader--place-recording-enabled t)
+            (let ((item
+                   (make-yunge-reader-outline-item
+                    :title "Target"
+                    :depth 0
+                    :action
+                    (make-yunge-reader-action
+                     :type 'location
+                     :position
+                     (make-yunge-reader-position :unit 9)
+                     :zoom-mode 'manual
+                     :scale 2.0))))
+              (let ((inhibit-message t))
+                (should
+                 (yunge-reader--follow-outline-item item)))))
+          (should (= (yunge-reader-position-unit current) 9))
+          (should (eq yunge-reader-zoom-mode 'manual))
+          (should (= yunge-reader-scale 2.0))
+          (should
+           (= (plist-get
+               (plist-get
+                (cdr (assoc key yunge-reader-saved-places))
+                :position)
+               :unit)
+              9))
+          (let* ((history
+                  (window-parameter
+                   (selected-window) 'yunge-jump-history))
+                 (entry
+                  (car
+                   (yunge-jump-history--history-entries history)))
+                 (place
+                  (plist-get
+                   (yunge-jump-history--entry-value entry)
+                   :place)))
+            (should
+             (= (plist-get (plist-get place :position) :unit)
+                1))))
+      (when (buffer-live-p buffer)
+        (kill-buffer buffer)))))
+
+(ert-deftest yunge-reader-rejected-outline-jump-rolls-back ()
+  (let* ((file (expand-file-name "outline-rejected.pdf"))
+         (key (yunge-reader--place-file-key file))
+         (old (yunge-reader-test--place 'test 4))
+         (yunge-reader-saved-places
+          (list (cons key (copy-tree old t))))
+         (yunge-reader-drivers nil)
+         (current (make-yunge-reader-position :unit 4))
+         buffer)
+    (unwind-protect
+        (save-window-excursion
+          (setq buffer (generate-new-buffer " *reader-outline-reject*"))
+          (switch-to-buffer buffer)
+          (yunge-reader-mode)
+          (let ((driver
+                 (yunge-reader-register-driver
+                  'test
+                  :match #'ignore :open #'ignore :close #'ignore
+                  :request #'ignore
+                  :location (lambda (_document _window) current)
+                  :restore
+                  (lambda (_document position _window)
+                    (setq current position)
+                    (/= (yunge-reader-position-unit position) 9)))))
+            (setq yunge-reader-document
+                  (make-yunge-reader-document
+                   :file file :driver driver :layout 'fixed)
+                  yunge-reader--place-recording-enabled t)
+            (let ((item
+                   (make-yunge-reader-outline-item
+                    :title "Rejected"
+                    :depth 0
+                    :action
+                    (make-yunge-reader-action
+                     :type 'location
+                     :position
+                     (make-yunge-reader-position :unit 9)
+                     :zoom-mode 'manual
+                     :scale 2.0))))
+              (should-error
+               (yunge-reader--follow-outline-item item)
+               :type 'user-error)))
+          (should (= (yunge-reader-position-unit current) 4))
+          (should (eq yunge-reader-zoom-mode 'fit-width))
+          (should (= yunge-reader-scale 1.0))
+          (should
+           (equal (cdr (assoc key yunge-reader-saved-places))
+                  old)))
+      (when (buffer-live-p buffer)
+        (kill-buffer buffer)))))
 
 (ert-deftest yunge-reader-registers-replaces-and-resolves-drivers ()
   (let ((yunge-reader-drivers nil))

@@ -190,7 +190,9 @@
         :cursor (make-yunge-reader-position :unit 3 :offset 4)
         :match-limit 25
         :page-limit 6)
-       #'ignore))
+       #'ignore)
+      (yunge-reader-pdf--request
+       document 'outline nil #'ignore))
     (setq calls (nreverse calls))
     (should (equal (caar calls) "page-info"))
     (should (equal (cdr (assq 'document (cdar calls))) 11))
@@ -205,7 +207,10 @@
       (should (equal (cdr (assq 'cursor (cdr search)))
                      '((page . 3) (offset . 4))))
       (should (= (cdr (assq 'match-limit (cdr search))) 25))
-      (should (= (cdr (assq 'page-limit (cdr search))) 6)))))
+      (should (= (cdr (assq 'page-limit (cdr search))) 6)))
+    (let ((outline (nth 4 calls)))
+      (should (equal (car outline) "outline"))
+      (should (= (cdr (assq 'document (cdr outline))) 11)))))
 
 (ert-deftest yunge-reader-pdf-converts-native-search-batches ()
   (let* ((value
@@ -231,6 +236,67 @@
     (should (= (yunge-reader-position-unit
                 (yunge-reader-search-batch-cursor batch))
                3))))
+
+(ert-deftest yunge-reader-pdf-converts-native-outlines ()
+  (let* ((document
+          (make-yunge-reader-document
+           :metadata
+           '(:page-count 2
+             :pages
+             (((page . 0) (width . 100.0) (height . 200.0))
+              ((page . 1) (width . 300.0) (height . 400.0))))))
+         (value
+          '((items
+             . (((title . "Part")
+                 (depth . 0)
+                 (destination))
+                ((title . "Exact")
+                 (depth . 1)
+                 (destination
+                  . ((page . 1) (x . 12.0) (y . 34.0)
+                     (zoom . 1.5) (view . "xyz"))))
+                ((title . "Width")
+                 (depth . 1)
+                 (destination
+                  . ((page . 0) (y . 150.0)
+                     (view . "fit-horizontal"))))))
+            (truncated . t)))
+         (outline
+          (yunge-reader-pdf--native-outline document value))
+         (items (yunge-reader-outline-data-items outline))
+         (exact
+          (yunge-reader-outline-item-action (nth 1 items)))
+         (width
+          (yunge-reader-outline-item-action (nth 2 items))))
+    (should (yunge-reader-outline-data-p outline))
+    (should (yunge-reader-outline-data-truncated outline))
+    (should-not (yunge-reader-outline-item-action (car items)))
+    (should (= (yunge-reader-outline-item-depth (nth 1 items)) 1))
+    (should (= (yunge-reader-position-unit
+                (yunge-reader-action-position exact))
+               1))
+    (should (= (yunge-reader-position-x
+                (yunge-reader-action-position exact))
+               12.0))
+    (should (= (yunge-reader-position-y
+                (yunge-reader-action-position exact))
+               34.0))
+    (should (eq (yunge-reader-action-zoom-mode exact) 'manual))
+    (should (= (yunge-reader-action-scale exact) 1.5))
+    (should (eq (yunge-reader-action-zoom-mode width) 'fit-width))
+    (should (= (yunge-reader-position-y
+                (yunge-reader-action-position width))
+               150.0))))
+
+(ert-deftest yunge-reader-pdf-accepts-an-empty-native-outline ()
+  (let* ((document
+          (make-yunge-reader-document
+           :metadata '(:page-count 0 :pages nil)))
+         (outline
+          (yunge-reader-pdf--native-outline
+           document '((items) (truncated)))))
+    (should (yunge-reader-outline-data-p outline))
+    (should-not (yunge-reader-outline-data-items outline))))
 
 (ert-deftest yunge-reader-pdf-resolves-cross-page-selection-natively ()
   (let* ((document (make-yunge-reader-document :handle 11))

@@ -196,6 +196,93 @@
                     (yunge-reader-pdf--native-position cursor-value))
        :done (eq (alist-get 'done value) t)))))
 
+(defun yunge-reader-pdf--outline-page-info (document page)
+  "Return metadata for zero-based PAGE in PDF DOCUMENT."
+  (let* ((metadata (yunge-reader-document-metadata document))
+         (pages (plist-get metadata :pages)))
+    (and (natnump page)
+         (listp pages)
+         (< page (length pages))
+         (nth page pages))))
+
+(defun yunge-reader-pdf--outline-view-state (destination)
+  "Return generic zoom mode and scale for native DESTINATION."
+  (let ((view (alist-get 'view destination))
+        (zoom (alist-get 'zoom destination)))
+    (pcase view
+      ("xyz"
+       (if (and (numberp zoom) (> zoom 0))
+           (cons 'manual zoom)
+         '(nil)))
+      ((or "fit" "fit-bounds") '(fit-page))
+      ((or "fit-horizontal" "fit-bounds-horizontal")
+       '(fit-width))
+      (_ '(nil)))))
+
+(defun yunge-reader-pdf--native-outline-action
+    (document destination)
+  "Return a generic action for PDF DESTINATION in DOCUMENT."
+  (let* ((page (alist-get 'page destination))
+         (page-info
+          (yunge-reader-pdf--outline-page-info document page))
+         (height (and page-info (alist-get 'height page-info)))
+         (x (alist-get 'x destination))
+         (y (alist-get 'y destination))
+         (view-state
+          (yunge-reader-pdf--outline-view-state destination)))
+    (when (and page-info
+               (numberp height)
+               (> height 0)
+               (or (null x) (numberp x))
+               (or (null y) (numberp y)))
+      (make-yunge-reader-action
+       :type 'location
+       :position
+       (make-yunge-reader-position
+        :unit page
+        :x (or x 0.0)
+        :y (or y height))
+       :zoom-mode (car view-state)
+       :scale (cdr view-state)))))
+
+(defun yunge-reader-pdf--native-outline-item (document value)
+  "Return a generic outline item represented by native VALUE."
+  (let ((title (alist-get 'title value))
+        (depth (alist-get 'depth value))
+        (destination (alist-get 'destination value)))
+    (when (and (stringp title)
+               (not (string-empty-p (string-trim title)))
+               (natnump depth)
+               (or (null destination)
+                   (listp destination)))
+      (let ((action
+             (and destination
+                  (yunge-reader-pdf--native-outline-action
+                   document destination))))
+        (when (or (null destination) action)
+          (make-yunge-reader-outline-item
+           :title title
+           :depth depth
+           :action action))))))
+
+(defun yunge-reader-pdf--native-outline (document value)
+  "Return a generic PDF outline represented by native VALUE."
+  (let* ((items-entry (assq 'items value))
+         (native-items (cdr items-entry))
+         (items
+          (and (listp native-items)
+               (mapcar
+                (lambda (item)
+                  (yunge-reader-pdf--native-outline-item
+                   document item))
+                native-items))))
+    (when (and items-entry
+               (listp native-items)
+               (cl-every #'identity items))
+      (make-yunge-reader-outline-data
+       :items items
+       :truncated (eq (alist-get 'truncated value) t)))))
+
 (defun yunge-reader-pdf--open (file complete)
   "Open PDF FILE and call COMPLETE using the reader driver contract."
   (let ((buffer (current-buffer))
@@ -259,6 +346,16 @@
   "Dispatch PDF DOCUMENT OPERATION with ARGUMENTS to COMPLETE."
   (let ((handle (yunge-reader-document-handle document)))
     (pcase operation
+      ('outline
+       (yunge-reader-native-request
+        "outline"
+        (list (cons 'document handle))
+        (lambda (result native-error)
+          (funcall complete
+                   (and result
+                        (yunge-reader-pdf--native-outline
+                         document result))
+                   native-error))))
       ('page-info
        (yunge-reader-native-request
         "page-info"

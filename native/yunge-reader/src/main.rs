@@ -7,7 +7,7 @@ use regex::{Regex, RegexBuilder};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::env;
 use std::fs::{self, File};
 use std::io::{self, BufRead, Write};
@@ -19,13 +19,16 @@ type Error = Box<dyn std::error::Error>;
 const PROTOCOL_VERSION: u32 = 1;
 const PDFIUM_API: &str = "7881";
 const BUILD_ID: &str = env!("YUNGE_READER_BUILD_ID");
-const CAPABILITIES: [&str; 5] = [
+const CAPABILITIES: [&str; 6] = [
     "cache-maintenance",
     "lifecycle",
+    "pdf-outline",
     "pdf-render",
     "pdf-search",
     "pdf-text",
 ];
+const OUTLINE_MAX_ITEMS: usize = 10_000;
+const OUTLINE_MAX_TITLE_CHARACTERS: usize = 1_024;
 const SEARCH_CONTEXT_CHARACTERS: usize = 24;
 const SEARCH_MAX_MATCHES: u32 = 200;
 const SEARCH_MAX_PAGES: u32 = 64;
@@ -48,7 +51,7 @@ struct Ready<'a> {
     build_id: &'a str,
     #[serde(rename = "pdfium-api")]
     pdfium_api: &'static str,
-    capabilities: [&'static str; 5],
+    capabilities: [&'static str; 6],
 }
 
 #[derive(Debug, Serialize)]
@@ -185,6 +188,103 @@ struct SearchMatch {
     text: String,
     before: String,
     after: String,
+}
+
+#[derive(Debug, Serialize)]
+struct OutlineDestination {
+    page: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    x: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    y: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    zoom: Option<f32>,
+    view: &'static str,
+}
+
+#[derive(Debug, Serialize)]
+struct OutlineItem {
+    title: String,
+    depth: usize,
+    destination: Option<OutlineDestination>,
+}
+
+#[derive(Debug, Serialize)]
+struct OutlineResult {
+    items: Vec<OutlineItem>,
+    truncated: bool,
+}
+
+fn finite_point(value: Option<PdfPoints>) -> Option<f32> {
+    value
+        .map(|point| point.value)
+        .filter(|value| value.is_finite())
+}
+
+fn outline_title(value: Option<String>) -> String {
+    let trimmed = value.as_deref().unwrap_or("").trim();
+    let title: String =
+        trimmed.chars().take(OUTLINE_MAX_TITLE_CHARACTERS).collect();
+    if title.is_empty() {
+        "(untitled)".to_owned()
+    } else {
+        title
+    }
+}
+
+fn outline_destination_view(
+    settings: PdfDestinationViewSettings,
+) -> (Option<f32>, Option<f32>, Option<f32>, &'static str) {
+    match settings {
+        PdfDestinationViewSettings::SpecificCoordinatesAndZoom(x, y, zoom) => (
+            finite_point(x),
+            finite_point(y),
+            zoom.filter(|value| value.is_finite() && *value > 0.0),
+            "xyz",
+        ),
+        PdfDestinationViewSettings::FitPageToWindow => {
+            (None, None, None, "fit")
+        }
+        PdfDestinationViewSettings::FitPageHorizontallyToWindow(y) => {
+            (None, finite_point(y), None, "fit-horizontal")
+        }
+        PdfDestinationViewSettings::FitPageVerticallyToWindow(x) => {
+            (finite_point(x), None, None, "fit-vertical")
+        }
+        PdfDestinationViewSettings::FitPageToRectangle(rectangle) => (
+            Some(rectangle.left().value),
+            Some(rectangle.top().value),
+            None,
+            "fit-rectangle",
+        ),
+        PdfDestinationViewSettings::FitBoundsToWindow => {
+            (None, None, None, "fit-bounds")
+        }
+        PdfDestinationViewSettings::FitBoundsHorizontallyToWindow(y) => {
+            (None, finite_point(y), None, "fit-bounds-horizontal")
+        }
+        PdfDestinationViewSettings::FitBoundsVerticallyToWindow(x) => {
+            (finite_point(x), None, None, "fit-bounds-vertical")
+        }
+        PdfDestinationViewSettings::Unknown => (None, None, None, "unknown"),
+    }
+}
+
+fn outline_destination(
+    destination: PdfDestination<'_>,
+) -> Option<OutlineDestination> {
+    let page = u32::try_from(destination.page_index().ok()?).ok()?;
+    let settings = destination
+        .view_settings()
+        .unwrap_or(PdfDestinationViewSettings::Unknown);
+    let (x, y, zoom, view) = outline_destination_view(settings);
+    Some(OutlineDestination {
+        page,
+        x,
+        y,
+        zoom,
+        view,
+    })
 }
 
 fn default_search_match_limit() -> u32 {
@@ -670,6 +770,49 @@ impl Service {
             ));
         }
         Ok(json!({ "closed": true }))
+    }
+
+    fn outline(&self, params: Value) -> Result<Value, ServiceError> {
+        let params: DocumentParams = Self::parse(params)?;
+        let document = self.document(params.document)?;
+        let mut stack = Vec::new();
+        let mut visited = HashSet::new();
+        let mut items = Vec::new();
+        let mut truncated = false;
+        if let Some(root) = document.bookmarks().root() {
+            stack.push((root, 0));
+        }
+        while let Some((bookmark, depth)) = stack.pop() {
+            if items.len() == OUTLINE_MAX_ITEMS {
+                truncated = true;
+                break;
+            }
+            if !visited.insert(bookmark.clone()) {
+                truncated = true;
+                continue;
+            }
+            if let Some(sibling) = bookmark.next_sibling() {
+                stack.push((sibling, depth));
+            }
+            if let Some(child) = bookmark.first_child() {
+                stack.push((child, depth + 1));
+            }
+            items.push(OutlineItem {
+                title: outline_title(bookmark.title()),
+                depth,
+                destination: bookmark
+                    .destination()
+                    .and_then(outline_destination),
+            });
+        }
+        serde_json::to_value(OutlineResult { items, truncated }).map_err(
+            |error| {
+                ServiceError::new(
+                    "outline-failed",
+                    format!("could not encode document outline: {error}"),
+                )
+            },
+        )
     }
 
     fn page_info(&self, params: Value) -> Result<Value, ServiceError> {
@@ -1165,6 +1308,7 @@ impl Service {
             "pdfium-info" => self.pdfium_info(request.params),
             "open" => self.open(request.params),
             "close" => self.close(request.params),
+            "outline" => self.outline(request.params),
             "page-info" => self.page_info(request.params),
             "page-text" => self.page_text(request.params),
             "cache-prune" => self.cache_prune(request.params),
@@ -1404,6 +1548,11 @@ mod tests {
             "\n",
             r#"{"id":7,"op":"cache-prune","params":{"#,
             r#""max-bytes":10,"target-bytes":5,"extra":true}}"#,
+            "\n",
+            r#"{"id":8,"op":"outline","params":{"document":1,"#,
+            r#""extra":true}}"#,
+            "\n",
+            r#"{"id":9,"op":"outline","params":{"document":1}}"#,
         ));
         assert_eq!(output[1]["error"]["code"], "invalid-params");
         assert_eq!(output[2]["error"]["code"], "invalid-render-size");
@@ -1412,6 +1561,43 @@ mod tests {
         assert_eq!(output[5]["error"]["code"], "invalid-search-limit");
         assert_eq!(output[6]["error"]["code"], "invalid-cache-limit");
         assert_eq!(output[7]["error"]["code"], "invalid-params");
+        assert_eq!(output[8]["error"]["code"], "invalid-params");
+        assert_eq!(output[9]["error"]["code"], "unknown-document");
+    }
+
+    #[test]
+    fn outline_titles_are_nonempty_and_bounded() {
+        assert_eq!(outline_title(None), "(untitled)");
+        assert_eq!(outline_title(Some("   ".to_owned())), "(untitled)");
+        let value =
+            format!("  {}  ", "章".repeat(OUTLINE_MAX_TITLE_CHARACTERS + 2));
+        let title = outline_title(Some(value));
+        assert_eq!(title.chars().count(), OUTLINE_MAX_TITLE_CHARACTERS);
+        assert!(title.chars().all(|character| character == '章'));
+    }
+
+    #[test]
+    fn outline_views_preserve_coordinates_and_zoom_hints() {
+        let (x, y, zoom, view) = outline_destination_view(
+            PdfDestinationViewSettings::SpecificCoordinatesAndZoom(
+                Some(PdfPoints::new(12.0)),
+                Some(PdfPoints::new(34.0)),
+                Some(1.5),
+            ),
+        );
+        assert_eq!(
+            (x, y, zoom, view),
+            (Some(12.0), Some(34.0), Some(1.5), "xyz")
+        );
+        let (x, y, zoom, view) = outline_destination_view(
+            PdfDestinationViewSettings::FitPageHorizontallyToWindow(Some(
+                PdfPoints::new(500.0),
+            )),
+        );
+        assert_eq!(
+            (x, y, zoom, view),
+            (None, Some(500.0), None, "fit-horizontal")
+        );
     }
 
     #[test]

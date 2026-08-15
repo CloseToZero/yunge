@@ -18,8 +18,8 @@ The helper writes one message immediately after startup:
 #+begin_src json
 {"kind":"ready","protocol":1,"build-id":"HASH",
  "pdfium-api":"7881",
- "capabilities":["cache-maintenance","lifecycle","pdf-render",
-                 "pdf-search","pdf-text"]}
+ "capabilities":["cache-maintenance","lifecycle","pdf-outline",
+                 "pdf-render","pdf-search","pdf-text"]}
 #+end_src
 
 Emacs requires the protocol, build ID, PDFium API, and all capabilities to
@@ -36,8 +36,8 @@ reject unknown fields.
 {"id":1,"op":"ping"}
 {"id":1,"ok":true,
  "result":{"protocol":1,"backend":"pdfium",
-           "capabilities":["cache-maintenance","lifecycle","pdf-render",
-                           "pdf-search","pdf-text"]}}
+           "capabilities":["cache-maintenance","lifecycle","pdf-outline",
+                           "pdf-render","pdf-search","pdf-text"]}}
 #+end_src
 
 Failures have a stable code and diagnostic message:
@@ -103,6 +103,28 @@ PDF point width and height plus the page label.
 {"id":4,"ok":true,
  "result":{"page":0,"width":595.276,"height":841.89,"label":"1"}}
 #+end_src
+
+=outline= accepts a =document= handle.  It returns bookmarks in bounded
+preorder with a zero-based =depth=.  A structural bookmark has a null
+=destination=.  A local destination contains a zero-based page, optional
+canonical PDF =x=, =y=, and =zoom= values, plus its PDF view kind.
+
+#+begin_src json
+{"id":5,"op":"outline","params":{"document":1}}
+{"id":5,"ok":true,
+ "result":{"items":[
+   {"title":"Chapter 1","depth":0,
+    "destination":{"page":2,"y":700,"view":"fit-horizontal"}}],
+   "truncated":false}}
+#+end_src
+
+The helper returns at most 10,000 entries and at most 1,024 Unicode
+characters per title.  =truncated= is true when traversal reaches the entry
+limit or detects a bookmark cycle.  View kinds are =xyz=, =fit=,
+=fit-horizontal=, =fit-vertical=, =fit-rectangle=, =fit-bounds=,
+=fit-bounds-horizontal=, =fit-bounds-vertical=, and =unknown=.  Outline
+extraction does not expose or execute URI, remote-document, embedded-document,
+Launch, or unsupported bookmark actions.
 
 =page-text= accepts =document= and =page=.  It returns the complete Unicode
 text plus characters in PDFium index order.  Each character has a zero-based

@@ -65,7 +65,7 @@
          (build-id . "test-build")
          (pdfium-api . "7881")
          (capabilities
-          . ("cache-maintenance" "lifecycle" "pdf-render"
+          . ("cache-maintenance" "lifecycle" "pdf-outline" "pdf-render"
              "pdf-search" "pdf-text"))))
       (should (= (length sent) 1))
       (let ((request
@@ -89,7 +89,7 @@
         (build-id . "old-build")
         (pdfium-api . "7881")
         (capabilities
-         . ("cache-maintenance" "lifecycle" "pdf-render"
+         . ("cache-maintenance" "lifecycle" "pdf-outline" "pdf-render"
             "pdf-search" "pdf-text"))))
      :type 'error)
     (should-error
@@ -99,7 +99,7 @@
         (build-id . "test-build")
         (pdfium-api . "7881")
         (capabilities
-         . ("cache-maintenance" "lifecycle" "pdf-render"
+         . ("cache-maintenance" "lifecycle" "pdf-outline" "pdf-render"
             "pdf-search" "pdf-text"))))
      :type 'error)
     (should-error
@@ -108,7 +108,9 @@
         (protocol . 1)
         (build-id . "test-build")
         (pdfium-api . "7881")
-        (capabilities . ("lifecycle" "pdf-render" "pdf-text"))))
+        (capabilities
+         . ("cache-maintenance" "lifecycle" "pdf-render"
+            "pdf-search" "pdf-text"))))
      :type 'error)))
 
 (ert-deftest yunge-reader-native-stop-requests-shutdown-then-arms-timeout ()
@@ -234,7 +236,7 @@
        (build-id . "test-build")
        (pdfium-api . "7881")
        (capabilities
-        . ("cache-maintenance" "lifecycle" "pdf-render"
+        . ("cache-maintenance" "lifecycle" "pdf-outline" "pdf-render"
            "pdf-search" "pdf-text"))))
     (should (= (length sent) 1))
     (cl-letf (((symbol-function 'run-at-time)

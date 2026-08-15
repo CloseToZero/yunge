@@ -334,6 +334,7 @@ Shared reader bindings are:
   match.
 - ~+/-~ zoom in or out, ~=~ resets zoom, and ~W/P~ fit the document width or
   page to the window.
+- ~o~ opens the document outline when the active format provides one.
 - ~gr~ refreshes the rendered view and ~q~ quits its window.
 
 In fixed-layout readers, ~J/K~ move to the next or previous page, ~gg/G~ move
@@ -342,6 +343,10 @@ retain screen-scrolling behavior.  These page keys stay separate from search
 repeat keys.  Search-result changes and ~gg/G/gp~ are semantic jumps, so
 ~C-o/C-i~ can revisit them.  Paging and ordinary scrolling do not add jump
 entries.
+
+Choosing an outline destination is a semantic jump and participates in
+~C-o/C-i~.  Loading an outline never opens a late minibuffer after the user
+has changed the originating Reader window.
 
 * Cross-platform rules
 

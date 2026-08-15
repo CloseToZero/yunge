@@ -20,6 +20,7 @@ The current PDF adapter provides:
 - canonical bounds and rotated glyph quadrilaterals for local hit testing;
 - cross-page drag, polygonal SVG highlights, and exact text copying;
 - bounded Unicode literal search, repeat navigation, and glyph-level jumping;
+- bounded document outlines with stable internal destinations;
 - versioned per-document places with zoom-aware PDF viewport restoration;
 - window-local back and forward history for semantic Reader jumps;
 - immutable render keys, stale-response rejection, and bounded disk cache
@@ -27,12 +28,13 @@ The current PDF adapter provides:
 - graceful, forced, idle, EOF, and Emacs-exit service shutdown paths.
 
 The reader uses one key vocabulary with or without Evil.  Shared keys are
-=y= to copy the logical selection, =/= to start a search, =n/N= to visit the
-next or previous match, =gr= to refresh, =+/-= to zoom, === to reset zoom,
-=W/P= to fit width or page, and =q= to quit.  PDF views use =J/K= for the
-next or previous page, =gg/G= for the first or last page, =gp= for a page
-prompt, and Page Down or Page Up for screen scrolling.  Evil starts Reader
-buffers in Normal state and leaves Visual =y= as =evil-yank=.
+=y= to copy the logical selection, =o= to open the outline, =/= to start a
+search, =n/N= to visit the next or previous match, =gr= to refresh, =+/-= to
+zoom, === to reset zoom, =W/P= to fit width or page, and =q= to quit.  PDF
+views use =J/K= for the next or previous page, =gg/G= for the first or last
+page, =gp= for a page prompt, and Page Down or Page Up for screen scrolling.
+Evil starts Reader buffers in Normal state and leaves Visual =y= as
+=evil-yank=.
 =M-x yunge-reader-clear-search= removes the active match highlight.
 
 * Library boundary
@@ -40,7 +42,7 @@ buffers in Normal state and leaves Visual =y= as =evil-yank=.
 The implementation is divided into four pieces:
 
 - =yunge-reader.el= owns drivers, documents, stable positions, logical
-  selections, bounded search state, reader buffers, and zoom state.
+  selections, outlines, bounded search state, reader buffers, and zoom state.
 - =yunge-reader-native.el= owns subprocess requests, build identity,
   reference counting, cache policy, idle shutdown, and explicit lifecycle
   commands.
@@ -89,8 +91,9 @@ later traversal.
 
 Reader targets use the same window-local =C-o/C-i= history as ordinary
 buffers.  PDF =gg=, =G=, and =gp= commands, together with successful search
-result changes, create semantic jumps.  =J/K= paging, Page Up or Page Down,
-mouse wheel movement, and ordinary scrolling do not fill the history.
+result and outline changes, create semantic jumps.  =J/K= paging, Page Up or
+Page Down, mouse wheel movement, and ordinary scrolling do not fill the
+history.
 
 If a target Reader buffer was killed, traversal reopens the document
 asynchronously in a hidden buffer.  It replaces the jump window only after the
@@ -112,6 +115,25 @@ the coordinates are then projected into the current render size.  A page past
 the new document end is clamped to the last page.  If the Reader buffer has no
 live window, the PDF adapter retains the position and applies it before the
 next visible-page update and before recording any replacement.
+
+An outline is a bounded preorder list of titled entries.  Entries may be
+structural headings or carry a format-independent action.  The first action
+kind is a stable location with optional zoom hints; no Lisp object contains a
+PDFium bookmark or destination handle.  This lets PDF, EPUB, and later
+formats share the selection UI and jump machinery without pretending their
+source outline formats are identical.
+
+=o= requests the outline once per open document and presents actionable
+entries through ordinary completion.  Duplicate labels receive stable
+numeric suffixes.  A successful choice uses the same guarded live-place
+restore as jump history, so a rejected target rolls back view and zoom state
+and cannot replace the saved place.  PDF XYZ, fit-page, and fit-width hints
+map to Reader zoom modes; unsupported fit variants retain the current zoom.
+
+Outline loading may complete asynchronously.  The completion opens a prompt
+only while the original Reader window, buffer, point, scroll state, selected
+window, and minibuffer state are unchanged.  Otherwise it caches the result
+and waits for the next =o=, avoiding a late prompt in unrelated work.
 
 A logical selection contains two positions and optional resolved text.  Its
 painted rectangles are disposable view state, not the source of truth.
@@ -261,7 +283,7 @@ selection, and annotation conformance tests.
 
 The next implementation slices should add, in order:
 
-1. document outlines and internal or external links;
+1. internal and external page links;
 2. annotation anchors and independent decoration layers; and
 3. a second format driver to exercise the reflow contract.
 
@@ -276,10 +298,12 @@ stale search rejection, independent match painting, precise match scrolling,
 canonical viewport capture, cross-scale place restoration, page clamping,
 deferred window restoration, failed-open place protection, rejected restores,
 immutable Reader jump capture, failed live-jump rollback, asynchronous reopen,
-late-window protection, semantic page tracking, keyed render completions,
-cache limits, prune-before-stop ordering, and lease races.  Rust tests cover
-the handshake, strict parameters, safe cache eviction, Unicode literal
-matching, byte-to-PDFium-index mapping, search cursors and limits, regular and
+late-window protection, semantic page tracking, outline caching, unique
+outline completion labels, outline-place restoration, keyed render
+completions, cache limits, prune-before-stop ordering, and lease races.  Rust
+tests cover the handshake, strict parameters, bounded outline titles,
+destination view mapping, safe cache eviction, Unicode literal matching,
+byte-to-PDFium-index mapping, search cursors and limits, regular and
 singular-angle quadrilateral recovery, cross-page inclusive ranges, protocol
 errors, shutdown ordering, and EOF.
 
@@ -299,3 +323,8 @@ A real PDF search check finds case-sensitive =SLIME= at offsets =0..4= in the
 reference-card fixture.  A case-insensitive =compile= query returns two bounded
 results, resumes at cursor =1485= without duplication, and returns the final
 match before reporting =done=.
+
+A real outline smoke check opens =pdfium-render/test/test-toc.pdf= through the
+pinned PDFium build.  It returns 101 entries in preorder, preserves depths zero
+through three, maps destinations across all seven pages, and reports that the
+result was not truncated before closing the document and helper cleanly.
