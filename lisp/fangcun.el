@@ -69,7 +69,8 @@ When the helper is unavailable, synchronization falls back to Emacs."
 
 (cl-defstruct fangcun-backlink
   node
-  position)
+  position
+  count)
 
 (defconst fangcun-backlinks-buffer-name "*Fangcun Backlinks*")
 
@@ -1704,7 +1705,8 @@ When MARKERP is non-nil, return the location as a marker."
   "Return a Fangcun backlink represented by SQLite ROW."
   (make-fangcun-backlink
    :node (fangcun--node-from-row (cl-subseq row 0 6))
-   :position (elt row 6)))
+   :position (elt row 6)
+   :count (and (> (length row) 7) (elt row 7))))
 
 (defun fangcun--attach-backlink-node-data
     (database backlinks target-id)
@@ -1747,9 +1749,11 @@ When one source contains several links, retain its first occurrence."
         database
         (concat
          "SELECT n.id, n.yiyu_id, y.name, y.root, "
-         "n.file, n.title, first_link.position "
+         "n.file, n.title, first_link.position, "
+         "first_link.occurrence_count "
          "FROM ("
-         "SELECT source_id, MIN(position) AS position "
+         "SELECT source_id, MIN(position) AS position, "
+         "COUNT(*) AS occurrence_count "
          "FROM links WHERE target_id = ? GROUP BY source_id"
          ") AS first_link "
          "JOIN nodes AS n ON n.id = first_link.source_id "

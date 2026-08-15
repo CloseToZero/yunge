@@ -47,6 +47,17 @@
       "方寸（Fangcun）"
       (plist-get tool :description)))))
 
+(ert-deftest yunge-mcp-fangcun-list-tools-describe-cursor-pages ()
+  (require 'fangcun-mcp)
+  (dolist (name '("fangcun_search_nodes" "fangcun_list_backlinks"))
+    (let* ((tool (gethash name yunge-mcp--tools))
+           (schema (yunge-mcp-tool-input-schema tool))
+           (properties (plist-get schema :properties)))
+      (should tool)
+      (should (plist-member properties :pageSize))
+      (should (plist-member properties :cursor))
+      (should-not (plist-member properties :limit)))))
+
 (ert-deftest yunge-mcp-dispatches-tool-arguments ()
   (let ((yunge-mcp--tools (make-hash-table :test #'equal)))
     (cl-letf (((symbol-function 'yunge-mcp--load-tools) #'ignore))

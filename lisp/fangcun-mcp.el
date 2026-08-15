@@ -3,9 +3,16 @@
 ;; SPDX-License-Identifier: MIT
 
 (require 'fangcun)
+(require 'json)
 (require 'seq)
 (require 'subr-x)
 (require 'yunge-mcp)
+
+(defconst fangcun-mcp--default-page-size 20
+  "Default number of results returned by a paginated tool call.")
+
+(defconst fangcun-mcp--maximum-page-size 100
+  "Maximum number of results returned by a paginated tool call.")
 
 (defconst fangcun-mcp--read-only-annotations
   '(:readOnlyHint t
@@ -31,18 +38,239 @@
    :yiyuName (fangcun-node-yiyu-name node)
    :file (fangcun-node-file node)))
 
-(defun fangcun-mcp--node-search-text (node)
-  "Return the searchable text belonging to NODE."
-  (string-join
-   (append
+(defun fangcun-mcp--page-size (arguments)
+  "Return and validate the page size in ARGUMENTS."
+  (let ((page-size
+         (or (plist-get arguments :pageSize)
+             fangcun-mcp--default-page-size)))
+    (unless
+        (and (integerp page-size)
+             (<= 1 page-size fangcun-mcp--maximum-page-size))
+      (user-error
+       ":pageSize must be an integer between 1 and %d"
+       fangcun-mcp--maximum-page-size))
+    page-size))
+
+(defun fangcun-mcp--encode-cursor (kind scope key)
+  "Return an opaque cursor for KIND, SCOPE, and sort KEY."
+  (base64-encode-string
+   (encode-coding-string
+    (json-serialize
+     (list
+      :version 1
+      :kind kind
+      :scope scope
+      :key (vconcat key)))
+    'utf-8)
+   t))
+
+(defun fangcun-mcp--decode-cursor
+    (cursor expected-kind expected-scope key-predicate)
+  "Decode CURSOR and validate its expected context and key.
+EXPECTED-KIND and EXPECTED-SCOPE bind the cursor to one result set.
+KEY-PREDICATE returns non-nil for a valid decoded sort key."
+  (when cursor
+    (unless (and (stringp cursor) (not (string-empty-p cursor)))
+      (user-error ":cursor must be a non-empty string"))
+    (condition-case error-data
+        (let* ((object
+                (json-parse-string
+                 (decode-coding-string
+                  (base64-decode-string cursor)
+                  'utf-8)
+                 :object-type 'plist
+                 :array-type 'list
+                 :null-object nil
+                 :false-object nil))
+               (version (plist-get object :version))
+               (kind (plist-get object :kind))
+               (scope (plist-get object :scope))
+               (key (plist-get object :key)))
+          (unless (and (= version 1)
+                       (equal kind expected-kind)
+                       (equal scope expected-scope)
+                       (funcall key-predicate key))
+            (user-error
+             "Cursor does not belong to this request"))
+          key)
+      (user-error
+       (signal (car error-data) (cdr error-data)))
+      (error (user-error "Invalid cursor")))))
+
+(defun fangcun-mcp--normalize-search-string (value)
+  "Return VALUE without properties and normalized for search."
+  (downcase (substring-no-properties (or value ""))))
+
+(defun fangcun-mcp--contains-p (needle haystack)
+  "Return non-nil when HAYSTACK contains NEEDLE."
+  (string-match-p (regexp-quote needle) haystack))
+
+(defun fangcun-mcp--word-contains-p (needle haystack)
+  "Return non-nil when HAYSTACK contains NEEDLE as a word."
+  (string-match-p
+   (concat "\\_<" (regexp-quote needle) "\\_>")
+   haystack))
+
+(defun fangcun-mcp--some-string-p (predicate strings)
+  "Return non-nil when PREDICATE accepts an element of STRINGS."
+  (seq-some predicate strings))
+
+(defun fangcun-mcp--term-match (term fields)
+  "Return the best score and field for TERM in normalized FIELDS."
+  (let ((title (plist-get fields :title))
+        (aliases (plist-get fields :aliases))
+        (tags (plist-get fields :tags))
+        (file (plist-get fields :file))
+        (yiyu (plist-get fields :yiyu)))
+    (cond
+     ((equal term title) (cons 100 "title"))
+     ((member term aliases) (cons 100 "alias"))
+     ((string-prefix-p term title) (cons 90 "title"))
+     ((fangcun-mcp--some-string-p
+       (lambda (value) (string-prefix-p term value))
+       aliases)
+      (cons 90 "alias"))
+     ((fangcun-mcp--word-contains-p term title)
+      (cons 80 "title"))
+     ((fangcun-mcp--some-string-p
+       (lambda (value)
+         (fangcun-mcp--word-contains-p term value))
+       aliases)
+      (cons 80 "alias"))
+     ((fangcun-mcp--contains-p term title)
+      (cons 70 "title"))
+     ((fangcun-mcp--some-string-p
+       (lambda (value) (fangcun-mcp--contains-p term value))
+       aliases)
+      (cons 70 "alias"))
+     ((member term tags) (cons 60 "tag"))
+     ((fangcun-mcp--some-string-p
+       (lambda (value) (fangcun-mcp--contains-p term value))
+       tags)
+      (cons 50 "tag"))
+     ((fangcun-mcp--contains-p term file) (cons 30 "file"))
+     ((fangcun-mcp--some-string-p
+       (lambda (value) (fangcun-mcp--contains-p term value))
+       yiyu)
+      (cons 20 "yiyu")))))
+
+(defun fangcun-mcp--whole-query-rank (query fields)
+  "Return the whole-title or alias match rank for QUERY in FIELDS."
+  (let ((title (plist-get fields :title))
+        (aliases (plist-get fields :aliases)))
+    (cond
+     ((or (equal query title) (member query aliases)) 3)
+     ((or (string-prefix-p query title)
+          (fangcun-mcp--some-string-p
+           (lambda (value) (string-prefix-p query value))
+           aliases))
+      2)
+     ((or (fangcun-mcp--contains-p query title)
+          (fangcun-mcp--some-string-p
+           (lambda (value) (fangcun-mcp--contains-p query value))
+           aliases))
+      1)
+     (t 0))))
+
+(defun fangcun-mcp--search-result (node terms query)
+  "Return NODE's ranked search result for TERMS and QUERY, or nil."
+  (let* ((fields
+          (list
+           :title
+           (fangcun-mcp--normalize-search-string
+            (fangcun-node-title node))
+           :aliases
+           (mapcar
+            #'fangcun-mcp--normalize-search-string
+            (fangcun-node-aliases node))
+           :tags
+           (mapcar
+            #'fangcun-mcp--normalize-search-string
+            (fangcun-node-tags node))
+           :file
+           (fangcun-mcp--normalize-search-string
+            (fangcun-node-file node))
+           :yiyu
+           (mapcar
+            #'fangcun-mcp--normalize-search-string
+            (list
+             (fangcun-node-yiyu-id node)
+             (fangcun-node-yiyu-name node)))))
+         (matches
+          (mapcar
+           (lambda (term)
+             (fangcun-mcp--term-match term fields))
+           terms)))
+    (when (seq-every-p #'identity matches)
+      (let* ((scores (mapcar #'car matches))
+              (matched-fields
+               (delete-dups (mapcar #'cdr matches)))
+             (key
+              (list
+               (fangcun-mcp--whole-query-rank query fields)
+               (apply #'min scores)
+               (apply #'+ scores)
+               (plist-get fields :title)
+               (fangcun-mcp--normalize-search-string
+                (fangcun-node-yiyu-id node))
+               (plist-get fields :file)
+               (fangcun-node-id node))))
+        (list
+         :node node
+         :matched-fields matched-fields
+         :key key)))))
+
+(defun fangcun-mcp--string-key-before-p (left right)
+  "Return non-nil when string key LEFT sorts before RIGHT."
+  (cond
+   ((null left) nil)
+   ((string-lessp (car left) (car right)) t)
+   ((equal (car left) (car right))
+    (fangcun-mcp--string-key-before-p (cdr left) (cdr right)))
+   (t nil)))
+
+(defun fangcun-mcp--search-key-before-p (left right)
+  "Return non-nil when search key LEFT sorts before RIGHT."
+  (cond
+   ((> (nth 0 left) (nth 0 right)) t)
+   ((< (nth 0 left) (nth 0 right)) nil)
+   ((> (nth 1 left) (nth 1 right)) t)
+   ((< (nth 1 left) (nth 1 right)) nil)
+   ((> (nth 2 left) (nth 2 right)) t)
+   ((< (nth 2 left) (nth 2 right)) nil)
+   (t
+    (fangcun-mcp--string-key-before-p
+     (nthcdr 3 left) (nthcdr 3 right)))))
+
+(defun fangcun-mcp--valid-search-key-p (key)
+  "Return non-nil when KEY is a valid search cursor key."
+  (and (listp key)
+       (= (length key) 7)
+       (seq-every-p #'numberp (seq-take key 3))
+       (seq-every-p #'stringp (nthcdr 3 key))))
+
+(defun fangcun-mcp--items-after-key
+    (items cursor-key key-function before-p)
+  "Return ITEMS strictly after CURSOR-KEY in their current order."
+  (if (null cursor-key)
+      items
+    (seq-drop-while
+     (lambda (item)
+       (not
+        (funcall
+         before-p cursor-key (funcall key-function item))))
+     items)))
+
+(defun fangcun-mcp--page (items page-size)
+  "Return a page and optional continuation key from sorted ITEMS."
+  (let* ((window (seq-take items (1+ page-size)))
+         (has-more (> (length window) page-size))
+         (page (if has-more (butlast window) window)))
     (list
-     (fangcun-node-title node)
-     (fangcun-node-yiyu-id node)
-     (fangcun-node-yiyu-name node)
-     (fangcun-node-file node))
-    (fangcun-node-aliases node)
-    (fangcun-node-tags node))
-   "\n"))
+     :items page
+     :next-key
+     (and has-more
+          (plist-get (car (last page)) :key)))))
 
 (defun fangcun-mcp--list-yiyus (_arguments)
   "Return the configured Fangcun yiyus."
@@ -58,25 +286,60 @@
 (defun fangcun-mcp--search-nodes (arguments)
   "Search Fangcun nodes described by MCP ARGUMENTS."
   (fangcun--ensure-session)
-  (let* ((query (fangcun-mcp--required-string arguments :query))
-         (terms (split-string query nil t))
-         (limit (or (plist-get arguments :limit) 20)))
-    (unless (and (integerp limit) (<= 1 limit 100))
-      (user-error ":limit must be an integer between 1 and 100"))
-    (vconcat
-     (mapcar
-      #'fangcun-mcp--node-object
-      (seq-take
-       (seq-filter
-        (lambda (node)
-          (let ((case-fold-search t)
-                (text (fangcun-mcp--node-search-text node)))
-            (seq-every-p
-             (lambda (term)
-               (string-match-p (regexp-quote term) text))
-             terms)))
-        (fangcun-node-list))
-       limit)))))
+  (let* ((raw-query
+          (fangcun-mcp--required-string arguments :query))
+          (terms
+           (mapcar
+            #'fangcun-mcp--normalize-search-string
+            (split-string raw-query nil t)))
+          (query
+           (if terms
+               (string-join terms " ")
+             (user-error ":query must contain a search term")))
+         (page-size (fangcun-mcp--page-size arguments))
+         (cursor-key
+          (fangcun-mcp--decode-cursor
+           (plist-get arguments :cursor)
+           "search-nodes" query
+           #'fangcun-mcp--valid-search-key-p))
+          (results
+           (sort
+            (delq
+             nil
+             (mapcar
+              (lambda (node)
+                (fangcun-mcp--search-result node terms query))
+              (fangcun-node-list)))
+            (lambda (left right)
+              (fangcun-mcp--search-key-before-p
+               (plist-get left :key)
+               (plist-get right :key)))))
+         (remaining
+          (fangcun-mcp--items-after-key
+           results cursor-key
+           (lambda (result) (plist-get result :key))
+           #'fangcun-mcp--search-key-before-p))
+         (page (fangcun-mcp--page remaining page-size))
+         (items (plist-get page :items))
+         (next-key (plist-get page :next-key)))
+    (append
+     (list
+      :nodes
+      (vconcat
+       (mapcar
+        (lambda (result)
+          (list
+           :node
+           (fangcun-mcp--node-object
+            (plist-get result :node))
+           :matchedFields
+           (vconcat (plist-get result :matched-fields))))
+        items)))
+     (when next-key
+       (list
+        :nextCursor
+        (fangcun-mcp--encode-cursor
+         "search-nodes" query next-key))))))
 
 (defun fangcun-mcp--node-by-id (id)
   "Return the indexed Fangcun node named ID."
@@ -131,30 +394,86 @@
      :node (fangcun-mcp--node-object node)
      :content (fangcun-mcp--read-node-source node))))
 
+(defun fangcun-mcp--backlink-key (backlink)
+  "Return the stable display-order key for BACKLINK."
+  (let ((node (fangcun-backlink-node backlink)))
+    (list
+     (fangcun-mcp--normalize-search-string
+      (fangcun-node-title node))
+     (fangcun-mcp--normalize-search-string
+      (fangcun-node-yiyu-name node))
+     (fangcun-mcp--normalize-search-string
+      (fangcun-node-file node))
+     (fangcun-node-id node))))
+
+(defun fangcun-mcp--valid-backlink-key-p (key)
+  "Return non-nil when KEY is a valid backlink cursor key."
+  (and (listp key)
+       (= (length key) 4)
+       (seq-every-p #'stringp key)))
+
 (defun fangcun-mcp--list-backlinks (arguments)
   "List backlinks described by MCP ARGUMENTS."
   (let* ((id (fangcun-mcp--required-string arguments :id))
          (include-preview (plist-get arguments :includePreview))
          (target (fangcun-mcp--node-by-id id))
-         (backlinks (fangcun-backlink-occurrence-list id))
+         (page-size (fangcun-mcp--page-size arguments))
+         (cursor-key
+          (fangcun-mcp--decode-cursor
+           (plist-get arguments :cursor)
+           "list-backlinks" id
+           #'fangcun-mcp--valid-backlink-key-p))
+          (results
+           (sort
+            (mapcar
+             (lambda (backlink)
+               (list
+                :backlink backlink
+                :key (fangcun-mcp--backlink-key backlink)))
+             (fangcun-backlink-list id))
+            (lambda (left right)
+              (fangcun-mcp--string-key-before-p
+               (plist-get left :key)
+               (plist-get right :key)))))
+         (remaining
+          (fangcun-mcp--items-after-key
+           results cursor-key
+           (lambda (result) (plist-get result :key))
+           #'fangcun-mcp--string-key-before-p))
+         (page (fangcun-mcp--page remaining page-size))
+         (items (plist-get page :items))
+         (next-key (plist-get page :next-key))
+         (backlinks
+          (mapcar
+           (lambda (result) (plist-get result :backlink))
+           items))
          (previews
           (when include-preview
             (fangcun--backlink-previews backlinks))))
-    (list
-     :target (fangcun-mcp--node-object target)
-     :backlinks
-     (vconcat
-      (mapcar
-       (lambda (backlink)
-         (append
-          (list
-           :source
-           (fangcun-mcp--node-object
-            (fangcun-backlink-node backlink))
-           :position (fangcun-backlink-position backlink))
-          (when include-preview
-            (list :preview (gethash backlink previews)))))
-       backlinks)))))
+    (append
+     (list
+      :target (fangcun-mcp--node-object target)
+      :backlinks
+      (vconcat
+       (mapcar
+        (lambda (backlink)
+          (append
+           (list
+            :source
+            (fangcun-mcp--node-object
+             (fangcun-backlink-node backlink))
+            :occurrenceCount
+            (or (fangcun-backlink-count backlink) 1)
+            :firstPosition
+            (fangcun-backlink-position backlink))
+           (when include-preview
+             (list :preview (gethash backlink previews)))))
+        backlinks)))
+     (when next-key
+       (list
+        :nextCursor
+        (fangcun-mcp--encode-cursor
+         "list-backlinks" id next-key))))))
 
 (defun fangcun-mcp--yiyu-by-id (id yiyus)
   "Return the member of YIYUS named ID."
@@ -229,11 +548,17 @@
  "fangcun_search_nodes"
  (concat
   "Search indexed 方寸（Fangcun） Org note nodes by title, alias, tag, "
-  "一隅（yiyu）, or relative file.")
+  "一隅（yiyu）, or relative file. Results are relevance-ranked and "
+  "returned one cursor page at a time.")
  '(:type "object"
    :properties
    (:query (:type "string" :description "Whitespace-separated search terms")
-    :limit (:type "integer" :minimum 1 :maximum 100 :default 20))
+    :pageSize
+    (:type "integer" :minimum 1 :maximum 100 :default 20
+     :description "Maximum nodes to return in this page")
+    :cursor
+    (:type "string"
+     :description "Opaque nextCursor from the preceding search page"))
    :required ["query"]
    :additionalProperties :false)
  #'fangcun-mcp--search-nodes
@@ -253,15 +578,23 @@
 (yunge-mcp-register-tool
  "fangcun_list_backlinks"
  (concat
-  "List every indexed Org link that points to a 方寸（Fangcun） note node. "
-  "Source-line previews can be included on request.")
+  "List unique 方寸（Fangcun） note nodes containing indexed Org links "
+  "to a target node. Each result includes its occurrence count and first "
+  "position. Results are returned one cursor page at a time; source-line "
+  "previews can be included on request.")
  '(:type "object"
    :properties
    (:id (:type "string" :description "Target 方寸（Fangcun） node ID")
+    :pageSize
+    (:type "integer" :minimum 1 :maximum 100 :default 20
+     :description "Maximum source nodes to return in this page")
+    :cursor
+    (:type "string"
+     :description "Opaque nextCursor from the preceding backlink page")
     :includePreview
     (:type "boolean"
      :description
-     "Include a one-line preview for each backlink occurrence"
+     "Include the first occurrence preview for each source node"
      :default :false))
    :required ["id"]
    :additionalProperties :false)

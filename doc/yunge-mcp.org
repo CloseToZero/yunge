@@ -12,11 +12,33 @@ The initial tool set belongs to Fangcun:
 - =fangcun_list_yiyus= lists the configured note roots by identifier,
   display name, and absolute root path.
 - =fangcun_search_nodes= searches node titles, aliases, tags, yiyu names, and
-  relative files.
+  relative files.  Results are ranked by match quality and use opaque cursor
+  pagination.
 - =fangcun_read_node= returns one node's metadata and Org source.
-- =fangcun_list_backlinks= returns every indexed link to one node and can
-  optionally include a one-line source preview for each occurrence.
+- =fangcun_list_backlinks= returns unique source nodes linking to one node,
+  together with each source's occurrence count and first link position.  It
+  uses opaque cursor pagination and can optionally include a one-line preview
+  of the first occurrence.
 - =fangcun_create_file_node= creates, saves, and indexes a new Org file node.
+
+* Search and backlink pagination
+
+Both =fangcun_search_nodes= and =fangcun_list_backlinks= accept =pageSize=
+between 1 and 100, defaulting to 20.  When more results exist, the response
+contains an opaque =nextCursor=.  Pass that value back as =cursor= with the
+same query or target ID to read the next page.  A response without
+=nextCursor= is the final page.
+
+Search requires every whitespace-separated query term to match.  Results
+prefer exact title or alias matches, then prefixes, word and substring
+matches, tags, relative files, and yiyu identifiers or names.  Ties have a
+stable node order.  Each result reports =matchedFields= so a caller can see
+why it matched without depending on an internal numeric score.
+
+Backlinks are paged by unique source node rather than individual link
+occurrence.  Repeated links in one source produce one result containing
+=occurrenceCount= and =firstPosition=.  With =includePreview= enabled, the
+preview belongs to that first occurrence.
 
 Run =M-x yunge-mcp-setup= to build and install the server, then declare it in
 the user configuration of selected AI agents.  The prompt always lists every

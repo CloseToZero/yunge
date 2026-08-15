@@ -1336,6 +1336,7 @@
       (fangcun-db-sync)
       (let ((backlinks (fangcun-backlink-list "work-file")))
         (should (= (length backlinks) 1))
+        (should (= (fangcun-backlink-count (car backlinks)) 2))
         (should
          (equal
           (fangcun-node-id
@@ -1712,21 +1713,118 @@
 (ert-deftest fangcun-mcp-searches-and-reads-nodes ()
   (fangcun-test-with-notes
     (fangcun-db-sync)
-    (let* ((matches
+    (let* ((search
             (fangcun-mcp--search-nodes
-             '(:query "A THEOREM" :limit 10)))
+             '(:query "A THEOREM" :pageSize 10)))
+           (matches (plist-get search :nodes))
            (match
             (seq-find
-             (lambda (node)
-               (equal (plist-get node :id) "theorem"))
+             (lambda (result)
+               (equal
+                (plist-get (plist-get result :node) :id)
+                "theorem"))
              matches))
            (result (fangcun-mcp--read-node '(:id "theorem"))))
       (should match)
-      (should (equal (plist-get match :title) "A theorem"))
+      (should
+       (equal
+        (plist-get (plist-get match :node) :title)
+        "A theorem"))
+      (should
+       (seq-contains-p (plist-get match :matchedFields) "title"))
       (should
        (string-match-p
         (regexp-quote "* [[id:source][A theorem]]")
         (plist-get result :content))))))
+
+(ert-deftest fangcun-mcp-ranks-and-pages-node-searches ()
+  (fangcun-test-with-notes
+    (fangcun-test--write-file
+     (expand-file-name "graph.org" personal-root)
+     (concat
+      ":PROPERTIES:\n"
+      ":ID: graph-exact\n"
+      ":END:\n"
+      "#+title: Graph theory\n"))
+    (fangcun-test--write-file
+     (expand-file-name "graph-extended.org" work-root)
+     (concat
+      ":PROPERTIES:\n"
+      ":ID: graph-prefix\n"
+      ":END:\n"
+      "#+title: Graph theory extended\n"))
+    (fangcun-test--write-file
+     (expand-file-name "alias.org" personal-root)
+     (concat
+      ":PROPERTIES:\n"
+      ":ID: graph-alias\n"
+      ":ALIASES: \"Graph theory\"\n"
+      ":END:\n"
+      "#+title: Topology\n"))
+    (fangcun-test--write-file
+     (expand-file-name "tagged.org" work-root)
+     (concat
+      ":PROPERTIES:\n"
+      ":ID: graph-tags\n"
+      ":END:\n"
+      "#+title: Networks\n"
+      "#+filetags: :graph:theory:\n"))
+    (fangcun-db-sync)
+    (let* ((first
+            (fangcun-mcp--search-nodes
+             '(:query "GRAPH theory" :pageSize 1)))
+           (first-items (plist-get first :nodes))
+           (cursor (plist-get first :nextCursor))
+           (second
+            (fangcun-mcp--search-nodes
+             (list
+              :query "graph theory"
+              :pageSize 3
+              :cursor cursor)))
+           (second-items (plist-get second :nodes))
+           (second-ids
+            (mapcar
+             (lambda (item)
+               (plist-get (plist-get item :node) :id))
+             (append second-items nil))))
+      (should (= (length first-items) 1))
+      (should
+       (equal
+        (plist-get
+         (plist-get (aref first-items 0) :node)
+         :id)
+        "graph-exact"))
+      (should (stringp cursor))
+      (should (= (length second-items) 3))
+      (should
+       (equal
+        second-ids
+        '("graph-alias" "graph-prefix" "graph-tags")))
+      (should
+       (equal
+        (append
+         (plist-get (aref second-items 0) :matchedFields)
+         nil)
+        '("alias")))
+      (should
+       (equal
+        (append
+         (plist-get (aref second-items 2) :matchedFields)
+         nil)
+        '("tag")))
+      (should-not (plist-member second :nextCursor))
+      (should-error
+       (fangcun-mcp--search-nodes
+        (list :query "graph" :cursor cursor))
+       :type 'user-error)
+      (should-error
+       (fangcun-mcp--search-nodes
+        '(:query "graph" :pageSize 0))
+       :type 'user-error)
+      (should-error
+       (fangcun-mcp--search-nodes
+        '(:query "graph" :cursor "not-a-cursor"))
+       :type 'user-error))))
 
 (ert-deftest fangcun-mcp-lists-configured-yiyus ()
   (fangcun-test-with-notes
@@ -1736,7 +1834,7 @@
       `[(:id "personal" :name "Personal" :root ,personal-root)
         (:id "work" :name "Work" :root ,work-root)]))))
 
-(ert-deftest fangcun-mcp-lists-every-backlink-occurrence ()
+(ert-deftest fangcun-mcp-groups-and-pages-backlink-sources ()
   (fangcun-test-with-notes
     (fangcun-test--write-file
      personal-file
@@ -1745,34 +1843,59 @@
       ":ID: target\n"
       ":END:\n"
       "#+title: Target\n\n"
+      "* Other source\n"
+      ":PROPERTIES:\n"
+      ":ID: other-source\n"
+      ":END:\n"
+      "[[id:target]].\n\n"
       "* Source\n"
       ":PROPERTIES:\n"
       ":ID: source\n"
       ":END:\n"
       "[[id:target]] and [[id:target]].\n"))
     (fangcun-db-sync)
-    (let* ((result
-            (fangcun-mcp--list-backlinks '(:id "target")))
+    (let* ((result (fangcun-mcp--list-backlinks
+                    '(:id "target" :pageSize 100)))
            (backlinks (plist-get result :backlinks))
-           (preview-result
+           (source
+            (seq-find
+             (lambda (backlink)
+               (equal
+                (plist-get (plist-get backlink :source) :id)
+                "source"))
+             backlinks))
+           (first-page
             (fangcun-mcp--list-backlinks
-             '(:id "target" :includePreview t)))
+             '(:id "target" :pageSize 1 :includePreview t)))
+           (cursor (plist-get first-page :nextCursor))
+           (second-page
+            (fangcun-mcp--list-backlinks
+             (list
+              :id "target"
+              :pageSize 1
+              :cursor cursor
+              :includePreview t)))
            (preview-backlinks
-            (plist-get preview-result :backlinks)))
+            (append
+             (plist-get first-page :backlinks)
+             (plist-get second-page :backlinks)
+             nil)))
       (should (= (length backlinks) 2))
       (should
        (seq-every-p
         (lambda (backlink)
-          (equal
-           (plist-get (plist-get backlink :source) :id)
-           "source"))
+          (and (integerp (plist-get backlink :firstPosition))
+               (integerp (plist-get backlink :occurrenceCount))))
         backlinks))
+      (should (= (plist-get source :occurrenceCount) 2))
       (should-not
        (seq-some
         (lambda (backlink)
           (plist-member backlink :preview))
         backlinks))
       (should (= (length preview-backlinks) 2))
+      (should (stringp cursor))
+      (should-not (plist-member second-page :nextCursor))
       (should
        (seq-every-p
         (lambda (backlink)
@@ -1780,7 +1903,11 @@
                (string-match-p
                 "id:target"
                 (plist-get backlink :preview))))
-        preview-backlinks)))))
+        preview-backlinks))
+      (should-error
+       (fangcun-mcp--list-backlinks
+        (list :id "source" :cursor cursor))
+       :type 'user-error))))
 
 (ert-deftest fangcun-mcp-creates-and-indexes-file-nodes ()
   (fangcun-test-with-notes
