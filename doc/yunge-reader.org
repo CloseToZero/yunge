@@ -21,6 +21,7 @@ The current PDF adapter provides:
 - cross-page drag, polygonal SVG highlights, and exact text copying;
 - bounded Unicode literal search, repeat navigation, and glyph-level jumping;
 - bounded document outlines with stable internal destinations;
+- bounded internal page links with local hit testing and guarded jumps;
 - versioned per-document places with zoom-aware PDF viewport restoration;
 - window-local back and forward history for semantic Reader jumps;
 - immutable render keys, stale-response rejection, and bounded disk cache
@@ -32,7 +33,9 @@ The reader uses one key vocabulary with or without Evil.  Shared keys are
 search, =n/N= to visit the next or previous match, =gr= to refresh, =+/-= to
 zoom, === to reset zoom, =W/P= to fit width or page, and =q= to quit.  PDF
 views use =J/K= for the next or previous page, =gg/G= for the first or last
-page, =gp= for a page prompt, and Page Down or Page Up for screen scrolling.
+page, =gp= for a page prompt, =RET= for a visible internal link prompt, and
+Page Down or Page Up for screen scrolling.  Mouse-1 follows an internal link
+when hit and otherwise selects one character; dragging always selects text.
 Evil starts Reader buffers in Normal state and leaves Visual =y= as
 =evil-yank=.
 =M-x yunge-reader-clear-search= removes the active match highlight.
@@ -134,6 +137,26 @@ Outline loading may complete asynchronously.  The completion opens a prompt
 only while the original Reader window, buffer, point, scroll state, selected
 window, and minibuffer state are unchanged.  Otherwise it caches the result
 and waits for the next =o=, avoiding a late prompt in unrelated work.
+
+Internal PDF page links reuse the same format-independent location actions as
+outlines, but their source rectangles remain disposable PDF adapter state.
+This avoids forcing fixed-page geometry into a future reflowable driver.  The
+helper enumerates at most 4,096 links from one page and exposes only direct
+local destinations or explicit same-document GoTo actions.  URI, remote,
+embedded, Launch, and unsupported actions are not executable in this slice.
+
+Visible-page prefetch fills a page-indexed link cache and coalesces concurrent
+requests.  =RET= presents links from the selected Reader window through
+ordinary completion, with source and destination page labels and stable
+duplicate suffixes.  A successful choice uses guarded live-place restoration
+and the window-local =C-o/C-i= history.  Rejected destinations roll back the
+view and zoom and cannot replace the saved place.
+
+Mouse-1 converts the image coordinate to canonical PDF points and tests the
+cached rectangles locally.  When link data is still loading, activation is
+allowed only if the original Reader window, buffer, point, scroll state,
+selected window, and minibuffer state remain unchanged.  A late completion is
+cached without taking over another window.  Drag events never follow links.
 
 A logical selection contains two positions and optional resolved text.  Its
 painted rectangles are disposable view state, not the source of truth.
@@ -283,7 +306,7 @@ selection, and annotation conformance tests.
 
 The next implementation slices should add, in order:
 
-1. internal and external page links;
+1. external URI page links with an allowlisted scheme policy;
 2. annotation anchors and independent decoration layers; and
 3. a second format driver to exercise the reflow contract.
 
@@ -300,9 +323,10 @@ deferred window restoration, failed-open place protection, rejected restores,
 immutable Reader jump capture, failed live-jump rollback, asynchronous reopen,
 late-window protection, semantic page tracking, outline caching, unique
 outline completion labels, outline-place restoration, keyed render
-completions, cache limits, prune-before-stop ordering, and lease races.  Rust
-tests cover the handshake, strict parameters, bounded outline titles,
-destination view mapping, safe cache eviction, Unicode literal matching,
+completions, bounded link mapping and hit testing, link request coalescing,
+late link caching, cache limits, prune-before-stop ordering, and lease races.
+Rust tests cover the handshake, strict parameters, bounded outline and link
+labels, destination view mapping, safe cache eviction, Unicode literal matching,
 byte-to-PDFium-index mapping, search cursors and limits, regular and
 singular-angle quadrilateral recovery, cross-page inclusive ranges, protocol
 errors, shutdown ordering, and EOF.
@@ -328,3 +352,8 @@ A real outline smoke check opens =pdfium-render/test/test-toc.pdf= through the
 pinned PDFium build.  It returns 101 entries in preorder, preserves depths zero
 through three, maps destinations across all seven pages, and reports that the
 result was not truncated before closing the document and helper cleanly.
+
+A generated two-page link smoke fixture contains one same-document link and
+one URI link on its first page.  The helper returns only the local rectangle
+and its fit-page destination, returns no links for the second page, and then
+closes the document and helper cleanly.

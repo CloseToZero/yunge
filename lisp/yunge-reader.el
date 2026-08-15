@@ -863,8 +863,8 @@ COMPLETE is called exactly once by the driver with a value and error value."
          (setq completed t)
          (funcall complete nil error-data))))))
 
-(defun yunge-reader--outline-action-valid-p (action)
-  "Return non-nil when ACTION is a supported outline action."
+(defun yunge-reader--action-valid-p (action)
+  "Return non-nil when ACTION is supported by the Reader core."
   (and (yunge-reader-action-p action)
        (eq (yunge-reader-action-type action) 'location)
        (yunge-reader-position-p
@@ -886,7 +886,7 @@ COMPLETE is called exactly once by the driver with a value and error value."
        (natnump (yunge-reader-outline-item-depth item))
        (let ((action (yunge-reader-outline-item-action item)))
          (or (null action)
-             (yunge-reader--outline-action-valid-p action)))))
+             (yunge-reader--action-valid-p action)))))
 
 (defun yunge-reader--outline-valid-p (outline)
   "Return non-nil when OUTLINE follows the generic outline contract."
@@ -936,7 +936,7 @@ COMPLETE is called exactly once by the driver with a value and error value."
            (cons unique (cdr candidate)))))
      (nreverse labeled))))
 
-(defun yunge-reader--outline-action-place (action)
+(defun yunge-reader--action-place (action)
   "Return a Reader place for location ACTION."
   (let* ((driver
           (yunge-reader-document-driver yunge-reader-document))
@@ -949,19 +949,25 @@ COMPLETE is called exactly once by the driver with a value and error value."
       (setq place (plist-put place :scale scale)))
     place))
 
-(defun yunge-reader--follow-outline-item (item)
-  "Follow the location action carried by outline ITEM."
-  (let ((action (yunge-reader-outline-item-action item))
-        (window (yunge-reader--place-window)))
-    (unless (and action
-                 (yunge-reader--outline-action-valid-p action))
-      (user-error "This outline entry has no supported destination"))
+(defun yunge-reader--follow-action (action)
+  "Follow supported Reader ACTION and return non-nil on success."
+  (let ((window (yunge-reader--place-window)))
+    (unless (yunge-reader--action-valid-p action)
+      (user-error "This document action has no supported destination"))
     (unless window
       (user-error "The Reader buffer is not displayed in a live window"))
     (unless
         (yunge-reader--restore-live-place
-         (yunge-reader--outline-action-place action) window)
-      (user-error "The Reader driver rejected the outline destination"))
+         (yunge-reader--action-place action) window)
+      (user-error "The Reader driver rejected the destination"))
+    t))
+
+(defun yunge-reader--follow-outline-item (item)
+  "Follow the location action carried by outline ITEM."
+  (let ((action (yunge-reader-outline-item-action item)))
+    (unless action
+      (user-error "This outline entry has no supported destination"))
+    (yunge-reader--follow-action action)
     (message "Outline: %s" (yunge-reader-outline-item-title item))
     t))
 

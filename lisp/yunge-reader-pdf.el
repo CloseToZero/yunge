@@ -3,6 +3,7 @@
 ;; SPDX-License-Identifier: MIT
 
 (require 'cl-lib)
+(require 'seq)
 (require 'svg)
 (require 'subr-x)
 (require 'yunge-key)
@@ -47,6 +48,23 @@
 (defconst yunge-reader-pdf--points-to-pixels (/ 96.0 72.0)
   "Nominal conversion from PDF points to screen pixels at scale one.")
 
+(defconst yunge-reader-pdf-link-maximum-items 4096
+  "Maximum number of links accepted from one PDF page response.")
+
+(cl-defstruct yunge-reader-pdf-link
+  "One internal PDF page link with disposable hit geometry."
+  page
+  index
+  bounds
+  label
+  action)
+
+(cl-defstruct yunge-reader-pdf-link-data
+  "One bounded page of internal PDF links."
+  page
+  links
+  truncated)
+
 (defvar-local yunge-reader-pdf-page 0
   "Zero-based page currently displayed in the PDF adapter.")
 
@@ -80,12 +98,22 @@
 (defvar-local yunge-reader-pdf--text-pending nil
   "Page-indexed set of outstanding PDF text requests.")
 
+(defvar-local yunge-reader-pdf--link-cache nil
+  "Page-indexed cache of internal PDF links.")
+
+(defvar-local yunge-reader-pdf--link-pending nil
+  "Page-indexed map of callbacks awaiting internal PDF links.")
+
+(defvar-local yunge-reader-pdf--link-activation-generation 0
+  "Generation used to reject late interactive PDF link completions.")
+
 (defvar-keymap yunge-reader-pdf--image-map
-  "<mouse-1>" #'yunge-reader-pdf-select-at-mouse
+  "<mouse-1>" #'yunge-reader-pdf-activate-at-mouse
   "<drag-mouse-1>" #'yunge-reader-pdf-select-with-mouse)
 
 (defconst yunge-reader-pdf-normal-bindings
-  '(("G" yunge-reader-pdf-last-page "last page")
+  '(("RET" yunge-reader-pdf-follow-link "follow link")
+    ("G" yunge-reader-pdf-last-page "last page")
     ("J" yunge-reader-pdf-next-page "next page")
     ("K" yunge-reader-pdf-previous-page "previous page")
     ("gg" yunge-reader-pdf-first-page "first page")
@@ -94,6 +122,7 @@
   "Normal-state bindings for the PDF view adapter.")
 
 (defvar-keymap yunge-reader-pdf-view-mode-map
+  "RET" #'yunge-reader-pdf-follow-link
   "G" #'yunge-reader-pdf-last-page
   "J" #'yunge-reader-pdf-next-page
   "K" #'yunge-reader-pdf-previous-page
@@ -120,6 +149,11 @@
                     (make-hash-table :test #'eql))
         (setq-local yunge-reader-pdf--text-pending
                     (make-hash-table :test #'eql))
+        (setq-local yunge-reader-pdf--link-cache
+                    (make-hash-table :test #'eql))
+        (setq-local yunge-reader-pdf--link-pending
+                    (make-hash-table :test #'eql))
+        (setq-local yunge-reader-pdf--link-activation-generation 0)
         (setq-local yunge-reader-pdf--pending-location nil)
         (add-hook 'yunge-reader-refresh-hook
                   #'yunge-reader-pdf--refresh nil t)
@@ -145,7 +179,10 @@
           yunge-reader-pdf--displayed-pages nil
           yunge-reader-pdf--pending-location nil
           yunge-reader-pdf--text-cache nil
-          yunge-reader-pdf--text-pending nil)))
+          yunge-reader-pdf--text-pending nil
+          yunge-reader-pdf--link-cache nil
+          yunge-reader-pdf--link-pending nil
+          yunge-reader-pdf--link-activation-generation 0)))
 
 (with-eval-after-load 'evil
   (yunge-key-evil-define-minor-mode
@@ -219,9 +256,9 @@
        '(fit-width))
       (_ '(nil)))))
 
-(defun yunge-reader-pdf--native-outline-action
+(defun yunge-reader-pdf--native-location-action
     (document destination)
-  "Return a generic action for PDF DESTINATION in DOCUMENT."
+  "Return a generic location action for PDF DESTINATION in DOCUMENT."
   (let* ((page (alist-get 'page destination))
          (page-info
           (yunge-reader-pdf--outline-page-info document page))
@@ -257,7 +294,7 @@
                    (listp destination)))
       (let ((action
              (and destination
-                  (yunge-reader-pdf--native-outline-action
+                  (yunge-reader-pdf--native-location-action
                    document destination))))
         (when (or (null destination) action)
           (make-yunge-reader-outline-item
@@ -281,6 +318,72 @@
                (cl-every #'identity items))
       (make-yunge-reader-outline-data
        :items items
+       :truncated (eq (alist-get 'truncated value) t)))))
+
+(defun yunge-reader-pdf--native-link-bounds (value)
+  "Return validated canonical PDF link bounds represented by VALUE."
+  (let ((left (alist-get 'left value))
+        (bottom (alist-get 'bottom value))
+        (right (alist-get 'right value))
+        (top (alist-get 'top value)))
+    (when (and (numberp left)
+               (numberp bottom)
+               (numberp right)
+               (numberp top)
+               (< left right)
+               (< bottom top))
+      (list
+       (cons 'left left)
+       (cons 'bottom bottom)
+       (cons 'right right)
+       (cons 'top top)))))
+
+(defun yunge-reader-pdf--native-page-link
+    (document page index value)
+  "Return PAGE link INDEX represented by native VALUE in DOCUMENT."
+  (let ((bounds
+         (yunge-reader-pdf--native-link-bounds
+          (alist-get 'bounds value)))
+        (destination (alist-get 'destination value))
+        (label (alist-get 'label value)))
+    (when (and bounds
+               (listp destination)
+               (or (null label)
+                   (and (stringp label)
+                        (not (string-empty-p label)))))
+      (when-let* ((action
+                   (yunge-reader-pdf--native-location-action
+                    document destination)))
+        (make-yunge-reader-pdf-link
+         :page page
+         :index index
+         :bounds bounds
+         :label label
+         :action action)))))
+
+(defun yunge-reader-pdf--native-page-links
+    (document expected-page value)
+  "Return internal links for EXPECTED-PAGE represented by native VALUE."
+  (let* ((page (alist-get 'page value))
+         (links-entry (assq 'links value))
+         (native-links (cdr links-entry))
+         (links
+          (and (listp native-links)
+               (cl-loop
+                for item in native-links
+                for index from 0
+                collect
+                (yunge-reader-pdf--native-page-link
+                 document page index item)))))
+    (when (and (eql page expected-page)
+               links-entry
+               (listp native-links)
+               (<= (length native-links)
+                   yunge-reader-pdf-link-maximum-items)
+               (cl-every #'identity links))
+      (make-yunge-reader-pdf-link-data
+       :page page
+       :links links
        :truncated (eq (alist-get 'truncated value) t)))))
 
 (defun yunge-reader-pdf--open (file complete)
@@ -362,6 +465,18 @@
         (list (cons 'document handle)
               (cons 'page (plist-get arguments :page)))
         complete))
+      ('page-links
+       (let ((page (plist-get arguments :page)))
+         (yunge-reader-native-request
+          "page-links"
+          (list (cons 'document handle)
+                (cons 'page page))
+          (lambda (result native-error)
+            (funcall complete
+                     (and result
+                          (yunge-reader-pdf--native-page-links
+                           document page result))
+                     native-error)))))
       ('page-text
        (yunge-reader-native-request
         "page-text"
@@ -1050,7 +1165,9 @@ When SUPPRESS-SCALE is non-nil, do not update the shared effective scale."
         'keymap yunge-reader-pdf--image-map
         'pointer 'hand
         'help-echo
-        "Mouse-1 selects a character; drag selects across pages"))
+        (concat
+         "Mouse-1 follows an internal link or selects a character; "
+         "drag selects across pages")))
       (unless (= page (1- count))
         (insert (propertize "\n" 'yunge-reader-pdf-page page))))
     (setq yunge-reader-pdf--page-positions positions)
@@ -1189,13 +1306,74 @@ When SUPPRESS-SCALE is non-nil, do not update the shared effective scale."
          (yunge-reader-pdf--text-complete
           buffer page result error-data))))))
 
+(defun yunge-reader-pdf--link-complete
+    (buffer document page result error-data)
+  "Store PAGE link RESULT for DOCUMENT in BUFFER and notify waiters."
+  (when (buffer-live-p buffer)
+    (with-current-buffer buffer
+      (when (eq document yunge-reader-document)
+        (let ((callbacks
+               (and (hash-table-p yunge-reader-pdf--link-pending)
+                    (gethash page yunge-reader-pdf--link-pending))))
+          (when (hash-table-p yunge-reader-pdf--link-pending)
+            (remhash page yunge-reader-pdf--link-pending))
+          (unless (or error-data
+                      (yunge-reader-pdf-link-data-p result))
+            (setq error-data
+                  (list 'error
+                        "Reader driver returned invalid PDF link data")))
+          (if error-data
+              (display-warning
+               'yunge-reader
+               (format "Could not load PDF page links: %s"
+                       (error-message-string error-data))
+               :warning)
+            (when (hash-table-p yunge-reader-pdf--link-cache)
+              (puthash page result yunge-reader-pdf--link-cache)))
+          (dolist (callback (delq nil callbacks))
+            (condition-case callback-error
+                (funcall callback result error-data)
+              (error
+               (display-warning
+                'yunge-reader
+                (format "Could not finish PDF link action: %s"
+                        (error-message-string callback-error))
+                :warning)))))))))
+
+(defun yunge-reader-pdf--request-links (page &optional complete)
+  "Request and cache internal links for PAGE, then call COMPLETE."
+  (if-let* ((cached
+             (and (hash-table-p yunge-reader-pdf--link-cache)
+                  (gethash page yunge-reader-pdf--link-cache))))
+      (when complete
+        (funcall complete cached nil))
+    (let ((pending
+           (and (hash-table-p yunge-reader-pdf--link-pending)
+                (gethash page yunge-reader-pdf--link-pending))))
+      (if pending
+          (when complete
+            (puthash
+             page (cons complete pending)
+             yunge-reader-pdf--link-pending))
+        (let ((buffer (current-buffer))
+              (document yunge-reader-document))
+          (puthash page (list complete)
+                   yunge-reader-pdf--link-pending)
+          (yunge-reader-request
+           'page-links (list :page page)
+           (lambda (result error-data)
+             (yunge-reader-pdf--link-complete
+              buffer document page result error-data))))))))
+
 (defun yunge-reader-pdf--queue-pages (pages)
-  "Queue render and text work for PAGES in image-first order."
+  "Queue render, text, and link work for PAGES in image-first order."
   (let ((generation yunge-reader-pdf--generation))
     (dolist (page pages)
       (yunge-reader-pdf--request-render generation page))
     (dolist (page pages)
-      (yunge-reader-pdf--request-text page))))
+      (yunge-reader-pdf--request-text page))
+    (dolist (page pages)
+      (yunge-reader-pdf--request-links page))))
 
 (defun yunge-reader-pdf--sync-current-page (&optional window)
   "Update the current page from WINDOW's topmost roll slot."
@@ -1369,6 +1547,177 @@ When SUPPRESS-SCALE is non-nil, do not update the shared effective scale."
                (<= best-distance (* tolerance tolerance)))
       best)))
 
+(defun yunge-reader-pdf--link-contains-p (link point)
+  "Return non-nil when LINK contains canonical PDF POINT."
+  (let ((bounds (yunge-reader-pdf-link-bounds link))
+        (x (car point))
+        (y (cdr point)))
+    (and (<= (alist-get 'left bounds) x)
+         (<= x (alist-get 'right bounds))
+         (<= (alist-get 'bottom bounds) y)
+         (<= y (alist-get 'top bounds)))))
+
+(defun yunge-reader-pdf--link-at-point (page point data)
+  "Return PAGE link containing canonical POINT in DATA."
+  (when (and (yunge-reader-pdf-link-data-p data)
+             (= page (yunge-reader-pdf-link-data-page data)))
+    (seq-find
+     (lambda (link)
+       (yunge-reader-pdf--link-contains-p link point))
+     (yunge-reader-pdf-link-data-links data))))
+
+(defun yunge-reader-pdf--page-label (page)
+  "Return the display label for zero-based PDF PAGE."
+  (or (alist-get 'label (yunge-reader-pdf--page-info page))
+      (number-to-string (1+ page))))
+
+(defun yunge-reader-pdf--link-label (link)
+  "Return one completion label for internal PDF LINK."
+  (let* ((action (yunge-reader-pdf-link-action link))
+         (destination (yunge-reader-action-position action))
+         (source (yunge-reader-pdf-link-page link))
+         (target (yunge-reader-position-unit destination))
+         (text
+          (or (yunge-reader-pdf-link-label link)
+              (format "link %d"
+                      (1+ (yunge-reader-pdf-link-index link))))))
+    (truncate-string-to-width
+     (format "Page %s: %s -> page %s"
+             (yunge-reader-pdf--page-label source)
+             text
+             (yunge-reader-pdf--page-label target))
+     120 nil nil t)))
+
+(defun yunge-reader-pdf--link-candidates (pages)
+  "Return unique completion candidates for cached links on PAGES."
+  (let ((counts (make-hash-table :test #'equal))
+        (seen (make-hash-table :test #'equal))
+        (used (make-hash-table :test #'equal))
+        labeled)
+    (dolist (page pages)
+      (when-let* ((data
+                   (gethash page yunge-reader-pdf--link-cache)))
+        (dolist (link (yunge-reader-pdf-link-data-links data))
+          (let ((label (yunge-reader-pdf--link-label link)))
+            (push (cons label link) labeled)
+            (puthash label (1+ (gethash label counts 0)) counts)))))
+    (mapcar
+     (lambda (candidate)
+       (let* ((label (car candidate))
+              (index (1+ (gethash label seen 0))))
+         (puthash label index seen)
+         (let* ((base
+                 (if (> (gethash label counts) 1)
+                     (format "%s [%d]" label index)
+                   label))
+                (unique base)
+                (suffix 2))
+           (while (gethash unique used)
+             (setq unique (format "%s [%d]" base suffix)
+                   suffix (1+ suffix)))
+           (puthash unique t used)
+           (cons unique (cdr candidate)))))
+     (nreverse labeled))))
+
+(defun yunge-reader-pdf--follow-link (link)
+  "Follow internal PDF LINK through the generic Reader action layer."
+  (yunge-reader--follow-action
+   (yunge-reader-pdf-link-action link))
+  (message "Link: %s" (yunge-reader-pdf--link-label link))
+  t)
+
+(defun yunge-reader-pdf--select-link (pages)
+  "Choose and follow one cached internal link from PAGES."
+  (let ((candidates (yunge-reader-pdf--link-candidates pages))
+        (truncated
+         (seq-some
+          (lambda (page)
+            (when-let* ((data
+                         (gethash page yunge-reader-pdf--link-cache)))
+              (yunge-reader-pdf-link-data-truncated data)))
+          pages)))
+    (if (null candidates)
+        (message "The visible PDF pages have no internal links")
+      (let* ((completion-extra-properties
+              '(:category yunge-reader-link))
+             (choice
+              (completing-read
+               (if truncated "Links (truncated): " "Links: ")
+               candidates nil t))
+             (link (cdr (assoc choice candidates))))
+        (when link
+          (yunge-reader-pdf--follow-link link))))))
+
+(defun yunge-reader-pdf--link-prompt-current-p
+    (document generation window state)
+  "Return whether a pending link prompt still belongs to the current view."
+  (and (eq document yunge-reader-document)
+       (= generation yunge-reader-pdf--link-activation-generation)
+       (eq (selected-window) window)
+       (not (active-minibuffer-window))
+       (yunge-reader--window-state-current-p window state)))
+
+(defun yunge-reader-pdf--finish-link-prompt
+    (buffer document generation window state pages loaded)
+  "Finish a link prompt for BUFFER when its captured view is unchanged."
+  (when (buffer-live-p buffer)
+    (with-current-buffer buffer
+      (when (and
+             (= generation
+                yunge-reader-pdf--link-activation-generation)
+             (eq document yunge-reader-document))
+        (if
+            (yunge-reader-pdf--link-prompt-current-p
+             document generation window state)
+            (condition-case error-data
+                (yunge-reader-pdf--select-link pages)
+              (quit nil)
+              (error
+               (display-warning
+                'yunge-reader
+                (format "Could not follow PDF link: %s"
+                        (error-message-string error-data))
+                :warning)))
+          (when loaded
+            (message "PDF links loaded; press RET to open them")))))))
+
+(defun yunge-reader-pdf-follow-link ()
+  "Choose an internal link from the PDF pages visible in this window."
+  (interactive)
+  (unless yunge-reader-document
+    (user-error "This reader buffer has no open document"))
+  (let* ((window (yunge-reader--place-window))
+         (pages (and window (yunge-reader-pdf--window-pages window))))
+    (unless window
+      (user-error "The Reader buffer is not displayed in a live window"))
+    (setq pages (or pages (list yunge-reader-pdf-page)))
+    (let* ((buffer (current-buffer))
+           (document yunge-reader-document)
+           (state (yunge-reader--window-state window))
+           (generation
+            (cl-incf yunge-reader-pdf--link-activation-generation))
+           (missing
+            (seq-remove
+             (lambda (page)
+               (gethash page yunge-reader-pdf--link-cache))
+             pages)))
+      (if (null missing)
+          (yunge-reader-pdf--select-link pages)
+        (let ((remaining (length missing))
+              loaded)
+          (message "Loading PDF links...")
+          (dolist (page missing)
+            (yunge-reader-pdf--request-links
+             page
+             (lambda (_result error-data)
+               (unless error-data
+                 (setq loaded t))
+               (cl-decf remaining)
+               (when (zerop remaining)
+                 (yunge-reader-pdf--finish-link-prompt
+                  buffer document generation window state
+                  pages loaded))))))))))
+
 (defun yunge-reader-pdf--event-page-point (position)
   "Return PAGE and canonical point represented by mouse POSITION."
   (let* ((buffer-position (posn-point position))
@@ -1458,6 +1807,55 @@ When SINGLE is non-nil, use the event start for both points."
         (yunge-reader-pdf--select-points
          start-point end-point)))))
 
+(defun yunge-reader-pdf--activate-page-point (location data)
+  "Follow a link at LOCATION in DATA, or select the character there."
+  (let* ((page (plist-get location :page))
+         (point (plist-get location :point))
+         (link (yunge-reader-pdf--link-at-point page point data)))
+    (if link
+        (yunge-reader-pdf--follow-link link)
+      (yunge-reader-pdf--select-points location location))))
+
+(defun yunge-reader-pdf-activate-at-mouse (event)
+  "Follow an internal PDF link at EVENT, or select one character."
+  (interactive "e")
+  (let* ((position (event-start event))
+         (window (posn-window position)))
+    (unless (windowp window)
+      (user-error "The mouse event is outside a PDF window"))
+    (select-window window)
+    (with-current-buffer (window-buffer window)
+      (let* ((location
+              (yunge-reader-pdf--event-page-point position))
+             (page (plist-get location :page))
+             (cached
+              (and (hash-table-p yunge-reader-pdf--link-cache)
+                   (gethash page yunge-reader-pdf--link-cache)))
+             (buffer (current-buffer))
+             (document yunge-reader-document)
+             (state (yunge-reader--window-state window))
+             (generation
+              (cl-incf yunge-reader-pdf--link-activation-generation)))
+        (if cached
+            (yunge-reader-pdf--activate-page-point location cached)
+          (yunge-reader-pdf--request-links
+           page
+           (lambda (result _error-data)
+             (when (buffer-live-p buffer)
+               (with-current-buffer buffer
+                 (when
+                     (yunge-reader-pdf--link-prompt-current-p
+                      document generation window state)
+                   (condition-case error-data
+                       (yunge-reader-pdf--activate-page-point
+                        location result)
+                     (error
+                      (display-warning
+                       'yunge-reader
+                       (format "Could not activate PDF pointer: %s"
+                               (error-message-string error-data))
+                       :warning)))))))))))))
+
 (defun yunge-reader-pdf-select-at-mouse (event)
   "Select the PDF character at mouse EVENT."
   (interactive "e")
@@ -1533,7 +1931,8 @@ When SINGLE is non-nil, use the event start for both points."
 (dolist (command
          '(yunge-reader-pdf-first-page
            yunge-reader-pdf-last-page
-           yunge-reader-pdf-goto-page))
+           yunge-reader-pdf-goto-page
+           yunge-reader-pdf--follow-link))
   (yunge-jump-history-track-command command))
 
 (provide 'yunge-reader-pdf)

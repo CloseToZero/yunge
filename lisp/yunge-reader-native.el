@@ -174,6 +174,8 @@ This must not exceed `yunge-reader-cache-max-bytes'."
                          (alist-get 'capabilities message))
                  (member "lifecycle"
                          (alist-get 'capabilities message))
+                 (member "pdf-links"
+                         (alist-get 'capabilities message))
                  (member "pdf-outline"
                          (alist-get 'capabilities message))
                  (member "pdf-render"

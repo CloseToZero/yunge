@@ -65,8 +65,8 @@
          (build-id . "test-build")
          (pdfium-api . "7881")
          (capabilities
-          . ("cache-maintenance" "lifecycle" "pdf-outline" "pdf-render"
-             "pdf-search" "pdf-text"))))
+           . ("cache-maintenance" "lifecycle" "pdf-links"
+              "pdf-outline" "pdf-render" "pdf-search" "pdf-text"))))
       (should (= (length sent) 1))
       (let ((request
              (json-parse-string
@@ -89,8 +89,8 @@
         (build-id . "old-build")
         (pdfium-api . "7881")
         (capabilities
-         . ("cache-maintenance" "lifecycle" "pdf-outline" "pdf-render"
-            "pdf-search" "pdf-text"))))
+          . ("cache-maintenance" "lifecycle" "pdf-links"
+             "pdf-outline" "pdf-render" "pdf-search" "pdf-text"))))
      :type 'error)
     (should-error
      (yunge-reader-native--validate-ready
@@ -99,8 +99,8 @@
         (build-id . "test-build")
         (pdfium-api . "7881")
         (capabilities
-         . ("cache-maintenance" "lifecycle" "pdf-outline" "pdf-render"
-            "pdf-search" "pdf-text"))))
+          . ("cache-maintenance" "lifecycle" "pdf-links"
+             "pdf-outline" "pdf-render" "pdf-search" "pdf-text"))))
      :type 'error)
     (should-error
      (yunge-reader-native--validate-ready
@@ -109,8 +109,8 @@
         (build-id . "test-build")
         (pdfium-api . "7881")
         (capabilities
-         . ("cache-maintenance" "lifecycle" "pdf-render"
-            "pdf-search" "pdf-text"))))
+          . ("cache-maintenance" "lifecycle" "pdf-outline"
+             "pdf-render" "pdf-search" "pdf-text"))))
      :type 'error)))
 
 (ert-deftest yunge-reader-native-stop-requests-shutdown-then-arms-timeout ()
@@ -236,8 +236,8 @@
        (build-id . "test-build")
        (pdfium-api . "7881")
        (capabilities
-        . ("cache-maintenance" "lifecycle" "pdf-outline" "pdf-render"
-           "pdf-search" "pdf-text"))))
+         . ("cache-maintenance" "lifecycle" "pdf-links"
+            "pdf-outline" "pdf-render" "pdf-search" "pdf-text"))))
     (should (= (length sent) 1))
     (cl-letf (((symbol-function 'run-at-time)
                (lambda (&rest _arguments) 'fake-timer)))

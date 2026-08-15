@@ -10,10 +10,24 @@
   (make-yunge-reader-document
    :metadata (list :page-count (length pages) :pages pages)))
 
+(defun yunge-reader-pdf-test--link
+    (page index bounds target &optional label)
+  "Return one internal PDF link fixture from PAGE to TARGET."
+  (make-yunge-reader-pdf-link
+   :page page
+   :index index
+   :bounds bounds
+   :label label
+   :action
+   (make-yunge-reader-action
+    :type 'location
+    :position (make-yunge-reader-position :unit target))))
+
 (ert-deftest yunge-reader-pdf-uses-viewer-page-bindings ()
   (yunge-test-keymap-keys
    yunge-reader-pdf-view-mode-map
-   '(("G" . yunge-reader-pdf-last-page)
+   '(("RET" . yunge-reader-pdf-follow-link)
+     ("G" . yunge-reader-pdf-last-page)
      ("J" . yunge-reader-pdf-next-page)
      ("K" . yunge-reader-pdf-previous-page)
      ("gg" . yunge-reader-pdf-first-page)
@@ -24,13 +38,21 @@
        #'yunge-reader-pdf-next-page))
   (should-not
    (eq (lookup-key yunge-reader-pdf-view-mode-map (kbd "b"))
-       #'yunge-reader-pdf-previous-page)))
+       #'yunge-reader-pdf-previous-page))
+  (should
+   (eq (lookup-key yunge-reader-pdf--image-map (kbd "<mouse-1>"))
+       #'yunge-reader-pdf-activate-at-mouse))
+  (should
+   (eq (lookup-key yunge-reader-pdf--image-map
+                   (kbd "<drag-mouse-1>"))
+       #'yunge-reader-pdf-select-with-mouse)))
 
 (ert-deftest yunge-reader-pdf-tracks-only-semantic-page-jumps ()
   (dolist (command
            '(yunge-reader-pdf-first-page
              yunge-reader-pdf-last-page
-             yunge-reader-pdf-goto-page))
+             yunge-reader-pdf-goto-page
+             yunge-reader-pdf--follow-link))
     (should
      (advice-member-p
       #'yunge-jump-history--track-navigation command)))
@@ -51,7 +73,8 @@
     (yunge-reader-pdf-view-mode 1)
     (yunge-test-evil-keys
      'normal
-     '(("/" . yunge-reader-search)
+     '(("RET" . yunge-reader-pdf-follow-link)
+       ("/" . yunge-reader-search)
        ("G" . yunge-reader-pdf-last-page)
        ("J" . yunge-reader-pdf-next-page)
        ("K" . yunge-reader-pdf-previous-page)
@@ -180,6 +203,8 @@
       (yunge-reader-pdf--request
        document 'page-text '(:page 2) #'ignore)
       (yunge-reader-pdf--request
+       document 'page-links '(:page 2) #'ignore)
+      (yunge-reader-pdf--request
        document 'render-page
        '(:page 2 :width 900 :cache-key "key") #'ignore)
       (yunge-reader-pdf--request
@@ -198,17 +223,20 @@
     (should (equal (cdr (assq 'document (cdar calls))) 11))
     (should (equal (cdr (assq 'page (cdar calls))) 2))
     (should (equal (caadr calls) "page-text"))
-    (should (equal (caaddr calls) "render-page"))
-    (should (equal (cdr (assq 'width (cdaddr calls))) 900))
-    (should (equal (cdr (assq 'cache-key (cdaddr calls))) "key"))
-    (let ((search (nth 3 calls)))
+    (should (equal (caaddr calls) "page-links"))
+    (should (= (cdr (assq 'page (cdaddr calls))) 2))
+    (let ((render (nth 3 calls)))
+      (should (equal (car render) "render-page"))
+      (should (= (cdr (assq 'width (cdr render))) 900))
+      (should (equal (cdr (assq 'cache-key (cdr render))) "key")))
+    (let ((search (nth 4 calls)))
       (should (equal (car search) "search"))
       (should (eq (cdr (assq 'case-sensitive (cdr search))) t))
       (should (equal (cdr (assq 'cursor (cdr search)))
                      '((page . 3) (offset . 4))))
       (should (= (cdr (assq 'match-limit (cdr search))) 25))
       (should (= (cdr (assq 'page-limit (cdr search))) 6)))
-    (let ((outline (nth 4 calls)))
+    (let ((outline (nth 5 calls)))
       (should (equal (car outline) "outline"))
       (should (= (cdr (assq 'document (cdr outline))) 11)))))
 
@@ -297,6 +325,101 @@
            document '((items) (truncated)))))
     (should (yunge-reader-outline-data-p outline))
     (should-not (yunge-reader-outline-data-items outline))))
+
+(ert-deftest yunge-reader-pdf-converts-native-internal-links ()
+  (let* ((document
+          (make-yunge-reader-document
+           :metadata
+           '(:page-count 2
+             :pages
+             (((page . 0) (width . 100.0) (height . 200.0))
+              ((page . 1) (width . 300.0) (height . 400.0))))))
+         (data
+          (yunge-reader-pdf--native-page-links
+           document 0
+           '((page . 0)
+             (links
+              . (((bounds
+                   . ((left . 10.0) (bottom . 20.0)
+                      (right . 30.0) (top . 40.0)))
+                  (destination
+                   . ((page . 1) (x . 12.0) (y . 34.0)
+                      (zoom . 1.5) (view . "xyz")))
+                  (label . "Details"))))
+             (truncated . t))))
+         (link (car (yunge-reader-pdf-link-data-links data)))
+         (action (yunge-reader-pdf-link-action link)))
+    (should (yunge-reader-pdf-link-data-p data))
+    (should (yunge-reader-pdf-link-data-truncated data))
+    (should (equal (yunge-reader-pdf-link-label link) "Details"))
+    (should (= (alist-get 'left
+                          (yunge-reader-pdf-link-bounds link))
+               10.0))
+    (should (= (yunge-reader-position-unit
+                (yunge-reader-action-position action))
+               1))
+    (should (= (yunge-reader-position-y
+                (yunge-reader-action-position action))
+               34.0))
+    (should (eq (yunge-reader-action-zoom-mode action) 'manual))
+    (should (= (yunge-reader-action-scale action) 1.5))))
+
+(ert-deftest yunge-reader-pdf-rejects-malformed-native-link-pages ()
+  (let ((document
+         (make-yunge-reader-document
+          :metadata
+          '(:page-count 2
+            :pages
+            (((page . 0) (width . 100.0) (height . 200.0))
+             ((page . 1) (width . 100.0) (height . 200.0)))))))
+    (should-not
+     (yunge-reader-pdf--native-page-links
+      document 0
+      '((page . 1) (links) (truncated))))
+    (should-not
+     (yunge-reader-pdf--native-page-links
+      document 0
+      '((page . 0)
+        (links
+         . (((bounds
+              . ((left . 30.0) (bottom . 20.0)
+                 (right . 10.0) (top . 40.0)))
+             (destination . ((page . 1) (view . "xyz")))))))))))
+
+(ert-deftest yunge-reader-pdf-builds-unique-link-candidates ()
+  (with-temp-buffer
+    (yunge-reader-mode)
+    (yunge-reader-pdf-view-mode 1)
+    (setq yunge-reader-pdf--page-infos
+          [((label . "i"))
+           ((label . "ii"))
+           ((label . "ii [1]"))])
+    (let* ((bounds
+            '((left . 0.0) (bottom . 0.0)
+              (right . 10.0) (top . 10.0)))
+           (first
+            (yunge-reader-pdf-test--link
+             0 0 bounds 1 "Section"))
+           (second
+            (yunge-reader-pdf-test--link
+             0 1 bounds 1 "Section"))
+           (colliding
+            (yunge-reader-pdf-test--link
+             0 2 bounds 2 "Section")))
+      (puthash
+       0
+       (make-yunge-reader-pdf-link-data
+        :page 0 :links (list first second colliding))
+       yunge-reader-pdf--link-cache)
+      (let ((candidates (yunge-reader-pdf--link-candidates '(0))))
+        (should
+         (equal
+          (mapcar #'car candidates)
+          '("Page i: Section -> page ii [1]"
+            "Page i: Section -> page ii [2]"
+            "Page i: Section -> page ii [1] [2]")))
+        (should (eq (cdar candidates) first))
+        (should (eq (cdadr candidates) second))))))
 
 (ert-deftest yunge-reader-pdf-resolves-cross-page-selection-natively ()
   (let* ((document (make-yunge-reader-document :handle 11))
@@ -530,6 +653,112 @@
       (should (eq (gethash 0 yunge-reader-pdf--text-cache)
                   result)))))
 
+(ert-deftest yunge-reader-pdf-coalesces-and-caches-page-links ()
+  (with-temp-buffer
+    (yunge-reader-mode)
+    (yunge-reader-pdf-view-mode 1)
+    (setq yunge-reader-document 'document)
+    (let ((requests 0)
+          (callbacks 0)
+          completion
+          (result
+           (make-yunge-reader-pdf-link-data
+            :page 0 :links nil)))
+      (cl-letf (((symbol-function 'yunge-reader-request)
+                 (lambda (operation arguments complete)
+                   (should (eq operation 'page-links))
+                   (should (= (plist-get arguments :page) 0))
+                   (cl-incf requests)
+                   (setq completion complete))))
+        (yunge-reader-pdf--request-links
+         0 (lambda (&rest _arguments) (cl-incf callbacks)))
+        (yunge-reader-pdf--request-links
+         0 (lambda (&rest _arguments) (cl-incf callbacks)))
+        (should (= requests 1))
+        (funcall completion result nil)
+        (should (= callbacks 2))
+        (should (eq (gethash 0 yunge-reader-pdf--link-cache)
+                    result))
+        (yunge-reader-pdf--request-links
+         0 (lambda (&rest _arguments) (cl-incf callbacks)))
+        (should (= requests 1))
+        (should (= callbacks 3))))))
+
+(ert-deftest yunge-reader-pdf-click-prefers-links-over-selection ()
+  (let* ((bounds
+          '((left . 10.0) (bottom . 20.0)
+            (right . 30.0) (top . 40.0)))
+         (link
+          (yunge-reader-pdf-test--link 0 0 bounds 1 "Target"))
+         (data
+          (make-yunge-reader-pdf-link-data
+           :page 0 :links (list link)))
+         followed
+         selected)
+    (cl-letf (((symbol-function 'yunge-reader-pdf--follow-link)
+               (lambda (value) (setq followed value)))
+              ((symbol-function 'yunge-reader-pdf--select-points)
+               (lambda (start end)
+                 (setq selected (list start end)))))
+      (yunge-reader-pdf--activate-page-point
+       '(:page 0 :point (15.0 . 25.0)) data)
+      (should (eq followed link))
+      (should-not selected)
+      (setq followed nil)
+      (yunge-reader-pdf--activate-page-point
+       '(:page 0 :point (5.0 . 5.0)) data)
+      (should-not followed)
+      (should (= (length selected) 2)))))
+
+(ert-deftest yunge-reader-pdf-caches-late-links-without-prompting ()
+  (let (completion reader other
+        (requests 0)
+        (shown 0))
+    (unwind-protect
+        (save-window-excursion
+          (setq reader (generate-new-buffer " *reader-links-late*"))
+          (setq other (generate-new-buffer " *reader-links-other*"))
+          (switch-to-buffer reader)
+          (yunge-reader-mode)
+          (yunge-reader-pdf-view-mode 1)
+          (setq yunge-reader-document 'document)
+          (cl-letf
+              (((symbol-function 'yunge-reader-pdf--window-pages)
+                (lambda (_window) '(0)))
+               ((symbol-function 'yunge-reader--window-state)
+                (lambda (_window) 'state))
+               ((symbol-function 'yunge-reader--window-state-current-p)
+                (lambda (window _state)
+                  (eq (window-buffer window) reader)))
+               ((symbol-function 'yunge-reader-request)
+                (lambda (_operation _arguments complete)
+                  (cl-incf requests)
+                  (setq completion complete)))
+               ((symbol-function 'yunge-reader-pdf--select-link)
+                (lambda (_pages) (cl-incf shown))))
+            (yunge-reader-pdf-follow-link)
+            (switch-to-buffer other)
+            (funcall
+             completion
+             (make-yunge-reader-pdf-link-data
+              :page 0 :links nil)
+             nil)
+            (should (zerop shown))
+            (with-current-buffer reader
+              (should
+               (yunge-reader-pdf-link-data-p
+                (gethash 0 yunge-reader-pdf--link-cache))))
+            (switch-to-buffer reader)
+            (yunge-reader-pdf-follow-link)
+            (should (= shown 1))
+            (should (= requests 1))))
+      (when (buffer-live-p reader)
+        (with-current-buffer reader
+          (setq yunge-reader-document nil))
+        (kill-buffer reader))
+      (when (buffer-live-p other)
+        (kill-buffer other)))))
+
 (ert-deftest yunge-reader-pdf-prioritizes-image-before-text-layer ()
   (with-temp-buffer
     (yunge-reader-mode)
@@ -541,11 +770,15 @@
                    (push (list 'render page) operations)))
                 ((symbol-function 'yunge-reader-pdf--request-text)
                  (lambda (page)
-                   (push (list 'text page) operations))))
+                   (push (list 'text page) operations)))
+                ((symbol-function 'yunge-reader-pdf--request-links)
+                 (lambda (page &optional _complete)
+                   (push (list 'links page) operations))))
         (yunge-reader-pdf--queue-pages '(0 1)))
       (should (equal (nreverse operations)
                      '((render 0) (render 1)
-                       (text 0) (text 1)))))))
+                       (text 0) (text 1)
+                       (links 0) (links 1)))))))
 
 (ert-deftest yunge-reader-pdf-refresh-builds-and-prefetches-the-roll ()
   (with-temp-buffer
@@ -566,7 +799,8 @@
       (should (equal yunge-reader-pdf--page-positions [1 3]))
       (should (equal (nreverse operations)
                      '((render-page 0) (render-page 1)
-                       (page-text 0) (page-text 1)))))))
+                       (page-text 0) (page-text 1)
+                       (page-links 0) (page-links 1)))))))
 
 (ert-deftest yunge-reader-pdf-paints-selection-in-svg-coordinates ()
   (with-temp-buffer

@@ -19,14 +19,17 @@ type Error = Box<dyn std::error::Error>;
 const PROTOCOL_VERSION: u32 = 1;
 const PDFIUM_API: &str = "7881";
 const BUILD_ID: &str = env!("YUNGE_READER_BUILD_ID");
-const CAPABILITIES: [&str; 6] = [
+const CAPABILITIES: [&str; 7] = [
     "cache-maintenance",
     "lifecycle",
+    "pdf-links",
     "pdf-outline",
     "pdf-render",
     "pdf-search",
     "pdf-text",
 ];
+const PAGE_LINK_MAX_ITEMS: usize = 4_096;
+const PAGE_LINK_MAX_LABEL_CHARACTERS: usize = 256;
 const OUTLINE_MAX_ITEMS: usize = 10_000;
 const OUTLINE_MAX_TITLE_CHARACTERS: usize = 1_024;
 const SEARCH_CONTEXT_CHARACTERS: usize = 24;
@@ -51,7 +54,7 @@ struct Ready<'a> {
     build_id: &'a str,
     #[serde(rename = "pdfium-api")]
     pdfium_api: &'static str,
-    capabilities: [&'static str; 6],
+    capabilities: [&'static str; 7],
 }
 
 #[derive(Debug, Serialize)]
@@ -215,6 +218,47 @@ struct OutlineResult {
     truncated: bool,
 }
 
+#[derive(Clone, Copy, Debug, Serialize)]
+struct PageLinkBounds {
+    left: f32,
+    bottom: f32,
+    right: f32,
+    top: f32,
+}
+
+impl PageLinkBounds {
+    fn from_pdfium(bounds: PdfRect) -> Option<Self> {
+        let result = Self {
+            left: bounds.left().value,
+            bottom: bounds.bottom().value,
+            right: bounds.right().value,
+            top: bounds.top().value,
+        };
+        (result.left.is_finite()
+            && result.bottom.is_finite()
+            && result.right.is_finite()
+            && result.top.is_finite()
+            && result.right > result.left
+            && result.top > result.bottom)
+            .then_some(result)
+    }
+}
+
+#[derive(Debug, Serialize)]
+struct PageLink {
+    bounds: PageLinkBounds,
+    destination: OutlineDestination,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    label: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct PageLinksResult {
+    page: u32,
+    links: Vec<PageLink>,
+    truncated: bool,
+}
+
 fn finite_point(value: Option<PdfPoints>) -> Option<f32> {
     value
         .map(|point| point.value)
@@ -285,6 +329,26 @@ fn outline_destination(
         zoom,
         view,
     })
+}
+
+fn page_link_label(value: String) -> Option<String> {
+    let normalized = value.split_whitespace().collect::<Vec<_>>().join(" ");
+    let label: String = normalized
+        .chars()
+        .take(PAGE_LINK_MAX_LABEL_CHARACTERS)
+        .collect();
+    (!label.is_empty()).then_some(label)
+}
+
+fn page_link_destination(link: &PdfLink<'_>) -> Option<OutlineDestination> {
+    match link.action() {
+        Some(action) => action
+            .as_local_destination_action()?
+            .destination()
+            .ok()
+            .and_then(outline_destination),
+        None => link.destination().and_then(outline_destination),
+    }
 }
 
 fn default_search_match_limit() -> u32 {
@@ -837,6 +901,58 @@ impl Service {
         }))
     }
 
+    fn page_links(&self, params: Value) -> Result<Value, ServiceError> {
+        let params: PageParams = Self::parse(params)?;
+        let document = self.document(params.document)?;
+        let index = Self::page_index(document, params.page)?;
+        let page = document.pages().get(index).map_err(|error| {
+            ServiceError::new(
+                "invalid-page",
+                format!("could not load page {}: {error}", params.page),
+            )
+        })?;
+        let text = page.text().ok();
+        let mut links = Vec::new();
+        let mut truncated = false;
+        for (link_index, link) in page.links().iter().enumerate() {
+            if link_index == PAGE_LINK_MAX_ITEMS {
+                truncated = true;
+                break;
+            }
+            let Some(bounds) =
+                link.rect().ok().and_then(PageLinkBounds::from_pdfium)
+            else {
+                continue;
+            };
+            let Some(destination) = page_link_destination(&link) else {
+                continue;
+            };
+            links.push(PageLink {
+                bounds,
+                destination,
+                label: text.as_ref().and_then(|text| {
+                    page_link_label(text.inside_rect(PdfRect::new_from_values(
+                        bounds.bottom,
+                        bounds.left,
+                        bounds.top,
+                        bounds.right,
+                    )))
+                }),
+            });
+        }
+        serde_json::to_value(PageLinksResult {
+            page: params.page,
+            links,
+            truncated,
+        })
+        .map_err(|error| {
+            ServiceError::new(
+                "page-links-failed",
+                format!("could not encode page links: {error}"),
+            )
+        })
+    }
+
     fn page_text(&self, params: Value) -> Result<Value, ServiceError> {
         let params: PageParams = Self::parse(params)?;
         let document = self.document(params.document)?;
@@ -1310,6 +1426,7 @@ impl Service {
             "close" => self.close(request.params),
             "outline" => self.outline(request.params),
             "page-info" => self.page_info(request.params),
+            "page-links" => self.page_links(request.params),
             "page-text" => self.page_text(request.params),
             "cache-prune" => self.cache_prune(request.params),
             "search" => self.search(request.params),
@@ -1553,6 +1670,12 @@ mod tests {
             r#""extra":true}}"#,
             "\n",
             r#"{"id":9,"op":"outline","params":{"document":1}}"#,
+            "\n",
+            r#"{"id":10,"op":"page-links","params":{"document":1,"#,
+            r#""page":0,"extra":true}}"#,
+            "\n",
+            r#"{"id":11,"op":"page-links","params":{"document":1,"#,
+            r#""page":0}}"#,
         ));
         assert_eq!(output[1]["error"]["code"], "invalid-params");
         assert_eq!(output[2]["error"]["code"], "invalid-render-size");
@@ -1563,6 +1686,8 @@ mod tests {
         assert_eq!(output[7]["error"]["code"], "invalid-params");
         assert_eq!(output[8]["error"]["code"], "invalid-params");
         assert_eq!(output[9]["error"]["code"], "unknown-document");
+        assert_eq!(output[10]["error"]["code"], "invalid-params");
+        assert_eq!(output[11]["error"]["code"], "unknown-document");
     }
 
     #[test]
@@ -1598,6 +1723,28 @@ mod tests {
             (x, y, zoom, view),
             (None, Some(500.0), None, "fit-horizontal")
         );
+    }
+
+    #[test]
+    fn page_link_labels_are_compact_and_bounded() {
+        assert_eq!(
+            page_link_label("  Read\n  more  ".to_owned()).unwrap(),
+            "Read more"
+        );
+        let value = "链".repeat(PAGE_LINK_MAX_LABEL_CHARACTERS + 2);
+        let label = page_link_label(value).unwrap();
+        assert_eq!(label.chars().count(), PAGE_LINK_MAX_LABEL_CHARACTERS);
+        assert_eq!(page_link_label(" \n\t ".to_owned()), None);
+    }
+
+    #[test]
+    fn page_link_bounds_reject_empty_or_nonfinite_rectangles() {
+        let valid = PdfRect::new_from_values(2.0, 1.0, 4.0, 3.0);
+        assert!(PageLinkBounds::from_pdfium(valid).is_some());
+        let empty = PdfRect::new_from_values(2.0, 1.0, 2.0, 3.0);
+        assert!(PageLinkBounds::from_pdfium(empty).is_none());
+        let nonfinite = PdfRect::new_from_values(2.0, 1.0, f32::INFINITY, 3.0);
+        assert!(PageLinkBounds::from_pdfium(nonfinite).is_none());
     }
 
     #[test]
