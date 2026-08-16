@@ -291,8 +291,18 @@ Functions run in the affected Reader buffer without arguments.  A view
 adapter should update role-dependent presentation without rebuilding its
 document contents.")
 
+(defconst yunge-reader-command-bindings
+  '(("p" yunge-reader-make-primary "make primary")
+    ("v" yunge-reader-new-view "new view")))
+
+(defvar-keymap yunge-reader-command-map
+  :doc "Keymap for Reader view commands.")
+
+(yunge-key-define yunge-reader-command-map
+                  yunge-reader-command-bindings)
+
 (defconst yunge-reader-normal-bindings
-  '(("+" yunge-reader-zoom-in "zoom in")
+  `(("+" yunge-reader-zoom-in "zoom in")
     ("-" yunge-reader-zoom-out "zoom out")
     ("=" yunge-reader-zoom-reset "reset zoom")
     ("/" yunge-reader-search "search")
@@ -303,7 +313,8 @@ document contents.")
     ("n" yunge-reader-search-next "next match")
     ("o" yunge-reader-outline "outline")
     ("q" quit-window "quit")
-    ("y" yunge-reader-copy-selection "copy selection"))
+    ("y" yunge-reader-copy-selection "copy selection")
+    ([localleader] ,yunge-reader-command-map nil))
   "Normal-state bindings shared by Yunge Reader adapters.")
 
 (defvar-keymap yunge-reader-mode-map
@@ -339,6 +350,10 @@ document contents.")
   (evil-set-initial-state 'yunge-reader-mode 'normal)
   (yunge-key-evil-define 'normal yunge-reader-mode-map
                          yunge-reader-normal-bindings))
+
+(with-eval-after-load 'which-key
+  (yunge-key-add-which-key-descriptions
+   yunge-reader-command-map yunge-reader-command-bindings))
 
 (cl-defun yunge-reader-register-driver
     (name &key match open close attach detach request location restore)

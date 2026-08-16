@@ -337,6 +337,13 @@ Shared reader bindings are:
 - ~o~ opens the document outline when the active format provides one.
 - ~gr~ refreshes the rendered view and ~q~ quits its window.
 
+Reader view administration remains under the mode-local leader:
+
+- ~SPC m v~ creates an additional view from the current stable place.
+- ~SPC m p~ makes the current view primary.
+
+These commands execute once and do not enter a persistent Reader control map.
+
 In fixed-layout readers, ~J/K~ move to the next or previous page, ~gg/G~ move
 to the first or last page, and ~gp~ prompts for a page.  Page Down and Page Up
 retain screen-scrolling behavior.  These page keys stay separate from search

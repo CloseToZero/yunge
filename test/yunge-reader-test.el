@@ -60,6 +60,8 @@
      ("n" . yunge-reader-search-next)
      ("o" . yunge-reader-outline)
      ("q" . quit-window)
+     ("SPC m p" . yunge-reader-make-primary)
+     ("SPC m v" . yunge-reader-new-view)
      ("y" . yunge-reader-copy-selection)
      ("0" . evil-beginning-of-line)
      ("b" . evil-backward-word-begin)
@@ -67,6 +69,10 @@
      ("w" . evil-forward-word-begin)))
   (yunge-test-which-key-prefix-bindings
    'yunge-reader-mode "g" '(("r" nil "refresh")))
+  (yunge-test-which-key-prefix-bindings
+   'yunge-reader-mode "SPC m"
+   '(("p" nil "make primary")
+     ("v" nil "new view")))
   (yunge-test-evil-visual-keys
    'yunge-reader-mode
    '(("y" . evil-yank))))

@@ -52,6 +52,8 @@ cannot silently fall back to page zero or an older saved place.  The existing
 primary view is unchanged.  Run =M-x yunge-reader-make-primary= to transfer
 durable place ownership after saving the current view's stable location.
 PDF headers identify each buffer as =Primary= or =Additional=.
+In Evil Normal state, =SPC m v= creates a view and =SPC m p= makes the
+current view primary.  Both commands are one-shot localleader actions.
 
 * Library boundary
 
