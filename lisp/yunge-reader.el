@@ -80,8 +80,10 @@
 MATCH-FUNCTION receives an absolute file name.  OPEN-FUNCTION receives that
 file and a completion function, which it calls with HANDLE, a properties
 plist, and an error value.  CLOSE-FUNCTION receives a `yunge-reader-document'.
-REQUEST-FUNCTION receives a document, operation, argument plist, and a
-completion function, which it calls with a value and an error value.
+ATTACH-FUNCTION and DETACH-FUNCTION receive a document in the Reader buffer
+whose format-specific view they initialize or tear down.  REQUEST-FUNCTION
+receives a document, operation, argument plist, and a completion function,
+which it calls with a value and an error value.
 LOCATION-FUNCTION receives a document and window and returns a stable
 `yunge-reader-position'.  RESTORE-FUNCTION receives a document, position,
 and window and returns non-nil after accepting the location."
@@ -89,12 +91,14 @@ and window and returns non-nil after accepting the location."
   match-function
   open-function
   close-function
+  attach-function
+  detach-function
   request-function
   location-function
   restore-function)
 
 (cl-defstruct yunge-reader-document
-  "An open document owned by one reader driver."
+  "An open document resource owned by one reader driver."
   file
   driver
   handle
@@ -168,6 +172,9 @@ Each entry maps a canonical file name to versioned, printable place data.")
 
 (defvar-local yunge-reader-document nil
   "Document displayed by the current reader buffer.")
+
+(defvar-local yunge-reader--view-attached nil
+  "Whether the current buffer owns an attached driver view.")
 
 (defvar-local yunge-reader--opening-file nil
   "Absolute file currently being opened, or nil.")
@@ -285,6 +292,7 @@ artifacts.  Functions run in the reader buffer without arguments.")
   (setq-local cursor-type nil)
   (setq-local truncate-lines t)
   (setq-local yunge-reader-scale yunge-reader-default-scale)
+  (setq-local yunge-reader--view-attached nil)
   (setq-local yunge-reader--copy-generation 0)
   (setq-local yunge-reader--copy-pending nil)
   (add-hook 'kill-buffer-hook #'yunge-reader--close-document nil t))
@@ -295,10 +303,12 @@ artifacts.  Functions run in the reader buffer without arguments.")
                          yunge-reader-normal-bindings))
 
 (cl-defun yunge-reader-register-driver
-    (name &key match open close request location restore)
+    (name &key match open close attach detach request location restore)
   "Register a reader driver NAME.
 MATCH, OPEN, CLOSE, and REQUEST follow the contracts documented by
-`yunge-reader-driver'.  LOCATION and RESTORE are an optional pair.
+`yunge-reader-driver'.  ATTACH and DETACH are an optional pair whose omitted
+default performs no buffer-specific setup.  LOCATION and RESTORE are another
+optional pair.
 Registering NAME again atomically replaces its old definition and gives the
 new definition highest precedence."
   (unless (symbolp name)
@@ -307,9 +317,11 @@ new definition highest precedence."
     (unless (functionp function)
       (error "Reader driver %s has a non-function member: %S"
              name function)))
+  (unless (eq (null attach) (null detach))
+    (error "Reader driver %s must define both view functions" name))
   (unless (eq (null location) (null restore))
     (error "Reader driver %s must define both location functions" name))
-  (dolist (function (delq nil (list location restore)))
+  (dolist (function (delq nil (list attach detach location restore)))
     (unless (functionp function)
       (error "Reader driver %s has a non-function member: %S"
              name function)))
@@ -319,6 +331,8 @@ new definition highest precedence."
           :match-function match
           :open-function open
           :close-function close
+          :attach-function (or attach #'ignore)
+          :detach-function (or detach #'ignore)
           :request-function request
           :location-function location
           :restore-function restore)))
@@ -692,24 +706,55 @@ Do nothing until document opening and any prior place restoration commit."
     (erase-buffer)
     (insert (apply #'format format-string arguments) "\n")))
 
-(defun yunge-reader--close-handle (driver file handle properties)
-  "Close HANDLE returned for FILE by DRIVER using PROPERTIES."
-  (when handle
+(defun yunge-reader--attach-view (document)
+  "Attach DOCUMENT's driver view to the current Reader buffer."
+  (let* ((driver (yunge-reader-document-driver document))
+         (attach (yunge-reader-driver-attach-function driver)))
+    ;; DETACH must be able to clean up a partially attached view when ATTACH
+    ;; signals after installing buffer-local state.
+    (setq yunge-reader--view-attached t)
+    (funcall attach document)))
+
+(defun yunge-reader--detach-view (document)
+  "Detach DOCUMENT's driver view from the current Reader buffer."
+  (when yunge-reader--view-attached
+    (setq yunge-reader--view-attached nil)
     (condition-case error-data
         (funcall
-         (yunge-reader-driver-close-function driver)
-         (make-yunge-reader-document
-          :file file
-          :driver driver
-          :handle handle
-          :layout (plist-get properties :layout)
-          :metadata (plist-get properties :metadata)))
+         (yunge-reader-driver-detach-function
+          (yunge-reader-document-driver document))
+         document)
       (error
        (display-warning
         'yunge-reader
-        (format "Could not close late reader document: %s"
+        (format "Could not detach reader view: %s"
                 (error-message-string error-data))
         :warning)))))
+
+(defun yunge-reader--close-resource (document warning-format)
+  "Close DOCUMENT, reporting failures with WARNING-FORMAT."
+  (condition-case error-data
+      (funcall
+       (yunge-reader-driver-close-function
+        (yunge-reader-document-driver document))
+       document)
+    (error
+     (display-warning
+      'yunge-reader
+      (format warning-format (error-message-string error-data))
+      :warning))))
+
+(defun yunge-reader--close-handle (driver file handle properties)
+  "Close HANDLE returned for FILE by DRIVER using PROPERTIES."
+  (when handle
+    (yunge-reader--close-resource
+     (make-yunge-reader-document
+      :file file
+      :driver driver
+      :handle handle
+      :layout (plist-get properties :layout)
+      :metadata (plist-get properties :metadata))
+     "Could not close late reader document: %s")))
 
 (defun yunge-reader--finish-open
     (buffer generation driver file handle properties error-data complete)
@@ -729,6 +774,8 @@ non-nil after the initial view and pending place are ready."
           (progn
             (setq yunge-reader--pending-place nil
                   yunge-reader--place-recording-enabled nil)
+            (yunge-reader--close-handle
+             driver file handle properties)
             (yunge-reader--display-status
              "Could not open %s:\n\n%s"
              file (error-message-string error-data))
@@ -751,30 +798,39 @@ non-nil after the initial view and pending place are ready."
                  file (error-message-string error-data))
                 (when complete
                   (funcall complete nil)))
-            (setq yunge-reader-document
-                  (make-yunge-reader-document
-                   :file file
-                   :driver driver
-                   :handle handle
-                   :layout layout
-                   :metadata (plist-get properties :metadata)))
-            (yunge-reader--display-status
-             "%s\n\nLayout: %s\nDriver: %s"
-             (file-name-nondirectory file)
-             layout
-             (yunge-reader-driver-name driver))
-            (let (accepted restore-error)
+            (let ((document
+                   (make-yunge-reader-document
+                    :file file
+                    :driver driver
+                    :handle handle
+                    :layout layout
+                    :metadata (plist-get properties :metadata)))
+                  accepted
+                  prepare-error)
+              (setq yunge-reader-document document)
+              (yunge-reader--display-status
+               "%s\n\nLayout: %s\nDriver: %s"
+               (file-name-nondirectory file)
+               layout
+               (yunge-reader-driver-name driver))
               (condition-case error-data
-                  (setq accepted
-                        (yunge-reader--restore-open-place))
-                (error (setq restore-error error-data)))
-              (if restore-error
+                  (progn
+                    (yunge-reader--attach-view document)
+                    (setq accepted
+                          (yunge-reader--restore-open-place)))
+                (error (setq prepare-error error-data)))
+              (if prepare-error
                   (progn
                     (setq yunge-reader--pending-place nil
                           yunge-reader--place-recording-enabled nil)
+                    (yunge-reader--detach-view document)
+                    (setq yunge-reader-document nil)
+                    (yunge-reader--close-resource
+                     document
+                     "Could not close failed reader document: %s")
                     (yunge-reader--display-status
                      "Could not prepare %s:\n\n%s"
-                     file (error-message-string restore-error)))
+                     file (error-message-string prepare-error)))
                 (when accepted
                   (yunge-reader-record-place)))
               (when complete
@@ -852,7 +908,7 @@ asynchronously."
         buffer))))
 
 (defun yunge-reader--close-document ()
-  "Close the native or external document owned by the current buffer."
+  "Detach the current view and close its driver-owned document resource."
   (cl-incf yunge-reader--open-generation)
   (cl-incf yunge-reader--search-generation)
   (cl-incf yunge-reader--outline-generation)
@@ -863,19 +919,13 @@ asynchronously."
         yunge-reader--copy-pending nil)
   (when yunge-reader-document
     (yunge-reader-record-place)
-    (let* ((document yunge-reader-document)
-           (driver (yunge-reader-document-driver document)))
-      (setq yunge-reader-document nil
-            yunge-reader--pending-place nil
+    (let ((document yunge-reader-document))
+      (setq yunge-reader--pending-place nil
             yunge-reader--place-recording-enabled nil)
-      (condition-case error-data
-          (funcall (yunge-reader-driver-close-function driver) document)
-        (error
-         (display-warning
-          'yunge-reader
-          (format "Could not close reader document: %s"
-                  (error-message-string error-data))
-          :warning))))))
+      (yunge-reader--detach-view document)
+      (setq yunge-reader-document nil)
+      (yunge-reader--close-resource
+       document "Could not close reader document: %s"))))
 
 (defun yunge-reader-request (operation arguments complete)
   "Request OPERATION with ARGUMENTS for the current document.

@@ -365,6 +365,19 @@
       :match #'ignore :open #'ignore :close #'ignore :request #'ignore
       :restore #'ignore))))
 
+(ert-deftest yunge-reader-requires-both-driver-view-functions ()
+  (let ((yunge-reader-drivers nil))
+    (should-error
+     (yunge-reader-register-driver
+      'attach-only
+      :match #'ignore :open #'ignore :close #'ignore :request #'ignore
+      :attach #'ignore))
+    (should-error
+     (yunge-reader-register-driver
+      'detach-only
+      :match #'ignore :open #'ignore :close #'ignore :request #'ignore
+      :detach #'ignore))))
+
 (ert-deftest yunge-reader-open-failure-preserves-the-saved-place ()
   (let* ((file (expand-file-name "unbuilt.pdf"))
          (key (yunge-reader--place-file-key file))
@@ -657,6 +670,240 @@
                       (file-name-nondirectory (car entry)))
                     yunge-reader-saved-places)
             '("three.pdf" "two.pdf")))))
+
+(ert-deftest yunge-reader-orders-document-and-view-lifecycles ()
+  (let ((yunge-reader-drivers nil)
+        events
+        attached-document
+        buffer)
+    (unwind-protect
+        (save-window-excursion
+          (setq buffer (generate-new-buffer " *reader-lifecycle*"))
+          (switch-to-buffer buffer)
+          (yunge-reader-mode)
+          (let ((driver
+                 (yunge-reader-register-driver
+                  'test
+                  :match (lambda (_file) t)
+                  :open
+                  (lambda (_file complete)
+                    (push 'open events)
+                    (funcall complete 'handle '(:layout fixed) nil))
+                  :close
+                  (lambda (document)
+                    (should (eq document attached-document))
+                    (push 'close events))
+                  :attach
+                  (lambda (document)
+                    (setq attached-document document)
+                    (push 'attach events)
+                    (add-hook
+                     'yunge-reader-refresh-hook
+                     (lambda () (push 'refresh events)) nil t))
+                  :detach
+                  (lambda (document)
+                    (should (eq document attached-document))
+                    (push 'detach events))
+                  :request #'ignore
+                  :location
+                  (lambda (_document _window)
+                    (push 'location events)
+                    (make-yunge-reader-position :unit 7))
+                  :restore
+                  (lambda (_document _position _window)
+                    (push 'restore events)
+                    t))))
+            (yunge-reader--begin-open
+             buffer driver "lifecycle.pdf"
+             (yunge-reader-test--place 'test 7)))
+          (should yunge-reader--view-attached)
+          (should (eq yunge-reader-document attached-document))
+          (yunge-reader--close-document)
+          (should-not yunge-reader--view-attached)
+          (should-not yunge-reader-document)
+          (should
+           (equal
+            (nreverse events)
+            '(open attach refresh restore location location
+                   detach close))))
+      (when (buffer-live-p buffer)
+        (kill-buffer buffer)))))
+
+(ert-deftest yunge-reader-cleans-up-a-failed-view-attach ()
+  (let* ((file (expand-file-name "attach-failure.pdf"))
+         (key (yunge-reader--place-file-key file))
+         (old (yunge-reader-test--place 'test 19))
+         (yunge-reader-saved-places
+          (list (cons key (copy-tree old t))))
+         (yunge-reader-drivers nil)
+         (completion 'pending)
+         events
+         document
+         buffer)
+    (unwind-protect
+        (save-window-excursion
+          (setq buffer (generate-new-buffer " *reader-attach-failure*"))
+          (switch-to-buffer buffer)
+          (yunge-reader-mode)
+          (let ((driver
+                 (yunge-reader-register-driver
+                  'test
+                  :match (lambda (_file) t)
+                  :open
+                  (lambda (_file complete)
+                    (funcall complete 'handle '(:layout fixed) nil))
+                  :close
+                  (lambda (value)
+                    (should (eq value document))
+                    (push 'close events))
+                  :attach
+                  (lambda (value)
+                    (setq document value)
+                    (push 'attach events)
+                    (error "attach failed"))
+                  :detach
+                  (lambda (value)
+                    (should (eq value document))
+                    (push 'detach events))
+                  :request #'ignore
+                  :location
+                  (lambda (&rest _arguments)
+                    (push 'location events)
+                    (make-yunge-reader-position :unit 0))
+                  :restore (lambda (&rest _arguments) t))))
+            (yunge-reader--begin-open
+             buffer driver file nil
+             (lambda (success) (setq completion success))))
+          (should-not completion)
+          (should-not yunge-reader-document)
+          (should-not yunge-reader--view-attached)
+          (should-not yunge-reader--place-recording-enabled)
+          (should (equal (nreverse events)
+                         '(attach detach close)))
+          (should (equal (cdr (assoc key yunge-reader-saved-places))
+                         old)))
+      (when (buffer-live-p buffer)
+        (kill-buffer buffer)))))
+
+(ert-deftest yunge-reader-cleans-up-a-failed-view-restore ()
+  (let* ((file (expand-file-name "restore-failure.pdf"))
+         (key (yunge-reader--place-file-key file))
+         (old (yunge-reader-test--place 'test 23))
+         (yunge-reader-saved-places
+          (list (cons key (copy-tree old t))))
+         (yunge-reader-drivers nil)
+         (completion 'pending)
+         events
+         buffer)
+    (unwind-protect
+        (save-window-excursion
+          (setq buffer
+                (generate-new-buffer " *reader-restore-failure*"))
+          (switch-to-buffer buffer)
+          (yunge-reader-mode)
+          (let ((driver
+                 (yunge-reader-register-driver
+                  'test
+                  :match (lambda (_file) t)
+                  :open
+                  (lambda (_file complete)
+                    (funcall complete 'handle '(:layout fixed) nil))
+                  :close (lambda (_document) (push 'close events))
+                  :attach
+                  (lambda (_document) (push 'attach events))
+                  :detach
+                  (lambda (_document) (push 'detach events))
+                  :request #'ignore
+                  :location
+                  (lambda (&rest _arguments)
+                    (push 'location events)
+                    (make-yunge-reader-position :unit 0))
+                  :restore
+                  (lambda (&rest _arguments)
+                    (push 'restore events)
+                    (error "restore failed")))))
+            (yunge-reader--begin-open
+             buffer driver file nil
+             (lambda (success) (setq completion success))))
+          (should-not completion)
+          (should-not yunge-reader-document)
+          (should-not yunge-reader--view-attached)
+          (should-not yunge-reader--place-recording-enabled)
+          (should
+           (equal (nreverse events)
+                  '(attach restore detach close)))
+          (should (equal (cdr (assoc key yunge-reader-saved-places))
+                         old)))
+      (when (buffer-live-p buffer)
+        (kill-buffer buffer)))))
+
+(ert-deftest yunge-reader-closes-resource-returned-with-open-error ()
+  (let ((yunge-reader-drivers nil)
+        (completion 'pending)
+        attached
+        closed)
+    (with-temp-buffer
+      (yunge-reader-mode)
+      (let ((driver
+             (yunge-reader-register-driver
+              'test
+              :match (lambda (_file) t)
+              :open
+              (lambda (_file complete)
+                (funcall
+                 complete 'handle
+                 '(:layout fixed :metadata (:pages 3))
+                 '(error "open failed")))
+              :close (lambda (document) (setq closed document))
+              :attach (lambda (_document) (setq attached t))
+              :detach #'ignore
+              :request #'ignore)))
+        (yunge-reader--begin-open
+         (current-buffer) driver "open-error.pdf" nil
+         (lambda (success) (setq completion success))))
+      (should-not completion)
+      (should-not attached)
+      (should-not yunge-reader-document)
+      (should (yunge-reader-document-p closed))
+      (should (eq (yunge-reader-document-handle closed) 'handle))
+      (should (eq (yunge-reader-document-layout closed) 'fixed))
+      (should
+       (equal (yunge-reader-document-metadata closed) '(:pages 3))))))
+
+(ert-deftest yunge-reader-closes-resource-after-view-detach-error ()
+  (let ((yunge-reader-drivers nil)
+        events
+        warnings)
+    (with-temp-buffer
+      (yunge-reader-mode)
+      (let* ((driver
+              (yunge-reader-register-driver
+               'test
+               :match #'ignore
+               :open #'ignore
+               :close (lambda (_document) (push 'close events))
+               :attach (lambda (_document) (push 'attach events))
+               :detach
+               (lambda (_document)
+                 (push 'detach events)
+                 (error "detach failed"))
+               :request #'ignore))
+             (document
+              (make-yunge-reader-document
+               :file "detach-error.pdf"
+               :driver driver
+               :handle 'handle
+               :layout 'fixed)))
+        (setq yunge-reader-document document)
+        (yunge-reader--attach-view document)
+        (cl-letf (((symbol-function 'display-warning)
+                   (lambda (&rest arguments)
+                     (push arguments warnings))))
+          (yunge-reader--close-document)))
+      (should (equal (nreverse events) '(attach detach close)))
+      (should (= (length warnings) 1))
+      (should-not yunge-reader-document)
+      (should-not yunge-reader--view-attached))))
 
 (ert-deftest yunge-reader-opens-reuses-and-closes-one-document ()
   (let ((yunge-reader-drivers nil)

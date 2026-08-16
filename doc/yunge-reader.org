@@ -59,9 +59,16 @@ The implementation is divided into four pieces:
   virtualizes a continuous page roll, and paints visible selections.
 
 The core never depends on PDFium, PDF page objects, or PNG.  A driver supplies
-a name, file matcher, open function, close function, and request function.
-Open and request completion may be immediate or asynchronous.  The core
-guards completions so one driver mistake cannot complete an operation twice.
+a name and file matcher, resource open and close functions, buffer view attach
+and detach functions, and a request function.  Open and request completion may
+be immediate or asynchronous.  The core guards completions so one driver
+mistake cannot complete an operation twice.
+
+Resource opening finishes before the core attaches the format-specific view.
+Closing detaches that view before releasing the resource.  A partial attach or
+failed initial restore is detached and closed in the same order.  This keeps a
+buffer's rendering state distinct from document identity, which is required
+before one document resource can safely support several independent views.
 
 Opening a document declares one of two layouts:
 
@@ -110,11 +117,12 @@ unchanged.  If the user changes that window while opening is pending, the late
 Reader buffer is closed instead of taking the window away.
 
 Opening treats an old place as pending data.  Place recording remains disabled
-through native document opening, the initial view refresh, and restoration.
-Only a successful restore permits the current view to replace the old record.
-An unavailable or unbuilt helper, an open or refresh failure, an invalid
-layout, or a rejected restore therefore leaves the prior place untouched.  In
-particular, a transient initial PDF page zero cannot become durable state.
+through document resource opening, view attachment, the initial refresh, and
+restoration.  Only a successful restore permits the current view to replace
+the old record.  An unavailable or unbuilt helper, an open, attach, refresh, or
+restore failure, an invalid layout, or a rejected restore therefore leaves the
+prior place untouched.  In particular, a transient initial PDF page zero
+cannot become durable state.
 
 An encrypted PDF first tries a password from Emacs's standard
 =password-cache=.  A rejected cached password is removed before prompting.
@@ -379,16 +387,23 @@ selection, and annotation conformance tests.
 
 * Next PDF slices
 
-The next implementation slice should add a second format driver to exercise
-the reflow contract.
+The next implementation slice can place open document resources in a canonical
+registry and reference-count attached views.  One primary view should own
+ordinary saved-place updates.  Additional views should keep independent zoom,
+viewport, selection, and search state until the user explicitly promotes one.
+Closing one view must not close a resource still used by another.
+
+A later slice should add a second format driver to exercise the reflow
+contract.
 
 Annotation anchors and independent decoration layers remain a planned
 extension of the stable position contract, after the reading path is hardened.
 
 * Testing
 
-ERT tests cover driver precedence, asynchronous cleanup, zoom, logical
-selection, native lifecycle, strict setup validation, PDF request mapping,
+ERT tests cover driver precedence, document/view lifecycle order, partial view
+cleanup, asynchronous cleanup, zoom, logical selection, native lifecycle,
+strict setup validation, PDF request mapping,
 lease balance, fit calculations, stable roll slots, visible-page
 virtualization, prefetch bounds, one-at-a-time render-first scheduling, rapid
 viewport replacement, interactive request priority, explicit-stop queue

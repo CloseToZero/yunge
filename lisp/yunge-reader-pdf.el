@@ -578,7 +578,6 @@ receives the raw native open result and nil, or nil and an error value."
 
 (defun yunge-reader-pdf--open (file complete)
   "Open PDF FILE and call COMPLETE using the reader driver contract."
-  (yunge-reader-pdf-view-mode 1)
   (let* ((buffer (current-buffer))
          (generation yunge-reader--open-generation)
          (window (yunge-reader--place-window))
@@ -597,9 +596,6 @@ receives the raw native open result and nil, or nil and an error value."
                      (setq acquired nil)
                      (yunge-reader-native-release))
                    (funcall complete nil nil error-data))
-               (when (buffer-live-p buffer)
-                 (with-current-buffer buffer
-                   (setq yunge-reader-pdf-page 0)))
                (funcall
                 complete
                 (make-yunge-reader-pdf-handle
@@ -617,6 +613,14 @@ receives the raw native open result and nil, or nil and an error value."
             (yunge-reader-pdf--open-in-session
              file session buffer generation window state #'finish))
         (error (finish nil acquire-error))))))
+
+(defun yunge-reader-pdf--attach (_document)
+  "Attach the PDF view adapter to the current Reader buffer."
+  (yunge-reader-pdf-view-mode 1))
+
+(defun yunge-reader-pdf--detach (_document)
+  "Detach the PDF view adapter from the current Reader buffer."
+  (yunge-reader-pdf-view-mode -1))
 
 (defun yunge-reader-pdf--session-error-p (error-data)
   "Return whether ERROR-DATA reports a lost native helper session."
@@ -951,6 +955,8 @@ requests for the same document share one native open."
    :match #'yunge-reader-pdf--match-p
    :open #'yunge-reader-pdf--open
    :close #'yunge-reader-pdf--close
+   :attach #'yunge-reader-pdf--attach
+   :detach #'yunge-reader-pdf--detach
    :request #'yunge-reader-pdf--request
    :location #'yunge-reader-pdf--location
    :restore #'yunge-reader-pdf--restore-location))

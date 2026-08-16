@@ -123,6 +123,21 @@
          'pdf))
     (should (equal auto-mode-alist modes))))
 
+(ert-deftest yunge-reader-pdf-attaches-and-detaches-its-view ()
+  (with-temp-buffer
+    (yunge-reader-mode)
+    (let ((document (yunge-reader-pdf-test--document)))
+      (yunge-reader-pdf--attach document)
+      (should yunge-reader-pdf-view-mode)
+      (should
+       (memq #'yunge-reader-pdf--refresh
+             yunge-reader-refresh-hook))
+      (yunge-reader-pdf--detach document)
+      (should-not yunge-reader-pdf-view-mode)
+      (should-not
+       (memq #'yunge-reader-pdf--refresh
+             yunge-reader-refresh-hook)))))
+
 (ert-deftest yunge-reader-pdf-open-and-close-balance-native-lease ()
   (with-temp-buffer
     (yunge-reader-mode)
@@ -172,6 +187,7 @@
            (setq opened handle
                  properties value
                  error-data error)))
+        (should-not yunge-reader-pdf-view-mode)
         (should (= leases 1))
         (should (yunge-reader-pdf-handle-p opened))
         (should (= (yunge-reader-pdf-handle-session opened) 17))
