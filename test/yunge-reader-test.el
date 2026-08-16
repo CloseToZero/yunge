@@ -96,27 +96,34 @@
     (yunge-reader-mode)
     (should-not buffer-auto-save-file-name)))
 
-(ert-deftest yunge-reader-evil-escape-clears-a-logical-selection ()
+(ert-deftest yunge-reader-evil-escape-clears-transient-highlights ()
   (yunge-test-enable-evil)
   (with-temp-buffer
     (yunge-reader-mode)
-    (let ((refreshes 0))
+    (let ((refreshes 0)
+          (search-updates 0))
       (setq yunge-reader-selection
             (make-yunge-reader-selection
              :start (make-yunge-reader-position :unit 0 :offset 1)
-             :end (make-yunge-reader-position :unit 0 :offset 2)))
+             :end (make-yunge-reader-position :unit 0 :offset 2))
+            yunge-reader-search-query "needle")
       (add-hook 'yunge-reader-refresh-hook
                 (lambda () (cl-incf refreshes)) nil t)
+      (add-hook 'yunge-reader-search-result-hook
+                (lambda () (cl-incf search-updates)) nil t)
       (let ((this-command nil))
         (evil-force-normal-state))
       (should yunge-reader-selection)
+      (should yunge-reader-search-query)
       (save-window-excursion
         (switch-to-buffer (current-buffer))
         (should (eq (key-binding (kbd "<escape>"))
                     'evil-force-normal-state))
         (execute-kbd-macro (kbd "<escape>")))
       (should-not yunge-reader-selection)
-      (should (= refreshes 1)))))
+      (should-not yunge-reader-search-query)
+      (should (zerop refreshes))
+      (should (= search-updates 1)))))
 
 (ert-deftest yunge-reader-escape-clears-or-uses-the-ordinary-action ()
   (with-temp-buffer
@@ -137,6 +144,38 @@
         (yunge-reader-escape))
       (should escaped)
       (should (= refreshes 1)))))
+
+(ert-deftest yunge-reader-search-starts-empty-and-uses-history ()
+  (with-temp-buffer
+    (yunge-reader-mode)
+    (setq yunge-reader-document 'document
+          yunge-reader-search-query "old query")
+    (cl-letf (((symbol-function 'read-string)
+               (lambda (prompt initial history &rest _arguments)
+                 (should (equal prompt "Search document: "))
+                 (should-not initial)
+                 (should (eq history 'yunge-reader-search-history))
+                 "new query"))
+              ((symbol-function 'yunge-reader--request-search-batch)
+               #'ignore))
+      (call-interactively #'yunge-reader-search))
+    (should (equal yunge-reader-search-query "new query"))))
+
+(ert-deftest yunge-reader-escape-clears-search-without-a-selection ()
+  (with-temp-buffer
+    (yunge-reader-mode)
+    (let ((updates 0))
+      (setq yunge-reader-search-query "needle"
+            yunge-reader-search-result
+            (make-yunge-reader-search-result
+             :start (make-yunge-reader-position :unit 0 :offset 1)
+             :end (make-yunge-reader-position :unit 0 :offset 2)))
+      (add-hook 'yunge-reader-search-result-hook
+                (lambda () (cl-incf updates)) nil t)
+      (yunge-reader-escape)
+      (should-not yunge-reader-search-query)
+      (should-not yunge-reader-search-result)
+      (should (= updates 1)))))
 
 (ert-deftest yunge-reader-opens-only-allowlisted-uri-actions ()
   (let* ((yunge-reader-uri-schemes '("https" "mailto"))

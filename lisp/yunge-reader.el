@@ -268,6 +268,9 @@ Each entry maps a canonical file name to versioned, printable place data.")
 (defvar-local yunge-reader-search-query nil
   "Literal query active in the current reader buffer, or nil.")
 
+(defvar yunge-reader-search-history nil
+  "Minibuffer history for document search queries.")
+
 (defvar-local yunge-reader-search-results nil
   "Search results loaded so far in document order.")
 
@@ -369,11 +372,10 @@ document contents.")
 
 (defun yunge-reader--clear-selection-after-force-normal-state
     (&rest _arguments)
-  "Clear a Reader selection after an interactive Evil escape."
+  "Clear Reader highlights after an interactive Evil escape."
   (when (and (eq this-command 'evil-force-normal-state)
-             (derived-mode-p 'yunge-reader-mode)
-             yunge-reader-selection)
-    (yunge-reader-clear-selection)))
+             (derived-mode-p 'yunge-reader-mode))
+    (yunge-reader--clear-transient-highlights)))
 
 (define-derived-mode yunge-reader-mode special-mode "Yunge Reader"
   "Major mode shared by Yunge Reader document adapters."
@@ -1905,7 +1907,9 @@ Render OUTLINE when non-nil; otherwise display STATUS."
   "Search the current document for literal QUERY.
 Case is ignored unless QUERY contains an uppercase character."
   (interactive
-   (list (read-string "Search document: " yunge-reader-search-query)))
+   (list
+    (read-string
+     "Search document: " nil 'yunge-reader-search-history)))
   (unless yunge-reader-document
     (user-error "This reader buffer has no open document"))
   (when (string-empty-p query)
@@ -2052,19 +2056,31 @@ driver that already resolved the selected glyphs."
         (make-yunge-reader-selection
          :start start :end end :text text)))
 
-(defun yunge-reader-clear-selection ()
-  "Clear the logical selection in the current reader buffer."
+(defun yunge-reader-clear-selection (&optional defer-refresh)
+  "Clear the logical selection in the current reader buffer.
+When DEFER-REFRESH is non-nil, leave repainting to the caller."
   (interactive)
   (cl-incf yunge-reader--copy-generation)
   (setq yunge-reader-selection nil
         yunge-reader--copy-pending nil)
-  (yunge-reader-refresh))
+  (unless defer-refresh
+    (yunge-reader-refresh)))
+
+(defun yunge-reader--clear-transient-highlights ()
+  "Clear active selection and search highlights.
+Return non-nil when at least one transient highlight was active."
+  (let ((selection yunge-reader-selection)
+        (search yunge-reader-search-query))
+    (when selection
+      (yunge-reader-clear-selection search))
+    (when search
+      (yunge-reader-clear-search))
+    (or selection search)))
 
 (defun yunge-reader-escape ()
-  "Clear a Reader selection or perform the ordinary escape action."
+  "Clear Reader highlights or perform the ordinary escape action."
   (interactive)
-  (if yunge-reader-selection
-      (yunge-reader-clear-selection)
+  (unless (yunge-reader--clear-transient-highlights)
     (keyboard-escape-quit)))
 
 (defun yunge-reader--selection-batch-valid-p (batch)

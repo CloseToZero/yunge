@@ -45,9 +45,10 @@ or Page Up for screen scrolling.  =C-d/C-u= scroll by half a screen in
 pixels, while =j/k= scroll by one screen line.  Mouse-1 selects one
 character, dragging selects text, and Ctrl-Mouse-1 follows a link when hit.
 Evil starts Reader buffers in Normal state and leaves Visual =y= as
-=evil-yank=.  =C-g= clears the logical text selection.  =ESC= does the same
-from Evil's Normal state while retaining its usual force-normal and search
-highlight cleanup; without Evil it clears the selection directly.
+=evil-yank=.  =C-g= clears the logical text selection.  One =ESC= clears both
+the logical selection and the active Reader search highlight.  From Evil's
+Normal state it retains the ordinary force-normal behavior; without Evil it
+uses the same Reader cleanup directly.
 =M-x yunge-reader-clear-search= removes the active match highlight.
 
 =M-x yunge-reader-new-view= creates an independent buffer at the current
@@ -330,7 +331,9 @@ configured number of document units and returns a bounded match list plus the
 first unscanned stable position.  Emacs stops after the first useful batch and
 requests another only for repeat navigation.  An obsolete query generation
 cannot publish results, and each native batch is short enough to let render
-requests run between batches.
+requests run between batches.  The search prompt starts empty instead of
+preselecting the active query; ordinary minibuffer history still recalls
+earlier queries.
 
 The PDF adapter requests text geometry only for ordinary visible prefetch or a
 target search page.  It projects the first drawable match character into
