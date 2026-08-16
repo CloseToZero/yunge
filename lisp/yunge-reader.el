@@ -45,6 +45,16 @@
   :type '(integer :tag "Units" 1 64)
   :group 'yunge-reader)
 
+(defcustom yunge-reader-copy-unit-limit 8
+  "Maximum document units read by one selection text batch."
+  :type '(integer :tag "Units" 1 64)
+  :group 'yunge-reader)
+
+(defcustom yunge-reader-copy-character-limit 16384
+  "Maximum indexed characters read by one selection text batch."
+  :type '(integer :tag "Characters" 1 65536)
+  :group 'yunge-reader)
+
 (defcustom yunge-reader-place-limit 1000
   "Maximum number of durable document places to retain."
   :type '(integer :tag "Places" 1)
@@ -106,6 +116,12 @@ unscaled coordinate system of UNIT."
   start
   end
   text)
+
+(cl-defstruct yunge-reader-selection-batch
+  "One concatenable batch of selected document text."
+  text
+  cursor
+  done)
 
 (cl-defstruct yunge-reader-search-result
   "One driver-neutral document search result."
@@ -179,6 +195,12 @@ Each entry maps a canonical file name to versioned, printable place data.")
 
 (defvar-local yunge-reader-selection nil
   "Current logical `yunge-reader-selection', or nil.")
+
+(defvar-local yunge-reader--copy-generation 0
+  "Generation used to reject late selection text completions.")
+
+(defvar-local yunge-reader--copy-pending nil
+  "Non-nil while the current selection is being copied in batches.")
 
 (defvar-local yunge-reader-search-query nil
   "Literal query active in the current reader buffer, or nil.")
@@ -263,6 +285,8 @@ artifacts.  Functions run in the reader buffer without arguments.")
   (setq-local cursor-type nil)
   (setq-local truncate-lines t)
   (setq-local yunge-reader-scale yunge-reader-default-scale)
+  (setq-local yunge-reader--copy-generation 0)
+  (setq-local yunge-reader--copy-pending nil)
   (add-hook 'kill-buffer-hook #'yunge-reader--close-document nil t))
 
 (with-eval-after-load 'evil
@@ -832,9 +856,11 @@ asynchronously."
   (cl-incf yunge-reader--open-generation)
   (cl-incf yunge-reader--search-generation)
   (cl-incf yunge-reader--outline-generation)
+  (cl-incf yunge-reader--copy-generation)
   (setq yunge-reader--outline nil
         yunge-reader--outline-loaded nil
-        yunge-reader--outline-pending nil)
+        yunge-reader--outline-pending nil
+        yunge-reader--copy-pending nil)
   (when yunge-reader-document
     (yunge-reader-record-place)
     (let* ((document yunge-reader-document)
@@ -1400,6 +1426,8 @@ driver that already resolved the selected glyphs."
   (unless (and (yunge-reader-position-p start)
                (yunge-reader-position-p end))
     (error "Reader selection endpoints must be reader positions"))
+  (cl-incf yunge-reader--copy-generation)
+  (setq yunge-reader--copy-pending nil)
   (setq yunge-reader-selection
         (make-yunge-reader-selection
          :start start :end end :text text)))
@@ -1407,15 +1435,29 @@ driver that already resolved the selected glyphs."
 (defun yunge-reader-clear-selection ()
   "Clear the logical selection in the current reader buffer."
   (interactive)
-  (setq yunge-reader-selection nil)
+  (cl-incf yunge-reader--copy-generation)
+  (setq yunge-reader-selection nil
+        yunge-reader--copy-pending nil)
   (yunge-reader-refresh))
 
-(defun yunge-reader--selection-result-text (value)
-  "Return selected text represented by driver VALUE, or nil."
-  (cond
-   ((stringp value) value)
-   ((and (listp value) (stringp (plist-get value :text)))
-    (plist-get value :text))))
+(defun yunge-reader--selection-batch-valid-p (batch)
+  "Return non-nil when BATCH follows the selection text contract."
+  (when (yunge-reader-selection-batch-p batch)
+    (let ((cursor (yunge-reader-selection-batch-cursor batch))
+          (done (yunge-reader-selection-batch-done batch)))
+      (and (stringp (yunge-reader-selection-batch-text batch))
+           (memq done '(nil t))
+           (if done
+               (null cursor)
+             (yunge-reader-position-p cursor))))))
+
+(defun yunge-reader--copy-current-p
+    (document selection generation)
+  "Return whether DOCUMENT copy of SELECTION at GENERATION is current."
+  (and yunge-reader--copy-pending
+       (= generation yunge-reader--copy-generation)
+       (eq document yunge-reader-document)
+       (eq selection yunge-reader-selection)))
 
 (defun yunge-reader--copy-text (text)
   "Put nonempty selected TEXT in the kill ring."
@@ -1425,33 +1467,114 @@ driver that already resolved the selected glyphs."
   (message "Copied document text")
   text)
 
+(defun yunge-reader--schedule-selection-batch
+    (buffer document selection generation cursor fragments)
+  "Schedule the next selection batch for BUFFER and DOCUMENT."
+  (run-at-time
+   0 nil
+   (lambda ()
+     (when (buffer-live-p buffer)
+       (with-current-buffer buffer
+         (when (yunge-reader--copy-current-p
+                document selection generation)
+           (yunge-reader--request-selection-batch
+            buffer document selection generation cursor fragments)))))))
+
+(defun yunge-reader--complete-selection-batch
+    (buffer document selection generation old-cursor fragments
+            value error-data)
+  "Complete one selection text request made from BUFFER."
+  (when (buffer-live-p buffer)
+    (with-current-buffer buffer
+      (when (yunge-reader--copy-current-p
+             document selection generation)
+        (cond
+         (error-data
+          (setq yunge-reader--copy-pending nil)
+          (display-warning
+           'yunge-reader
+           (format "Could not copy document text: %s"
+                   (error-message-string error-data))
+           :warning))
+         ((not (yunge-reader--selection-batch-valid-p value))
+          (setq yunge-reader--copy-pending nil)
+          (display-warning
+           'yunge-reader
+           "Reader driver returned an invalid selection text batch"
+           :warning))
+         (t
+          (let* ((text (yunge-reader-selection-batch-text value))
+                 (cursor (yunge-reader-selection-batch-cursor value))
+                 (done (yunge-reader-selection-batch-done value))
+                 (fragments (cons text fragments)))
+            (cond
+             (done
+              (let ((complete-text
+                     (mapconcat #'identity
+                                (nreverse fragments) "")))
+                (setq yunge-reader--copy-pending nil)
+                (condition-case copy-error
+                    (progn
+                      (yunge-reader--copy-text complete-text)
+                      (setf (yunge-reader-selection-text selection)
+                            complete-text))
+                  (error
+                   (display-warning
+                    'yunge-reader
+                    (format "Could not copy document text: %s"
+                            (error-message-string copy-error))
+                    :warning)))))
+             ((equal cursor old-cursor)
+              (setq yunge-reader--copy-pending nil)
+              (display-warning
+               'yunge-reader
+               "Reader selection text cursor did not advance"
+               :warning))
+             (t
+              (yunge-reader--schedule-selection-batch
+               buffer document selection generation cursor
+               fragments))))))))))
+
+(defun yunge-reader--request-selection-batch
+    (buffer document selection generation cursor fragments)
+  "Request one bounded text batch for SELECTION in DOCUMENT."
+  (yunge-reader-request
+   'selection-text
+   (list :start (yunge-reader-selection-start selection)
+         :end (yunge-reader-selection-end selection)
+         :cursor cursor
+         :unit-limit yunge-reader-copy-unit-limit
+         :character-limit yunge-reader-copy-character-limit)
+   (lambda (value error-data)
+     (yunge-reader--complete-selection-batch
+      buffer document selection generation cursor fragments
+      value error-data))))
+
 (defun yunge-reader-copy-selection ()
   "Copy the current logical document selection.
 Ask the active driver for text when the selection does not already carry it."
   (interactive)
   (unless yunge-reader-selection
     (user-error "There is no document selection"))
-  (if-let* ((text (yunge-reader-selection-text yunge-reader-selection)))
-      (yunge-reader--copy-text text)
+  (cond
+   ((yunge-reader-selection-text yunge-reader-selection)
+    (cl-incf yunge-reader--copy-generation)
+    (setq yunge-reader--copy-pending nil)
+    (yunge-reader--copy-text
+     (yunge-reader-selection-text yunge-reader-selection)))
+   (yunge-reader--copy-pending
+    (message "Document selection is still being copied"))
+   (t
     (let ((buffer (current-buffer))
-          (selection yunge-reader-selection))
-      (yunge-reader-request
-       'selection-text
-       (list :start (yunge-reader-selection-start selection)
-             :end (yunge-reader-selection-end selection))
-       (lambda (value error-data)
-         (when (buffer-live-p buffer)
-           (with-current-buffer buffer
-             (if error-data
-                 (display-warning
-                  'yunge-reader
-                  (format "Could not copy document text: %s"
-                          (error-message-string error-data))
-                  :warning)
-               (let ((text (yunge-reader--selection-result-text value)))
-                 (when (eq selection yunge-reader-selection)
-                   (setf (yunge-reader-selection-text selection) text))
-                 (yunge-reader--copy-text text))))))))))
+          (document yunge-reader-document)
+          (selection yunge-reader-selection)
+          (generation (cl-incf yunge-reader--copy-generation)))
+      (unless document
+        (user-error "This reader buffer has no open document"))
+      (setq yunge-reader--copy-pending t)
+      (message "Copying document text...")
+      (yunge-reader--request-selection-batch
+       buffer document selection generation nil nil)))))
 
 (yunge-jump-history-register-target
  'reader

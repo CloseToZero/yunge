@@ -278,6 +278,24 @@
                     (yunge-reader-pdf--native-position cursor-value))
        :done (eq (alist-get 'done value) t)))))
 
+(defun yunge-reader-pdf--native-selection-batch (value)
+  "Return a generic selection batch represented by native VALUE."
+  (let ((cursor-value (alist-get 'cursor value)))
+    (make-yunge-reader-selection-batch
+     :text (alist-get 'text value)
+     :cursor (and cursor-value
+                  (yunge-reader-pdf--native-position cursor-value))
+     :done (eq (alist-get 'done value) t))))
+
+(defun yunge-reader-pdf--indexed-position-parameters (position)
+  "Return native indexed parameters for reader POSITION, or nil."
+  (let ((page (and (yunge-reader-position-p position)
+                   (yunge-reader-position-unit position)))
+        (offset (and (yunge-reader-position-p position)
+                     (yunge-reader-position-offset position))))
+    (when (and (natnump page) (natnump offset))
+      (list (cons 'page page) (cons 'offset offset)))))
+
 (defun yunge-reader-pdf--outline-page-info (document page)
   "Return metadata for zero-based PAGE in PDF DOCUMENT."
   (let* ((metadata (yunge-reader-document-metadata document))
@@ -841,33 +859,43 @@ requests for the same document share one native open."
       ('selection-text
        (let* ((start (plist-get arguments :start))
               (end (plist-get arguments :end))
-              (start-page (yunge-reader-position-unit start))
-              (end-page (yunge-reader-position-unit end))
-              (start-offset (yunge-reader-position-offset start))
-              (end-offset (yunge-reader-position-offset end)))
-         (if (not (and (natnump start-page)
-                       (natnump end-page)
-                       (natnump start-offset)
-                       (natnump end-offset)))
-             (funcall
-              complete nil
-              (yunge-reader-pdf--native-error
-               "PDF selection endpoints must be indexed positions"))
-           (yunge-reader-native-request-in-session
-            session
-            "selection-text"
-            (list
-             (cons 'document id)
-             (cons 'start
-                   (list (cons 'page start-page)
-                         (cons 'offset start-offset)))
-             (cons 'end
-                   (list (cons 'page end-page)
-                         (cons 'offset end-offset))))
-            (lambda (result native-error)
-              (funcall complete
-                       (and result (alist-get 'text result))
-                       native-error))))))
+              (cursor (plist-get arguments :cursor))
+              (start-parameters
+               (yunge-reader-pdf--indexed-position-parameters start))
+              (end-parameters
+               (yunge-reader-pdf--indexed-position-parameters end))
+              (cursor-parameters
+               (and cursor
+                    (yunge-reader-pdf--indexed-position-parameters
+                     cursor)))
+              (unit-limit (plist-get arguments :unit-limit))
+              (character-limit
+               (plist-get arguments :character-limit)))
+          (if (not (and start-parameters end-parameters
+                        (or (null cursor) cursor-parameters)))
+              (funcall
+               complete nil
+               (yunge-reader-pdf--native-error
+                "PDF selection endpoints must be indexed positions"))
+            (yunge-reader-native-request-in-session
+             session
+             "selection-text"
+             (append
+              (list (cons 'document id)
+                    (cons 'start start-parameters)
+                    (cons 'end end-parameters))
+              (when cursor-parameters
+                (list (cons 'cursor cursor-parameters)))
+              (when unit-limit
+                (list (cons 'page-limit unit-limit)))
+              (when character-limit
+                (list (cons 'character-limit character-limit))))
+             (lambda (result native-error)
+               (funcall complete
+                        (and result
+                             (yunge-reader-pdf--native-selection-batch
+                              result))
+                        native-error))))))
       (_
        (funcall
         complete nil

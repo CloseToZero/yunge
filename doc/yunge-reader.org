@@ -19,7 +19,7 @@ The current PDF adapter provides:
 - next, previous, direct page, screen, mouse wheel, and ordinary scrolling;
 - fit-width, fit-page, and bounded manual zoom;
 - canonical bounds and rotated glyph quadrilaterals for local hit testing;
-- cross-page drag, polygonal SVG highlights, and exact text copying;
+- cross-page drag, polygonal SVG highlights, and bounded exact text copying;
 - bounded Unicode literal search, repeat navigation, and glyph-level jumping;
 - bounded document outlines with stable internal destinations;
 - bounded internal and external page links with local hit testing;
@@ -183,7 +183,15 @@ A logical selection contains two positions and optional resolved text.  Its
 painted rectangles are disposable view state, not the source of truth.
 Rerendering or evicting an image therefore need not invalidate the text range.
 =yunge-reader-copy-selection= copies resolved text or asks the driver for
-=selection-text=.
+=selection-text= batches.  Each batch contains directly concatenable text, an
+optional stable cursor, and a completion flag.  The core limits both document
+units and indexed characters per request, schedules continuation through the
+event loop, and publishes text only after every batch succeeds.
+
+Changing or clearing the selection invalidates its copy generation.  A late
+batch can neither cache obsolete text nor replace the kill ring, and no later
+batches are requested.  Repeating =y= for the same pending selection reuses
+the active copy instead of starting a duplicate request.
 
 A search result uses the same stable endpoints, but its transient highlight is
 independent of the copy selection.  Search preview can therefore move and
@@ -197,9 +205,11 @@ independent of drag direction, including when the drag crosses page slots.
 The helper returns Unicode, loose character bounds, and optional oriented
 quadrilaterals in canonical PDF points.  Emacs performs polygon hit testing
 locally, stores only the stable endpoints, and asks PDFium to resolve the exact
-range text.  Missing or malformed quadrilaterals fall back to bounds.
-Cross-page copy preserves each exact page fragment and inserts one newline at
-every page boundary.
+range text.  Each native batch reads at most 8 pages and 16,384 indexed
+characters by default.  Missing or malformed quadrilaterals fall back to
+bounds.  Cross-page copy preserves each exact page fragment and inserts one
+newline at every page boundary, including when that boundary separates two
+protocol batches.
 
 The same boundary can carry later annotations.  Durable annotation data can
 store document identity, stable endpoints, quoted text, color, and provenance
@@ -361,10 +371,8 @@ selection, and annotation conformance tests.
 
 * Next PDF slices
 
-The next implementation slices should add, in order:
-
-1. bounded, cooperatively batched multi-page copy requests; and
-2. a second format driver to exercise the reflow contract.
+The next implementation slice should add a second format driver to exercise
+the reflow contract.
 
 Annotation anchors and independent decoration layers remain a planned
 extension of the stable position contract, after the reading path is hardened.
@@ -380,17 +388,18 @@ cancellation, error continuation, and exact working-set cache pruning.  A
 50,000-page roll test checks stable first, middle, and last slots without live
 page images, while 1,000 viewport replacements verify bounded queued work.
 Further tests cover stale render widths, text caching, cross-page hit testing,
-copying, rotated polygon painting, rectangle fallback, bounded search
-continuation, stale search rejection, independent match painting, precise
-match scrolling, canonical viewport capture, cross-scale place restoration,
-page clamping, deferred window restoration, failed-open place protection,
-rejected restores, immutable Reader jump capture, failed live-jump rollback,
-asynchronous reopen, late-window protection, semantic page tracking, outline
-caching, unique outline completion labels, outline-place restoration, keyed
-render completions, bounded link mapping and hit testing, tagged URI
-validation, allowlisted explicit activation, link request coalescing, late
-link caching, password retry, cancellation, attempt bounds, late-prompt
-rejection, cache replacement, lease balance, cache limits,
+cooperatively batched copying, stale-copy rejection, partial-copy failure,
+nonadvancing cursor rejection, rotated polygon painting, rectangle fallback,
+bounded search continuation, stale search rejection, independent match
+painting, precise match scrolling, canonical viewport capture, cross-scale
+place restoration, page clamping, deferred window restoration, failed-open
+place protection, rejected restores, immutable Reader jump capture, failed
+live-jump rollback, asynchronous reopen, late-window protection, semantic page
+tracking, outline caching, unique outline completion labels, outline-place
+restoration, keyed render completions, bounded link mapping and hit testing,
+tagged URI validation, allowlisted explicit activation, link request
+coalescing, late link caching, password retry, cancellation, attempt bounds,
+late-prompt rejection, cache replacement, lease balance, cache limits,
 prune-before-stop ordering, and lease races.  Recovery tests cover shared
 reopen, file replacement before and during open, a single interrupted-request
 retry, late close cleanup, background password rejection, view and saved-place
@@ -400,9 +409,9 @@ failure, stale-session request rejection, intentional-stop errors, and
 process-local handle collisions.  Rust tests cover the handshake, strict
 parameters, stable PDF password errors, bounded outline, link labels and URIs,
 destination view mapping, safe cache eviction, Unicode literal matching,
-byte-to-PDFium-index mapping, search cursors and limits, regular and
-singular-angle quadrilateral recovery, cross-page inclusive ranges, protocol
-errors, shutdown ordering, and EOF.
+byte-to-PDFium-index mapping, search and selection cursors and limits, regular
+and singular-angle quadrilateral recovery, cross-page inclusive ranges,
+protocol errors, shutdown ordering, and EOF.
 
 The integration path installs the pinned Windows library through the public
 setup command, runs its =pdfium-info= smoke test, opens a five-page A4 fixture,
@@ -456,3 +465,10 @@ waits for render, text, and link tasks for pages 0 and 1 to drain in order.  It
 then replaces the working set with page 3 and confirms that all three
 in-memory caches shrink from two pages to that single page.  The native
 document closes and its service lease is released normally.
+
+A bounded-copy smoke check makes a backward selection across the first two
+pages of the same fixture.  One-page, three-character requests finish in six
+cursor batches and concatenate to the exact result of one comparison request,
+including the page separator.  The complete Reader path independently stores
+the resulting 17 characters in both the logical selection and kill ring.  The
+document and helper then close normally.

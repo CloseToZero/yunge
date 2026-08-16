@@ -207,21 +207,26 @@ Queries longer than 256 Unicode characters are rejected.  Search does not
 interpret regular-expression syntax and does not join matches across page
 boundaries.  Case-insensitive matching uses Unicode-aware simple case folding.
 
-=selection-text= accepts two inclusive document positions.  Each position has
-a zero-based =page= and PDFium character =offset=.  The helper normalizes
-backward selections and returns each page fragment in PDFium index order.  One
-newline separates adjacent page fragments.  Invalid pages or offsets return
-=invalid-page= or =invalid-selection=.
+=selection-text= accepts two inclusive document positions and an optional
+=cursor=.  Each position has a zero-based =page= and PDFium character =offset=.
+The helper normalizes backward selections.  =page-limit= defaults to 8 and is
+bounded at 64; =character-limit= defaults to 16,384 and is bounded at 65,536.
+Each response returns directly concatenable =text=, the next =cursor=, and
+=done=.  A continuation within one page adds no separator; a continuation on
+the next page begins with the one newline belonging to that page boundary.
+Invalid pages, offsets, cursors, or limits return stable protocol errors.
 
 #+begin_src json
 {"id":7,"op":"selection-text",
  "params":{"document":1,
            "start":{"page":1,"offset":4},
-           "end":{"page":0,"offset":3}}}
+           "end":{"page":0,"offset":3},
+           "page-limit":1,"character-limit":12}}
 {"id":7,"ok":true,
  "result":{"start":{"page":0,"offset":3},
-           "end":{"page":1,"offset":4},
-           "text":"first page text\nsecond"}}
+            "end":{"page":1,"offset":4},
+            "text":"first page t",
+            "cursor":{"page":0,"offset":15},"done":false}}
 #+end_src
 
 =render-page= additionally accepts pixel =width= from 16 through 8192 and a

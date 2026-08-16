@@ -767,10 +767,14 @@
   (with-temp-buffer
     (yunge-reader-mode)
     (let* ((yunge-reader-drivers nil)
+           (yunge-reader-copy-unit-limit 2)
+           (yunge-reader-copy-character-limit 3)
            (kill-ring nil)
            (start (make-yunge-reader-position :unit 1 :offset 2))
            (end (make-yunge-reader-position :unit 1 :offset 5))
+           (cursor (make-yunge-reader-position :unit 1 :offset 5))
            (requests 0)
+           arguments-seen
            completion
            (driver
             (yunge-reader-register-driver
@@ -781,10 +785,19 @@
              :request
              (lambda (_document operation arguments complete)
                (cl-incf requests)
+               (push arguments arguments-seen)
                (should (eq operation 'selection-text))
                (should (eq (plist-get arguments :start) start))
                (should (eq (plist-get arguments :end) end))
-               (setq completion complete)))))
+               (should (= (plist-get arguments :unit-limit) 2))
+               (should (= (plist-get arguments :character-limit) 3))
+               (if (plist-get arguments :cursor)
+                   (funcall
+                    complete
+                    (make-yunge-reader-selection-batch
+                     :text "olved" :done t)
+                    nil)
+                 (setq completion complete))))))
       (setq yunge-reader-document
             (make-yunge-reader-document
              :file "selection.pdf" :driver driver :handle 'handle
@@ -794,16 +807,160 @@
         (should (equal (yunge-reader-copy-selection) "cached")))
       (should (equal (car kill-ring) "cached"))
       (yunge-reader-set-selection start end)
-      (let ((inhibit-message t))
-        (yunge-reader-copy-selection))
-      (should (= requests 1))
-      (with-temp-buffer
+      (cl-letf (((symbol-function 'run-at-time)
+                 (lambda (_time _repeat function &rest arguments)
+                   (apply function arguments))))
         (let ((inhibit-message t))
-          (funcall completion '(:text "resolved") nil)))
+          (yunge-reader-copy-selection)
+          (yunge-reader-copy-selection))
+        (should yunge-reader--copy-pending)
+        (should (= requests 1))
+        (with-temp-buffer
+          (let ((inhibit-message t))
+            (funcall
+             completion
+             (make-yunge-reader-selection-batch
+              :text "res" :cursor cursor :done nil)
+             nil))))
+      (should (= requests 2))
+      (should-not yunge-reader--copy-pending)
+      (should (eq (plist-get (car arguments-seen) :cursor)
+                  cursor))
       (should (equal (car kill-ring) "resolved"))
       (should
        (equal (yunge-reader-selection-text yunge-reader-selection)
               "resolved")))))
+
+(ert-deftest yunge-reader-discards-a-late-copy-after-selection-changes ()
+  (with-temp-buffer
+    (yunge-reader-mode)
+    (let* ((yunge-reader-drivers nil)
+           (kill-ring nil)
+           (old-start
+            (make-yunge-reader-position :unit 0 :offset 1))
+           (old-end
+            (make-yunge-reader-position :unit 0 :offset 2))
+           (new-start
+            (make-yunge-reader-position :unit 1 :offset 3))
+           (new-end
+            (make-yunge-reader-position :unit 1 :offset 4))
+           completion
+           (driver
+            (yunge-reader-register-driver
+             'selection-test
+             :match #'ignore
+             :open #'ignore
+             :close #'ignore
+             :request
+             (lambda (_document _operation _arguments complete)
+               (setq completion complete)))))
+      (setq yunge-reader-document
+            (make-yunge-reader-document
+             :file "selection.pdf" :driver driver :handle 'handle
+             :layout 'fixed))
+      (yunge-reader-set-selection old-start old-end)
+      (let ((inhibit-message t))
+        (yunge-reader-copy-selection))
+      (should yunge-reader--copy-pending)
+      (yunge-reader-set-selection new-start new-end)
+      (funcall
+       completion
+       (make-yunge-reader-selection-batch :text "obsolete" :done t)
+       nil)
+      (should-not kill-ring)
+      (should-not yunge-reader--copy-pending)
+      (should-not
+       (yunge-reader-selection-text yunge-reader-selection)))))
+
+(ert-deftest yunge-reader-stops-a-copy-when-its-cursor-does-not-advance ()
+  (with-temp-buffer
+    (yunge-reader-mode)
+    (let* ((yunge-reader-drivers nil)
+           (start (make-yunge-reader-position :unit 0 :offset 0))
+           (end (make-yunge-reader-position :unit 0 :offset 4))
+           (cursor (make-yunge-reader-position :unit 0 :offset 2))
+           (requests 0)
+           warnings
+           (driver
+            (yunge-reader-register-driver
+             'selection-test
+             :match #'ignore
+             :open #'ignore
+             :close #'ignore
+             :request
+             (lambda (_document _operation _arguments complete)
+               (cl-incf requests)
+               (funcall
+                complete
+                (make-yunge-reader-selection-batch
+                 :text "part"
+                 :cursor cursor
+                 :done nil)
+                nil)))))
+      (setq yunge-reader-document
+            (make-yunge-reader-document
+             :file "selection.pdf" :driver driver :handle 'handle
+             :layout 'fixed))
+      (yunge-reader-set-selection start end)
+      (cl-letf (((symbol-function 'run-at-time)
+                 (lambda (_time _repeat function &rest arguments)
+                   (apply function arguments)))
+                ((symbol-function 'display-warning)
+                 (lambda (&rest arguments)
+                   (push arguments warnings))))
+        (let ((inhibit-message t))
+          (yunge-reader-copy-selection)))
+      (should (= requests 2))
+      (should (= (length warnings) 1))
+      (should-not yunge-reader--copy-pending)
+      (should-not
+       (yunge-reader-selection-text yunge-reader-selection)))))
+
+(ert-deftest yunge-reader-discards-partial-text-after-a-copy-error ()
+  (with-temp-buffer
+    (yunge-reader-mode)
+    (let* ((yunge-reader-drivers nil)
+           (kill-ring nil)
+           (start (make-yunge-reader-position :unit 0 :offset 0))
+           (end (make-yunge-reader-position :unit 1 :offset 4))
+           (cursor (make-yunge-reader-position :unit 1 :offset 0))
+           (requests 0)
+           warnings
+           (driver
+            (yunge-reader-register-driver
+             'selection-test
+             :match #'ignore
+             :open #'ignore
+             :close #'ignore
+             :request
+             (lambda (_document _operation arguments complete)
+               (cl-incf requests)
+               (if (plist-get arguments :cursor)
+                   (funcall complete nil '(error "copy stopped"))
+                 (funcall
+                  complete
+                  (make-yunge-reader-selection-batch
+                   :text "partial" :cursor cursor :done nil)
+                  nil))))))
+      (setq yunge-reader-document
+            (make-yunge-reader-document
+             :file "selection.pdf" :driver driver :handle 'handle
+             :layout 'fixed))
+      (yunge-reader-set-selection start end)
+      (cl-letf (((symbol-function 'run-at-time)
+                 (lambda (_time _repeat function &rest arguments)
+                   (apply function arguments)))
+                ((symbol-function 'display-warning)
+                 (lambda (&rest arguments)
+                   (push arguments warnings))))
+        (let ((inhibit-message t))
+          (yunge-reader-copy-selection)))
+      (should (= requests 2))
+      (should (= (length warnings) 1))
+      (should-not kill-ring)
+      (should-not yunge-reader--copy-pending)
+      (should-not
+       (yunge-reader-selection-text yunge-reader-selection)))))
 
 (ert-deftest yunge-reader-request-completes-only-once ()
   (with-temp-buffer

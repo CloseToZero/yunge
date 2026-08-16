@@ -1074,12 +1074,13 @@
         (should (eq (cdar candidates) first))
         (should (eq (cdadr candidates) second))))))
 
-(ert-deftest yunge-reader-pdf-resolves-cross-page-selection-natively ()
+(ert-deftest yunge-reader-pdf-maps-bounded-selection-text-batches ()
   (let* ((document
           (make-yunge-reader-document
            :handle (yunge-reader-pdf-test--handle 11)))
          (start (make-yunge-reader-position :unit 3 :offset 9))
          (end (make-yunge-reader-position :unit 2 :offset 4))
+         (cursor (make-yunge-reader-position :unit 2 :offset 7))
          request
          result)
     (cl-letf
@@ -1089,10 +1090,16 @@
           (lambda (session operation parameters complete)
             (should (= session 17))
             (setq request (cons operation parameters))
-            (funcall complete '((text . "exact text")) nil))))
+            (funcall
+             complete
+             '((text . "exact text")
+               (cursor . ((page . 3) (offset . 1)))
+               (done . :false))
+             nil))))
       (yunge-reader-pdf--request
        document 'selection-text
-       (list :start start :end end)
+       (list :start start :end end :cursor cursor
+             :unit-limit 4 :character-limit 123)
        (lambda (value error-data)
          (should-not error-data)
          (setq result value))))
@@ -1101,7 +1108,18 @@
                    '((page . 3) (offset . 9))))
     (should (equal (cdr (assq 'end (cdr request)))
                    '((page . 2) (offset . 4))))
-    (should (equal result "exact text"))))
+    (should (equal (cdr (assq 'cursor (cdr request)))
+                   '((page . 2) (offset . 7))))
+    (should (= (cdr (assq 'page-limit (cdr request))) 4))
+    (should (= (cdr (assq 'character-limit (cdr request))) 123))
+    (should (yunge-reader-selection-batch-p result))
+    (should (equal (yunge-reader-selection-batch-text result)
+                   "exact text"))
+    (should-not (yunge-reader-selection-batch-done result))
+    (should
+     (equal
+      (yunge-reader-selection-batch-cursor result)
+      (make-yunge-reader-position :unit 3 :offset 1)))))
 
 (ert-deftest yunge-reader-pdf-resolves-fit-and-manual-widths ()
   (with-temp-buffer

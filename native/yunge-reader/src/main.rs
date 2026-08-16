@@ -37,6 +37,8 @@ const SEARCH_CONTEXT_CHARACTERS: usize = 24;
 const SEARCH_MAX_MATCHES: u32 = 200;
 const SEARCH_MAX_PAGES: u32 = 64;
 const SEARCH_MAX_QUERY_CHARACTERS: usize = 256;
+const SELECTION_MAX_CHARACTERS: u32 = 65_536;
+const SELECTION_MAX_PAGES: u32 = 64;
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -160,6 +162,15 @@ struct SelectionParams {
     document: u64,
     start: SelectionPosition,
     end: SelectionPosition,
+    #[serde(default)]
+    cursor: Option<SelectionPosition>,
+    #[serde(
+        default = "default_selection_character_limit",
+        rename = "character-limit"
+    )]
+    character_limit: u32,
+    #[serde(default = "default_selection_page_limit", rename = "page-limit")]
+    page_limit: u32,
 }
 
 #[derive(Debug, Deserialize)]
@@ -413,6 +424,14 @@ fn default_search_match_limit() -> u32 {
 }
 
 fn default_search_page_limit() -> u32 {
+    8
+}
+
+fn default_selection_character_limit() -> u32 {
+    16_384
+}
+
+fn default_selection_page_limit() -> u32 {
     8
 }
 
@@ -1183,10 +1202,48 @@ impl Service {
 
     fn selection_text(&self, params: Value) -> Result<Value, ServiceError> {
         let params: SelectionParams = Self::parse(params)?;
-        let document = self.document(params.document)?;
+        if !(1..=SELECTION_MAX_CHARACTERS).contains(&params.character_limit) {
+            return Err(ServiceError::new(
+                "invalid-selection-limit",
+                format!(
+                    concat!(
+                        "selection character limit must be between 1 and ",
+                        "{}"
+                    ),
+                    SELECTION_MAX_CHARACTERS
+                ),
+            ));
+        }
+        if !(1..=SELECTION_MAX_PAGES).contains(&params.page_limit) {
+            return Err(ServiceError::new(
+                "invalid-selection-limit",
+                format!(
+                    concat!(
+                        "selection page limit must be between 1 and ",
+                        "{}"
+                    ),
+                    SELECTION_MAX_PAGES
+                ),
+            ));
+        }
         let (start, end) = ordered_positions(params.start, params.end);
+        let cursor = params.cursor.unwrap_or(start);
+        if cursor < start || cursor > end {
+            return Err(ServiceError::new(
+                "invalid-selection-cursor",
+                "selection cursor lies outside the selected range",
+            ));
+        }
+        let document = self.document(params.document)?;
         let mut text = String::new();
-        for page_number in start.page..=end.page {
+        let mut page_number = cursor.page;
+        let mut minimum_offset = cursor.offset;
+        let mut pages_read = 0;
+        let mut characters_read = 0;
+        let mut done = false;
+        while pages_read < params.page_limit
+            && characters_read < params.character_limit
+        {
             let index = Self::page_index(document, page_number)?;
             let page = document.pages().get(index).map_err(|error| {
                 ServiceError::new(
@@ -1201,13 +1258,32 @@ impl Service {
                 )
             })?;
             let chars = page_text.chars();
-            if page_number > start.page {
-                text.push('\n');
-            }
-            if let Some(range) =
-                page_selection_range(chars.len(), page_number, start, end)?
-            {
-                for char_index in range {
+            let range =
+                page_selection_range(chars.len(), page_number, start, end)?;
+            if let Some(range) = range {
+                let first = *range.start();
+                let last = *range.end();
+                if page_number == cursor.page
+                    && !(first..=last).contains(&(minimum_offset as usize))
+                {
+                    return Err(ServiceError::new(
+                        "invalid-selection-cursor",
+                        format!(
+                            concat!(
+                                "selection cursor offset {} is outside ",
+                                "the selected characters on page {}"
+                            ),
+                            minimum_offset, page_number
+                        ),
+                    ));
+                }
+                if page_number > start.page && minimum_offset == 0 {
+                    text.push('\n');
+                }
+                let mut char_index = minimum_offset as usize;
+                while char_index <= last
+                    && characters_read < params.character_limit
+                {
                     let character = chars.get(char_index).map_err(|error| {
                         ServiceError::new(
                             "invalid-selection",
@@ -1219,13 +1295,51 @@ impl Service {
                     if let Some(value) = character.unicode_string() {
                         text.push_str(&value);
                     }
+                    char_index += 1;
+                    characters_read += 1;
+                }
+                if char_index <= last {
+                    return Ok(json!({
+                        "start": start,
+                        "end": end,
+                        "text": text,
+                        "cursor": SelectionPosition {
+                            page: page_number,
+                            offset: char_index as u32,
+                        },
+                        "done": false,
+                    }));
+                }
+            } else {
+                if page_number == cursor.page && minimum_offset != 0 {
+                    return Err(ServiceError::new(
+                        "invalid-selection-cursor",
+                        format!(
+                            "selection cursor exceeds empty page {page_number}"
+                        ),
+                    ));
+                }
+                if page_number > start.page {
+                    text.push('\n');
                 }
             }
+            pages_read += 1;
+            if page_number == end.page {
+                done = true;
+                break;
+            }
+            page_number += 1;
+            minimum_offset = 0;
         }
         Ok(json!({
             "start": start,
             "end": end,
             "text": text,
+            "cursor": (!done).then_some(SelectionPosition {
+                page: page_number,
+                offset: minimum_offset,
+            }),
+            "done": done,
         }))
     }
 
@@ -1733,6 +1847,23 @@ mod tests {
             "\n",
             r#"{"id":11,"op":"page-links","params":{"document":1,"#,
             r#""page":0}}"#,
+            "\n",
+            r#"{"id":12,"op":"selection-text","params":{"#,
+            r#""document":1,"start":{"page":0,"offset":0},"#,
+            r#""end":{"page":0,"offset":1},"character-limit":0}}"#,
+            "\n",
+            r#"{"id":13,"op":"selection-text","params":{"#,
+            r#""document":1,"start":{"page":0,"offset":0},"#,
+            r#""end":{"page":0,"offset":1},"page-limit":65}}"#,
+            "\n",
+            r#"{"id":14,"op":"selection-text","params":{"#,
+            r#""document":1,"start":{"page":0,"offset":0},"#,
+            r#""end":{"page":0,"offset":1},"extra":true}}"#,
+            "\n",
+            r#"{"id":15,"op":"selection-text","params":{"#,
+            r#""document":1,"start":{"page":0,"offset":0},"#,
+            r#""end":{"page":0,"offset":1},"#,
+            r#""cursor":{"page":1,"offset":0}}}"#,
         ));
         assert_eq!(output[1]["error"]["code"], "invalid-params");
         assert_eq!(output[2]["error"]["code"], "invalid-render-size");
@@ -1745,6 +1876,10 @@ mod tests {
         assert_eq!(output[9]["error"]["code"], "unknown-document");
         assert_eq!(output[10]["error"]["code"], "invalid-params");
         assert_eq!(output[11]["error"]["code"], "unknown-document");
+        assert_eq!(output[12]["error"]["code"], "invalid-selection-limit");
+        assert_eq!(output[13]["error"]["code"], "invalid-selection-limit");
+        assert_eq!(output[14]["error"]["code"], "invalid-params");
+        assert_eq!(output[15]["error"]["code"], "invalid-selection-cursor");
     }
 
     #[test]
@@ -1925,6 +2060,21 @@ mod tests {
                 .code,
             "invalid-selection"
         );
+    }
+
+    #[test]
+    fn selection_batches_have_bounded_defaults() {
+        let params: SelectionParams = Service::parse(json!({
+            "document": 1,
+            "start": {"page": 0, "offset": 2},
+            "end": {"page": 1, "offset": 3},
+        }))
+        .unwrap();
+        assert_eq!(params.cursor, None);
+        assert_eq!(params.character_limit, 16_384);
+        assert_eq!(params.page_limit, 8);
+        assert!(params.character_limit <= SELECTION_MAX_CHARACTERS);
+        assert!(params.page_limit <= SELECTION_MAX_PAGES);
     }
 
     #[test]
