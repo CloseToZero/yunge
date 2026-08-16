@@ -2686,7 +2686,7 @@
        (yunge-reader-pdf--hit-character
         0 '(0.0 . 0.0) layer)))))
 
-(ert-deftest yunge-reader-pdf-falls-back-from-invalid-quads ()
+(ert-deftest yunge-reader-pdf-uses-bounds-when-quad-is-unavailable ()
   (with-temp-buffer
     (setq yunge-reader-pdf--page-infos
           [((width . 100.0) (height . 100.0))])
@@ -2695,10 +2695,7 @@
               (text . "F")
               (bounds . ((left . 10.0) (bottom . 10.0)
                          (right . 20.0) (top . 20.0)))
-              (quad . (((x . 10.0) (y . 10.0))
-                       ((x . 12.0) (y . 12.0))
-                       ((x . 14.0) (y . 14.0))
-                       ((x . 16.0) (y . 16.0))))))
+              (quad . nil)))
            (layer `((characters . (,character)))))
       (should
        (= (alist-get
@@ -2706,6 +2703,23 @@
            (yunge-reader-pdf--hit-character
             0 '(15.0 . 15.0) layer))
           9)))))
+
+(ert-deftest yunge-reader-pdf-rejects-malformed-character-quads ()
+  (let ((invalid-quads
+         '(not-a-quad
+           (((x . 0.0) (y . 0.0)))
+           (((x . 0.0) (y . 0.0))
+            ((x . 1.0) (y . 0.0))
+            ((x . 1.0))
+            ((x . 0.0) (y . 1.0)))
+           (((x . 0.0) (y . 0.0))
+            ((x . 1.0) (y . 1.0))
+            ((x . 2.0) (y . 2.0))
+            ((x . 3.0) (y . 3.0))))))
+    (dolist (quad invalid-quads)
+      (should-error
+       (yunge-reader-pdf--quad-points `((quad . ,quad)))
+       :type 'error))))
 
 (ert-deftest yunge-reader-pdf-hit-index-checks-only-nearby-characters ()
   (with-temp-buffer

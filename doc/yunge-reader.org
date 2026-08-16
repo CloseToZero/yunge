@@ -367,14 +367,14 @@ records use the same position contract.
 For PDF, =unit= is a zero-based page and =offset= is PDFium's zero-based
 character index.  A selected range includes both endpoint characters and is
 independent of drag direction, including when the drag crosses page slots.
-The helper returns Unicode, loose character bounds, and optional oriented
+The helper returns Unicode, loose character bounds, and nullable oriented
 quadrilaterals in canonical PDF points.  Emacs performs polygon hit testing
 locally, stores only the stable endpoints, and asks PDFium to resolve the exact
 range text.  Each native batch reads at most 8 pages and 16,384 indexed
-characters by default.  Missing or malformed quadrilaterals fall back to
-bounds.  Cross-page copy preserves each exact page fragment and inserts one
-newline at every page boundary, including when that boundary separates two
-protocol batches.
+characters by default.  A null quadrilateral uses bounds; a malformed non-null
+quadrilateral is a protocol error.  Cross-page copy preserves each exact page
+fragment and inserts one newline at every page boundary, including when that
+boundary separates two protocol batches.
 
 The same boundary can carry later annotations.  Durable annotation data can
 store document identity, stable endpoints, quoted text, color, and provenance

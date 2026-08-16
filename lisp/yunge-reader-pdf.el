@@ -1318,19 +1318,25 @@ When SUPPRESS-SCALE is non-nil, do not update the shared effective scale."
                 (setq valid nil)))))))
     valid))
 
+(defun yunge-reader-pdf--canonical-point-p (point)
+  "Return non-nil when POINT is one strict canonical PDF point."
+  (and (listp point)
+       (equal (mapcar #'car-safe point) '(x y))
+       (cl-every #'numberp (mapcar #'cdr point))))
+
 (defun yunge-reader-pdf--quad-points (character)
-  "Return CHARACTER's valid canonical quadrilateral, or nil."
+  "Return CHARACTER's canonical quadrilateral, or nil when unavailable.
+Signal an error when CHARACTER supplies a malformed non-nil quad."
   (let ((quad (alist-get 'quad character)))
-    (when (and (listp quad)
-               (ignore-errors (= (length quad) 4))
-               (cl-every
-                (lambda (point)
-                  (and (listp point)
-                       (numberp (alist-get 'x point))
-                       (numberp (alist-get 'y point))))
-                quad)
-               (yunge-reader-pdf--convex-quad-p quad))
-      quad)))
+    (cond
+     ((null quad) nil)
+     ((and (listp quad)
+           (= (length quad) 4)
+           (cl-every #'yunge-reader-pdf--canonical-point-p quad)
+           (yunge-reader-pdf--convex-quad-p quad))
+      quad)
+     (t
+      (error "Invalid PDF character quad: %S" quad)))))
 
 (defun yunge-reader-pdf--svg-quad
     (quad page-width page-height pixel-width pixel-height)

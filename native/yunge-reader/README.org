@@ -319,11 +319,11 @@ Launch, and unsupported page actions are filtered.
 
 =page-text= accepts =document= and =page=.  It returns the complete Unicode
 text plus characters in PDFium index order.  Each character has a zero-based
-=index=, Unicode =text=, optional canonical point =bounds= and =quad=, plus
+=index=, Unicode =text=, nullable canonical =bounds= and =quad= geometry, plus
 =generated= and =hyphen= flags.  PDF coordinates start at the bottom left of
 the visible, intrinsically rotated page, matching =render-page=.  The four
 =quad= vertices follow the transformed glyph axes in outline order.  Clients
-use =bounds= when =quad= is null or invalid.
+use =bounds= only when =quad= is null and reject malformed non-null quads.
 
 #+begin_src json
 {"id":5,"op":"page-text","params":{"document":1,"page":0}}
