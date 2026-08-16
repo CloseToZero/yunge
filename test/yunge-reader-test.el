@@ -35,6 +35,7 @@
      ("N" . yunge-reader-search-previous)
      ("P" . yunge-reader-fit-page)
      ("W" . yunge-reader-fit-width)
+     ("C-g" . yunge-reader-keyboard-quit)
      ("<escape>" . yunge-reader-escape)
      ("gr" . yunge-reader-refresh)
      ("n" . yunge-reader-search-next)
@@ -100,13 +101,20 @@
   (yunge-test-enable-evil)
   (with-temp-buffer
     (yunge-reader-mode)
-    (let ((refreshes 0)
+    (let ((result
+           (make-yunge-reader-search-result
+            :start (make-yunge-reader-position :unit 0 :offset 3)
+            :end (make-yunge-reader-position :unit 0 :offset 8)))
+          (refreshes 0)
           (search-updates 0))
       (setq yunge-reader-selection
             (make-yunge-reader-selection
              :start (make-yunge-reader-position :unit 0 :offset 1)
              :end (make-yunge-reader-position :unit 0 :offset 2))
-            yunge-reader-search-query "needle")
+            yunge-reader-search-query "needle"
+            yunge-reader-search-results (list result)
+            yunge-reader-search-result result
+            yunge-reader-search-highlight-visible t)
       (add-hook 'yunge-reader-refresh-hook
                 (lambda () (cl-incf refreshes)) nil t)
       (add-hook 'yunge-reader-search-result-hook
@@ -121,15 +129,18 @@
                     'evil-force-normal-state))
         (execute-kbd-macro (kbd "<escape>")))
       (should-not yunge-reader-selection)
-      (should-not yunge-reader-search-query)
+      (should (equal yunge-reader-search-query "needle"))
+      (should (eq yunge-reader-search-result result))
+      (should-not yunge-reader-search-highlight-visible)
       (should (zerop refreshes))
       (should (= search-updates 1)))))
 
-(ert-deftest yunge-reader-escape-clears-or-uses-the-ordinary-action ()
+(ert-deftest yunge-reader-quit-commands-clear-or-use-ordinary-action ()
   (with-temp-buffer
     (yunge-reader-mode)
     (let ((refreshes 0)
-          escaped)
+          escaped
+          quit)
       (setq yunge-reader-selection
             (make-yunge-reader-selection
              :start (make-yunge-reader-position :unit 0 :offset 1)
@@ -143,6 +154,11 @@
                  (lambda () (setq escaped t))))
         (yunge-reader-escape))
       (should escaped)
+      (should (= refreshes 1))
+      (cl-letf (((symbol-function 'keyboard-quit)
+                 (lambda () (setq quit t))))
+        (yunge-reader-keyboard-quit))
+      (should quit)
       (should (= refreshes 1)))))
 
 (ert-deftest yunge-reader-search-starts-empty-and-uses-history ()
@@ -159,23 +175,79 @@
               ((symbol-function 'yunge-reader--request-search-batch)
                #'ignore))
       (call-interactively #'yunge-reader-search))
-    (should (equal yunge-reader-search-query "new query"))))
+    (should (equal yunge-reader-search-query "new query"))
+    (should yunge-reader-search-highlight-visible)))
 
-(ert-deftest yunge-reader-escape-clears-search-without-a-selection ()
+(ert-deftest yunge-reader-escape-hides-search-without-ending-it ()
   (with-temp-buffer
     (yunge-reader-mode)
-    (let ((updates 0))
+    (let ((updates 0)
+          (result
+           (make-yunge-reader-search-result
+            :start (make-yunge-reader-position :unit 0 :offset 1)
+            :end (make-yunge-reader-position :unit 0 :offset 2))))
       (setq yunge-reader-search-query "needle"
-            yunge-reader-search-result
-            (make-yunge-reader-search-result
-             :start (make-yunge-reader-position :unit 0 :offset 1)
-             :end (make-yunge-reader-position :unit 0 :offset 2)))
+            yunge-reader-search-results (list result)
+            yunge-reader-search-result result
+            yunge-reader-search-highlight-visible t)
       (add-hook 'yunge-reader-search-result-hook
                 (lambda () (cl-incf updates)) nil t)
       (yunge-reader-escape)
-      (should-not yunge-reader-search-query)
-      (should-not yunge-reader-search-result)
+      (should (equal yunge-reader-search-query "needle"))
+      (should (equal yunge-reader-search-results (list result)))
+      (should (eq yunge-reader-search-result result))
+      (should-not yunge-reader-search-highlight-visible)
       (should (= updates 1)))))
+
+(ert-deftest yunge-reader-evil-c-g-dismisses-the-same-highlights ()
+  (yunge-test-enable-evil)
+  (with-temp-buffer
+    (yunge-reader-mode)
+    (let ((result
+           (make-yunge-reader-search-result
+            :start (make-yunge-reader-position :unit 0 :offset 3)
+            :end (make-yunge-reader-position :unit 0 :offset 8))))
+      (setq yunge-reader-selection
+            (make-yunge-reader-selection
+             :start (make-yunge-reader-position :unit 0 :offset 1)
+             :end (make-yunge-reader-position :unit 0 :offset 2))
+            yunge-reader-search-query "needle"
+            yunge-reader-search-results (list result)
+            yunge-reader-search-result result
+            yunge-reader-search-highlight-visible t)
+      (save-window-excursion
+        (switch-to-buffer (current-buffer))
+        (should (eq (key-binding (kbd "C-g"))
+                    'yunge-reader-keyboard-quit))
+        (call-interactively (key-binding (kbd "C-g"))))
+      (should-not yunge-reader-selection)
+      (should (equal yunge-reader-search-query "needle"))
+      (should (eq yunge-reader-search-result result))
+      (should-not yunge-reader-search-highlight-visible))))
+
+(ert-deftest yunge-reader-search-navigation-restores-hidden-highlight ()
+  (with-temp-buffer
+    (yunge-reader-mode)
+    (let ((first
+           (make-yunge-reader-search-result
+            :start (make-yunge-reader-position :unit 0 :offset 1)
+            :end (make-yunge-reader-position :unit 0 :offset 2)))
+          (second
+           (make-yunge-reader-search-result
+            :start (make-yunge-reader-position :unit 1 :offset 3)
+            :end (make-yunge-reader-position :unit 1 :offset 4))))
+      (setq yunge-reader-search-query "needle"
+            yunge-reader-search-results (list first second)
+            yunge-reader-search-result first
+            yunge-reader-search-highlight-visible nil
+            yunge-reader--search-index 0)
+      (yunge-reader-search-next)
+      (should yunge-reader-search-highlight-visible)
+      (should (eq yunge-reader-search-result second))
+      (setq yunge-reader-search-highlight-visible nil)
+      (yunge-reader-search-previous)
+      (should yunge-reader-search-highlight-visible)
+      (should (eq yunge-reader-search-result first)))))
 
 (ert-deftest yunge-reader-opens-only-allowlisted-uri-actions ()
   (let* ((yunge-reader-uri-schemes '("https" "mailto"))
@@ -1978,6 +2050,7 @@
                :start (make-yunge-reader-position :unit 2)
                :end (make-yunge-reader-position :unit 2)
                :text "match")))
+            (yunge-reader-search-highlight-visible t)
             events)
         (add-hook
          'yunge-reader-search-result-hook

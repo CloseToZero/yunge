@@ -277,8 +277,11 @@ Each entry maps a canonical file name to versioned, printable place data.")
 (defvar-local yunge-reader-search-result nil
   "Current `yunge-reader-search-result', or nil.")
 
+(defvar-local yunge-reader-search-highlight-visible nil
+  "Whether the active search may display its current result highlight.")
+
 (defvar-local yunge-reader-search-result-hook nil
-  "Hook run after `yunge-reader-search-result' changes.")
+  "Hook run after the search result or its visibility changes.")
 
 (defvar-local yunge-reader--search-case-sensitive nil
   "Whether the active reader search distinguishes case.")
@@ -350,7 +353,7 @@ document contents.")
   "N" #'yunge-reader-search-previous
   "P" #'yunge-reader-fit-page
   "W" #'yunge-reader-fit-width
-  "C-g" #'yunge-reader-clear-selection
+  "C-g" #'yunge-reader-keyboard-quit
   "<escape>" #'yunge-reader-escape
   "g r" #'yunge-reader-refresh
   "n" #'yunge-reader-search-next
@@ -370,9 +373,9 @@ document contents.")
        (and (boundp 'evil-state) (symbol-value 'evil-state))
        (current-buffer)))))
 
-(defun yunge-reader--clear-selection-after-force-normal-state
+(defun yunge-reader--dismiss-after-force-normal-state
     (&rest _arguments)
-  "Clear Reader highlights after an interactive Evil escape."
+  "Dismiss Reader highlights after an interactive Evil quit."
   (when (and (eq this-command 'evil-force-normal-state)
              (derived-mode-p 'yunge-reader-mode))
     (yunge-reader--clear-transient-highlights)))
@@ -401,7 +404,7 @@ document contents.")
                          yunge-reader-normal-bindings)
   (advice-add
    'evil-force-normal-state :after
-   #'yunge-reader--clear-selection-after-force-normal-state)
+   #'yunge-reader--dismiss-after-force-normal-state)
   (dolist (buffer (buffer-list))
     (with-current-buffer buffer
       (when (derived-mode-p 'yunge-reader-mode)
@@ -1806,18 +1809,20 @@ Render OUTLINE when non-nil; otherwise display STATUS."
   (let ((result (nth index yunge-reader-search-results)))
     (unless result
       (error "Reader search result index is unavailable: %S" index))
-    (when-let* ((window (get-buffer-window (current-buffer) t)))
-      (yunge-jump-history-record window))
+    (when yunge-reader-search-highlight-visible
+      (when-let* ((window (get-buffer-window (current-buffer) t)))
+        (yunge-jump-history-record window)))
     (setq yunge-reader--search-index index
           yunge-reader-search-result result)
     (run-hooks 'yunge-reader-search-result-hook)
-    (message
-     "Match %d%s: %s"
-     (1+ index)
-     (if yunge-reader--search-done
-         (format "/%d" (length yunge-reader-search-results))
-       "+")
-     (yunge-reader--search-context result))
+    (when yunge-reader-search-highlight-visible
+      (message
+       "Match %d%s: %s"
+       (1+ index)
+       (if yunge-reader--search-done
+           (format "/%d" (length yunge-reader-search-results))
+         "+")
+       (yunge-reader--search-context result)))
     result))
 
 (defun yunge-reader--schedule-search-request
@@ -1918,6 +1923,7 @@ Case is ignored unless QUERY contains an uppercase character."
   (setq yunge-reader-search-query query
         yunge-reader-search-results nil
         yunge-reader-search-result nil
+        yunge-reader-search-highlight-visible t
         yunge-reader--search-case-sensitive
         (yunge-reader--search-smart-case-p query)
         yunge-reader--search-index nil
@@ -1935,6 +1941,7 @@ Case is ignored unless QUERY contains an uppercase character."
     (user-error "There is no active document search"))
   (when yunge-reader--search-pending
     (user-error "Document search is still loading"))
+  (setq yunge-reader-search-highlight-visible t)
   (cond
    ((and (natnump yunge-reader--search-index)
          (< (1+ yunge-reader--search-index)
@@ -1956,6 +1963,7 @@ At the first loaded match, finish the bounded search before wrapping."
     (user-error "There is no active document search"))
   (when yunge-reader--search-pending
     (user-error "Document search is still loading"))
+  (setq yunge-reader-search-highlight-visible t)
   (cond
    ((and (natnump yunge-reader--search-index)
          (> yunge-reader--search-index 0))
@@ -1976,6 +1984,7 @@ At the first loaded match, finish the bounded search before wrapping."
   (setq yunge-reader-search-query nil
         yunge-reader-search-results nil
         yunge-reader-search-result nil
+        yunge-reader-search-highlight-visible nil
         yunge-reader--search-index nil
         yunge-reader--search-cursor nil
         yunge-reader--search-done nil
@@ -2066,16 +2075,30 @@ When DEFER-REFRESH is non-nil, leave repainting to the caller."
   (unless defer-refresh
     (yunge-reader-refresh)))
 
+(defun yunge-reader-hide-search-highlight ()
+  "Hide the active search highlight without ending its search session."
+  (interactive)
+  (when yunge-reader-search-highlight-visible
+    (setq yunge-reader-search-highlight-visible nil)
+    (run-hooks 'yunge-reader-search-result-hook)
+    t))
+
 (defun yunge-reader--clear-transient-highlights ()
-  "Clear active selection and search highlights.
+  "Clear the selection and hide the active search highlight.
 Return non-nil when at least one transient highlight was active."
   (let ((selection yunge-reader-selection)
-        (search yunge-reader-search-query))
+        (search-highlight yunge-reader-search-highlight-visible))
     (when selection
-      (yunge-reader-clear-selection search))
-    (when search
-      (yunge-reader-clear-search))
-    (or selection search)))
+      (yunge-reader-clear-selection search-highlight))
+    (when search-highlight
+      (yunge-reader-hide-search-highlight))
+    (or selection search-highlight)))
+
+(defun yunge-reader-keyboard-quit ()
+  "Dismiss Reader highlights or perform the ordinary keyboard quit."
+  (interactive)
+  (unless (yunge-reader--clear-transient-highlights)
+    (keyboard-quit)))
 
 (defun yunge-reader-escape ()
   "Clear Reader highlights or perform the ordinary escape action."

@@ -1269,7 +1269,8 @@ When SUPPRESS-SCALE is non-nil, do not update the shared effective scale."
 
 (defun yunge-reader-pdf--search-offsets (page text-layer)
   "Return current search match offsets for PAGE and TEXT-LAYER."
-  (when yunge-reader-search-result
+  (when (and yunge-reader-search-highlight-visible
+             yunge-reader-search-result)
     (yunge-reader-pdf--range-offsets
      page text-layer
      (yunge-reader-search-result-start yunge-reader-search-result)
@@ -1498,7 +1499,8 @@ Use the nearest cached render ENTRY while an exact render is unavailable."
 
 (defun yunge-reader-pdf--search-page-p (page)
   "Return non-nil when the current search result intersects PAGE."
-  (when yunge-reader-search-result
+  (when (and yunge-reader-search-highlight-visible
+             yunge-reader-search-result)
     (let* ((range
             (yunge-reader-pdf--ordered-range
              (yunge-reader-search-result-start
@@ -1543,7 +1545,8 @@ Use the nearest cached render ENTRY while an exact render is unavailable."
 
 (defun yunge-reader-pdf--scroll-to-search-result ()
   "Align the current PDF search result inside its reader window."
-  (when yunge-reader-search-result
+  (when (and yunge-reader-search-highlight-visible
+             yunge-reader-search-result)
     (let* ((page
             (yunge-reader-position-unit
              (yunge-reader-search-result-start
@@ -1593,7 +1596,8 @@ Use the nearest cached render ENTRY while an exact render is unavailable."
 
 (defun yunge-reader-pdf--search-result-changed ()
   "Repaint and visit the current PDF search result."
-  (if (not yunge-reader-search-result)
+  (if (not (and yunge-reader-search-highlight-visible
+                yunge-reader-search-result))
       (when yunge-reader-pdf--displayed-pages
         (yunge-reader-pdf--paint-pages
          yunge-reader-pdf--displayed-pages)

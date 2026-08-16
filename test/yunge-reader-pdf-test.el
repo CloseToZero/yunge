@@ -1971,6 +1971,7 @@
     (yunge-reader-pdf-view-mode 1)
     (setq yunge-reader-document 'document
           yunge-reader-pdf--displayed-pages '(0)
+          yunge-reader-search-highlight-visible t
           yunge-reader-search-result
           (make-yunge-reader-search-result
            :start (make-yunge-reader-position :unit 0 :offset 4)
@@ -2415,6 +2416,7 @@
           (make-yunge-reader-selection
            :start (make-yunge-reader-position :unit 0 :offset 1)
            :end (make-yunge-reader-position :unit 0 :offset 1))
+          yunge-reader-search-highlight-visible t
           yunge-reader-search-result
           (make-yunge-reader-search-result
            :start (make-yunge-reader-position :unit 0 :offset 4)
@@ -2442,7 +2444,17 @@
         (should
          (member yunge-reader-pdf-search-color
                  (mapcar (lambda (node) (dom-attr node 'fill))
-                         rectangles)))))))
+                         rectangles))))
+      (setq yunge-reader-search-highlight-visible nil)
+      (let ((hidden-svg (svg-create 1000 1000)))
+        (yunge-reader-pdf--paint-selection
+         hidden-svg 0 page-info text-layer 1000 1000)
+        (yunge-reader-pdf--paint-search
+         hidden-svg 0 page-info text-layer 1000 1000)
+        (let ((rectangles (dom-by-tag hidden-svg 'rect)))
+          (should (= (length rectangles) 1))
+          (should (equal (dom-attr (car rectangles) 'fill)
+                         yunge-reader-pdf-selection-color)))))))
 
 (ert-deftest yunge-reader-pdf-scrolls-to-search-character-geometry ()
   (with-temp-buffer
@@ -2451,6 +2463,7 @@
     (setq yunge-reader-pdf--page-infos
           [((width . 100.0) (height . 200.0))]
           yunge-reader-pdf--page-positions [1]
+          yunge-reader-search-highlight-visible t
           yunge-reader-search-result
           (make-yunge-reader-search-result
            :start (make-yunge-reader-position :unit 0 :offset 7)
@@ -2501,9 +2514,10 @@
       (should-not vertical)
       (should-not horizontal))))
 
-(ert-deftest yunge-reader-pdf-redisplays-search-result-and-clear ()
+(ert-deftest yunge-reader-pdf-redisplays-search-result-and-hide ()
   (with-temp-buffer
     (setq yunge-reader-pdf--displayed-pages '(0)
+          yunge-reader-search-highlight-visible t
           yunge-reader-search-result
           (make-yunge-reader-search-result
            :start (make-yunge-reader-position :unit 0 :offset 7)
@@ -2523,7 +2537,7 @@
                 ((symbol-function 'yunge-reader-pdf--force-redisplay)
                  (lambda (&optional _window) (cl-incf redisplays))))
         (yunge-reader-pdf--search-result-changed)
-        (setq yunge-reader-search-result nil)
+        (setq yunge-reader-search-highlight-visible nil)
         (yunge-reader-pdf--search-result-changed))
       (should (equal pages '(0)))
       (should (equal requests '(0)))
