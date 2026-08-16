@@ -239,6 +239,44 @@
             '(("view-clear-selection" ((view . 8)))
               ("view-focus-parent" ((view . 8))))))))
 
+(ert-deftest yunge-reader-webview-routes-keys-to-the-owning-buffer ()
+  (let* (routed
+         (buffer (generate-new-buffer " *webview key owner*"))
+         (view
+          (yunge-reader-webview--make-view
+           :id 9
+           :buffer buffer
+           :accelerator-function
+           (lambda (value key)
+             (setq routed (list value key (current-buffer))))))
+         (yunge-reader-webview--process 'fake-webview-process)
+         (yunge-reader-webview--views
+          (make-hash-table :test #'eql)))
+    (unwind-protect
+        (progn
+          (puthash 9 view yunge-reader-webview--views)
+          (yunge-reader-webview--handle-event
+           'fake-webview-process
+           '((kind . "event")
+             (event . "accelerator")
+             (view . 9)
+             (key . "C-d")))
+          (should (equal routed (list view "C-d" buffer))))
+      (kill-buffer buffer))))
+
+(ert-deftest yunge-reader-webview-rejects-unknown-forwarded-keys ()
+  (let ((yunge-reader-webview--process 'fake-webview-process)
+        (yunge-reader-webview--views
+         (make-hash-table :test #'eql)))
+    (should-error
+     (yunge-reader-webview--handle-event
+      'fake-webview-process
+      '((kind . "event")
+        (event . "accelerator")
+        (view . 9)
+        (key . "j")))
+     :type 'error)))
+
 (ert-deftest yunge-reader-webview-events-do-not-consume-callbacks ()
   (yunge-reader-webview-test--with-fake-process
     (yunge-reader-webview-start)

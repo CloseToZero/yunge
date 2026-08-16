@@ -20,6 +20,9 @@ use webview2_com::Microsoft::Web::WebView2::Win32::{
     COREWEBVIEW2_KEY_EVENT_KIND_SYSTEM_KEY_DOWN,
 };
 use windows::Win32::Foundation::HWND;
+use windows::Win32::UI::Input::KeyboardAndMouse::{
+    GetKeyState, VIRTUAL_KEY, VK_CONTROL, VK_MENU, VK_NEXT, VK_PRIOR, VK_SHIFT,
+};
 use windows::Win32::UI::WindowsAndMessaging::{
     DispatchMessageW, IsWindow, MSG, PM_REMOVE, PeekMessageW, TranslateMessage,
 };
@@ -138,6 +141,8 @@ struct ViewEvent {
     message: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     location: Option<EpubLocator>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    key: Option<String>,
 }
 
 #[derive(Debug)]
@@ -227,11 +232,14 @@ struct RendererMessage {
     message: Option<String>,
     #[serde(default)]
     location: Option<EpubLocator>,
+    #[serde(default)]
+    key: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 enum RendererEvent {
+    Accelerator,
     Location,
     NavigationError,
     PublicationError,
@@ -1274,10 +1282,51 @@ impl From<EpubError> for ServiceError {
     }
 }
 
-fn is_escape_key(kind: COREWEBVIEW2_KEY_EVENT_KIND, key: u32) -> bool {
-    key == ESCAPE_VIRTUAL_KEY
-        && (kind == COREWEBVIEW2_KEY_EVENT_KIND_KEY_DOWN
-            || kind == COREWEBVIEW2_KEY_EVENT_KIND_SYSTEM_KEY_DOWN)
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum RoutedKey {
+    Escape,
+    Accelerator(&'static str),
+}
+
+fn routed_key(
+    kind: COREWEBVIEW2_KEY_EVENT_KIND,
+    key: u32,
+    control: bool,
+    alt: bool,
+    shift: bool,
+) -> Option<RoutedKey> {
+    if kind != COREWEBVIEW2_KEY_EVENT_KIND_KEY_DOWN
+        && kind != COREWEBVIEW2_KEY_EVENT_KIND_SYSTEM_KEY_DOWN
+    {
+        return None;
+    }
+    if key == ESCAPE_VIRTUAL_KEY {
+        return Some(RoutedKey::Escape);
+    }
+    if alt || shift {
+        return None;
+    }
+    match (key, control) {
+        (key, true) if key == u32::from(b'D') => {
+            Some(RoutedKey::Accelerator("C-d"))
+        }
+        (key, true) if key == u32::from(b'U') => {
+            Some(RoutedKey::Accelerator("C-u"))
+        }
+        (key, false) if key == u32::from(VK_NEXT.0) => {
+            Some(RoutedKey::Accelerator("<next>"))
+        }
+        (key, false) if key == u32::from(VK_PRIOR.0) => {
+            Some(RoutedKey::Accelerator("<prior>"))
+        }
+        _ => None,
+    }
+}
+
+fn key_state(key: VIRTUAL_KEY) -> bool {
+    // SAFETY: `GetKeyState' accepts every Win32 virtual-key value and has no
+    // pointer or lifetime requirements.
+    unsafe { GetKeyState(i32::from(key.0)) < 0 }
 }
 
 fn install_accelerator_handler(
@@ -1297,14 +1346,28 @@ fn install_accelerator_handler(
             unsafe {
                 args.KeyEventKind(&mut kind)?;
                 args.VirtualKey(&mut key)?;
-                if is_escape_key(kind, key) {
+                let routed = routed_key(
+                    kind,
+                    key,
+                    key_state(VK_CONTROL),
+                    key_state(VK_MENU),
+                    key_state(VK_SHIFT),
+                );
+                if let Some(routed) = routed {
                     args.SetHandled(true)?;
+                    let (event, key) = match routed {
+                        RoutedKey::Escape => ("escape", None),
+                        RoutedKey::Accelerator(key) => {
+                            ("accelerator", Some(key.to_owned()))
+                        }
+                    };
                     let _ = event_sender.send(ViewEvent {
                         kind: "event",
-                        event: "escape",
+                        event,
                         view,
                         message: None,
                         location: None,
+                        key,
                     });
                 }
             }
@@ -1391,34 +1454,43 @@ fn renderer_event(
     {
         return None;
     }
-    let (event, detail, location) = match message.event {
+    let (event, detail, location, key) = match message.event {
+        RendererEvent::Accelerator => {
+            if message.message.is_some() || message.location.is_some() {
+                return None;
+            }
+            let key = message
+                .key
+                .filter(|key| matches!(key.as_str(), "J" | "K"))?;
+            ("accelerator", None, None, Some(key))
+        }
         RendererEvent::Location => {
-            if message.message.is_some() {
+            if message.message.is_some() || message.key.is_some() {
                 return None;
             }
             let location = message.location?.validate().ok()?;
-            ("location", None, Some(location))
+            ("location", None, Some(location), None)
         }
         RendererEvent::NavigationError => {
-            if message.location.is_some() {
+            if message.location.is_some() || message.key.is_some() {
                 return None;
             }
             let detail = message.message.filter(|value| !value.is_empty())?;
-            ("navigation-error", Some(detail), None)
+            ("navigation-error", Some(detail), None, None)
         }
         RendererEvent::PublicationReady => {
-            if message.message.is_some() {
+            if message.message.is_some() || message.key.is_some() {
                 return None;
             }
             let location = message.location?.validate().ok()?;
-            ("publication-ready", None, Some(location))
+            ("publication-ready", None, Some(location), None)
         }
         RendererEvent::PublicationError => {
-            if message.location.is_some() {
+            if message.location.is_some() || message.key.is_some() {
                 return None;
             }
             let detail = message.message.filter(|value| !value.is_empty())?;
-            ("publication-error", Some(detail), None)
+            ("publication-error", Some(detail), None, None)
         }
     };
     Some(ViewEvent {
@@ -1427,6 +1499,7 @@ fn renderer_event(
         view,
         message: detail,
         location,
+        key,
     })
 }
 
@@ -1667,6 +1740,12 @@ mod tests {
         assert!(!csp.contains("script-src 'self' blob:"));
         assert!(app_asset("foliate-js/view.js").is_some());
         assert!(app_asset("foliate-js/vendor/zip.js").is_none());
+        let adapter =
+            std::str::from_utf8(app_asset("yunge-reader.js").unwrap().1)
+                .unwrap();
+        assert!(adapter.contains("post('accelerator', { key })"));
+        assert!(adapter.contains("['J', 'K'].includes(event.key)"));
+        assert!(!adapter.contains("['j', 'k'].includes(event.key)"));
         for path in ["foliate-js/paginator.js", "foliate-js/fixed-layout.js"] {
             let source =
                 std::str::from_utf8(app_asset(path).unwrap().1).unwrap();
@@ -1866,6 +1945,7 @@ mod tests {
         assert_eq!(event.event, "publication-ready");
         assert_eq!(event.view, 7);
         assert!(event.message.is_none());
+        assert!(event.key.is_none());
         assert_eq!(
             event.location,
             Some(EpubLocator {
@@ -1902,6 +1982,17 @@ mod tests {
         assert_eq!(event.event, "publication-error");
         assert_eq!(event.message.as_deref(), Some("bad EPUB"));
         assert!(event.location.is_none());
+        assert!(event.key.is_none());
+
+        let accelerator = HttpRequest::builder()
+            .uri(APP_URL)
+            .body(r#"{"protocol":1,"event":"accelerator","key":"J"}"#.into())
+            .unwrap();
+        let event = renderer_event(8, &accelerator).unwrap();
+        assert_eq!(event.event, "accelerator");
+        assert_eq!(event.key.as_deref(), Some("J"));
+        assert!(event.location.is_none());
+        assert!(event.message.is_none());
 
         for request in [
             HttpRequest::builder()
@@ -1919,6 +2010,19 @@ mod tests {
             HttpRequest::builder()
                 .uri(APP_URL)
                 .body(r#"{"protocol":1,"event":"publication-ready"}"#.into())
+                .unwrap(),
+            HttpRequest::builder()
+                .uri(APP_URL)
+                .body(
+                    r#"{"protocol":1,"event":"accelerator","key":"j"}"#.into(),
+                )
+                .unwrap(),
+            HttpRequest::builder()
+                .uri(APP_URL)
+                .body(
+                    r#"{"protocol":1,"event":"accelerator","key":"C-d"}"#
+                        .into(),
+                )
                 .unwrap(),
             HttpRequest::builder()
                 .uri(APP_URL)
@@ -2015,23 +2119,87 @@ mod tests {
     }
 
     #[test]
-    fn escape_is_the_only_routed_accelerator() {
-        assert!(is_escape_key(
-            COREWEBVIEW2_KEY_EVENT_KIND_KEY_DOWN,
-            ESCAPE_VIRTUAL_KEY,
-        ));
-        assert!(is_escape_key(
-            COREWEBVIEW2_KEY_EVENT_KIND_SYSTEM_KEY_DOWN,
-            ESCAPE_VIRTUAL_KEY,
-        ));
-        assert!(!is_escape_key(
-            WebView2::COREWEBVIEW2_KEY_EVENT_KIND_KEY_UP,
-            ESCAPE_VIRTUAL_KEY,
-        ));
-        assert!(!is_escape_key(
-            COREWEBVIEW2_KEY_EVENT_KIND_KEY_DOWN,
-            u32::from(b'J'),
-        ));
+    fn native_reader_keys_are_normalized_without_character_keys() {
+        assert_eq!(
+            routed_key(
+                COREWEBVIEW2_KEY_EVENT_KIND_KEY_DOWN,
+                ESCAPE_VIRTUAL_KEY,
+                false,
+                false,
+                false,
+            ),
+            Some(RoutedKey::Escape)
+        );
+        assert_eq!(
+            routed_key(
+                COREWEBVIEW2_KEY_EVENT_KIND_KEY_DOWN,
+                u32::from(b'D'),
+                true,
+                false,
+                false,
+            ),
+            Some(RoutedKey::Accelerator("C-d"))
+        );
+        assert_eq!(
+            routed_key(
+                COREWEBVIEW2_KEY_EVENT_KIND_KEY_DOWN,
+                u32::from(b'U'),
+                true,
+                false,
+                false,
+            ),
+            Some(RoutedKey::Accelerator("C-u"))
+        );
+        assert_eq!(
+            routed_key(
+                COREWEBVIEW2_KEY_EVENT_KIND_KEY_DOWN,
+                u32::from(VK_NEXT.0),
+                false,
+                false,
+                false,
+            ),
+            Some(RoutedKey::Accelerator("<next>"))
+        );
+        assert_eq!(
+            routed_key(
+                COREWEBVIEW2_KEY_EVENT_KIND_KEY_DOWN,
+                u32::from(VK_PRIOR.0),
+                false,
+                false,
+                false,
+            ),
+            Some(RoutedKey::Accelerator("<prior>"))
+        );
+        assert_eq!(
+            routed_key(
+                WebView2::COREWEBVIEW2_KEY_EVENT_KIND_KEY_UP,
+                ESCAPE_VIRTUAL_KEY,
+                false,
+                false,
+                false,
+            ),
+            None
+        );
+        assert_eq!(
+            routed_key(
+                COREWEBVIEW2_KEY_EVENT_KIND_KEY_DOWN,
+                u32::from(b'J'),
+                false,
+                false,
+                true,
+            ),
+            None
+        );
+        assert_eq!(
+            routed_key(
+                COREWEBVIEW2_KEY_EVENT_KIND_SYSTEM_KEY_DOWN,
+                u32::from(b'D'),
+                true,
+                true,
+                false,
+            ),
+            None
+        );
         assert!(CLEAR_SELECTION_SCRIPT.contains("removeAllRanges"));
     }
 }

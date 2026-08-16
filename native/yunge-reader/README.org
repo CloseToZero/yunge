@@ -91,6 +91,7 @@ installing or downloading it:
                  "view-clear-selection","view-create",
                  "view-destroy","view-events","view-focus",
                  "view-focus-parent","view-info","view-status",
+                 "view-navigate","view-open-publication",
                  "view-visible"],
  "engine":"webview2","kind":"webview-ready","platform":"windows",
  "protocol":1,"version":"151.0.4129.86"}
@@ -131,8 +132,10 @@ sniffing and caching, allow token-bearing cross-origin reads, and apply a CSP
 that blocks scripts, objects, frames, forms, connections, and external
 subresources.
 
-The current child page is not yet attached to a publication.  The transport
-is ready for the renderer adapter, but it does not render EPUB content yet.
+The built-in child page opens the validated publication through its private
+resource origin.  Its bundled, script-disabled Foliate renderer provides CSS
+layout, native text selection, links, relocation events, and semantic screen
+navigation without exposing the local EPUB path.
 
 =view-create= accepts a logical =view= ID, a live Emacs frame HWND as
 =parent=, a physical-pixel =bounds= object, and optional =visible=.  The
@@ -152,15 +155,21 @@ and =view-destroy= removes the child.  =view-status= reports whether the
 built-in page finished loading, together with the last accepted bounds and
 visibility.
 
-Escape is captured by the native WebView2 accelerator event.  The helper
-writes an unsolicited semantic event without allocating a request ID:
+Escape, Control reader keys, and non-character reader keys are captured by the
+native WebView2 accelerator event.  Uppercase character reader keys are
+relayed by the trusted renderer because WebView2 does not classify them as
+accelerators.  Both paths write unsolicited events without request IDs:
 
 #+begin_src json
 {"kind":"event","event":"escape","view":1}
+{"kind":"event","event":"accelerator","key":"C-d","view":1}
+{"kind":"event","event":"accelerator","key":"J","view":1}
 #+end_src
 
-Only Escape is routed in this spike.  Navigation bindings remain owned by
-Emacs instead of being duplicated in the embedded page.
+The helper accepts only =J=, =K=, =C-d=, =C-u=, =<next>=, and =<prior>=.
+It never interprets them as navigation.  Emacs resolves each normalized key
+through the owning EPUB buffer's active maps, so Reader, Evil, and user
+bindings remain authoritative while focus stays in the child WebView.
 
 View IDs are independent, so multiple Reader views do not share layout or
 scroll state.  Positions must be nonnegative; dimensions must be positive and

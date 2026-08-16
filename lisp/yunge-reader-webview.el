@@ -81,7 +81,8 @@
   pending-destroys
   destroy-waiters
   destroy-finished
-  location-changed-function)
+  location-changed-function
+  accelerator-function)
 
 (define-derived-mode yunge-reader-webview-spike-mode special-mode
   "Yunge-WebView"
@@ -282,6 +283,27 @@ LOCATION is required only for the go-to command."
     (unless (and (stringp event) (integerp id))
       (error "Malformed Yunge Reader WebView event: %S" message))
     (pcase event
+      ("accelerator"
+       (let ((key (alist-get 'key message)))
+         (unless (member key
+                         '("J" "K" "C-d" "C-u"
+                           "<next>" "<prior>"))
+           (error "Malformed WebView accelerator event: %S" message))
+         (when-let* ((view (gethash id yunge-reader-webview--views))
+                     (function
+                      (yunge-reader-webview--view-accelerator-function
+                       view))
+                     (buffer (yunge-reader-webview--view-buffer view))
+                     ((buffer-live-p buffer)))
+           (with-current-buffer buffer
+             (condition-case error-data
+                 (funcall function view key)
+               (error
+                (display-warning
+                 'yunge-reader
+                 (format "Could not run EPUB key %s: %s"
+                         key (error-message-string error-data))
+                 :warning)))))))
       ("escape"
        (when-let* ((view (gethash id yunge-reader-webview--views))
                    (window (yunge-reader-webview--view-window view))
@@ -833,10 +855,13 @@ Without FORCE, request graceful shutdown and enforce a deadline."
     view))
 
 (defun yunge-reader-webview--attach-shared-publication
-    (publication &optional location location-changed-function)
+    (publication &optional location location-changed-function
+                 accelerator-function)
   "Attach shared PUBLICATION to the current Reader buffer.
 Restore bounded LOCATION when supplied.  Invoke LOCATION-CHANGED-FUNCTION
-with the logical view whenever its renderer reports a stable location."
+with the logical view whenever its renderer reports a stable location.
+Invoke ACCELERATOR-FUNCTION with the view and a normalized key when the
+focused native child forwards one."
   (unless (and (integerp publication) (> publication 0))
     (error "Invalid EPUB publication ID: %S" publication))
   (when location
@@ -845,6 +870,10 @@ with the logical view whenever its renderer reports a stable location."
              (not (functionp location-changed-function)))
     (error "Invalid EPUB location callback: %S"
            location-changed-function))
+  (when (and accelerator-function
+             (not (functionp accelerator-function)))
+    (error "Invalid EPUB accelerator callback: %S"
+           accelerator-function))
   (when (and yunge-reader-webview--buffer-view
              (not (yunge-reader-webview--view-destroyed
                    yunge-reader-webview--buffer-view)))
@@ -855,7 +884,8 @@ with the logical view whenever its renderer reports a stable location."
           :persistent t
           :publication publication
           :location (and location (copy-tree location))
-          :location-changed-function location-changed-function)))
+          :location-changed-function location-changed-function
+          :accelerator-function accelerator-function)))
     (setq yunge-reader-webview--buffer-view view)
     (yunge-reader-webview--register-view view)
     view))

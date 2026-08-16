@@ -190,7 +190,8 @@
     (yunge-reader-epub--update-header)
     (yunge-reader-webview--attach-shared-publication
      (yunge-reader-epub-handle-publication handle)
-     nil #'yunge-reader-epub--location-changed)))
+     nil #'yunge-reader-epub--location-changed
+     #'yunge-reader-epub--accelerator)))
 
 (defun yunge-reader-epub--detach-complete (handle)
   "Finish one native view detach belonging to HANDLE."
@@ -278,6 +279,14 @@
   (yunge-reader-webview--navigate-view
    (yunge-reader-webview--current-ready-view)
    command #'yunge-reader-epub--restore-complete))
+
+(defun yunge-reader-epub--accelerator (view key)
+  "Run normalized WebView KEY for EPUB VIEW through active Emacs maps."
+  (when (and (eq view yunge-reader-webview--buffer-view)
+             yunge-reader-epub-view-mode)
+    (when-let* ((command (key-binding (kbd key) t))
+                ((commandp command)))
+      (call-interactively command))))
 
 (defun yunge-reader-epub-next-screen (&optional count)
   "Move forward COUNT EPUB screens."

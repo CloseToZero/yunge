@@ -31,12 +31,38 @@ const LOCATION_DELAY_MS = 75
 let generation = 0
 let current = null
 
-const post = (event, { message, location } = {}) => {
+const post = (event, { message, location, key } = {}) => {
     const payload = { protocol: 1, event }
     if (message) payload.message = String(message).slice(0, 4096)
     if (location) payload.location = location
+    if (key) payload.key = key
     window.ipc.postMessage(JSON.stringify(payload))
 }
+
+const readerCharacterKey = event => {
+    if (event.defaultPrevented || event.isComposing
+        || event.ctrlKey || event.altKey || event.metaKey
+        || event.target?.closest?.(
+            'input, textarea, select, '
+            + '[contenteditable]:not([contenteditable="false"])')) {
+        return null
+    }
+    return ['J', 'K'].includes(event.key) ? event.key : null
+}
+
+const relayReaderCharacterKey = event => {
+    const key = readerCharacterKey(event)
+    if (!key) return
+    event.preventDefault()
+    event.stopImmediatePropagation()
+    post('accelerator', { key })
+}
+
+const installReaderCharacterKeys = target => {
+    target.addEventListener('keydown', relayReaderCharacterKey, true)
+}
+
+installReaderCharacterKeys(document)
 
 const encodePath = path => path.split('/').map(encodeURIComponent).join('/')
 
@@ -338,6 +364,9 @@ const open = async ({ view: viewID, resourceRoot, location }) => {
         const book = await new EPUB(loader).init()
         protectBook(book)
         const view = document.createElement('foliate-view')
+        view.addEventListener('load', event => {
+            installReaderCharacterKeys(event.detail.doc)
+        })
         view.addEventListener('external-link', event => {
             event.preventDefault()
         })

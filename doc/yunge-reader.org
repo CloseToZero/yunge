@@ -92,10 +92,11 @@ can move independently and becomes a durable-place owner only through
 =yunge-reader-make-primary=.
 
 =J= and =C-d= move to the next reflowed screen; =K= and =C-u= move to the
-previous screen.  Page Down and Page Up provide the same portable commands.
+previous screen.  Page Down and Page Up provide the same portable commands,
+including after a mouse click gives the child WebView native focus.
 The current slice retains browser-native text selection, copying, links, CSS
 layout, and width reflow.  Reader outline, search, selection-copy integration,
-reading styles, and focused-WebView accelerator forwarding remain later work.
+and reading styles remain later work.
 
 * Library boundary
 
@@ -551,14 +552,14 @@ scripts.  The outer WebView denies permissions, downloads, new windows, and
 external navigation.  Renderer IPC accepts only bounded, versioned messages
 from the renderer application origin.
 
-WebView2 captures Escape through its native accelerator event rather than a
-second JavaScript key map.  Rust emits only the semantic =escape= event.
-Emacs uses the owning view ID to clear the DOM selection, return native focus
-to the parent, select the corresponding Emacs window, and focus its frame.
-Reader navigation remains in the existing Emacs key maps; the embedded page
-does not duplicate =j=, =k=, or other Reader bindings.  Escape is the only
-native accelerator forwarded in this slice, so broader Reader key forwarding
-after the user focuses WebView2 is still required.
+WebView2 forwards Escape, =C-d/C-u=, and Page Down or Page Up through its
+native accelerator event.  A bounded renderer listener forwards =J/K=
+because WebView2 does not classify character keys as accelerators.  Both
+paths emit only normalized key events; they never choose or execute Reader
+commands.  Emacs resolves navigation through the owning EPUB buffer's active
+maps, preserving Reader, Evil, and user bindings while native focus remains
+in the child.  Escape still clears the DOM selection, returns native focus to
+the parent, selects the owning Emacs window, and focuses its frame.
 
 =M-x yunge-reader-webview-stop= requests graceful shutdown and then enforces a
 deadline; a prefix argument terminates it immediately.  Emacs exit also ends
@@ -618,12 +619,13 @@ destination view mapping, safe cache eviction, Unicode literal matching,
 byte-to-PDFium-index mapping, search and selection cursors and limits, regular
 and singular-angle quadrilateral recovery, cross-page inclusive ranges,
 protocol errors, shutdown ordering, EOF, WebView bounds validation, omitted
-empty parameters, native Escape filtering, embedded renderer assets, strict
+empty parameters, native Reader-key filtering, embedded renderer assets, strict
 renderer IPC, bounded EPUB locators, and bounded EPUB resource catalogs.
 WebView ERT tests cover the separate handshake, strict capability validation,
 asynchronous renderer event routing, per-view EPUB locations, owning-window
-focus recovery, frame handle parsing, coalesced resize requests, view
-destruction after buffer replacement, persistent hidden-view recreation,
+focus recovery, owning-buffer key dispatch, frame handle parsing, coalesced
+resize requests, destruction after buffer replacement, persistent hidden-view
+recreation,
 multi-surface destruction barriers, and ordered publication release.  EPUB
 driver tests cover registration, reflowable key bindings, native open result
 validation, shared publication ownership, printable place conversion, restore
@@ -634,6 +636,8 @@ the href and fraction fallback order.  The formal driver smoke test also opens
 through =auto-mode-alist=, hides and recreates a persistent surface, creates an
 independent additional view over the same publication, verifies primary place
 ownership, and closes the resource only after both views detach.
+A focused-key smoke test sends =J= and then =C-d= to a real child WebView and
+requires two forwarded protocol events plus two successive locator changes.
 
 The integration path installs the pinned Windows library through the public
 setup command, runs its =pdfium-info= smoke test, opens a five-page A4 fixture,

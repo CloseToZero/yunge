@@ -172,13 +172,15 @@
       (cl-letf
           (((symbol-function
              'yunge-reader-webview--attach-shared-publication)
-            (lambda (publication _location location-function)
+            (lambda (publication _location location-function
+                                 accelerator-function)
               (setq yunge-reader-webview--buffer-view
                     (yunge-reader-webview--make-view
                      :buffer (current-buffer)
                      :publication publication
                      :persistent t
-                     :location-changed-function location-function))))
+                     :location-changed-function location-function
+                     :accelerator-function accelerator-function))))
            ((symbol-function
              'yunge-reader-webview--detach-shared-publication)
             (lambda (complete)
@@ -196,6 +198,10 @@
         (should (= (yunge-reader-webview--view-publication
                     yunge-reader-webview--buffer-view)
                    11))
+        (should
+         (eq (yunge-reader-webview--view-accelerator-function
+              yunge-reader-webview--buffer-view)
+             #'yunge-reader-epub--accelerator))
         (yunge-reader-epub--detach document)
         (should-not yunge-reader-epub-view-mode)
         (should (= (yunge-reader-epub-handle-pending-detaches
@@ -209,6 +215,21 @@
          (yunge-reader-epub-handle-closed handle))
         (funcall close-complete '((closed . t)) nil)
         (should (yunge-reader-epub-handle-closed handle))))))
+
+(ert-deftest yunge-reader-epub-resolves-forwarded-keys-in-emacs ()
+  (let ((view (yunge-reader-webview--make-view))
+        called)
+    (with-temp-buffer
+      (yunge-reader-mode)
+      (yunge-reader-epub-view-mode 1)
+      (setq yunge-reader-webview--buffer-view view)
+      (cl-letf
+          (((symbol-function 'yunge-reader-epub-next-screen)
+            (lambda (&optional count)
+              (interactive "p")
+              (setq called (list count (current-buffer))))))
+        (yunge-reader-epub--accelerator view "J"))
+      (should (equal called (list 1 (current-buffer)))))))
 
 (ert-deftest yunge-reader-epub-does-not-hide-close-failures ()
   (let ((handle (yunge-reader-epub-test--handle))
