@@ -1,8 +1,9 @@
 #+title: Yunge Reader
 
-Yunge Reader is an extensible Emacs document reader.  PDF is the first
-backend, but the core models ownership, location, selection, and view state
-without assuming that every document consists of immutable pages.
+Yunge Reader is an extensible Emacs document reader.  PDF is the first full
+backend, and EPUB now has a bounded reflowable driver.  The core models
+ownership, location, selection, and view state without assuming that every
+document consists of immutable pages.
 
 * Current PDF slice
 
@@ -65,13 +66,40 @@ to create a view before the current location is stable, so an incomplete view
 cannot silently fall back to page zero or an older saved place.  The existing
 primary view is unchanged.  Run =M-x yunge-reader-make-primary= to transfer
 durable place ownership after saving the current view's stable location.
-PDF headers identify each buffer as =Primary= or =Additional=.
+PDF and EPUB headers identify each buffer as =Primary= or =Additional=.
 In Evil Normal state, =SPC m v= creates a view and =SPC m p= makes the
 current view primary.  Both commands are one-shot localleader actions.
 
+* Current EPUB slice
+
+Run =M-x yunge-reader-native-setup= once, then visit a local =.epub= file on
+graphical Windows Emacs.  The adapter is autoloaded through =auto-mode-alist=;
+=M-x yunge-reader-epub-open= is the explicit entry point.  Reader reports a
+missing WebView2 Runtime but never installs it automatically.
+
+One shared native publication owns validation, metadata, archive resources,
+and its private origin.  Each Reader buffer owns an independent logical view,
+locator, native child surface, and primary or additional role.  Hiding a
+buffer releases only its child surface.  Displaying it again creates a new
+surface and restores the latest CFI without reopening the shared publication.
+The last buffer waits for every obsolete surface to finish destruction before
+invalidating the publication resource token.
+
+EPUB locations store a bounded CFI, canonical spine href, and optional finite
+whole-book fraction as printable Reader place data.  Ordinary renderer
+relocations update only the primary view's durable place.  An additional view
+can move independently and becomes a durable-place owner only through
+=yunge-reader-make-primary=.
+
+=J= and =C-d= move to the next reflowed screen; =K= and =C-u= move to the
+previous screen.  Page Down and Page Up provide the same portable commands.
+The current slice retains browser-native text selection, copying, links, CSS
+layout, and width reflow.  Reader outline, search, selection-copy integration,
+reading styles, and focused-WebView accelerator forwarding remain later work.
+
 * Library boundary
 
-The implementation is divided into four pieces:
+The implementation is divided into six pieces:
 
 - =yunge-reader.el= owns drivers, documents, stable positions, logical
   selections, outlines, bounded search state, reader buffers, and zoom state.
@@ -82,6 +110,10 @@ The implementation is divided into four pieces:
   operation-private installation transaction.
 - =yunge-reader-pdf.el= maps the format-independent interface onto PDFium,
   virtualizes a continuous page roll, and paints visible selections.
+- =yunge-reader-webview.el= owns the native child-surface protocol and keeps
+  persistent logical views separate from disposable window surfaces.
+- =yunge-reader-epub.el= maps shared EPUB publications and reflowable
+  locations onto the Reader driver interface.
 
 PDF selection and search geometry uses one compound SVG path per page and
 highlight kind.  Overlapping glyph bounds therefore share one opacity pass
@@ -134,8 +166,8 @@ The core persists a bounded, most-recently-used place alist through
 driver name, stable position, zoom mode, and manual scale.  It does not
 serialize Lisp structures that may be undefined when =savehist= first loads.
 A driver that supports places supplies location and restore functions as a
-pair.  Future reflowable drivers can use the same contract without storing an
-Emacs buffer point.
+pair.  EPUB uses that contract without storing an Emacs buffer point, and
+later reflowable drivers can do the same.
 
 Jump history and the saved place answer different questions.  The saved place
 is the most recent successful primary view used when a document is opened
@@ -451,7 +483,7 @@ The native protocol remains an engine boundary.  A pure-Rust engine can become
 another backend after it meets the same rendering, encryption, text geometry,
 selection, and annotation conformance tests.
 
-* Reflowable WebView spike
+* Reflowable WebView and EPUB driver
 
 The EPUB architecture spike uses a second mode of the Rust helper on Windows.
 =M-x yunge-reader-webview-spike= places the empty renderer shell over the
@@ -459,9 +491,9 @@ selected Emacs window body.  =M-x yunge-reader-webview-epub-spike= validates a
 local EPUB, opens it through that shell, and displays a visible text start in
 continuous flow.  A body/text landmark wins, followed by the first table of
 contents target and a bounded linear-spine fallback.  A section whose only
-media failed to decode is not reported as ready.  This remains a manual spike:
-it does not register =.epub=, bind Reader navigation, or write a durable
-reading position.
+media failed to decode is not reported as ready.  The manual command remains
+useful as a protocol diagnostic.  Normal =.epub= visits now use the formal
+Reader driver, durable places, and shared multi-view ownership.
 
 The renderer embeds a minimal set of modules from Foliate JS revision
 =78914aef4466eb960965702401634c2cb348e9b1= under its MIT license.  A
@@ -482,7 +514,8 @@ Attaching a publication may supply an initial locator.  The renderer tries its
 CFI, then href, then fraction; when none resolves to visible content it opens
 the normal visible text start.  =M-x yunge-reader-webview-previous-screen= and
 =M-x yunge-reader-webview-next-screen= exercise bounded semantic navigation.
-They deliberately have no bindings while the code remains a spike.
+They remain unbound protocol diagnostics.  The EPUB driver exposes the same
+operations as =J/K=, =C-d/C-u=, and Page Down or Page Up.
 
 The child surface is the preferred reflowable path.  It retains browser-native
 text selection, copying, links, accessibility, and CSS layout, and can reflow
@@ -496,10 +529,11 @@ Each logical Reader view receives its own numeric native view and WebView
 instance.  Emacs sends the frame window ID plus the body pixel rectangle.
 Window size, state, and buffer changes resynchronize that rectangle.  Only one
 bounds request per view may be outstanding; intermediate resize rectangles are
-coalesced into the newest value.  Replacing the buffer, deleting its window,
-or killing the spike buffer destroys that native view without affecting other
-views.  The local validation exercised two simultaneous child views with
-independent rectangles.
+coalesced into the newest value.  A formal Reader view survives window
+replacement: it destroys the obsolete child surface, retains the locator, and
+creates a fresh surface when its buffer becomes visible.  Killing the buffer
+destroys the logical view.  A manual spike remains temporary and is destroyed
+when its window stops displaying it.
 
 The renderer application and EPUB resource service use separate private
 HTTPS-equivalent origins.  Rust exposes only canonical, manifested,
@@ -522,15 +556,18 @@ second JavaScript key map.  Rust emits only the semantic =escape= event.
 Emacs uses the owning view ID to clear the DOM selection, return native focus
 to the parent, select the corresponding Emacs window, and focus its frame.
 Reader navigation remains in the existing Emacs key maps; the embedded page
-does not duplicate =j=, =k=, or other Reader bindings.
+does not duplicate =j=, =k=, or other Reader bindings.  Escape is the only
+native accelerator forwarded in this slice, so broader Reader key forwarding
+after the user focuses WebView2 is still required.
 
 =M-x yunge-reader-webview-stop= requests graceful shutdown and then enforces a
 deadline; a prefix argument terminates it immediately.  Emacs exit also ends
 the process.  The ordinary PDF helper and the WebView helper are separate
 process instances, so testing reflow does not interrupt open PDF documents.
-Destroying an EPUB spike view releases its publication only after native view
-destruction completes, so no live renderer can retain an invalid resource
-token.
+Destroying an owned EPUB spike view releases its publication only after native
+view destruction completes.  The formal driver additionally waits for every
+current or obsolete child surface before closing a shared publication, so no
+live renderer can retain an invalid resource token.
 
 No platform dependency is installed automatically.  Windows reports the
 detected WebView2 Runtime version or tells the user to install the runtime.
@@ -586,10 +623,17 @@ renderer IPC, bounded EPUB locators, and bounded EPUB resource catalogs.
 WebView ERT tests cover the separate handshake, strict capability validation,
 asynchronous renderer event routing, per-view EPUB locations, owning-window
 focus recovery, frame handle parsing, coalesced resize requests, view
-destruction after buffer replacement, and ordered publication release.
+destruction after buffer replacement, persistent hidden-view recreation,
+multi-surface destruction barriers, and ordered publication release.  EPUB
+driver tests cover registration, reflowable key bindings, native open result
+validation, shared publication ownership, printable place conversion, restore
+timing, and primary-only place recording.
 Isolated graphical Emacs smoke tests open real EPUBs through WebView2, move one
 screen, destroy and recreate the native view, restore the exact CFI, and check
-the href and fraction fallback order.
+the href and fraction fallback order.  The formal driver smoke test also opens
+through =auto-mode-alist=, hides and recreates a persistent surface, creates an
+independent additional view over the same publication, verifies primary place
+ownership, and closes the resource only after both views detach.
 
 The integration path installs the pinned Windows library through the public
 setup command, runs its =pdfium-info= smoke test, opens a five-page A4 fixture,
