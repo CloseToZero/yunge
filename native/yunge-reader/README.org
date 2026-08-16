@@ -164,7 +164,9 @@ helper neither returns it in a response nor writes it to diagnostics.
 #+end_src
 
 =page-info= accepts =document= and a zero-based =page=.  It returns canonical
-PDF point width and height plus the page label.
+PDF point width and height plus the page label.  The dimensions describe the
+visible page bounding box after the crop box and intrinsic page rotation are
+applied, matching =render-page=.
 
 #+begin_src json
 {"id":4,"op":"page-info","params":{"document":1,"page":0}}
@@ -175,7 +177,8 @@ PDF point width and height plus the page label.
 =outline= accepts a =document= handle.  It returns bookmarks in bounded
 preorder with a zero-based =depth=.  A structural bookmark has a null
 =destination=.  A local destination contains a zero-based page, optional
-canonical PDF =x=, =y=, and =zoom= values, plus its PDF view kind.
+canonical PDF =x=, =y=, and =zoom= values, plus its PDF view kind.  Coordinates
+are relative to the visible, intrinsically rotated destination page.
 
 #+begin_src json
 {"id":5,"op":"outline","params":{"document":1}}
@@ -195,8 +198,9 @@ extraction does not expose or execute URI, remote-document, embedded-document,
 Launch, or unsupported bookmark actions.
 
 =page-links= accepts a =document= and zero-based =page=.  It returns at most
-4,096 links with canonical PDF bounds, an optional label of at most 256
-Unicode characters, and one tagged action.
+4,096 links with canonical PDF bounds relative to the visible, intrinsically
+rotated page, an optional label of at most 256 Unicode characters, and one
+tagged action.
 
 #+begin_src json
 {"id":6,"op":"page-links","params":{"document":1,"page":0}}
@@ -217,9 +221,10 @@ Launch, and unsupported page actions are filtered.
 =page-text= accepts =document= and =page=.  It returns the complete Unicode
 text plus characters in PDFium index order.  Each character has a zero-based
 =index=, Unicode =text=, optional canonical point =bounds= and =quad=, plus
-=generated= and =hyphen= flags.  PDF coordinates start at the bottom left.
-The four =quad= vertices follow the transformed glyph axes in outline order.
-Clients use =bounds= when =quad= is null or invalid.
+=generated= and =hyphen= flags.  PDF coordinates start at the bottom left of
+the visible, intrinsically rotated page, matching =render-page=.  The four
+=quad= vertices follow the transformed glyph axes in outline order.  Clients
+use =bounds= when =quad= is null or invalid.
 
 #+begin_src json
 {"id":5,"op":"page-text","params":{"document":1,"page":0}}

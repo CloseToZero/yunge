@@ -95,8 +95,13 @@ struct Service {
     pdfium: Option<&'static Pdfium>,
     pdfium_library: Option<PathBuf>,
     cache_directory: Option<PathBuf>,
-    documents: HashMap<u64, PdfDocument<'static>>,
+    documents: HashMap<u64, OpenDocument>,
     next_document: u64,
+}
+
+struct OpenDocument {
+    value: PdfDocument<'static>,
+    pages: Vec<PageGeometry>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -338,12 +343,14 @@ fn outline_destination_view(
 
 fn outline_destination(
     destination: PdfDestination<'_>,
+    pages: &[PageGeometry],
 ) -> Option<OutlineDestination> {
     let page = u32::try_from(destination.page_index().ok()?).ok()?;
     let settings = destination
         .view_settings()
         .unwrap_or(PdfDestinationViewSettings::Unknown);
     let (x, y, zoom, view) = outline_destination_view(settings);
+    let (x, y) = pages.get(page as usize)?.normalize_optional_point(x, y);
     Some(OutlineDestination {
         page,
         x,
@@ -397,14 +404,19 @@ fn pdf_open_error_code(error: &PdfiumError) -> &'static str {
     }
 }
 
-fn page_link_action(link: &PdfLink<'_>) -> Option<PageLinkAction> {
+fn page_link_action(
+    link: &PdfLink<'_>,
+    pages: &[PageGeometry],
+) -> Option<PageLinkAction> {
     match link.action() {
         Some(action) => {
             if let Some(local) = action.as_local_destination_action() {
                 local
                     .destination()
                     .ok()
-                    .and_then(outline_destination)
+                    .and_then(|destination| {
+                        outline_destination(destination, pages)
+                    })
                     .map(|destination| PageLinkAction::Location { destination })
             } else if let Some(uri) = action.as_uri_action() {
                 uri.uri()
@@ -417,7 +429,7 @@ fn page_link_action(link: &PdfLink<'_>) -> Option<PageLinkAction> {
         }
         None => link
             .destination()
-            .and_then(outline_destination)
+            .and_then(|destination| outline_destination(destination, pages))
             .map(|destination| PageLinkAction::Location { destination }),
     }
 }
@@ -569,6 +581,234 @@ impl TextBounds {
 
     fn height(self) -> f32 {
         self.top - self.bottom
+    }
+
+    fn intersection(self, other: Self) -> Option<Self> {
+        let intersection = Self {
+            left: self.left.max(other.left),
+            bottom: self.bottom.max(other.bottom),
+            right: self.right.min(other.right),
+            top: self.top.min(other.top),
+        };
+        (intersection.width() > 0.0 && intersection.height() > 0.0)
+            .then_some(intersection)
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+struct PageGeometry {
+    left: f32,
+    bottom: f32,
+    right: f32,
+    top: f32,
+    width: f32,
+    height: f32,
+    rotation: PdfPageRenderRotation,
+}
+
+impl PageGeometry {
+    fn from_page(page: &PdfPage<'_>) -> Option<Self> {
+        let boundaries = page.boundaries();
+        let crop = boundaries
+            .crop()
+            .ok()
+            .map(|boundary| TextBounds::from_pdfium(boundary.bounds));
+        let media = boundaries
+            .media()
+            .ok()
+            .map(|boundary| TextBounds::from_pdfium(boundary.bounds));
+        Self::from_boxes(
+            crop,
+            media,
+            page.width().value,
+            page.height().value,
+            page.rotation().ok()?,
+        )
+    }
+
+    fn from_boxes(
+        crop: Option<TextBounds>,
+        media: Option<TextBounds>,
+        width: f32,
+        height: f32,
+        rotation: PdfPageRenderRotation,
+    ) -> Option<Self> {
+        let intersection = crop
+            .zip(media)
+            .and_then(|(crop, media)| crop.intersection(media));
+        intersection
+            .into_iter()
+            .chain(crop)
+            .chain(media)
+            .find_map(|bounds| Self::new(bounds, width, height, rotation))
+    }
+
+    fn new(
+        bounds: TextBounds,
+        width: f32,
+        height: f32,
+        rotation: PdfPageRenderRotation,
+    ) -> Option<Self> {
+        let geometry = Self {
+            left: bounds.left,
+            bottom: bounds.bottom,
+            right: bounds.right,
+            top: bounds.top,
+            width,
+            height,
+            rotation,
+        };
+        geometry.valid().then_some(geometry)
+    }
+
+    fn valid(self) -> bool {
+        if ![
+            self.left,
+            self.bottom,
+            self.right,
+            self.top,
+            self.width,
+            self.height,
+        ]
+        .iter()
+        .all(|value| value.is_finite())
+            || self.right <= self.left
+            || self.top <= self.bottom
+            || self.width <= 0.0
+            || self.height <= 0.0
+        {
+            return false;
+        }
+        let raw_width = self.right - self.left;
+        let raw_height = self.top - self.bottom;
+        let (expected_width, expected_height) = match self.rotation {
+            PdfPageRenderRotation::None | PdfPageRenderRotation::Degrees180 => {
+                (raw_width, raw_height)
+            }
+            PdfPageRenderRotation::Degrees90
+            | PdfPageRenderRotation::Degrees270 => (raw_height, raw_width),
+        };
+        Self::close_dimension(self.width, expected_width)
+            && Self::close_dimension(self.height, expected_height)
+    }
+
+    fn close_dimension(actual: f32, expected: f32) -> bool {
+        (actual - expected).abs() <= 0.01_f32.max(expected.abs() * 0.001)
+    }
+
+    fn normalize_point(self, point: TextPoint) -> TextPoint {
+        match self.rotation {
+            PdfPageRenderRotation::None => TextPoint {
+                x: point.x - self.left,
+                y: point.y - self.bottom,
+            },
+            PdfPageRenderRotation::Degrees90 => TextPoint {
+                x: point.y - self.bottom,
+                y: self.right - point.x,
+            },
+            PdfPageRenderRotation::Degrees180 => TextPoint {
+                x: self.right - point.x,
+                y: self.top - point.y,
+            },
+            PdfPageRenderRotation::Degrees270 => TextPoint {
+                x: self.top - point.y,
+                y: point.x - self.left,
+            },
+        }
+    }
+
+    fn normalize_optional_point(
+        self,
+        x: Option<f32>,
+        y: Option<f32>,
+    ) -> (Option<f32>, Option<f32>) {
+        match self.rotation {
+            PdfPageRenderRotation::None => (
+                x.map(|value| value - self.left),
+                y.map(|value| value - self.bottom),
+            ),
+            PdfPageRenderRotation::Degrees90 => (
+                y.map(|value| value - self.bottom),
+                x.map(|value| self.right - value),
+            ),
+            PdfPageRenderRotation::Degrees180 => (
+                x.map(|value| self.right - value),
+                y.map(|value| self.top - value),
+            ),
+            PdfPageRenderRotation::Degrees270 => (
+                y.map(|value| self.top - value),
+                x.map(|value| value - self.left),
+            ),
+        }
+    }
+
+    fn normalize_bounds(self, bounds: TextBounds) -> Option<TextBounds> {
+        let points = [
+            TextPoint {
+                x: bounds.left,
+                y: bounds.bottom,
+            },
+            TextPoint {
+                x: bounds.right,
+                y: bounds.bottom,
+            },
+            TextPoint {
+                x: bounds.right,
+                y: bounds.top,
+            },
+            TextPoint {
+                x: bounds.left,
+                y: bounds.top,
+            },
+        ]
+        .map(|point| self.normalize_point(point));
+        let normalized = TextBounds {
+            left: points
+                .iter()
+                .map(|point| point.x)
+                .fold(f32::INFINITY, f32::min),
+            bottom: points
+                .iter()
+                .map(|point| point.y)
+                .fold(f32::INFINITY, f32::min),
+            right: points
+                .iter()
+                .map(|point| point.x)
+                .fold(f32::NEG_INFINITY, f32::max),
+            top: points
+                .iter()
+                .map(|point| point.y)
+                .fold(f32::NEG_INFINITY, f32::max),
+        };
+        (normalized.left.is_finite()
+            && normalized.bottom.is_finite()
+            && normalized.right.is_finite()
+            && normalized.top.is_finite()
+            && normalized.right > normalized.left
+            && normalized.top > normalized.bottom)
+            .then_some(normalized)
+    }
+
+    fn normalize_quad(self, quad: [TextPoint; 4]) -> [TextPoint; 4] {
+        quad.map(|point| self.normalize_point(point))
+    }
+
+    fn normalize_link_bounds(
+        self,
+        bounds: PageLinkBounds,
+    ) -> Option<PageLinkBounds> {
+        self.normalize_bounds(TextBounds {
+            left: bounds.left,
+            bottom: bounds.bottom,
+            right: bounds.right,
+            top: bounds.top,
+        })
+        .map(|bounds| PageLinkBounds {
+            left: bounds.left,
+            bottom: bounds.bottom,
+            right: bounds.right,
+            top: bounds.top,
+        })
     }
 }
 
@@ -810,12 +1050,36 @@ impl Service {
         &self,
         document: u64,
     ) -> Result<&PdfDocument<'static>, ServiceError> {
+        Ok(&self.open_document(document)?.value)
+    }
+
+    fn open_document(
+        &self,
+        document: u64,
+    ) -> Result<&OpenDocument, ServiceError> {
         self.documents.get(&document).ok_or_else(|| {
             ServiceError::new(
                 "unknown-document",
                 format!("unknown document handle: {document}"),
             )
         })
+    }
+
+    fn page_geometry(
+        &self,
+        document: u64,
+        page: u32,
+    ) -> Result<PageGeometry, ServiceError> {
+        self.open_document(document)?
+            .pages
+            .get(page as usize)
+            .copied()
+            .ok_or_else(|| {
+                ServiceError::new(
+                    "invalid-page",
+                    format!("page {page} has no visible geometry"),
+                )
+            })
     }
 
     fn page_index(
@@ -869,11 +1133,20 @@ impl Service {
             })?;
         let page_count = document.pages().len();
         let mut pages = Vec::with_capacity(page_count as usize);
+        let mut page_geometries = Vec::with_capacity(page_count as usize);
         for index in 0..page_count {
             let page = document.pages().get(index).map_err(|error| {
                 ServiceError::new(
                     "pdf-open-failed",
                     format!("could not inspect page {index}: {error}"),
+                )
+            })?;
+            let geometry = PageGeometry::from_page(&page).ok_or_else(|| {
+                ServiceError::new(
+                    "pdf-open-failed",
+                    format!(
+                        "could not resolve visible geometry for page {index}"
+                    ),
                 )
             })?;
             let label = page
@@ -882,10 +1155,11 @@ impl Service {
                 .unwrap_or_else(|| (index + 1).to_string());
             pages.push(json!({
                 "page": index,
-                "width": page.width().value,
-                "height": page.height().value,
+                "width": geometry.width,
+                "height": geometry.height,
                 "label": label,
             }));
+            page_geometries.push(geometry);
         }
         let handle = self.next_document;
         self.next_document =
@@ -895,7 +1169,13 @@ impl Service {
                     "document handle space exhausted",
                 )
             })?;
-        self.documents.insert(handle, document);
+        self.documents.insert(
+            handle,
+            OpenDocument {
+                value: document,
+                pages: page_geometries,
+            },
+        );
         Ok(json!({
             "document": handle,
             "layout": "fixed",
@@ -917,7 +1197,8 @@ impl Service {
 
     fn outline(&self, params: Value) -> Result<Value, ServiceError> {
         let params: DocumentParams = Self::parse(params)?;
-        let document = self.document(params.document)?;
+        let open_document = self.open_document(params.document)?;
+        let document = &open_document.value;
         let mut stack = Vec::new();
         let mut visited = HashSet::new();
         let mut items = Vec::new();
@@ -943,9 +1224,9 @@ impl Service {
             items.push(OutlineItem {
                 title: outline_title(bookmark.title()),
                 depth,
-                destination: bookmark
-                    .destination()
-                    .and_then(outline_destination),
+                destination: bookmark.destination().and_then(|destination| {
+                    outline_destination(destination, &open_document.pages)
+                }),
             });
         }
         serde_json::to_value(OutlineResult { items, truncated }).map_err(
@@ -968,14 +1249,15 @@ impl Service {
                 format!("could not load page {}: {error}", params.page),
             )
         })?;
+        let geometry = self.page_geometry(params.document, params.page)?;
         let label = page
             .label()
             .map(str::to_owned)
             .unwrap_or_else(|| (params.page + 1).to_string());
         Ok(json!({
             "page": params.page,
-            "width": page.width().value,
-            "height": page.height().value,
+            "width": geometry.width,
+            "height": geometry.height,
             "label": label,
         }))
     }
@@ -990,6 +1272,8 @@ impl Service {
                 format!("could not load page {}: {error}", params.page),
             )
         })?;
+        let geometry = self.page_geometry(params.document, params.page)?;
+        let pages = &self.open_document(params.document)?.pages;
         let text = page.text().ok();
         let mut links = Vec::new();
         let mut truncated = false;
@@ -998,12 +1282,16 @@ impl Service {
                 truncated = true;
                 break;
             }
-            let Some(bounds) =
+            let Some(raw_bounds) =
                 link.rect().ok().and_then(PageLinkBounds::from_pdfium)
             else {
                 continue;
             };
-            let Some(action) = page_link_action(&link) else {
+            let Some(bounds) = geometry.normalize_link_bounds(raw_bounds)
+            else {
+                continue;
+            };
+            let Some(action) = page_link_action(&link, pages) else {
                 continue;
             };
             links.push(PageLink {
@@ -1011,10 +1299,10 @@ impl Service {
                 action,
                 label: text.as_ref().and_then(|text| {
                     page_link_label(text.inside_rect(PdfRect::new_from_values(
-                        bounds.bottom,
-                        bounds.left,
-                        bounds.top,
-                        bounds.right,
+                        raw_bounds.bottom,
+                        raw_bounds.left,
+                        raw_bounds.top,
+                        raw_bounds.right,
                     )))
                 }),
             });
@@ -1042,6 +1330,7 @@ impl Service {
                 format!("could not load page {}: {error}", params.page),
             )
         })?;
+        let geometry = self.page_geometry(params.document, params.page)?;
         let text = page.text().map_err(|error| {
             ServiceError::new(
                 "text-unavailable",
@@ -1054,18 +1343,22 @@ impl Service {
         for character in chars.iter() {
             let value = character.unicode_string().unwrap_or_default();
             complete_text.push_str(&value);
-            let bounds = character
+            let raw_bounds = character
                 .loose_bounds()
                 .or_else(|_| character.tight_bounds())
                 .ok()
                 .map(TextBounds::from_pdfium);
-            let quad = bounds.and_then(|bounds| {
-                character.matrix().ok().and_then(|matrix| {
-                    character_quad(bounds, matrix, || {
-                        character_font_height(&character)
+            let quad = raw_bounds
+                .and_then(|bounds| {
+                    character.matrix().ok().and_then(|matrix| {
+                        character_quad(bounds, matrix, || {
+                            character_font_height(&character)
+                        })
                     })
                 })
-            });
+                .map(|quad| geometry.normalize_quad(quad));
+            let bounds =
+                raw_bounds.and_then(|bounds| geometry.normalize_bounds(bounds));
             characters.push(json!({
                 "index": character.index(),
                 "text": value,
@@ -1978,6 +2271,83 @@ mod tests {
         assert!(PageLinkBounds::from_pdfium(empty).is_none());
         let nonfinite = PdfRect::new_from_values(2.0, 1.0, f32::INFINITY, 3.0);
         assert!(PageLinkBounds::from_pdfium(nonfinite).is_none());
+    }
+
+    #[test]
+    fn page_geometry_removes_the_visible_box_origin() {
+        let geometry = PageGeometry {
+            left: 63.0,
+            bottom: 72.0,
+            right: 532.0,
+            top: 738.0,
+            width: 469.0,
+            height: 666.0,
+            rotation: PdfPageRenderRotation::None,
+        };
+        assert!(geometry.valid());
+        let point = geometry.normalize_point(TextPoint {
+            x: 214.47876,
+            y: 509.57025,
+        });
+        assert_close(point.x, 151.47876);
+        assert_close(point.y, 437.57025);
+        let (x, y) =
+            geometry.normalize_optional_point(Some(214.47876), Some(509.57025));
+        assert_close(x.unwrap(), point.x);
+        assert_close(y.unwrap(), point.y);
+    }
+
+    #[test]
+    fn page_geometry_intersects_crop_and_media_boxes() {
+        let crop = TextBounds {
+            left: -20.0,
+            bottom: 50.0,
+            right: 550.0,
+            top: 750.0,
+        };
+        let media = TextBounds {
+            left: 0.0,
+            bottom: 0.0,
+            right: 600.0,
+            top: 800.0,
+        };
+        let geometry = PageGeometry::from_boxes(
+            Some(crop),
+            Some(media),
+            550.0,
+            700.0,
+            PdfPageRenderRotation::None,
+        )
+        .unwrap();
+        assert_close(geometry.left, 0.0);
+        assert_close(geometry.bottom, 50.0);
+        assert_close(geometry.right, 550.0);
+        assert_close(geometry.top, 750.0);
+    }
+
+    #[test]
+    fn page_geometry_applies_intrinsic_page_rotation() {
+        let geometry = PageGeometry {
+            left: 63.0,
+            bottom: 72.0,
+            right: 532.0,
+            top: 738.0,
+            width: 666.0,
+            height: 469.0,
+            rotation: PdfPageRenderRotation::Degrees90,
+        };
+        assert!(geometry.valid());
+        let lower_right =
+            geometry.normalize_point(TextPoint { x: 532.0, y: 72.0 });
+        assert_close(lower_right.x, 0.0);
+        assert_close(lower_right.y, 0.0);
+        let upper_left =
+            geometry.normalize_point(TextPoint { x: 63.0, y: 738.0 });
+        assert_close(upper_left.x, 666.0);
+        assert_close(upper_left.y, 469.0);
+        let (x, y) = geometry.normalize_optional_point(None, Some(400.0));
+        assert_close(x.unwrap(), 328.0);
+        assert!(y.is_none());
     }
 
     #[test]
