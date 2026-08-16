@@ -500,16 +500,6 @@ WebKitGTK and report a missing environment.  The current embedding command is
 deliberately Windows-only while cross-platform parent-view ownership remains
 under evaluation.
 
-* Next Reader slices
-
-The next substantial implementation slice should compare Readium Web and
-foliate-js behind the existing native view boundary.  Only after that
-comparison should the EPUB driver commit to a renderer and stable locator
-format.
-
-Annotation anchors and independent decoration layers remain a planned
-extension of the stable position contract, after the reading path is hardened.
-
 * Testing
 
 ERT tests cover driver precedence, canonical open coalescing, shared resource
