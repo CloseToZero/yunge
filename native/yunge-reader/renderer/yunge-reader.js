@@ -155,6 +155,42 @@ const applyReadingStyle = (view, style) => {
     `)
 }
 
+const sameReadingStyle = (left, right) => left && right
+    && left.fontScale === right.fontScale
+    && left.lineHeight === right.lineHeight
+    && left.contentWidth === right.contentWidth
+    && left.sidePadding === right.sidePadding
+
+const applyPendingStyle = session => {
+    session.styleFrame = null
+    const style = session.pendingStyle
+    session.pendingStyle = null
+    if (current !== session || !style
+        || sameReadingStyle(session.style, style)) return
+    try {
+        applyReadingStyle(session.view, style)
+        session.style = style
+    } catch (error) {
+        post('style-error', { message: error?.message ?? error })
+    }
+}
+
+const setStyle = ({ view: viewID, style }) => {
+    try {
+        viewID = checkedView(viewID)
+        style = checkedStyle(style)
+        if (!current || current.viewID !== viewID) {
+            throw new Error('EPUB view is not open')
+        }
+        const session = current
+        session.pendingStyle = style
+        session.styleFrame ??= requestAnimationFrame(
+            () => applyPendingStyle(session))
+    } catch (error) {
+        post('style-error', { message: error?.message ?? error })
+    }
+}
+
 const checkedLocatorText = (value, name) => {
     if (typeof value !== 'string' || !value
         || encoder.encode(value).length > MAX_LOCATOR_TEXT_BYTES
@@ -282,6 +318,9 @@ const protectBook = book => {
 const closeCurrent = () => {
     if (!current) return
     if (current.locationTimer) clearTimeout(current.locationTimer)
+    if (current.styleFrame !== null) {
+        cancelAnimationFrame(current.styleFrame)
+    }
     current.view.close()
     current.book.destroy()
     current.view.remove()
@@ -571,6 +610,9 @@ const open = async ({ view: viewID, resourceRoot, location, style }) => {
             view,
             location: null,
             locationTimer: null,
+            style,
+            pendingStyle: null,
+            styleFrame: null,
             opening: true,
             commandNavigation: false,
             userMovementDeadline: 0,
@@ -659,4 +701,4 @@ const navigate = ({ view: viewID, command, location }) => {
     }
 }
 
-globalThis.yungeReader = Object.freeze({ navigate, open })
+globalThis.yungeReader = Object.freeze({ navigate, open, setStyle })

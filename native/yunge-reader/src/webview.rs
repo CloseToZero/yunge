@@ -92,7 +92,7 @@ const RESOURCE_CSP: &str = concat!(
     "base-uri 'none'; ",
     "form-action 'none'"
 );
-const CAPABILITIES: [&str; 16] = [
+const CAPABILITIES: [&str; 17] = [
     "publication-close",
     "publication-info",
     "publication-open",
@@ -108,6 +108,7 @@ const CAPABILITIES: [&str; 16] = [
     "view-navigate",
     "view-open-publication",
     "view-status",
+    "view-style",
     "view-visible",
 ];
 const MAX_VIEW_EXTENT: u32 = 32_768;
@@ -212,6 +213,13 @@ struct ViewPublicationParams {
     style: EpubStyle,
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ViewStyleParams {
+    view: u64,
+    style: EpubStyle,
+}
+
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Serialize)]
 #[serde(deny_unknown_fields, rename_all = "kebab-case")]
 struct EpubStyle {
@@ -296,6 +304,7 @@ enum RendererEvent {
     NavigationError,
     PublicationError,
     PublicationReady,
+    StyleError,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1039,6 +1048,26 @@ impl Service {
         }))
     }
 
+    fn set_view_style(&mut self, params: Value) -> Result<Value, ServiceError> {
+        let params: ViewStyleParams = Self::parse(params)?;
+        let style = params.style.validate()?;
+        let view = self.view(params.view)?;
+        if view.publication.is_none() {
+            return Err(ServiceError::new(
+                "view-has-no-publication",
+                format!("view {} has no attached publication", params.view),
+            ));
+        }
+        let script = publication_style_script(params.view, &style);
+        view.webview.evaluate_script(&script).map_err(|error| {
+            ServiceError::new("view-update-failed", error.to_string())
+        })?;
+        Ok(json!({
+            "view": params.view,
+            "style": style,
+        }))
+    }
+
     fn destroy(&mut self, params: Value) -> Result<Value, ServiceError> {
         let params: ViewParams = Self::parse(params)?;
         if self.views.remove(&params.view).is_none() {
@@ -1094,6 +1123,7 @@ impl Service {
             "view-open-publication" => {
                 self.open_view_publication(request.params)
             }
+            "view-style" => self.set_view_style(request.params),
             "view-visible" => self.set_visible(request.params),
             "view-focus" => self.focus(request.params),
             "view-focus-parent" => self.focus_parent(request.params),
@@ -1687,6 +1717,16 @@ fn renderer_event(
             let detail = message.message.filter(|value| !value.is_empty())?;
             ("publication-error", Some(detail), None, None, None)
         }
+        RendererEvent::StyleError => {
+            if message.location.is_some()
+                || message.outline.is_some()
+                || message.key.is_some()
+            {
+                return None;
+            }
+            let detail = message.message.filter(|value| !value.is_empty())?;
+            ("style-error", Some(detail), None, None, None)
+        }
     };
     Some(ViewEvent {
         kind: "event",
@@ -1727,6 +1767,15 @@ fn publication_navigation_script(
     }))
     .expect("publication navigation payload is serializable");
     format!("void globalThis.yungeReader.navigate({payload});")
+}
+
+fn publication_style_script(view: u64, style: &EpubStyle) -> String {
+    let payload = serde_json::to_string(&json!({
+        "view": view,
+        "style": style,
+    }))
+    .expect("publication style payload is serializable");
+    format!("void globalThis.yungeReader.setStyle({payload});")
 }
 
 fn write_message(
@@ -1950,6 +1999,12 @@ mod tests {
         assert!(adapter.contains("session.commandNavigation"));
         assert!(adapter.contains("if (session.opening) return"));
         assert!(adapter.contains("view.renderer.addEventListener('relocate'"));
+        assert!(adapter.contains("pendingStyle"));
+        assert!(adapter.contains("requestAnimationFrame("));
+        assert!(adapter.contains("post('style-error'"));
+        assert!(
+            adapter.contains("Object.freeze({ navigate, open, setStyle })")
+        );
         for path in ["foliate-js/paginator.js", "foliate-js/fixed-layout.js"] {
             let source =
                 std::str::from_utf8(app_asset(path).unwrap().1).unwrap();
@@ -2204,6 +2259,21 @@ mod tests {
         assert!(event.outline.is_none());
         assert!(event.key.is_none());
 
+        let style_error = HttpRequest::builder()
+            .uri(APP_URL)
+            .body(
+                r#"{"protocol":1,"event":"style-error",
+                    "message":"bad style"}"#
+                    .into(),
+            )
+            .unwrap();
+        let event = renderer_event(8, &style_error).unwrap();
+        assert_eq!(event.event, "style-error");
+        assert_eq!(event.message.as_deref(), Some("bad style"));
+        assert!(event.location.is_none());
+        assert!(event.outline.is_none());
+        assert!(event.key.is_none());
+
         let accelerator = HttpRequest::builder()
             .uri(APP_URL)
             .body(r#"{"protocol":1,"event":"accelerator","key":"J"}"#.into())
@@ -2283,6 +2353,14 @@ mod tests {
         assert!(script.contains(r#""side-padding":7.0"#));
         assert!(!script.contains("eval"));
 
+        let style_script = publication_style_script(4, &EpubStyle::default());
+        assert!(
+            style_script.starts_with("void globalThis.yungeReader.setStyle(")
+        );
+        assert!(style_script.contains(r#""view":4"#));
+        assert!(style_script.contains(r#""font-scale":1.0"#));
+        assert!(!style_script.contains("eval"));
+
         let target = EpubNavigationTarget {
             cfi: Some(location.cfi.clone()),
             href: location.href.clone(),
@@ -2349,6 +2427,19 @@ mod tests {
         }))
         .unwrap();
         assert_eq!(parsed.style, default);
+
+        let parsed = Service::parse::<ViewStyleParams>(json!({
+            "view": 4,
+            "style": {
+                "font-scale": 1.25,
+                "line-height": 1.8,
+                "content-width": 640,
+                "side-padding": 10.0,
+            },
+        }))
+        .unwrap();
+        assert_eq!(parsed.view, 4);
+        assert_eq!(parsed.style.font_scale, 1.25);
 
         for invalid in [
             EpubStyle {

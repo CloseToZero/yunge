@@ -88,6 +88,7 @@
   publication
   publication-ready
   style
+  surface-style
   location
   pending-target
   outline
@@ -143,7 +144,7 @@
             "view-destroy" "view-events" "view-focus"
             "view-focus-parent" "view-info"
             "view-navigate" "view-open-publication"
-            "view-status" "view-visible")))
+            "view-status" "view-style" "view-visible")))
       (error
        "Incompatible Yunge Reader WebView helper: %S"
        message))))
@@ -371,6 +372,57 @@ LOCATION is required only for the go-to command."
       `((location . ,(yunge-reader-webview--check-target location)))))
    callback))
 
+(defun yunge-reader-webview--set-native-view-style
+    (view style callback)
+  "Apply STYLE to native VIEW, then invoke CALLBACK."
+  (yunge-reader-webview--request
+   "view-style"
+   `((view . ,(yunge-reader-webview--view-id view))
+     (style . ,(yunge-reader-webview--check-style style)))
+   callback))
+
+(defun yunge-reader-webview--style-complete
+    (view id style _result error-data)
+  "Finish applying STYLE to VIEW surface ID."
+  (when (yunge-reader-webview--surface-current-p view id)
+    (when error-data
+      (when (equal style
+                   (yunge-reader-webview--view-surface-style view))
+        (setf (yunge-reader-webview--view-surface-style view) nil))
+      (display-warning
+       'yunge-reader (error-message-string error-data) :warning))))
+
+(defun yunge-reader-webview--sync-view-style (view)
+  "Send VIEW's desired style to its ready native surface."
+  (let ((style (yunge-reader-webview--view-style view)))
+    (when (and style
+               (yunge-reader-webview--view-publication-ready view)
+               (yunge-reader-webview--surface-current-p
+                view (yunge-reader-webview--view-id view))
+               (not
+                (equal style
+                       (yunge-reader-webview--view-surface-style view))))
+      (let ((id (yunge-reader-webview--view-id view))
+            (requested (copy-tree style)))
+        (setf (yunge-reader-webview--view-surface-style view)
+              (copy-tree requested))
+        (yunge-reader-webview--set-native-view-style
+         view requested
+         (apply-partially
+          #'yunge-reader-webview--style-complete
+          view id requested))))))
+
+(defun yunge-reader-webview--set-view-style (view style)
+  "Set logical VIEW's desired STYLE and synchronize its live surface."
+  (when (or (null view)
+            (yunge-reader-webview--view-destroyed view))
+    (error "Cannot style a dead EPUB view"))
+  (let ((style (copy-tree
+                (yunge-reader-webview--check-style style))))
+    (setf (yunge-reader-webview--view-style view) style)
+    (yunge-reader-webview--sync-view-style view)
+    style))
+
 (defun yunge-reader-webview--queue-view-target (view target)
   "Queue one transient EPUB TARGET until VIEW's surface is ready."
   (setf (yunge-reader-webview--view-pending-target view)
@@ -526,6 +578,7 @@ Unless QUIET is non-nil, notify the logical view's owner."
        (when-let* ((view (gethash id yunge-reader-webview--views)))
          (yunge-reader-webview--store-view-location view message t)
          (setf (yunge-reader-webview--view-publication-ready view) t)
+         (yunge-reader-webview--sync-view-style view)
          (yunge-reader-webview--store-view-outline view message)
          (yunge-reader-webview--dispatch-pending-target view)
          (yunge-reader-webview--set-buffer-message
@@ -541,12 +594,20 @@ Unless QUIET is non-nil, notify the logical view's owner."
          (unless (stringp detail)
            (error "Malformed EPUB navigation error: %S" message))
          (display-warning 'yunge-reader detail :warning)))
+      ("style-error"
+       (let ((detail (alist-get 'message message)))
+         (unless (stringp detail)
+           (error "Malformed EPUB style error: %S" message))
+         (when-let* ((view (gethash id yunge-reader-webview--views)))
+           (setf (yunge-reader-webview--view-surface-style view) nil))
+         (display-warning 'yunge-reader detail :warning)))
       ("publication-error"
        (let ((detail (alist-get 'message message)))
          (unless (stringp detail)
            (error "Malformed EPUB renderer error: %S" message))
          (when-let* ((view (gethash id yunge-reader-webview--views)))
            (setf (yunge-reader-webview--view-publication-ready view) nil
+                 (yunge-reader-webview--view-surface-style view) nil
                  (yunge-reader-webview--view-pending-target view) nil
                  (yunge-reader-webview--view-outline-error view)
                  (list 'error detail))
@@ -919,6 +980,7 @@ Without FORCE, request graceful shutdown and enforce a deadline."
           (yunge-reader-webview--view-window view) nil
           (yunge-reader-webview--view-created view) nil
           (yunge-reader-webview--view-publication-ready view) nil
+          (yunge-reader-webview--view-surface-style view) nil
           (yunge-reader-webview--view-bounds view) nil
           (yunge-reader-webview--view-requested-bounds view) nil
           (yunge-reader-webview--view-bounds-pending view) nil)
@@ -1004,6 +1066,7 @@ Without FORCE, request graceful shutdown and enforce a deadline."
             (yunge-reader-webview--view-created view) nil
             (yunge-reader-webview--view-destroyed view) t
             (yunge-reader-webview--view-publication-ready view) nil
+            (yunge-reader-webview--view-surface-style view) nil
             (yunge-reader-webview--view-pending-destroys view) nil)
       (yunge-reader-webview--finish-view-destroy view)))
   (clrhash yunge-reader-webview--views)
@@ -1025,6 +1088,9 @@ Without FORCE, request graceful shutdown and enforce a deadline."
 (defun yunge-reader-webview--open-complete
     (view id _result error-data)
   "Finish VIEW surface ID's attempt to attach its publication."
+  (when (and error-data
+             (yunge-reader-webview--surface-current-p view id))
+    (setf (yunge-reader-webview--view-surface-style view) nil))
   (cond
    ((not (yunge-reader-webview--surface-current-p view id)))
    ((and error-data
@@ -1052,6 +1118,10 @@ Without FORCE, request graceful shutdown and enforce a deadline."
              (not (yunge-reader-webview--view-destroyed view))
              (yunge-reader-webview--view-publication view))
     (let ((id (yunge-reader-webview--view-id view)))
+      (setf (yunge-reader-webview--view-surface-style view)
+            (and (yunge-reader-webview--view-style view)
+                 (copy-tree
+                  (yunge-reader-webview--view-style view))))
       (yunge-reader-webview--open-view-publication
        view
        (yunge-reader-webview--view-publication view)
@@ -1212,6 +1282,7 @@ focused native child forwards one.  STYLE is copied into the logical view."
             (yunge-reader-webview--view-window view) window
             (yunge-reader-webview--view-created view) nil
             (yunge-reader-webview--view-publication-ready view) nil
+            (yunge-reader-webview--view-surface-style view) nil
             (yunge-reader-webview--view-outline-error view) nil
             (yunge-reader-webview--view-requested-bounds view)
             (yunge-reader-webview--window-bounds window))

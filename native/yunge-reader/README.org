@@ -24,7 +24,7 @@ The helper writes one message immediately after startup:
 
 Emacs requires the protocol, build ID, PDFium API, and all capabilities to
 match.  The build ID hashes the Cargo manifest and lock, build script, PDFium
-manifest, and Rust sources.
+manifest, Rust sources, and bundled renderer sources.
 
 * Requests and responses
 
@@ -90,8 +90,8 @@ installing or downloading it:
                  "publication-resources","view-bounds",
                  "view-clear-selection","view-create",
                  "view-destroy","view-events","view-focus",
-                 "view-focus-parent","view-info","view-status",
-                 "view-navigate","view-open-publication",
+                 "view-focus-parent","view-info","view-navigate",
+                 "view-open-publication","view-status","view-style",
                  "view-visible"],
  "engine":"webview2","kind":"webview-ready","platform":"windows",
  "protocol":1,"version":"151.0.4129.86"}
@@ -153,6 +153,13 @@ the same defaults shown above.  Unknown or partial style objects are rejected;
 arbitrary CSS, fonts, and colors never cross the protocol boundary.  The
 renderer maps these fields to reflowable layout before its first navigation
 and leaves fixed-layout publication geometry unchanged.
+
+=view-style= accepts the same complete style object for an attached view.
+The renderer coalesces updates requested within one animation frame and lets
+Foliate retain its current visible-range anchor while the document reflows.
+Changing style does not reopen the publication, recreate the child surface,
+or emit a durable location for layout-only movement.  A renderer-side failure
+is reported as a bounded =style-error= event.
 
 Successful publication readiness is an unsolicited event containing the
 first complete locator and a flattened EPUB 3 nav or EPUB 2 NCX outline:

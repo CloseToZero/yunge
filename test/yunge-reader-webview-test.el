@@ -72,7 +72,7 @@
          "view-destroy" "view-events" "view-focus"
          "view-focus-parent" "view-info"
          "view-navigate" "view-open-publication"
-         "view-status" "view-visible")))))
+         "view-status" "view-style" "view-visible")))))
 
 (defun yunge-reader-webview-test--location (&optional fraction)
   "Return one valid EPUB test locator with optional FRACTION."
@@ -93,10 +93,11 @@
 
 (defun yunge-reader-webview-test--style ()
   "Return one valid semantic EPUB reading style."
-  '((font-scale . 1.25)
-    (line-height . 1.6)
-    (content-width . 760)
-    (side-padding . 8.0)))
+  (copy-tree
+   '((font-scale . 1.25)
+     (line-height . 1.6)
+     (content-width . 760)
+     (side-padding . 8.0))))
 
 (ert-deftest yunge-reader-webview-queues-until-ready ()
   (yunge-reader-webview-test--with-fake-process
@@ -200,6 +201,91 @@
           (color . "red"))))
     (should-not (yunge-reader-webview--valid-style-p style))))
 
+(ert-deftest yunge-reader-webview-defers-hidden-reading-style ()
+  (let* ((style (yunge-reader-webview-test--style))
+         (view (yunge-reader-webview--make-view :publication 8))
+         (yunge-reader-webview--views
+          (make-hash-table :test #'eql))
+         requests)
+    (cl-letf
+        (((symbol-function
+           'yunge-reader-webview--set-native-view-style)
+          (lambda (value reading-style complete)
+            (push (list value reading-style complete) requests))))
+      (yunge-reader-webview--set-view-style view style)
+      (should-not requests)
+      (should (equal (yunge-reader-webview--view-style view) style))
+      (should-not (eq (yunge-reader-webview--view-style view) style))
+      (setcdr (assq 'font-scale style) 2.0)
+      (should
+       (= (alist-get
+           'font-scale (yunge-reader-webview--view-style view))
+          1.25))
+      (setf (yunge-reader-webview--view-id view) 23
+            (yunge-reader-webview--view-created view) t
+            (yunge-reader-webview--view-publication-ready view) t)
+      (puthash 23 view yunge-reader-webview--views)
+      (yunge-reader-webview--sync-view-style view)
+      (should (= (length requests) 1))
+      (should
+       (equal (cadar requests)
+              (yunge-reader-webview--view-style view)))
+      (should
+       (equal (yunge-reader-webview--view-surface-style view)
+              (yunge-reader-webview--view-style view))))))
+
+(ert-deftest yunge-reader-webview-reconciles-style-after-opening ()
+  (let* ((style (yunge-reader-webview-test--style))
+         (old-style (copy-tree style))
+         (view
+          (yunge-reader-webview--make-view
+           :id 24 :created t :publication 8
+           :style style :surface-style old-style))
+         (yunge-reader-webview--process 'fake-webview-process)
+         (yunge-reader-webview--views
+          (make-hash-table :test #'eql))
+         requested)
+    (setcdr (assq 'font-scale style) 1.5)
+    (puthash 24 view yunge-reader-webview--views)
+    (cl-letf
+        (((symbol-function
+           'yunge-reader-webview--set-native-view-style)
+          (lambda (_view reading-style _complete)
+            (setq requested reading-style))))
+      (yunge-reader-webview--handle-event
+       'fake-webview-process
+       `((kind . "event")
+         (event . "publication-ready")
+         (view . 24)
+         (location . ,(yunge-reader-webview-test--location 0.25))
+         (outline . ,(yunge-reader-webview-test--outline)))))
+    (should (equal requested style))
+    (should
+     (equal (yunge-reader-webview--view-surface-style view) style))))
+
+(ert-deftest yunge-reader-webview-style-failure-is-retryable ()
+  (let* ((style (yunge-reader-webview-test--style))
+         (view
+          (yunge-reader-webview--make-view
+           :id 25 :created t :publication 8
+           :publication-ready t :style style))
+         (yunge-reader-webview--views
+          (make-hash-table :test #'eql))
+         warning
+         complete)
+    (puthash 25 view yunge-reader-webview--views)
+    (cl-letf
+        (((symbol-function
+           'yunge-reader-webview--set-native-view-style)
+          (lambda (_view _style callback) (setq complete callback)))
+         ((symbol-function 'display-warning)
+          (lambda (&rest value) (setq warning value))))
+      (yunge-reader-webview--sync-view-style view)
+      (should complete)
+      (funcall complete nil '(error "style failed")))
+    (should-not (yunge-reader-webview--view-surface-style view))
+    (should (equal (cadr warning) "style failed"))))
+
 (ert-deftest yunge-reader-webview-serializes-location-navigation ()
   (yunge-reader-webview-test--with-fake-process
     (yunge-reader-webview-start)
@@ -216,6 +302,8 @@
        view "next-screen" #'ignore)
       (yunge-reader-webview--navigate-view
        view "go-to" #'ignore target)
+      (yunge-reader-webview--set-native-view-style
+       view style #'ignore)
       (let* ((requests
               (mapcar
                (lambda (line)
@@ -223,11 +311,13 @@
                (nreverse sent)))
              (open (nth 0 requests))
              (next (nth 1 requests))
-             (go-to (nth 2 requests)))
+             (go-to (nth 2 requests))
+             (styled (nth 3 requests)))
         (should
          (equal
           (mapcar (lambda (request) (alist-get 'op request)) requests)
-          '("view-open-publication" "view-navigate" "view-navigate")))
+          '("view-open-publication" "view-navigate" "view-navigate"
+            "view-style")))
         (should
          (equal (alist-get 'location (alist-get 'params open))
                 location))
@@ -239,7 +329,10 @@
                 "next-screen"))
         (should
          (equal (alist-get 'location (alist-get 'params go-to))
-                target))))))
+                target))
+        (should
+         (equal (alist-get 'style (alist-get 'params styled))
+                style))))))
 
 (ert-deftest yunge-reader-webview-wraps-publication-operations ()
   (yunge-reader-webview-test--with-fake-process
@@ -428,6 +521,19 @@
                   '((cfi . "epubcfi(/6/6!/4/2)")
                     (href . "OPS/next.xhtml")
                     (fraction . 0.3))))
+          (setf (yunge-reader-webview--view-surface-style view)
+                (yunge-reader-webview-test--style))
+          (cl-letf (((symbol-function 'display-warning)
+                     (lambda (&rest value) (setq warning value))))
+            (yunge-reader-webview--handle-event
+             'fake-webview-process
+             '((kind . "event")
+               (event . "style-error")
+               (view . 6)
+               (message . "bad style"))))
+          (should-not
+           (yunge-reader-webview--view-surface-style view))
+          (should (equal (cadr warning) "bad style"))
           (cl-letf (((symbol-function 'display-warning)
                      (lambda (&rest value) (setq warning value))))
             (yunge-reader-webview--handle-event
@@ -623,6 +729,7 @@
          (other (generate-new-buffer " *persistent EPUB replacement*"))
          (window (selected-window))
          (location (yunge-reader-webview-test--location 0.4))
+         (style (yunge-reader-webview-test--style))
          (view
           (yunge-reader-webview--make-view
            :id 15
@@ -631,6 +738,8 @@
            :created t
            :persistent t
            :publication 6
+           :style style
+           :surface-style (copy-tree style)
            :location location))
          (yunge-reader-webview--process 'fake-webview-process)
          (yunge-reader-webview--views
@@ -658,6 +767,8 @@
           (should (gethash view yunge-reader-webview--logical-views))
           (should (equal (yunge-reader-webview--view-location view)
                          location))
+          (should-not
+           (yunge-reader-webview--view-surface-style view))
           (should (equal (caar requests) "view-destroy"))
           (should-not
            (cl-find-if
@@ -718,7 +829,11 @@
             (setq opened
                   (list value publication target reading-style)))))
       (yunge-reader-webview--try-open-publication view))
-    (should (equal opened (list view 8 location style)))))
+    (should (equal opened (list view 8 location style)))
+    (should
+     (equal (yunge-reader-webview--view-surface-style view) style))
+    (should-not
+     (eq (yunge-reader-webview--view-surface-style view) style))))
 
 (ert-deftest yunge-reader-webview-copies-attached-reading-style ()
   (let ((style (yunge-reader-webview-test--style))

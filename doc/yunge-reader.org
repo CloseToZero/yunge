@@ -115,6 +115,14 @@ before its first navigation.  Hiding and recreating a surface therefore keeps
 that view's style, while another view may later diverge independently.
 Fixed-layout EPUBs retain their publisher geometry.
 
+The same complete style can be changed on a live logical view without
+reopening its publication or recreating its native child.  A hidden view keeps
+the desired style and supplies it when its next surface opens.  A change made
+while the publication is still opening is reconciled after readiness.  The
+renderer coalesces updates within one animation frame, and Foliate retains the
+visible-range anchor across reflow.  Layout-only anchor movement remains
+transient and cannot replace the primary durable place.
+
 A =publication-ready= locator updates only the logical view.  Readiness means
 that an initial target or retained location finished restoring; it is not user
 navigation and therefore cannot replace the primary durable place.  Later
@@ -685,10 +693,12 @@ catalogs.
 WebView ERT tests cover the separate handshake, strict capability validation,
 asynchronous renderer event routing, per-view EPUB locations, owning-window
 focus recovery, owning-buffer key dispatch, frame handle parsing, coalesced
-resize requests, destruction after buffer replacement, persistent hidden-view
-recreation,
-multi-surface destruction barriers, outline waiter completion, and ordered
-publication release.  EPUB driver tests cover registration, reflowable key
+resize requests, destruction after buffer replacement, persistent surface
+release and recreation, multi-surface destruction barriers, outline waiter
+completion, and ordered publication release.  They also cover deferred and
+live style updates,
+opening-time reconciliation, surface reset, and retryable failures.  EPUB
+driver tests cover registration, reflowable key
 bindings, native open result validation, shared publication ownership,
 printable place conversion, bounded outline mapping, transient href targets,
 view-local reading styles, restore timing, and primary-only place recording.
