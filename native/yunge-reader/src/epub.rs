@@ -48,7 +48,7 @@ pub struct EpubError {
 
 pub struct Publication {
     archive: ZipArchive<File>,
-    entries: HashMap<String, usize>,
+    entries: HashMap<String, ArchiveEntry>,
     expanded_size: u64,
     metadata: PublicationMetadata,
     resources: HashMap<String, String>,
@@ -58,6 +58,20 @@ pub struct Publication {
 pub struct PublicationResource {
     bytes: Vec<u8>,
     media_type: String,
+}
+
+#[derive(Clone, Copy)]
+struct ArchiveEntry {
+    index: usize,
+    size: u64,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub struct PublicationResourceMetadata {
+    pub path: String,
+    pub media_type: String,
+    pub size: u64,
 }
 
 impl EpubError {
@@ -157,6 +171,25 @@ impl Publication {
         self.expanded_size
     }
 
+    pub fn resource_catalog(&self) -> Vec<PublicationResourceMetadata> {
+        let mut resources: Vec<_> = self
+            .resources
+            .iter()
+            .filter(|(_, media_type)| browser_media_type_allowed(media_type))
+            .filter_map(|(path, media_type)| {
+                self.entries.get(path).map(|entry| {
+                    PublicationResourceMetadata {
+                        path: path.clone(),
+                        media_type: media_type.clone(),
+                        size: entry.size,
+                    }
+                })
+            })
+            .collect();
+        resources.sort_unstable_by(|left, right| left.path.cmp(&right.path));
+        resources
+    }
+
     pub fn read_resource(
         &mut self,
         path: &str,
@@ -223,7 +256,7 @@ impl PublicationResource {
 
 fn validate_archive(
     archive: &mut ZipArchive<File>,
-) -> Result<(HashMap<String, usize>, u64), EpubError> {
+) -> Result<(HashMap<String, ArchiveEntry>, u64), EpubError> {
     if archive.len() > MAX_ARCHIVE_ENTRIES {
         return Err(limit_error(format!(
             "archive has {} entries; limit is {MAX_ARCHIVE_ENTRIES}",
@@ -281,7 +314,13 @@ fn validate_archive(
             )));
         }
         if !entry.is_dir() {
-            entries.insert(normalized, index);
+            entries.insert(
+                normalized,
+                ArchiveEntry {
+                    index,
+                    size: entry.size(),
+                },
+            );
         }
     }
     Ok((entries, expanded_size))
@@ -492,6 +531,7 @@ fn browser_media_type_allowed(media_type: &str) -> bool {
             | "application/smil+xml"
             | "application/ttml+xml"
             | "application/vnd.ms-opentype"
+            | "application/x-dtbncx+xml"
             | "application/xhtml+xml"
             | "application/xml"
             | "audio/aac"
@@ -553,17 +593,17 @@ fn valid_media_type(media_type: &str) -> bool {
 
 fn read_entry<R: Read + Seek>(
     archive: &mut ZipArchive<R>,
-    entries: &HashMap<String, usize>,
+    entries: &HashMap<String, ArchiveEntry>,
     path: &str,
     limit: u64,
 ) -> Result<Vec<u8>, EpubError> {
-    let index = entries.get(path).copied().ok_or_else(|| {
+    let entry = entries.get(path).copied().ok_or_else(|| {
         EpubError::new(
             "epub-resource-not-found",
             format!("EPUB resource does not exist: {path}"),
         )
     })?;
-    let mut entry = archive.by_index(index).map_err(|error| {
+    let mut entry = archive.by_index(entry.index).map_err(|error| {
         EpubError::new(
             "invalid-epub",
             format!("could not open EPUB resource {path}: {error}"),
@@ -920,6 +960,14 @@ mod tests {
         let resource = publication.read_resource("OPS/chapter.xhtml").unwrap();
         assert_eq!(resource.media_type(), "application/xhtml+xml");
         assert_eq!(resource.bytes(), b"<html><body>Chapter</body></html>");
+        assert_eq!(
+            publication.resource_catalog(),
+            vec![PublicationResourceMetadata {
+                path: "OPS/chapter.xhtml".into(),
+                media_type: "application/xhtml+xml".into(),
+                size: 33,
+            }]
+        );
     }
 
     #[test]
@@ -1072,6 +1120,31 @@ mod tests {
                 .code(),
             "unsupported-epub-resource"
         );
+    }
+
+    #[test]
+    fn browser_resources_expose_epub_two_navigation() {
+        let mut entries = valid_entries();
+        entries.push(("OPS/toc.ncx".into(), b"<ncx/>".to_vec()));
+        entries[2].1 = PACKAGE
+            .replace(
+                "</manifest>",
+                concat!(
+                    "<item id=\"ncx\" href=\"toc.ncx\" ",
+                    "media-type=\"application/x-dtbncx+xml\"/>",
+                    "</manifest>"
+                ),
+            )
+            .into_bytes();
+        let file = write_archive("epub-two-navigation", &entries);
+        let mut publication = Publication::open(&file.0).unwrap();
+
+        let resource = publication.read_resource("OPS/toc.ncx").unwrap();
+        assert_eq!(resource.media_type(), "application/x-dtbncx+xml");
+        assert!(publication.resource_catalog().iter().any(|resource| {
+            resource.path == "OPS/toc.ncx"
+                && resource.media_type == "application/x-dtbncx+xml"
+        }));
     }
 
     #[test]

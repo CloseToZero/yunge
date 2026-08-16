@@ -68,8 +68,8 @@
          "publication-resources" "view-bounds"
          "view-clear-selection" "view-create"
          "view-destroy" "view-events" "view-focus"
-         "view-focus-parent" "view-info" "view-status"
-         "view-visible")))))
+         "view-focus-parent" "view-info"
+         "view-open-publication" "view-status" "view-visible")))))
 
 (ert-deftest yunge-reader-webview-queues-until-ready ()
   (yunge-reader-webview-test--with-fake-process
@@ -124,6 +124,9 @@
        path (lambda (_value _error-data)))
       (yunge-reader-webview--publication-info
        7 (lambda (_value _error-data)))
+      (yunge-reader-webview--open-view-publication
+       (yunge-reader-webview--make-view :id 4)
+       7 (lambda (_value _error-data)))
       (yunge-reader-webview--close-publication
        7 (lambda (_value _error-data)))
       (let ((requests
@@ -134,7 +137,8 @@
         (should
          (equal
           (mapcar (lambda (request) (alist-get 'op request)) requests)
-          '("publication-open" "publication-info" "publication-close")))
+          '("publication-open" "publication-info"
+            "view-open-publication" "publication-close")))
         (should
          (equal
           (alist-get 'path (alist-get 'params (car requests)))
@@ -192,6 +196,40 @@
       (should (zerop
                (hash-table-count
                 yunge-reader-webview--callbacks))))))
+
+(ert-deftest yunge-reader-webview-records-renderer-publication-events ()
+  (let* ((buffer (generate-new-buffer " *webview EPUB event*"))
+         (view
+          (yunge-reader-webview--make-view :id 6 :buffer buffer))
+         (yunge-reader-webview--process 'fake-webview-process)
+         (yunge-reader-webview--views
+          (make-hash-table :test #'eql))
+         warning)
+    (unwind-protect
+        (progn
+          (puthash 6 view yunge-reader-webview--views)
+          (yunge-reader-webview--handle-event
+           'fake-webview-process
+           '((kind . "event")
+             (event . "publication-ready")
+             (view . 6)))
+          (should
+           (yunge-reader-webview--view-publication-ready view))
+          (cl-letf (((symbol-function 'display-warning)
+                     (lambda (&rest value) (setq warning value))))
+            (yunge-reader-webview--handle-event
+             'fake-webview-process
+             '((kind . "event")
+               (event . "publication-error")
+               (view . 6)
+               (message . "bad chapter"))))
+          (should-not
+           (yunge-reader-webview--view-publication-ready view))
+          (should (equal (cadr warning) "bad chapter"))
+          (with-current-buffer buffer
+            (should (equal (string-trim (buffer-string))
+                           "bad chapter"))))
+      (kill-buffer buffer))))
 
 (ert-deftest yunge-reader-webview-parses-decimal-and-hex-frame-handles ()
   (cl-letf (((symbol-function 'frame-parameter)
@@ -256,5 +294,25 @@
           (should (equal (caar requests) "view-destroy")))
       (kill-buffer buffer)
       (kill-buffer other))))
+
+(ert-deftest yunge-reader-webview-closes-publication-after-destroy ()
+  (let* ((view
+          (yunge-reader-webview--make-view
+           :id 10 :created t :publication 3))
+         (yunge-reader-webview--process 'fake-webview-process)
+         (yunge-reader-webview--views
+          (make-hash-table :test #'eql))
+         requests)
+    (puthash 10 view yunge-reader-webview--views)
+    (cl-letf (((symbol-function 'process-live-p) (lambda (_process) t))
+              ((symbol-function 'yunge-reader-webview--request)
+               (lambda (operation parameters complete)
+                 (push (list operation parameters complete) requests))))
+      (yunge-reader-webview--destroy-view view)
+      (should (equal (caar requests) "view-destroy"))
+      (funcall (nth 2 (car requests)) nil nil)
+      (should
+       (equal (mapcar #'car (nreverse requests))
+              '("view-destroy" "publication-close"))))))
 
 ;;; yunge-reader-webview-test.el ends here

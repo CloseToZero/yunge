@@ -16,6 +16,11 @@
   :type 'number
   :group 'yunge-reader)
 
+(defcustom yunge-reader-webview-open-timeout 5.0
+  "Seconds allowed for the WebView renderer shell to become ready."
+  :type 'number
+  :group 'yunge-reader)
+
 (defconst yunge-reader-webview-protocol-version 1
   "WebView protocol version understood by this client.")
 
@@ -57,7 +62,12 @@
   destroyed
   bounds
   requested-bounds
-  bounds-pending)
+  bounds-pending
+  publication
+  publication-ready
+  path
+  open-deadline
+  open-timer)
 
 (define-derived-mode yunge-reader-webview-spike-mode special-mode
   "Yunge-WebView"
@@ -97,8 +107,8 @@
             "publication-resources" "view-bounds"
             "view-clear-selection" "view-create"
             "view-destroy" "view-events" "view-focus"
-            "view-focus-parent" "view-info" "view-status"
-            "view-visible")))
+            "view-focus-parent" "view-info"
+            "view-open-publication" "view-status" "view-visible")))
       (error
        "Incompatible Yunge Reader WebView helper: %S"
        message))))
@@ -145,6 +155,25 @@
   (yunge-reader-webview--request
    "publication-close" `((publication . ,publication)) callback))
 
+(defun yunge-reader-webview--open-view-publication
+    (view publication callback)
+  "Open PUBLICATION in native VIEW, then invoke CALLBACK."
+  (yunge-reader-webview--request
+   "view-open-publication"
+   `((view . ,(yunge-reader-webview--view-id view))
+     (publication . ,publication))
+   callback))
+
+(defun yunge-reader-webview--set-buffer-message (view message)
+  "Replace VIEW's backing buffer contents with MESSAGE."
+  (let ((buffer (yunge-reader-webview--view-buffer view)))
+    (when (buffer-live-p buffer)
+      (with-current-buffer buffer
+        (let ((inhibit-read-only t))
+          (erase-buffer)
+          (insert message "\n")
+          (set-buffer-modified-p nil))))))
+
 (defun yunge-reader-webview--handle-event (process message)
   "Handle one asynchronous WebView MESSAGE from PROCESS."
   (unless (eq process yunge-reader-webview--process)
@@ -168,6 +197,22 @@
           (lambda (_result _error-data)))
          (select-window window)
          (select-frame-set-input-focus (window-frame window))))
+      ("publication-ready"
+       (when-let* ((view (gethash id yunge-reader-webview--views)))
+         (setf (yunge-reader-webview--view-publication-ready view) t)
+         (yunge-reader-webview--set-buffer-message
+          view
+          (format "EPUB renderer ready: %s"
+                  (or (yunge-reader-webview--view-path view)
+                      "publication")))))
+      ("publication-error"
+       (let ((detail (alist-get 'message message)))
+         (unless (stringp detail)
+           (error "Malformed EPUB renderer error: %S" message))
+         (when-let* ((view (gethash id yunge-reader-webview--views)))
+           (setf (yunge-reader-webview--view-publication-ready view) nil)
+           (yunge-reader-webview--set-buffer-message view detail))
+         (display-warning 'yunge-reader detail :warning)))
       (_
        (error "Unsupported Yunge Reader WebView event: %s" event)))))
 
@@ -441,18 +486,38 @@ Without FORCE, request graceful shutdown and enforce a deadline."
     (dolist (view views)
       (yunge-reader-webview--sync-view view))))
 
+(defun yunge-reader-webview--cancel-open-timer (view)
+  "Cancel VIEW's renderer readiness timer."
+  (when-let* ((timer (yunge-reader-webview--view-open-timer view)))
+    (when (timerp timer)
+      (cancel-timer timer))
+    (setf (yunge-reader-webview--view-open-timer view) nil)))
+
+(defun yunge-reader-webview--close-owned-publication (publication)
+  "Close PUBLICATION when the WebView helper is still live."
+  (when (and publication
+             (process-live-p yunge-reader-webview--process))
+    (yunge-reader-webview--close-publication
+     publication (lambda (_result _error-data)))))
+
 (defun yunge-reader-webview--destroy-view (view)
   "Destroy native VIEW and forget its Emacs ownership."
   (unless (yunge-reader-webview--view-destroyed view)
+    (yunge-reader-webview--cancel-open-timer view)
     (setf (yunge-reader-webview--view-destroyed view) t)
     (remhash (yunge-reader-webview--view-id view)
              yunge-reader-webview--views)
-    (when (and (yunge-reader-webview--view-created view)
+    (let ((publication
+           (prog1 (yunge-reader-webview--view-publication view)
+             (setf (yunge-reader-webview--view-publication view) nil))))
+      (if (and (yunge-reader-webview--view-created view)
                (process-live-p yunge-reader-webview--process))
-      (yunge-reader-webview--request
-       "view-destroy"
-       `((view . ,(yunge-reader-webview--view-id view)))
-       (lambda (_result _error-data))))
+          (yunge-reader-webview--request
+           "view-destroy"
+           `((view . ,(yunge-reader-webview--view-id view)))
+           (lambda (_result _error-data)
+             (yunge-reader-webview--close-owned-publication publication)))
+        (yunge-reader-webview--close-owned-publication publication)))
     (when (zerop (hash-table-count yunge-reader-webview--views))
       (yunge-reader-webview--remove-hooks))))
 
@@ -460,6 +525,7 @@ Without FORCE, request graceful shutdown and enforce a deadline."
   "Forget all native views without sending protocol messages."
   (maphash
    (lambda (_id view)
+     (yunge-reader-webview--cancel-open-timer view)
      (setf (yunge-reader-webview--view-destroyed view) t))
    yunge-reader-webview--views)
   (clrhash yunge-reader-webview--views)
@@ -471,18 +537,54 @@ Without FORCE, request graceful shutdown and enforce a deadline."
     (yunge-reader-webview--destroy-view
      yunge-reader-webview--buffer-view)))
 
+(defun yunge-reader-webview--open-error-code (error-data)
+  "Return the stable helper code in ERROR-DATA, if present."
+  (and (eq (car-safe error-data)
+           'yunge-reader-webview-native-error)
+       (cadr error-data)))
+
+(defun yunge-reader-webview--open-complete
+    (view _result error-data)
+  "Finish one attempt to attach VIEW's EPUB publication."
+  (cond
+   ((yunge-reader-webview--view-destroyed view))
+   ((and error-data
+         (equal (yunge-reader-webview--open-error-code error-data)
+                "view-not-ready")
+         (< (float-time)
+            (yunge-reader-webview--view-open-deadline view)))
+    (setf
+     (yunge-reader-webview--view-open-timer view)
+     (run-at-time 0.05 nil
+                  #'yunge-reader-webview--try-open-publication view)))
+   (error-data
+    (yunge-reader-webview--set-buffer-message
+     view (error-message-string error-data))
+    (display-warning
+     'yunge-reader (error-message-string error-data) :warning))
+   (t
+    (yunge-reader-webview--set-buffer-message
+     view "Opening the EPUB text start..."))))
+
+(defun yunge-reader-webview--try-open-publication (view)
+  "Try to attach VIEW's publication after its renderer shell loads."
+  (setf (yunge-reader-webview--view-open-timer view) nil)
+  (when (and (yunge-reader-webview--view-created view)
+             (not (yunge-reader-webview--view-destroyed view))
+             (yunge-reader-webview--view-publication view))
+    (yunge-reader-webview--open-view-publication
+     view
+     (yunge-reader-webview--view-publication view)
+     (apply-partially #'yunge-reader-webview--open-complete view))))
+
 (defun yunge-reader-webview--create-complete
     (view _result error-data)
   "Complete creation of VIEW with ERROR-DATA when it failed."
   (if error-data
       (progn
         (yunge-reader-webview--destroy-view view)
-        (let ((buffer (yunge-reader-webview--view-buffer view)))
-          (when (buffer-live-p buffer)
-            (with-current-buffer buffer
-              (let ((inhibit-read-only t))
-                (erase-buffer)
-                (insert (error-message-string error-data) "\n")))))
+        (yunge-reader-webview--set-buffer-message
+         view (error-message-string error-data))
         (display-warning
          'yunge-reader (error-message-string error-data) :warning))
     (setf (yunge-reader-webview--view-created view) t)
@@ -494,7 +596,41 @@ Without FORCE, request graceful shutdown and enforce a deadline."
            (lambda (_value _error))))
       (setf (yunge-reader-webview--view-bounds view)
             (yunge-reader-webview--view-requested-bounds view))
-      (yunge-reader-webview--sync-view view))))
+      (yunge-reader-webview--sync-view view)
+      (when (yunge-reader-webview--view-publication view)
+        (setf (yunge-reader-webview--view-open-deadline view)
+              (+ (float-time) yunge-reader-webview-open-timeout))
+        (yunge-reader-webview--try-open-publication view)))))
+
+(defun yunge-reader-webview--request-create (view)
+  "Ask the helper to create native VIEW."
+  (let* ((window (yunge-reader-webview--view-window view))
+         (frame (window-frame window)))
+    (yunge-reader-webview--request
+     "view-create"
+     `((view . ,(yunge-reader-webview--view-id view))
+       (parent . ,(yunge-reader-webview--frame-handle frame))
+       (bounds . ,(yunge-reader-webview--view-requested-bounds view))
+       (visible . t))
+     (apply-partially #'yunge-reader-webview--create-complete view))))
+
+(defun yunge-reader-webview--publication-open-complete
+    (view result error-data)
+  "Finish opening VIEW's publication from native RESULT."
+  (if error-data
+      (progn
+        (yunge-reader-webview--set-buffer-message
+         view (error-message-string error-data))
+        (yunge-reader-webview--destroy-view view)
+        (display-warning
+         'yunge-reader (error-message-string error-data) :warning))
+    (let ((publication (alist-get 'publication result)))
+      (unless (and (integerp publication) (> publication 0))
+        (error "Malformed EPUB publication result: %S" result))
+      (if (yunge-reader-webview--view-destroyed view)
+          (yunge-reader-webview--close-owned-publication publication)
+        (setf (yunge-reader-webview--view-publication view) publication)
+        (yunge-reader-webview--request-create view)))))
 
 ;;;###autoload
 (defun yunge-reader-webview-spike (&optional window)
@@ -506,7 +642,6 @@ This command is an architecture spike, not an EPUB reader yet."
   (unless (eq system-type 'windows-nt)
     (user-error "The current WebView spike supports Windows only"))
   (let* ((window (or window (selected-window)))
-         (frame (window-frame window))
          (id (cl-incf yunge-reader-webview--next-view-id))
          (buffer
           (generate-new-buffer
@@ -522,17 +657,55 @@ This command is an architecture spike, not an EPUB reader yet."
       (yunge-reader-webview-spike-mode)
       (setq yunge-reader-webview--buffer-view view)
       (let ((inhibit-read-only t))
-        (insert "Creating native WebView...\n")))
+        (insert "Creating native WebView...\n")
+        (set-buffer-modified-p nil)))
     (set-window-buffer window buffer)
     (puthash id view yunge-reader-webview--views)
     (yunge-reader-webview--install-hooks)
-    (yunge-reader-webview--request
-     "view-create"
-     `((view . ,id)
-       (parent . ,(yunge-reader-webview--frame-handle frame))
-       (bounds . ,bounds)
-       (visible . t))
-     (apply-partially #'yunge-reader-webview--create-complete view))
+    (yunge-reader-webview--request-create view)
+    buffer))
+
+;;;###autoload
+(defun yunge-reader-webview-epub-spike (file &optional window)
+  "Open local EPUB FILE in a native child WebView in WINDOW.
+This manual architecture spike does not register EPUB file associations or
+save a durable reading position."
+  (interactive "fEPUB file: ")
+  (unless (display-graphic-p)
+    (user-error "The EPUB WebView spike requires a graphical display"))
+  (unless (eq system-type 'windows-nt)
+    (user-error "The current EPUB WebView spike supports Windows only"))
+  (setq file (expand-file-name file))
+  (when (file-remote-p file)
+    (user-error "The EPUB WebView spike accepts local files only"))
+  (unless (and (file-regular-p file) (file-readable-p file))
+    (user-error "EPUB file is not readable: %s" file))
+  (let* ((window (or window (selected-window)))
+         (id (cl-incf yunge-reader-webview--next-view-id))
+         (buffer
+          (generate-new-buffer
+           (format "*Yunge EPUB %s*" (file-name-nondirectory file))))
+         (bounds (yunge-reader-webview--window-bounds window))
+         (view
+          (yunge-reader-webview--make-view
+           :id id
+           :window window
+           :buffer buffer
+           :path file
+           :requested-bounds bounds)))
+    (with-current-buffer buffer
+      (yunge-reader-webview-spike-mode)
+      (setq yunge-reader-webview--buffer-view view)
+      (let ((inhibit-read-only t))
+        (insert "Validating EPUB publication...\n")
+        (set-buffer-modified-p nil)))
+    (set-window-buffer window buffer)
+    (puthash id view yunge-reader-webview--views)
+    (yunge-reader-webview--install-hooks)
+    (yunge-reader-webview--open-publication
+     file
+     (apply-partially
+      #'yunge-reader-webview--publication-open-complete view))
     buffer))
 
 (defun yunge-reader-webview--shutdown-for-emacs-exit ()

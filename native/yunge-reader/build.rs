@@ -6,13 +6,13 @@ use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-fn rust_sources(directory: &Path, files: &mut Vec<PathBuf>) {
+fn source_files(directory: &Path, files: &mut Vec<PathBuf>) {
     for entry in fs::read_dir(directory).unwrap() {
         let entry = entry.unwrap();
         let path = entry.path();
         if path.is_dir() {
-            rust_sources(&path, files);
-        } else if path.extension().is_some_and(|extension| extension == "rs") {
+            source_files(&path, files);
+        } else {
             files.push(path);
         }
     }
@@ -34,13 +34,15 @@ fn main() {
         root.join("build.rs"),
         root.join("pdfium-manifest.eld"),
     ];
-    rust_sources(&source, &mut files);
+    source_files(&source, &mut files);
+    source_files(&root.join("renderer"), &mut files);
     files.sort();
 
     println!("cargo:rerun-if-changed=Cargo.lock");
     println!("cargo:rerun-if-changed=Cargo.toml");
     println!("cargo:rerun-if-changed=build.rs");
     println!("cargo:rerun-if-changed=pdfium-manifest.eld");
+    println!("cargo:rerun-if-changed=renderer");
     println!("cargo:rerun-if-changed=src");
 
     let mut hasher = Sha256::new();

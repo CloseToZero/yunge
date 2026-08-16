@@ -453,12 +453,24 @@ selection, and annotation conformance tests.
 
 * Reflowable WebView spike
 
-The first EPUB architecture spike uses a second mode of the Rust helper on
-Windows.  =M-x yunge-reader-webview-spike= places a self-contained HTML test
-page over the selected Emacs window body.  It is not an EPUB driver yet.  The
-spike answers the earlier architectural question before an EPUB library is
-selected: a native child WebView can follow an Emacs window across live splits
-and resizes without rasterizing the document.
+The EPUB architecture spike uses a second mode of the Rust helper on Windows.
+=M-x yunge-reader-webview-spike= places the empty renderer shell over the
+selected Emacs window body.  =M-x yunge-reader-webview-epub-spike= validates a
+local EPUB, opens it through that shell, and displays a visible text start in
+continuous flow.  A body/text landmark wins, followed by the first table of
+contents target and a bounded linear-spine fallback.  A section whose only
+media failed to decode is not reported as ready.  This remains a manual spike:
+it does not register =.epub=, expose Reader navigation, or write a durable
+reading position.
+
+The renderer embeds a minimal set of modules from Foliate JS revision
+=78914aef4466eb960965702401634c2cb348e9b1= under its MIT license.  A
+Yunge-owned adapter is the only interface visible to Rust and Emacs; Foliate
+objects and locators do not cross the native protocol boundary.
+
+EPUB 2 NCX navigation documents are exposed alongside EPUB 3 navigation
+documents.  The continuous renderer and its inner frame fill the native child
+surface rather than inheriting the browser's default element dimensions.
 
 The child surface is the preferred reflowable path.  It retains browser-native
 text selection, copying, links, accessibility, and CSS layout, and can reflow
@@ -477,9 +489,21 @@ or killing the spike buffer destroys that native view without affecting other
 views.  The local validation exercised two simultaneous child views with
 independent rectangles.
 
-The spike page has a restrictive content security policy, denies WebView
-permissions, and rejects navigation.  These are baseline constraints for
-opening untrusted EPUB contents, not a complete EPUB sandbox.
+The renderer application and EPUB resource service use separate private
+HTTPS-equivalent origins.  Rust exposes only canonical, manifested,
+browser-safe resources, and each publication receives a random 128-bit token.
+Closing the publication invalidates that token.  Renderer assets are embedded
+in the helper and covered by its exact source build ID.
+
+EPUB scripts are rejected by the publication loader, and both reflowable and
+fixed-layout Foliate frames omit =allow-scripts=.  A document policy also
+denies scripts, objects, child frames, connections, forms, and base URL
+changes.  Since those blob documents inherit the renderer application policy,
+that outer policy admits only the blob/data presentation sources required for
+EPUB styles, images, fonts, and media; it does not admit blob or publication
+scripts.  The outer WebView denies permissions, downloads, new windows, and
+external navigation.  Renderer IPC accepts only bounded, versioned messages
+from the renderer application origin.
 
 WebView2 captures Escape through its native accelerator event rather than a
 second JavaScript key map.  Rust emits only the semantic =escape= event.
@@ -492,6 +516,9 @@ does not duplicate =j=, =k=, or other Reader bindings.
 deadline; a prefix argument terminates it immediately.  Emacs exit also ends
 the process.  The ordinary PDF helper and the WebView helper are separate
 process instances, so testing reflow does not interrupt open PDF documents.
+Destroying an EPUB spike view releases its publication only after native view
+destruction completes, so no live renderer can retain an invalid resource
+token.
 
 No platform dependency is installed automatically.  Windows reports the
 detected WebView2 Runtime version or tells the user to install the runtime.
@@ -542,11 +569,13 @@ destination view mapping, safe cache eviction, Unicode literal matching,
 byte-to-PDFium-index mapping, search and selection cursors and limits, regular
 and singular-angle quadrilateral recovery, cross-page inclusive ranges,
 protocol errors, shutdown ordering, EOF, WebView bounds validation, omitted
-empty parameters, native Escape filtering, and the self-contained spike page.
-WebView ERT tests cover the separate handshake, strict capability validation,
-asynchronous event routing, owning-window focus recovery, frame handle
-parsing, coalesced resize requests, and view destruction after buffer
-replacement.
+empty parameters, native Escape filtering, embedded renderer assets, strict
+renderer IPC, and bounded EPUB resource catalogs.  WebView ERT tests cover the
+separate handshake, strict capability validation, asynchronous renderer event
+routing, owning-window focus recovery, frame handle parsing, coalesced resize
+requests, view destruction after buffer replacement, and ordered publication
+release.  An isolated graphical Emacs smoke test opens a real EPUB through
+WebView2 and waits for its first section to report ready.
 
 The integration path installs the pinned Windows library through the public
 setup command, runs its =pdfium-info= smoke test, opens a five-page A4 fixture,

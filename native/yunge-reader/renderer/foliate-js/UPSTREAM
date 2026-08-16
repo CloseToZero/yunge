@@ -1,0 +1,16 @@
+Repository: https://github.com/johnfactotum/foliate-js.git
+Revision: 78914aef4466eb960965702401634c2cb348e9b1
+License: MIT
+
+Included modules:
+- epub.js
+- epubcfi.js
+- fixed-layout.js
+- overlayer.js
+- paginator.js
+- progress.js
+- text-walker.js
+- view.js
+
+Yunge Reader removes allow-scripts from the renderer iframe sandbox.  The
+upstream files otherwise remain source modules rather than a generated bundle.

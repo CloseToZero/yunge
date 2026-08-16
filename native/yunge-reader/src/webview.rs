@@ -4,6 +4,7 @@
 use getrandom::getrandom;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
+use std::borrow::Cow;
 use std::collections::HashMap;
 use std::io::{self, BufRead, Write};
 use std::num::NonZeroIsize;
@@ -29,17 +30,40 @@ use wry::raw_window_handle::{
     WindowHandle,
 };
 use wry::{
-    PageLoadEvent, PermissionResponse, Rect, WebView, WebViewBuilder,
-    WebViewBuilderExtWindows, WebViewExtWindows,
+    NewWindowResponse, PageLoadEvent, PermissionResponse, Rect, WebView,
+    WebViewBuilder, WebViewBuilderExtWindows, WebViewExtWindows,
 };
 use yunge_reader::epub::{EpubError, Publication};
 
 use super::{BUILD_ID, Error};
 
 const PROTOCOL_VERSION: u32 = 1;
+const APP_PROTOCOL: &str = "yunge-reader-app";
+const APP_URL: &str = "yunge-reader-app://localhost/index.html";
+const APP_BROWSER_URL: &str = "https://yunge-reader-app.localhost/index.html";
+const APP_BROWSER_ORIGIN: &str = "https://yunge-reader-app.localhost";
 const BOOK_PROTOCOL: &str = "yunge-reader-book";
+const BOOK_BROWSER_ROOT: &str = "https://yunge-reader-book.localhost/";
+const APP_CSP: &str = concat!(
+    "default-src 'none'; ",
+    "script-src 'self'; ",
+    "style-src 'self' blob: 'unsafe-inline'; ",
+    "img-src blob: data:; ",
+    "font-src blob: data:; ",
+    "media-src blob: data:; ",
+    "connect-src https://yunge-reader-book.localhost; ",
+    "frame-src blob:; ",
+    "object-src 'none'; ",
+    "worker-src 'none'; ",
+    "base-uri 'none'; ",
+    "form-action 'none'"
+);
 const MAX_RESOURCE_REQUESTS: usize = 8;
+const MAX_RESOURCE_CATALOG_BYTES: usize = 16 * 1_024 * 1_024;
 const MAX_RESOURCE_URI_PATH_BYTES: usize = 196_605;
+const MAX_RENDERER_MESSAGE_BYTES: usize = 8 * 1_024;
+const MAX_RENDERER_ERROR_BYTES: usize = 4 * 1_024;
+const RESOURCE_CATALOG_PATH: &str = ".yunge/resources.json";
 const RESOURCE_CSP: &str = concat!(
     "default-src 'none'; ",
     "img-src 'self' data:; ",
@@ -53,7 +77,7 @@ const RESOURCE_CSP: &str = concat!(
     "base-uri 'none'; ",
     "form-action 'none'"
 );
-const CAPABILITIES: [&str; 14] = [
+const CAPABILITIES: [&str; 15] = [
     "publication-close",
     "publication-info",
     "publication-open",
@@ -66,6 +90,7 @@ const CAPABILITIES: [&str; 14] = [
     "view-focus",
     "view-focus-parent",
     "view-info",
+    "view-open-publication",
     "view-status",
     "view-visible",
 ];
@@ -107,6 +132,8 @@ struct ViewEvent {
     kind: &'static str,
     event: &'static str,
     view: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    message: Option<String>,
 }
 
 #[derive(Debug)]
@@ -154,6 +181,29 @@ struct PublicationParams {
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
+struct ViewPublicationParams {
+    view: u64,
+    publication: u64,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RendererMessage {
+    protocol: u32,
+    event: RendererEvent,
+    #[serde(default)]
+    message: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+enum RendererEvent {
+    PublicationError,
+    PublicationReady,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct BoundsParams {
     view: u64,
     bounds: Bounds,
@@ -189,6 +239,7 @@ struct NativeView {
     loaded: Arc<AtomicBool>,
     bounds: Bounds,
     visible: bool,
+    publication: Option<u64>,
 }
 
 struct StoredPublication {
@@ -440,6 +491,19 @@ impl Service {
         params: Value,
     ) -> Result<Value, ServiceError> {
         let params: PublicationParams = Self::parse(params)?;
+        if self
+            .views
+            .values()
+            .any(|view| view.publication == Some(params.publication))
+        {
+            return Err(ServiceError::new(
+                "publication-in-use",
+                format!(
+                    "publication {} is attached to a live view",
+                    params.publication
+                ),
+            ));
+        }
         let mut publications = lock_publications(&self.publications)?;
         if publications.remove(params.publication).is_none() {
             return Err(unknown_publication(params.publication));
@@ -486,16 +550,21 @@ impl Service {
         }
         let bounds = params.bounds.validate()?;
         let parent = ParentWindow(parent_value);
-        let html = spike_html(params.view);
         let loaded = Arc::new(AtomicBool::new(false));
         let load_state = Arc::clone(&loaded);
         let publications = Arc::clone(&self.publications);
         let resource_requests = Arc::clone(&self.resource_requests);
+        let renderer_events = self.event_sender.clone();
+        let view_id = params.view;
         let build = || {
             WebViewBuilder::new()
                 .with_bounds(bounds.rect())
                 .with_focused(false)
                 .with_visible(params.visible)
+                .with_custom_protocol(
+                    APP_PROTOCOL.into(),
+                    move |_webview_id, request| app_response(request),
+                )
                 .with_asynchronous_custom_protocol(
                     BOOK_PROTOCOL.into(),
                     move |_webview_id, request, responder| {
@@ -518,14 +587,21 @@ impl Service {
                     },
                 )
                 .with_https_scheme(true)
-                .with_html(html)
-                .with_navigation_handler(|url| url == "about:blank")
+                .with_url(APP_URL)
+                .with_navigation_handler(app_navigation_allowed)
                 .with_on_page_load_handler(move |event, _url| {
                     if matches!(event, PageLoadEvent::Finished) {
                         load_state.store(true, Ordering::Release);
                     }
                 })
+                .with_ipc_handler(move |request| {
+                    if let Some(event) = renderer_event(view_id, &request) {
+                        let _ = renderer_events.send(event);
+                    }
+                })
                 .with_permission_handler(|_| PermissionResponse::Deny)
+                .with_new_window_req_handler(|_, _| NewWindowResponse::Deny)
+                .with_download_started_handler(|_, _| false)
                 .build_as_child(&parent)
         };
         let view = catch_unwind(AssertUnwindSafe(build))
@@ -551,6 +627,7 @@ impl Service {
                 loaded,
                 bounds,
                 visible: params.visible,
+                publication: None,
             },
         );
         Ok(json!({
@@ -614,6 +691,44 @@ impl Service {
         Ok(json!({ "view": params.view, "selection": false }))
     }
 
+    fn open_view_publication(
+        &mut self,
+        params: Value,
+    ) -> Result<Value, ServiceError> {
+        let params: ViewPublicationParams = Self::parse(params)?;
+        let view = self.view(params.view)?;
+        if !view.loaded.load(Ordering::Acquire) {
+            return Err(ServiceError::new(
+                "view-not-ready",
+                format!("view {} has not finished loading", params.view),
+            ));
+        }
+        let resource_root = {
+            let publications = lock_publications(&self.publications)?;
+            let publication = publications
+                .entries
+                .get(&params.publication)
+                .ok_or_else(|| unknown_publication(params.publication))?;
+            format!("{BOOK_BROWSER_ROOT}{}/", publication.token)
+        };
+        let script = publication_open_script(params.view, &resource_root);
+        self.view(params.view)?
+            .webview
+            .evaluate_script(&script)
+            .map_err(|error| {
+                ServiceError::new(
+                    "publication-render-failed",
+                    error.to_string(),
+                )
+            })?;
+        self.view_mut(params.view)?.publication = Some(params.publication);
+        Ok(json!({
+            "view": params.view,
+            "publication": params.publication,
+            "opening": true,
+        }))
+    }
+
     fn destroy(&mut self, params: Value) -> Result<Value, ServiceError> {
         let params: ViewParams = Self::parse(params)?;
         if self.views.remove(&params.view).is_none() {
@@ -630,6 +745,7 @@ impl Service {
             "loaded": view.loaded.load(Ordering::Acquire),
             "bounds": view.bounds,
             "visible": view.visible,
+            "publication": view.publication,
         }))
     }
 
@@ -664,6 +780,9 @@ impl Service {
             "view-create" => self.create_view(request.params),
             "view-bounds" => self.set_bounds(request.params),
             "view-clear-selection" => self.clear_selection(request.params),
+            "view-open-publication" => {
+                self.open_view_publication(request.params)
+            }
             "view-visible" => self.set_visible(request.params),
             "view-focus" => self.focus(request.params),
             "view-focus-parent" => self.focus_parent(request.params),
@@ -714,6 +833,113 @@ fn lock_publications(
     })
 }
 
+fn app_asset(path: &str) -> Option<(&'static str, &'static [u8])> {
+    match path {
+        "index.html" => Some((
+            "text/html; charset=utf-8",
+            include_bytes!("../renderer/index.html"),
+        )),
+        "style.css" => Some((
+            "text/css; charset=utf-8",
+            include_bytes!("../renderer/style.css"),
+        )),
+        "yunge-reader.js" => Some((
+            "text/javascript; charset=utf-8",
+            include_bytes!("../renderer/yunge-reader.js"),
+        )),
+        "foliate-js/epub.js" => Some((
+            "text/javascript; charset=utf-8",
+            include_bytes!("../renderer/foliate-js/epub.js"),
+        )),
+        "foliate-js/epubcfi.js" => Some((
+            "text/javascript; charset=utf-8",
+            include_bytes!("../renderer/foliate-js/epubcfi.js"),
+        )),
+        "foliate-js/fixed-layout.js" => Some((
+            "text/javascript; charset=utf-8",
+            include_bytes!("../renderer/foliate-js/fixed-layout.js"),
+        )),
+        "foliate-js/overlayer.js" => Some((
+            "text/javascript; charset=utf-8",
+            include_bytes!("../renderer/foliate-js/overlayer.js"),
+        )),
+        "foliate-js/paginator.js" => Some((
+            "text/javascript; charset=utf-8",
+            include_bytes!("../renderer/foliate-js/paginator.js"),
+        )),
+        "foliate-js/progress.js" => Some((
+            "text/javascript; charset=utf-8",
+            include_bytes!("../renderer/foliate-js/progress.js"),
+        )),
+        "foliate-js/text-walker.js" => Some((
+            "text/javascript; charset=utf-8",
+            include_bytes!("../renderer/foliate-js/text-walker.js"),
+        )),
+        "foliate-js/view.js" => Some((
+            "text/javascript; charset=utf-8",
+            include_bytes!("../renderer/foliate-js/view.js"),
+        )),
+        _ => None,
+    }
+}
+
+fn app_response(
+    request: HttpRequest<Vec<u8>>,
+) -> HttpResponse<Cow<'static, [u8]>> {
+    if request.method() != Method::GET && request.method() != Method::HEAD {
+        return app_error_response(405, "method not allowed");
+    }
+    let uri = request.uri();
+    if uri.scheme_str() != Some(APP_PROTOCOL)
+        || uri.authority().map(|value| value.as_str()) != Some("localhost")
+        || uri.query().is_some()
+    {
+        return app_error_response(400, "invalid renderer asset target");
+    }
+    let Some(path) = uri.path().strip_prefix('/') else {
+        return app_error_response(400, "invalid renderer asset path");
+    };
+    let Some((media_type, asset)) = app_asset(path) else {
+        return app_error_response(404, "renderer asset not found");
+    };
+    let body: Cow<'static, [u8]> = if request.method() == Method::HEAD {
+        Cow::Borrowed(&[])
+    } else {
+        Cow::Borrowed(asset)
+    };
+    build_app_response(200, media_type, asset.len(), body)
+}
+
+fn app_error_response(
+    status: u16,
+    message: &'static str,
+) -> HttpResponse<Cow<'static, [u8]>> {
+    build_app_response(
+        status,
+        "text/plain; charset=utf-8",
+        message.len(),
+        Cow::Borrowed(message.as_bytes()),
+    )
+}
+
+fn build_app_response(
+    status: u16,
+    media_type: &str,
+    content_length: usize,
+    body: Cow<'static, [u8]>,
+) -> HttpResponse<Cow<'static, [u8]>> {
+    HttpResponse::builder()
+        .status(status)
+        .header("Content-Type", media_type)
+        .header("Content-Length", content_length)
+        .header("Cache-Control", "no-store")
+        .header("X-Content-Type-Options", "nosniff")
+        .header("Referrer-Policy", "no-referrer")
+        .header("Content-Security-Policy", APP_CSP)
+        .body(body)
+        .expect("renderer response headers are valid")
+}
+
 fn resource_response(
     publications: &SharedPublications,
     request: HttpRequest<Vec<u8>>,
@@ -734,18 +960,50 @@ fn resource_response(
     let Some(publication) = publications.by_token_mut(&token) else {
         return resource_error_response(404, "publication not found");
     };
+    if path == RESOURCE_CATALOG_PATH {
+        let body = match serde_json::to_vec(&json!({
+            "resources": publication.publication.resource_catalog(),
+        })) {
+            Ok(body) if body.len() <= MAX_RESOURCE_CATALOG_BYTES => body,
+            Ok(_) => {
+                return resource_error_response(
+                    413,
+                    "EPUB resource catalog is too large",
+                );
+            }
+            Err(_) => {
+                return resource_error_response(
+                    500,
+                    "could not encode EPUB resource catalog",
+                );
+            }
+        };
+        return resource_body_response(
+            request.method(),
+            "application/json; charset=utf-8",
+            body,
+        );
+    }
     let resource = match publication.publication.read_resource(&path) {
         Ok(resource) => resource,
         Err(error) => return epub_resource_error_response(error),
     };
-    let content_length = resource.bytes().len();
     let media_type = resource.media_type().to_owned();
-    let body = if request.method() == Method::HEAD {
+    resource_body_response(request.method(), &media_type, resource.into_bytes())
+}
+
+fn resource_body_response(
+    method: &Method,
+    media_type: &str,
+    bytes: Vec<u8>,
+) -> HttpResponse<Vec<u8>> {
+    let content_length = bytes.len();
+    let body = if method == Method::HEAD {
         Vec::new()
     } else {
-        resource.into_bytes()
+        bytes
     };
-    build_resource_response(200, &media_type, content_length, body)
+    build_resource_response(200, media_type, content_length, body)
 }
 
 fn resource_request_target(
@@ -757,16 +1015,10 @@ fn resource_request_target(
     if uri.query().is_some() {
         return Err("EPUB resource queries are not supported");
     }
-    let token = uri
-        .authority()
+    uri.authority()
         .map(|authority| authority.as_str())
-        .filter(|authority| {
-            authority.len() == 32
-                && authority.bytes().all(|byte| {
-                    byte.is_ascii_digit() || matches!(byte, b'a'..=b'f')
-                })
-        })
-        .ok_or("invalid EPUB publication token")?;
+        .filter(|authority| *authority == "localhost")
+        .ok_or("invalid EPUB resource authority")?;
     let encoded = uri
         .path()
         .strip_prefix('/')
@@ -775,6 +1027,16 @@ fn resource_request_target(
     if encoded.len() > MAX_RESOURCE_URI_PATH_BYTES {
         return Err("EPUB resource path is too long");
     }
+    let (token, encoded) = encoded
+        .split_once('/')
+        .filter(|(token, path)| {
+            token.len() == 32
+                && token.bytes().all(|byte| {
+                    byte.is_ascii_digit() || matches!(byte, b'a'..=b'f')
+                })
+                && !path.is_empty()
+        })
+        .ok_or("invalid EPUB publication token")?;
     validate_percent_encoding(encoded)?;
     let path = percent_encoding::percent_decode_str(encoded)
         .decode_utf8()
@@ -850,7 +1112,7 @@ fn build_resource_response(
         .header("Content-Type", media_type)
         .header("Content-Length", content_length)
         .header("Cache-Control", "no-store")
-        .header("Access-Control-Allow-Origin", "*")
+        .header("Access-Control-Allow-Origin", APP_BROWSER_ORIGIN)
         .header("X-Content-Type-Options", "nosniff")
         .header("Referrer-Policy", "no-referrer")
         .header("Content-Security-Policy", RESOURCE_CSP)
@@ -872,7 +1134,7 @@ fn publication_result(id: u64, publication: &StoredPublication) -> Value {
         "entry-count": publication.publication.entry_count(),
         "expanded-bytes": publication.publication.expanded_size(),
         "resource-root": format!(
-            "{BOOK_PROTOCOL}://{}/",
+            "{BOOK_PROTOCOL}://localhost/{}/",
             publication.token
         ),
     })
@@ -913,6 +1175,7 @@ fn install_accelerator_handler(
                         kind: "event",
                         event: "escape",
                         view,
+                        message: None,
                     });
                 }
             }
@@ -977,34 +1240,50 @@ fn ready_message(version: &Result<String, String>) -> Value {
     ready
 }
 
-fn spike_html(view: u64) -> String {
-    format!(
-        r#"<!doctype html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<meta http-equiv="Content-Security-Policy"
-      content="default-src 'none'; style-src 'unsafe-inline'">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<style>
-html, body {{ margin: 0; min-height: 100%; background: #fafafa; }}
-body {{ box-sizing: border-box; padding: 4rem; color: #202020;
-       font: 20px/1.65 system-ui, sans-serif; }}
-main {{ margin: auto; max-width: 42rem; }}
-h1 {{ font-size: 2rem; line-height: 1.2; }}
-code {{ font-family: ui-monospace, monospace; }}
-</style>
-</head>
-<body>
-<main>
-<h1>Yunge Reader WebView spike</h1>
-<p>This is native reflowable text in view <code>{view}</code>.</p>
-<p>Resize or split the Emacs window, then select and copy this text.
-Press Escape to clear the selection and return focus to Emacs.</p>
-</main>
-</body>
-</html>"#
-    )
+fn app_navigation_allowed(url: String) -> bool {
+    matches!(url.as_str(), APP_URL | APP_BROWSER_URL)
+}
+
+fn renderer_event(
+    view: u64,
+    request: &HttpRequest<String>,
+) -> Option<ViewEvent> {
+    if !app_navigation_allowed(request.uri().to_string())
+        || request.body().len() > MAX_RENDERER_MESSAGE_BYTES
+    {
+        return None;
+    }
+    let message: RendererMessage = serde_json::from_str(request.body()).ok()?;
+    if message.protocol != PROTOCOL_VERSION
+        || message
+            .message
+            .as_ref()
+            .is_some_and(|value| value.len() > MAX_RENDERER_ERROR_BYTES)
+    {
+        return None;
+    }
+    let (event, message) = match message.event {
+        RendererEvent::PublicationReady => ("publication-ready", None),
+        RendererEvent::PublicationError => {
+            let message = message.message.filter(|value| !value.is_empty())?;
+            ("publication-error", Some(message))
+        }
+    };
+    Some(ViewEvent {
+        kind: "event",
+        event,
+        view,
+        message,
+    })
+}
+
+fn publication_open_script(view: u64, resource_root: &str) -> String {
+    let payload = serde_json::to_string(&json!({
+        "view": view,
+        "resourceRoot": resource_root,
+    }))
+    .expect("publication open payload is serializable");
+    format!("void globalThis.yungeReader.open({payload});")
 }
 
 fn write_message(
@@ -1191,12 +1470,36 @@ mod tests {
     }
 
     #[test]
-    fn spike_page_is_self_contained_and_identifies_the_view() {
-        let html = spike_html(42);
-        assert!(html.contains("view <code>42</code>"));
-        assert!(html.contains("default-src 'none'"));
-        assert!(!html.contains("http://"));
-        assert!(!html.contains("https://"));
+    fn renderer_assets_are_bounded_and_script_safe() {
+        let response = app_response(
+            HttpRequest::builder()
+                .uri(APP_URL)
+                .body(Vec::new())
+                .unwrap(),
+        );
+        assert_eq!(response.status(), 200);
+        assert_eq!(response.headers()["Cache-Control"], "no-store");
+        assert!(
+            response.headers()["Content-Security-Policy"]
+                .to_str()
+                .unwrap()
+                .contains("script-src 'self'")
+        );
+        let csp = response.headers()["Content-Security-Policy"]
+            .to_str()
+            .unwrap();
+        assert!(csp.contains("style-src 'self' blob: 'unsafe-inline'"));
+        assert!(csp.contains("img-src blob: data:"));
+        assert!(csp.contains("font-src blob: data:"));
+        assert!(csp.contains("media-src blob: data:"));
+        assert!(!csp.contains("script-src 'self' blob:"));
+        assert!(app_asset("foliate-js/view.js").is_some());
+        assert!(app_asset("foliate-js/vendor/zip.js").is_none());
+        for path in ["foliate-js/paginator.js", "foliate-js/fixed-layout.js"] {
+            let source =
+                std::str::from_utf8(app_asset(path).unwrap().1).unwrap();
+            assert!(!source.contains("allow-same-origin allow-scripts"));
+        }
     }
 
     #[test]
@@ -1228,6 +1531,22 @@ mod tests {
             result["resource-root"].as_str().unwrap().to_owned();
         assert!(resource_root.starts_with("yunge-reader-book://"));
 
+        let catalog = resource_response(
+            &service.publications,
+            HttpRequest::builder()
+                .uri(format!("{resource_root}{RESOURCE_CATALOG_PATH}"))
+                .body(Vec::new())
+                .unwrap(),
+        );
+        assert_eq!(catalog.status(), 200);
+        assert_eq!(
+            catalog.headers()["Content-Type"],
+            "application/json; charset=utf-8"
+        );
+        let catalog: Value = serde_json::from_slice(catalog.body()).unwrap();
+        assert_eq!(catalog["resources"][0]["path"], "OPS/chapter.xhtml");
+        assert_eq!(catalog["resources"][0]["size"], 33);
+
         let resource = resource_response(
             &service.publications,
             HttpRequest::builder()
@@ -1238,6 +1557,10 @@ mod tests {
         assert_eq!(resource.status(), 200);
         assert_eq!(resource.headers()["Content-Type"], "application/xhtml+xml");
         assert_eq!(resource.headers()["Cache-Control"], "no-store");
+        assert_eq!(
+            resource.headers()["Access-Control-Allow-Origin"],
+            APP_BROWSER_ORIGIN
+        );
         assert_eq!(resource.headers()["X-Content-Type-Options"], "nosniff");
         assert!(
             resource.headers()["Content-Security-Policy"]
@@ -1314,17 +1637,25 @@ mod tests {
     #[test]
     fn resource_protocol_rejects_unsafe_targets_and_methods() {
         let token = "0123456789abcdef0123456789abcdef";
-        let valid = format!("{BOOK_PROTOCOL}://{token}/OPS/chapter.xhtml");
+        let valid =
+            format!("{BOOK_PROTOCOL}://localhost/{token}/OPS/chapter.xhtml");
         assert_eq!(
             resource_request_target(&valid.parse().unwrap()).unwrap(),
             (token.into(), "OPS/chapter.xhtml".into())
         );
         for uri in [
-            format!("{BOOK_PROTOCOL}://short/OPS/chapter.xhtml"),
-            format!("{BOOK_PROTOCOL}://{token}/"),
-            format!("{BOOK_PROTOCOL}://{token}/OPS/%2e%2e/chapter.xhtml"),
-            format!("{BOOK_PROTOCOL}://{token}/OPS/a%2fchapter.xhtml"),
-            format!("{BOOK_PROTOCOL}://{token}/OPS/chapter.xhtml?x=1"),
+            format!("{BOOK_PROTOCOL}://wrong/{token}/OPS/chapter.xhtml"),
+            format!("{BOOK_PROTOCOL}://localhost/short/OPS/chapter.xhtml"),
+            format!("{BOOK_PROTOCOL}://localhost/{token}/"),
+            format!(
+                "{BOOK_PROTOCOL}://localhost/{token}/OPS/%2e%2e/chapter.xhtml"
+            ),
+            format!(
+                "{BOOK_PROTOCOL}://localhost/{token}/OPS/a%2fchapter.xhtml"
+            ),
+            format!(
+                "{BOOK_PROTOCOL}://localhost/{token}/OPS/chapter.xhtml?x=1"
+            ),
         ] {
             let parsed = uri.parse().unwrap();
             assert!(
@@ -1344,6 +1675,59 @@ mod tests {
                 .unwrap(),
         );
         assert_eq!(response.status(), 405);
+    }
+
+    #[test]
+    fn renderer_ipc_accepts_only_owned_bounded_messages() {
+        let ready = HttpRequest::builder()
+            .uri(APP_BROWSER_URL)
+            .body(r#"{"protocol":1,"event":"publication-ready"}"#.into())
+            .unwrap();
+        let event = renderer_event(7, &ready).unwrap();
+        assert_eq!(event.event, "publication-ready");
+        assert_eq!(event.view, 7);
+        assert!(event.message.is_none());
+
+        let error = HttpRequest::builder()
+            .uri(APP_URL)
+            .body(
+                r#"{"protocol":1,"event":"publication-error",
+                    "message":"bad EPUB"}"#
+                    .into(),
+            )
+            .unwrap();
+        let event = renderer_event(8, &error).unwrap();
+        assert_eq!(event.event, "publication-error");
+        assert_eq!(event.message.as_deref(), Some("bad EPUB"));
+
+        for request in [
+            HttpRequest::builder()
+                .uri("https://example.invalid/")
+                .body(ready.body().clone())
+                .unwrap(),
+            HttpRequest::builder()
+                .uri(APP_URL)
+                .body(r#"{"protocol":2,"event":"publication-ready"}"#.into())
+                .unwrap(),
+            HttpRequest::builder()
+                .uri(APP_URL)
+                .body(r#"{"protocol":1,"event":"other"}"#.into())
+                .unwrap(),
+        ] {
+            assert!(renderer_event(9, &request).is_none());
+        }
+    }
+
+    #[test]
+    fn publication_script_serializes_renderer_inputs() {
+        let script = publication_open_script(
+            4,
+            "https://yunge-reader-book.localhost/token/",
+        );
+        assert!(script.starts_with("void globalThis.yungeReader.open("));
+        assert!(script.contains(r#""view":4"#));
+        assert!(script.contains(r#""resourceRoot":"https://"#));
+        assert!(!script.contains("eval"));
     }
 
     #[test]
