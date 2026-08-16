@@ -89,6 +89,13 @@
     (should (equal evil-visual-state-cursor '(nil)))
     (should-not cursor-type)))
 
+(ert-deftest yunge-reader-disables-auto-save ()
+  (with-temp-buffer
+    (auto-save-mode 1)
+    (should buffer-auto-save-file-name)
+    (yunge-reader-mode)
+    (should-not buffer-auto-save-file-name)))
+
 (ert-deftest yunge-reader-evil-escape-clears-a-logical-selection ()
   (yunge-test-enable-evil)
   (with-temp-buffer

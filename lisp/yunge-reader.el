@@ -360,6 +360,7 @@ document contents.")
 
 (define-derived-mode yunge-reader-mode special-mode "Yunge Reader"
   "Major mode shared by Yunge Reader document adapters."
+  (auto-save-mode -1)
   (setq-local cursor-type nil)
   (yunge-reader--hide-evil-cursor)
   (setq-local truncate-lines t)
