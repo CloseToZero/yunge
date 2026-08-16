@@ -11,11 +11,16 @@ The Org integration has one small interaction boundary:
 
 - Point outside a LaTeX fragment shows its image.
 - Entering a fragment reveals its source.
+- Fragment display state belongs to the buffer rather than to a window.  When
+  several windows show the same buffer, entering or leaving a fragment in the
+  selected window changes that fragment in all of them; inactive windows do
+  not retain independent editing states.
 - Editing marks the fragment dirty without starting work for every keystroke.
 - Leaving a dirty fragment requests a new preview.
 - A late result from an older request cannot replace a newer result.
-- When an Org buffer is first displayed or scrolled, newly visible fragments
-  are requested without compiling every off-screen fragment.
+- When an Org buffer is first displayed, scrolled, or resized, newly visible
+  fragments are requested without compiling every off-screen fragment.  All
+  windows showing the buffer contribute their visible ranges.
 - Rapid viewport changes replace the pending viewport update, so rendering
   starts from the final visible range after scrolling settles.
 - Displaying rendered images rechecks the viewport until formulas exposed by

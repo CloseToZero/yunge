@@ -492,6 +492,82 @@
         (should-not
          (memq #'shuying-org--buffer-saved after-save-hook))))))
 
+(ert-deftest shuying-org-tracks-widths-of-windows-showing-one-buffer ()
+  (let ((buffer (generate-new-buffer " *shuying-org-window-width*")))
+    (unwind-protect
+        (save-window-excursion
+          (let* ((left (selected-window))
+                 (right (split-window-right)))
+            (set-window-buffer left buffer)
+            (set-window-buffer right buffer)
+            (with-current-buffer buffer
+              (org-mode)
+              (insert "First $x$.\nSecond $y$.\n")
+              (let ((before (shuying-org--window-state)))
+                (select-window left)
+                (enlarge-window-horizontally 5)
+                (should-not
+                 (equal before (shuying-org--window-state)))))))
+      (when (buffer-live-p buffer)
+        (kill-buffer buffer)))))
+
+(ert-deftest shuying-org-collects-visible-ranges-from-every-window ()
+  (let ((buffer (generate-new-buffer " *shuying-org-window-ranges*"))
+        second-start)
+    (unwind-protect
+        (save-window-excursion
+          (let* ((left (selected-window))
+                 (right (split-window-right)))
+            (with-current-buffer buffer
+              (org-mode)
+              (insert "First $x$.\n")
+              (dotimes (_ 100)
+                (insert "Filler.\n"))
+              (setq second-start (point))
+              (insert "Second $y$.\n"))
+            (set-window-buffer left buffer)
+            (set-window-start left (with-current-buffer buffer (point-min)))
+            (set-window-point left (with-current-buffer buffer (point-min)))
+            (set-window-buffer right buffer)
+            (set-window-start right second-start)
+            (set-window-point right second-start)
+            (with-current-buffer buffer
+              (let ((starts (mapcar #'car
+                                    (shuying-org--visible-ranges))))
+                (should (= (length starts) 2))
+                (should (memq (point-min) starts))
+                (should (memq second-start starts))))))
+      (when (buffer-live-p buffer)
+        (kill-buffer buffer)))))
+
+(ert-deftest shuying-org-rechecks-visible-previews-after-window-resize ()
+  (let ((buffer (generate-new-buffer " *shuying-org-window-resize*"))
+        scheduled)
+    (unwind-protect
+        (save-window-excursion
+          (set-window-buffer (selected-window) buffer)
+          (with-current-buffer buffer
+            (org-mode)
+            (cl-letf (((symbol-function
+                        'shuying-org--schedule-visible-preview)
+                       (lambda (&optional immediate)
+                         (setq scheduled immediate))))
+              (shuying-org-mode 1)
+              (should
+               (memq #'shuying-org--window-size-changed
+                     window-size-change-functions))
+              (setq scheduled nil
+                    shuying-org--visible-window-state 'settled)
+              (shuying-org--window-size-changed (selected-window))
+              (should scheduled)
+              (should-not shuying-org--visible-window-state)
+              (shuying-org-mode -1)
+              (should-not
+               (memq #'shuying-org--window-size-changed
+                     window-size-change-functions)))))
+      (when (buffer-live-p buffer)
+        (kill-buffer buffer)))))
+
 (ert-deftest shuying-org-coalesces-viewport-preview-updates ()
   (let* ((root (make-temp-file "shuying-org-" t))
          (shuying-cache-directory root)

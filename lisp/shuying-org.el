@@ -599,7 +599,10 @@ RANGES and the fragment catalog are traversed in buffer order."
   "Return state sufficient to notice changes to visible buffer ranges."
   (mapcar
    (lambda (window)
-     (list window (window-start window) (window-body-height window)))
+     (list window
+           (window-start window)
+           (window-body-width window)
+           (window-body-height window)))
    (get-buffer-window-list (current-buffer) nil t)))
 
 (defun shuying-org--preview-visible-windows ()
@@ -650,6 +653,16 @@ the next idle opportunity."
   "Schedule previews when WINDOW starts displaying the current buffer."
   (when (and (window-live-p window)
              (eq (window-buffer window) (current-buffer)))
+    (setq shuying-org--visible-window-state nil)
+    (shuying-org--schedule-visible-preview t)))
+
+(defun shuying-org--window-size-changed (window)
+  "Schedule previews when WINDOW showing the current buffer is resized."
+  (when (and (window-live-p window)
+             (eq (window-buffer window) (current-buffer)))
+    ;; Redisplay can change the visible end without moving `window-start',
+    ;; especially when a horizontal resize changes line wrapping.  Force the
+    ;; idle pass to recompute `window-end' after redisplay has settled.
     (setq shuying-org--visible-window-state nil)
     (shuying-org--schedule-visible-preview t)))
 
@@ -743,6 +756,8 @@ preview the whole buffer.  With three, clear the whole buffer."
                   #'shuying-org--schedule-visible-preview nil t)
         (add-hook 'window-buffer-change-functions
                   #'shuying-org--window-buffer-changed nil t)
+        (add-hook 'window-size-change-functions
+                  #'shuying-org--window-size-changed nil t)
         (add-hook 'after-save-hook #'shuying-org--buffer-saved nil t)
         (shuying-org--schedule-visible-preview t))
     (remove-hook 'post-command-hook #'shuying-org--post-command t)
@@ -750,6 +765,8 @@ preview the whole buffer.  With three, clear the whole buffer."
                  #'shuying-org--schedule-visible-preview t)
     (remove-hook 'window-buffer-change-functions
                  #'shuying-org--window-buffer-changed t)
+    (remove-hook 'window-size-change-functions
+                 #'shuying-org--window-size-changed t)
     (remove-hook 'after-save-hook #'shuying-org--buffer-saved t)
     (setq shuying-org--visible-window-state nil)
     (shuying-org--cancel-visible-preview-timer)
