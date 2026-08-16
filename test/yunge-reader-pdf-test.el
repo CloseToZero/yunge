@@ -61,8 +61,12 @@
    (eq (lookup-key yunge-reader-pdf-view-mode-map (kbd "b"))
        #'yunge-reader-pdf-previous-page))
   (should
+   (eq (lookup-key yunge-reader-pdf--image-map
+                   (kbd "<down-mouse-1>"))
+       #'yunge-reader-pdf-select-with-mouse))
+  (should
    (eq (lookup-key yunge-reader-pdf--image-map (kbd "<mouse-1>"))
-       #'yunge-reader-pdf-select-at-mouse))
+       #'ignore))
   (should
    (eq (lookup-key yunge-reader-pdf--image-map
                    (kbd "C-<mouse-1>"))
@@ -70,7 +74,7 @@
   (should
    (eq (lookup-key yunge-reader-pdf--image-map
                    (kbd "<drag-mouse-1>"))
-       #'yunge-reader-pdf-select-with-mouse)))
+       #'ignore)))
 
 (ert-deftest yunge-reader-pdf-tracks-only-semantic-page-jumps ()
   (dolist (command
@@ -1749,9 +1753,137 @@
                  yunge-reader-selection))
                1))
     (should (= (yunge-reader-position-offset
-                (yunge-reader-selection-end
+               (yunge-reader-selection-end
                  yunge-reader-selection))
                5))))
+
+(ert-deftest yunge-reader-pdf-rejects-mouse-points-outside-images ()
+  (with-temp-buffer
+    (setq yunge-reader-pdf--page-infos
+          [((width . 100.0) (height . 200.0))])
+    (cl-letf (((symbol-function 'posn-point) (lambda (_position) 1))
+              ((symbol-function 'yunge-reader-pdf--page-at-position)
+               (lambda (_position) 0))
+              ((symbol-function 'posn-image) (lambda (_position) t))
+              ((symbol-function 'posn-object-x-y)
+               (lambda (_position) '(100 . 200)))
+              ((symbol-function 'posn-object-width-height)
+               (lambda (_position) '(200 . 400))))
+      (should
+       (equal (yunge-reader-pdf--event-page-point 'position)
+              '(:page 0 :point (50.0 . 100.0))))
+      (cl-letf (((symbol-function 'posn-image)
+                 (lambda (_position) nil)))
+        (should-not
+         (yunge-reader-pdf--event-page-point 'position t))
+        (should-error
+         (yunge-reader-pdf--event-page-point 'position)
+         :type 'user-error)))))
+
+(ert-deftest yunge-reader-pdf-tracks-selection-before-mouse-release ()
+  (with-temp-buffer
+    (let ((events '(motion release))
+          calls
+          (messages 0))
+      (setq mark-active t)
+      (cl-letf (((symbol-function 'event-start)
+                 (lambda (event)
+                   (pcase event
+                     ('motion 'motion-position)
+                     ('release 'start-position))))
+                ((symbol-function 'event-end)
+                 (lambda (event)
+                   (and (eq event 'release) 'release-position)))
+                ((symbol-function 'event-basic-type)
+                 (lambda (event)
+                   (if (eq event 'release) 'mouse-1 event)))
+                ((symbol-function 'mouse-movement-p)
+                 (lambda (event) (eq event 'motion)))
+                ((symbol-function 'read-event)
+                 (lambda (&rest _arguments) (pop events)))
+                ((symbol-function 'posn-window)
+                 (lambda (_position) 'window))
+                ((symbol-function 'yunge-reader-pdf--event-page-point)
+                 (lambda (position &optional _noerror)
+                   (list :page 0 :point position)))
+                ((symbol-function 'yunge-reader-pdf--select-points)
+                 (lambda (start end &rest arguments)
+                   (push (list start end arguments) calls)
+                   t))
+                ((symbol-function 'yunge-reader-pdf--message-selection)
+                 (lambda () (cl-incf messages))))
+        (yunge-reader-pdf--track-selection-events
+         '(:page 0 :point start-position) 'window))
+      (should-not mark-active)
+      (should
+       (equal
+        (nreverse calls)
+        '(((:page 0 :point start-position)
+           (:page 0 :point start-position) (t nil window))
+          ((:page 0 :point start-position)
+           (:page 0 :point motion-position) (t t window))
+          ((:page 0 :point start-position)
+           (:page 0 :point release-position) (t t window)))))
+      (should (= messages 1)))))
+
+(ert-deftest yunge-reader-pdf-forces-selection-redisplay ()
+  (let (painted forced redisplayed)
+    (cl-letf (((symbol-function 'yunge-reader-pdf--paint-pages)
+               (lambda (pages &optional _window) (setq painted pages)))
+              ((symbol-function 'window-live-p)
+               (lambda (window) (eq window 'window)))
+              ((symbol-function 'force-window-update)
+               (lambda (window) (setq forced window)))
+              ((symbol-function 'display-graphic-p) (lambda () t))
+              ((symbol-function 'redisplay)
+               (lambda (&optional force) (setq redisplayed force))))
+      (let ((yunge-reader-pdf--displayed-pages '(2 3)))
+        (yunge-reader-pdf--repaint-selection 'window)))
+    (should (equal painted '(2 3)))
+    (should (eq forced 'window))
+    (should redisplayed)))
+
+(ert-deftest yunge-reader-pdf-reuses-render-files-in-svg-highlights ()
+  (with-temp-buffer
+    (setq yunge-reader-pdf--page-infos
+          [((width . 100.0) (height . 200.0))]
+          yunge-reader-pdf--render-results
+          (make-hash-table :test #'equal)
+          yunge-reader-pdf--text-cache
+          (make-hash-table :test #'eql)
+          yunge-reader-selection
+          (make-yunge-reader-selection
+           :start (make-yunge-reader-position :unit 0 :offset 4)
+           :end (make-yunge-reader-position :unit 0 :offset 4)))
+    (puthash
+     '(0 . 100)
+     '((path . "C:/cache/page.png")
+       (pixel-width . 100) (pixel-height . 200))
+     yunge-reader-pdf--render-results)
+    (puthash
+     0
+     '((characters
+        . (((index . 4)
+            (text . "A")
+            (bounds . ((left . 10.0) (bottom . 10.0)
+                       (right . 20.0) (top . 20.0)))))))
+     yunge-reader-pdf--text-cache)
+    (let (captured-svg captured-properties)
+      (cl-letf (((symbol-function 'svg-image)
+                 (lambda (svg &rest properties)
+                   (setq captured-svg svg
+                         captured-properties properties)
+                   'image)))
+        (should
+         (eq (yunge-reader-pdf--display-image-object 0 100)
+             'image)))
+      (should
+       (equal (dom-attr (car (dom-by-tag captured-svg 'image))
+                        'xlink:href)
+              "page.png"))
+      (should
+       (equal captured-properties
+              '(:base-uri "C:/cache/page.png"))))))
 
 (ert-deftest yunge-reader-pdf-caches-page-text-once ()
   (with-temp-buffer

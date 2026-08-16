@@ -154,9 +154,10 @@
   "Non-nil while the PDF prefetch scheduler is dispatching tasks.")
 
 (defvar-keymap yunge-reader-pdf--image-map
-  "<mouse-1>" #'yunge-reader-pdf-select-at-mouse
+  "<down-mouse-1>" #'yunge-reader-pdf-select-with-mouse
+  "<mouse-1>" #'ignore
   "C-<mouse-1>" #'yunge-reader-pdf-activate-at-mouse
-  "<drag-mouse-1>" #'yunge-reader-pdf-select-with-mouse)
+  "<drag-mouse-1>" #'ignore)
 
 (defconst yunge-reader-pdf-normal-bindings
   '(("RET" yunge-reader-pdf-follow-link "follow link")
@@ -1446,15 +1447,16 @@ Use the nearest cached render ENTRY while an exact render is unavailable."
                (or (yunge-reader-pdf--selection-offsets page text-layer)
                    (yunge-reader-pdf--search-offsets page text-layer)))
           (let ((svg (svg-create pixel-width pixel-height)))
-            (svg-embed svg path "image/png" nil
-                       :x 0 :y 0
-                       :width pixel-width
-                       :height pixel-height)
+            (svg-embed-base-uri-image
+             svg (file-name-nondirectory path)
+             :x 0 :y 0
+             :width pixel-width
+             :height pixel-height)
             (yunge-reader-pdf--paint-selection
              svg page page-info text-layer pixel-width pixel-height)
             (yunge-reader-pdf--paint-search
              svg page page-info text-layer pixel-width pixel-height)
-            (svg-image svg))
+            (svg-image svg :base-uri path))
         (if fallback
             (and pixel-width pixel-height
                  (create-image path nil nil
@@ -1660,7 +1662,7 @@ Use the nearest cached render ENTRY while an exact render is unavailable."
         'help-echo
         (concat
          "Mouse-1 selects text; Ctrl-Mouse-1 follows a link; "
-         "drag selects across pages")))
+         "drag highlights text across pages")))
       (unless (= page (1- count))
         (insert (propertize "\n" 'yunge-reader-pdf-page page))))
     (setq yunge-reader-pdf--page-positions positions)
@@ -2492,37 +2494,62 @@ Use the nearest cached render ENTRY while an exact render is unavailable."
                   buffer document generation window state
                   pages loaded))))))))))
 
-(defun yunge-reader-pdf--event-page-point (position)
-  "Return PAGE and canonical point represented by mouse POSITION."
+(defun yunge-reader-pdf--event-page-point (position &optional noerror)
+  "Return PAGE and canonical point represented by mouse POSITION.
+When NOERROR is non-nil, return nil for positions outside page images."
   (let* ((buffer-position (posn-point position))
          (page (yunge-reader-pdf--page-at-position buffer-position))
+         (image (posn-image position))
          (object-point (posn-object-x-y position))
-         (object-size (posn-object-width-height position)))
-    (unless (and (natnump page) object-point object-size)
-      (user-error "Place both PDF selection endpoints on page images"))
-    (list
-     :page page
-     :point
-     (yunge-reader-pdf--pixel-to-page-point
-      page
-      (car object-point) (cdr object-point)
-      (car object-size) (cdr object-size)))))
+         (object-size (posn-object-width-height position))
+         (x (car-safe object-point))
+         (y (cdr-safe object-point))
+         (width (car-safe object-size))
+         (height (cdr-safe object-size)))
+    (if (and (natnump page) image
+             (numberp x) (numberp y)
+             (numberp width) (> width 0)
+             (numberp height) (> height 0)
+             (<= 0 x width) (<= 0 y height))
+        (list
+         :page page
+         :point
+         (yunge-reader-pdf--pixel-to-page-point
+          page x y width height))
+      (unless noerror
+        (user-error "Keep the PDF selection pointer on a page image")))))
 
-(defun yunge-reader-pdf--event-page-points (event single)
-  "Return start and end page points for mouse EVENT.
-When SINGLE is non-nil, use the event start for both points."
-  (let* ((start (event-start event))
-         (end (if single start (or (event-end event) start)))
-         (window (posn-window start)))
-    (unless (and (windowp window)
-                 (eq window (posn-window end)))
-      (user-error "Keep the PDF selection in one reader window"))
-    (list
-     (yunge-reader-pdf--event-page-point start)
-     (yunge-reader-pdf--event-page-point end))))
+(defun yunge-reader-pdf--repaint-selection (window)
+  "Repaint the current selection and update live WINDOW immediately."
+  (yunge-reader-pdf--paint-pages yunge-reader-pdf--displayed-pages)
+  (when (window-live-p window)
+    (force-window-update window))
+  (when (display-graphic-p)
+    (redisplay t)))
 
-(defun yunge-reader-pdf--select-points (start-location end-location)
-  "Select PDF characters at START-LOCATION and END-LOCATION."
+(defun yunge-reader-pdf--message-selection ()
+  "Describe the current PDF selection in the echo area."
+  (when yunge-reader-selection
+    (let* ((start (yunge-reader-selection-start
+                   yunge-reader-selection))
+           (end (yunge-reader-selection-end yunge-reader-selection))
+           (start-page (yunge-reader-position-unit start))
+           (end-page (yunge-reader-position-unit end))
+           (start-index (yunge-reader-position-offset start))
+           (end-index (yunge-reader-position-offset end)))
+      (if (= start-page end-page)
+          (message "Selected %d PDF character%s"
+                   (1+ (abs (- start-index end-index)))
+                   (if (= start-index end-index) "" "s"))
+        (message "Selected PDF text across %d pages"
+                 (1+ (abs (- start-page end-page))))))))
+
+(defun yunge-reader-pdf--select-points
+    (start-location end-location &optional quiet soft window)
+  "Select PDF characters at START-LOCATION and END-LOCATION.
+Suppress the echo message when QUIET is non-nil.  When SOFT is non-nil,
+keep the previous selection if either pointer is not near selectable text.
+WINDOW is redisplayed immediately after a successful update."
   (let* ((start-page (plist-get start-location :page))
          (end-page (plist-get end-location :page))
          (start-point (plist-get start-location :point))
@@ -2541,45 +2568,80 @@ When SINGLE is non-nil, use the event start for both points."
           (end-character
            (yunge-reader-pdf--hit-character
             end-page end-point end-layer)))
-      (unless (and start-character end-character)
-        (setq yunge-reader-selection nil)
-        (yunge-reader-pdf--paint-pages
-         yunge-reader-pdf--displayed-pages)
-        (user-error "No selectable PDF text near the pointer"))
-      (let ((start-index (alist-get 'index start-character))
-            (end-index (alist-get 'index end-character)))
-        (yunge-reader-set-selection
-         (make-yunge-reader-position
-          :unit start-page
-          :offset start-index
-          :x (car start-point)
-          :y (cdr start-point))
-         (make-yunge-reader-position
-          :unit end-page
-          :offset end-index
-          :x (car end-point)
-          :y (cdr end-point)))
-        (yunge-reader-pdf--paint-pages
-         yunge-reader-pdf--displayed-pages)
-        (if (= start-page end-page)
-            (message "Selected %d PDF character%s"
-                     (1+ (abs (- start-index end-index)))
-                     (if (= start-index end-index) "" "s"))
-          (message "Selected PDF text across %d pages"
-                   (1+ (abs (- start-page end-page)))))))))
+      (if (and start-character end-character)
+          (progn
+            (yunge-reader-set-selection
+             (make-yunge-reader-position
+              :unit start-page
+              :offset (alist-get 'index start-character)
+              :x (car start-point)
+              :y (cdr start-point))
+             (make-yunge-reader-position
+              :unit end-page
+              :offset (alist-get 'index end-character)
+              :x (car end-point)
+              :y (cdr end-point)))
+            (yunge-reader-pdf--repaint-selection window)
+            (unless quiet
+              (yunge-reader-pdf--message-selection))
+            t)
+        (unless soft
+          (setq yunge-reader-selection nil)
+          (yunge-reader-pdf--repaint-selection window)
+          (user-error "No selectable PDF text near the pointer"))))))
 
-(defun yunge-reader-pdf--select-mouse-event (event single)
-  "Handle PDF mouse selection EVENT, using one point when SINGLE."
-  (let* ((position (event-start event))
-         (window (posn-window position)))
+(defun yunge-reader-pdf--selection-event-position (event)
+  "Return the final position represented by mouse EVENT."
+  (or (event-end event) (event-start event)))
+
+(defun yunge-reader-pdf--track-selection-events
+    (start-location window)
+  "Track selection events from START-LOCATION in WINDOW."
+  (let (moved done)
+    (setq mark-active nil)
+    (yunge-reader-pdf--select-points
+     start-location start-location t nil window)
+    (while (not done)
+      (let ((next (read-event)))
+        (cond
+         ((null next)
+          (setq done t))
+         ((mouse-movement-p next)
+          (setq moved t)
+          (let ((position (event-start next)))
+            (when (eq window (posn-window position))
+              (when-let* ((location
+                           (yunge-reader-pdf--event-page-point
+                            position t)))
+                (yunge-reader-pdf--select-points
+                 start-location location t t window)))))
+         ((memq (event-basic-type next) '(mouse-1 drag-mouse-1))
+          (let ((position
+                 (yunge-reader-pdf--selection-event-position next)))
+            (when (and moved (eq window (posn-window position)))
+              (when-let* ((location
+                           (yunge-reader-pdf--event-page-point
+                            position t)))
+                (yunge-reader-pdf--select-points
+                 start-location location t t window)))
+            (setq done t)))
+         (t
+          (push next unread-command-events)
+          (setq done t)))))
+    (yunge-reader-pdf--message-selection)))
+
+(defun yunge-reader-pdf--track-selection (event)
+  "Track PDF text selection continuously from down-mouse EVENT."
+  (let* ((start-position (event-start event))
+         (window (posn-window start-position)))
     (unless (windowp window)
       (user-error "The mouse event is outside a PDF window"))
     (with-current-buffer (window-buffer window)
-      (pcase-let ((`(,start-point ,end-point)
-                   (yunge-reader-pdf--event-page-points
-                    event single)))
-        (yunge-reader-pdf--select-points
-         start-point end-point)))))
+      (let ((start-location
+             (yunge-reader-pdf--event-page-point start-position)))
+        (track-mouse
+          (yunge-reader-pdf--track-selection-events
+           start-location window))))))
 
 (defun yunge-reader-pdf--activate-page-point (location data)
   "Follow a link at LOCATION in DATA, returning nil when none exists."
@@ -2631,15 +2693,10 @@ When SINGLE is non-nil, use the event start for both points."
                                (error-message-string error-data))
                        :warning)))))))))))))
 
-(defun yunge-reader-pdf-select-at-mouse (event)
-  "Select the PDF character at mouse EVENT."
-  (interactive "e")
-  (yunge-reader-pdf--select-mouse-event event t))
-
 (defun yunge-reader-pdf-select-with-mouse (event)
-  "Select the PDF character range described by drag EVENT."
+  "Select PDF text with live feedback from down-mouse EVENT."
   (interactive "e")
-  (yunge-reader-pdf--select-mouse-event event nil))
+  (yunge-reader-pdf--track-selection event))
 
 (defun yunge-reader-pdf--cancel-resize ()
   "Cancel a pending PDF viewport resize for the current buffer."

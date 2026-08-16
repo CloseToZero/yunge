@@ -43,7 +43,11 @@ views use =J/K= for the next or previous page, =gg/G= for the first or last
 page, =gp= for a page prompt, =RET= for a visible link prompt, and Page Down
 or Page Up for screen scrolling.  =C-d/C-u= scroll by half a screen in
 pixels, while =j/k= scroll by one screen line.  Mouse-1 selects one
-character, dragging selects text, and Ctrl-Mouse-1 follows a link when hit.
+character, dragging highlights text immediately, and Ctrl-Mouse-1 follows a
+link when hit.  Pointer motion outside a page image does not extend the
+selection until it returns to a page.  Reader handles the initial mouse-down
+itself and deactivates any ordinary Emacs region, so buffer text before the
+page cannot acquire a second, unrelated region highlight.
 Evil starts Reader buffers in Normal state and leaves Visual =y= as
 =evil-yank=.  =C-g= clears the logical text selection.  One =ESC= clears both
 the logical selection and the active Reader search highlight.  From Evil's
@@ -321,10 +325,12 @@ and links are fetched again.  Stable page slots and canonical page geometry
 remain linear in the page count by design; image residency, queued background
 work, and page-content caches remain bounded by the viewport working set.
 
-After a click or drag, Emacs embeds each visible selected PNG in an SVG and
-projects that page's part of the logical range over it.  Rotated characters
-use SVG polygons; older or exceptional geometry uses rectangles.  The source
-PNG cache remains independent of ephemeral selection paint.
+After a click or while dragging, Emacs reuses each visible cached PNG as an
+SVG base image and projects that page's part of the logical range over it.
+Rotated characters use SVG polygons; older or exceptional geometry uses
+rectangles.  The selected window receives an immediate complete redisplay, so
+live feedback does not leave stale page fragments.  The source PNG cache
+remains independent of ephemeral selection paint.
 
 Document search is cooperatively paged.  One native request scans at most a
 configured number of document units and returns a bounded match list plus the
