@@ -137,6 +137,28 @@ resource origin.  Its bundled, script-disabled Foliate renderer provides CSS
 layout, native text selection, links, relocation events, and semantic screen
 navigation without exposing the local EPUB path.
 
+Successful publication readiness is an unsolicited event containing the
+first complete locator and a flattened EPUB 3 nav or EPUB 2 NCX outline:
+
+#+begin_src json
+{"kind":"event","event":"publication-ready","view":1,
+ "location":{"cfi":"epubcfi(/6/4!/4/2)",
+             "href":"OPS/chapter.xhtml","fraction":0.1},
+ "outline":{"items":[
+   {"title":"Part One","depth":0},
+   {"title":"Chapter 1","depth":1,
+    "href":"OPS/chapter.xhtml#start"}],
+   "truncated":false}}
+#+end_src
+
+The renderer emits at most 4,096 outline items and 256 nesting levels.  A
+title is at most 1,024 UTF-8 bytes, an internal href is at most 3,072 bytes,
+and aggregate title and href text is at most 384 KiB.  The Rust boundary
+independently validates every item and limits the complete renderer message
+to 1 MiB.  Structural items omit =href=.  Paths must remain internal and
+canonical; an optional single fragment is permitted, while schemes, queries,
+absolute paths, traversal, controls, and backslashes are rejected.
+
 =view-create= accepts a logical =view= ID, a live Emacs frame HWND as
 =parent=, a physical-pixel =bounds= object, and optional =visible=.  The
 current spike loads only its built-in local HTML page.
@@ -154,6 +176,12 @@ focus back to its parent.  =view-clear-selection= removes the DOM selection,
 and =view-destroy= removes the child.  =view-status= reports whether the
 built-in page finished loading, together with the last accepted bounds and
 visibility.
+
+=view-navigate= accepts =previous-screen=, =next-screen=, or =go-to=.  A
+=go-to= target may be a complete stable locator or a bounded href-only outline
+target.  Href-only targets are transient: the helper and Emacs do not promote
+them to a saved location.  A later =location= event supplies the complete CFI,
+canonical spine href, and fraction that the owning view may persist.
 
 Escape, Control reader keys, and non-character reader keys are captured by the
 native WebView2 accelerator event.  Uppercase character reader keys are

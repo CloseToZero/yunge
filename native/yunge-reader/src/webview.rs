@@ -65,7 +65,11 @@ const MAX_RESOURCE_REQUESTS: usize = 8;
 const MAX_RESOURCE_CATALOG_BYTES: usize = 16 * 1_024 * 1_024;
 const MAX_RESOURCE_URI_PATH_BYTES: usize = 196_605;
 const MAX_EPUB_LOCATOR_TEXT_BYTES: usize = 3_072;
-const MAX_RENDERER_MESSAGE_BYTES: usize = 8 * 1_024;
+const MAX_EPUB_OUTLINE_DEPTH: u32 = 256;
+const MAX_EPUB_OUTLINE_ITEMS: usize = 4_096;
+const MAX_EPUB_OUTLINE_TITLE_BYTES: usize = 1_024;
+const MAX_EPUB_OUTLINE_TEXT_BYTES: usize = 384 * 1_024;
+const MAX_RENDERER_MESSAGE_BYTES: usize = 1_024 * 1_024;
 const MAX_RENDERER_ERROR_BYTES: usize = 4 * 1_024;
 const RESOURCE_CATALOG_PATH: &str = ".yunge/resources.json";
 const RESOURCE_CSP: &str = concat!(
@@ -142,6 +146,8 @@ struct ViewEvent {
     #[serde(skip_serializing_if = "Option::is_none")]
     location: Option<EpubLocator>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    outline: Option<EpubOutline>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     key: Option<String>,
 }
 
@@ -206,6 +212,32 @@ struct EpubLocator {
     fraction: Option<f64>,
 }
 
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+struct EpubNavigationTarget {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    cfi: Option<String>,
+    href: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    fraction: Option<f64>,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+struct EpubOutlineItem {
+    title: String,
+    depth: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    href: Option<String>,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+struct EpubOutline {
+    items: Vec<EpubOutlineItem>,
+    truncated: bool,
+}
+
 #[derive(Clone, Copy, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "kebab-case")]
 enum NavigationCommand {
@@ -220,7 +252,7 @@ struct ViewNavigateParams {
     view: u64,
     command: NavigationCommand,
     #[serde(default)]
-    location: Option<EpubLocator>,
+    location: Option<EpubNavigationTarget>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -232,6 +264,8 @@ struct RendererMessage {
     message: Option<String>,
     #[serde(default)]
     location: Option<EpubLocator>,
+    #[serde(default)]
+    outline: Option<EpubOutline>,
     #[serde(default)]
     key: Option<String>,
 }
@@ -486,13 +520,7 @@ impl EpubLocator {
                 "EPUB locator CFI is invalid",
             ));
         }
-        if self.href.starts_with('/')
-            || self.href.contains(['\\', ':', '?', '#'])
-            || self
-                .href
-                .split('/')
-                .any(|part| part.is_empty() || matches!(part, "." | ".."))
-        {
+        if !valid_epub_href(&self.href, false) {
             return Err(ServiceError::new(
                 "invalid-epub-location",
                 "EPUB locator href is not a canonical relative path",
@@ -508,6 +536,98 @@ impl EpubLocator {
         }
         Ok(self)
     }
+}
+
+impl EpubNavigationTarget {
+    fn validate(self) -> Result<Self, ServiceError> {
+        if let Some(cfi) = self.cfi.as_ref() {
+            EpubLocator {
+                cfi: cfi.clone(),
+                href: self.href.clone(),
+                fraction: self.fraction,
+            }
+            .validate()?;
+            return Ok(self);
+        }
+        if self.href.is_empty()
+            || self.href.len() > MAX_EPUB_LOCATOR_TEXT_BYTES
+            || self.href.chars().any(char::is_control)
+            || !valid_epub_href(&self.href, true)
+        {
+            return Err(ServiceError::new(
+                "invalid-epub-target",
+                "EPUB navigation href is not a bounded internal target",
+            ));
+        }
+        if self.fraction.is_some() {
+            return Err(ServiceError::new(
+                "invalid-epub-target",
+                "EPUB href-only targets do not accept a fraction",
+            ));
+        }
+        Ok(self)
+    }
+}
+
+impl EpubOutline {
+    fn validate(self) -> Result<Self, ServiceError> {
+        if self.items.len() > MAX_EPUB_OUTLINE_ITEMS {
+            return Err(ServiceError::new(
+                "invalid-epub-outline",
+                "EPUB outline contains too many items",
+            ));
+        }
+        let mut text_bytes = 0_usize;
+        for item in &self.items {
+            text_bytes = text_bytes
+                .checked_add(item.title.len())
+                .and_then(|value| {
+                    value.checked_add(item.href.as_ref().map_or(0, String::len))
+                })
+                .ok_or_else(|| {
+                    ServiceError::new(
+                        "invalid-epub-outline",
+                        "EPUB outline text exceeds its aggregate limit",
+                    )
+                })?;
+            if item.title.trim().is_empty()
+                || item.title.len() > MAX_EPUB_OUTLINE_TITLE_BYTES
+                || text_bytes > MAX_EPUB_OUTLINE_TEXT_BYTES
+                || item.title.chars().any(char::is_control)
+                || item.depth > MAX_EPUB_OUTLINE_DEPTH
+                || item.href.as_ref().is_some_and(|href| {
+                    href.is_empty()
+                        || href.len() > MAX_EPUB_LOCATOR_TEXT_BYTES
+                        || href.chars().any(char::is_control)
+                        || !valid_epub_href(href, true)
+                })
+            {
+                return Err(ServiceError::new(
+                    "invalid-epub-outline",
+                    "EPUB outline contains an invalid item",
+                ));
+            }
+        }
+        Ok(self)
+    }
+}
+
+fn valid_epub_href(value: &str, allow_fragment: bool) -> bool {
+    let path = if let Some((path, fragment)) = value.split_once('#') {
+        if !allow_fragment || fragment.contains('#') {
+            return false;
+        }
+        path
+    } else {
+        value
+    };
+    !path.is_empty()
+        && !path.starts_with('/')
+        && !value.contains(['\\', '?'])
+        && !path.contains(':')
+        && !path
+            .split('/')
+            .any(|part| part.is_empty() || matches!(part, "." | ".."))
 }
 
 impl Service {
@@ -824,8 +944,10 @@ impl Service {
 
     fn navigate_view(&mut self, params: Value) -> Result<Value, ServiceError> {
         let params: ViewNavigateParams = Self::parse(params)?;
-        let location =
-            params.location.map(EpubLocator::validate).transpose()?;
+        let location = params
+            .location
+            .map(EpubNavigationTarget::validate)
+            .transpose()?;
         match (params.command, location.as_ref()) {
             (NavigationCommand::GoTo, None) => {
                 return Err(ServiceError::new(
@@ -1367,6 +1489,7 @@ fn install_accelerator_handler(
                         view,
                         message: None,
                         location: None,
+                        outline: None,
                         key,
                     });
                 }
@@ -1454,43 +1577,62 @@ fn renderer_event(
     {
         return None;
     }
-    let (event, detail, location, key) = match message.event {
+    let (event, detail, location, outline, key) = match message.event {
         RendererEvent::Accelerator => {
-            if message.message.is_some() || message.location.is_some() {
+            if message.message.is_some()
+                || message.location.is_some()
+                || message.outline.is_some()
+            {
                 return None;
             }
             let key = message
                 .key
                 .filter(|key| matches!(key.as_str(), "J" | "K"))?;
-            ("accelerator", None, None, Some(key))
+            ("accelerator", None, None, None, Some(key))
         }
         RendererEvent::Location => {
-            if message.message.is_some() || message.key.is_some() {
+            if message.message.is_some()
+                || message.outline.is_some()
+                || message.key.is_some()
+            {
                 return None;
             }
             let location = message.location?.validate().ok()?;
-            ("location", None, Some(location), None)
+            ("location", None, Some(location), None, None)
         }
         RendererEvent::NavigationError => {
-            if message.location.is_some() || message.key.is_some() {
+            if message.location.is_some()
+                || message.outline.is_some()
+                || message.key.is_some()
+            {
                 return None;
             }
             let detail = message.message.filter(|value| !value.is_empty())?;
-            ("navigation-error", Some(detail), None, None)
+            ("navigation-error", Some(detail), None, None, None)
         }
         RendererEvent::PublicationReady => {
             if message.message.is_some() || message.key.is_some() {
                 return None;
             }
             let location = message.location?.validate().ok()?;
-            ("publication-ready", None, Some(location), None)
+            let outline = message.outline?.validate().ok()?;
+            (
+                "publication-ready",
+                None,
+                Some(location),
+                Some(outline),
+                None,
+            )
         }
         RendererEvent::PublicationError => {
-            if message.location.is_some() || message.key.is_some() {
+            if message.location.is_some()
+                || message.outline.is_some()
+                || message.key.is_some()
+            {
                 return None;
             }
             let detail = message.message.filter(|value| !value.is_empty())?;
-            ("publication-error", Some(detail), None, None)
+            ("publication-error", Some(detail), None, None, None)
         }
     };
     Some(ViewEvent {
@@ -1499,6 +1641,7 @@ fn renderer_event(
         view,
         message: detail,
         location,
+        outline,
         key,
     })
 }
@@ -1520,7 +1663,7 @@ fn publication_open_script(
 fn publication_navigation_script(
     view: u64,
     command: NavigationCommand,
-    location: Option<&EpubLocator>,
+    location: Option<&EpubNavigationTarget>,
 ) -> String {
     let payload = serde_json::to_string(&json!({
         "view": view,
@@ -1936,7 +2079,10 @@ mod tests {
                 concat!(
                     r#"{"protocol":1,"event":"publication-ready","#,
                     r#""location":{"cfi":"epubcfi(/6/4)","#,
-                    r#""href":"OPS/chapter.xhtml","fraction":0.25}}"#,
+                    r#""href":"OPS/chapter.xhtml","fraction":0.25},"#,
+                    r#""outline":{"items":[{"title":"Chapter","#,
+                    r#""depth":0,"href":"OPS/chapter.xhtml#start"}],"#,
+                    r#""truncated":false}}"#,
                 )
                 .into(),
             )
@@ -1946,6 +2092,17 @@ mod tests {
         assert_eq!(event.view, 7);
         assert!(event.message.is_none());
         assert!(event.key.is_none());
+        assert_eq!(
+            event.outline,
+            Some(EpubOutline {
+                items: vec![EpubOutlineItem {
+                    title: "Chapter".into(),
+                    depth: 0,
+                    href: Some("OPS/chapter.xhtml#start".into()),
+                }],
+                truncated: false,
+            })
+        );
         assert_eq!(
             event.location,
             Some(EpubLocator {
@@ -1969,6 +2126,7 @@ mod tests {
         let event = renderer_event(7, &location).unwrap();
         assert_eq!(event.event, "location");
         assert_eq!(event.location.unwrap().fraction, None);
+        assert!(event.outline.is_none());
 
         let error = HttpRequest::builder()
             .uri(APP_URL)
@@ -1982,6 +2140,7 @@ mod tests {
         assert_eq!(event.event, "publication-error");
         assert_eq!(event.message.as_deref(), Some("bad EPUB"));
         assert!(event.location.is_none());
+        assert!(event.outline.is_none());
         assert!(event.key.is_none());
 
         let accelerator = HttpRequest::builder()
@@ -1992,6 +2151,7 @@ mod tests {
         assert_eq!(event.event, "accelerator");
         assert_eq!(event.key.as_deref(), Some("J"));
         assert!(event.location.is_none());
+        assert!(event.outline.is_none());
         assert!(event.message.is_none());
 
         for request in [
@@ -2057,10 +2217,15 @@ mod tests {
         assert!(script.contains(r#""cfi":"epubcfi(/6/4!/4/2)"#));
         assert!(!script.contains("eval"));
 
+        let target = EpubNavigationTarget {
+            cfi: Some(location.cfi.clone()),
+            href: location.href.clone(),
+            fraction: location.fraction,
+        };
         let navigation = publication_navigation_script(
             4,
             NavigationCommand::GoTo,
-            Some(&location),
+            Some(&target),
         );
         assert!(
             navigation.starts_with("void globalThis.yungeReader.navigate(")
@@ -2105,6 +2270,75 @@ mod tests {
                 "invalid-epub-location"
             );
         }
+    }
+
+    #[test]
+    fn epub_navigation_accepts_bounded_internal_href_targets() {
+        let target = EpubNavigationTarget {
+            cfi: None,
+            href: "OPS/chapter.xhtml#section-2".into(),
+            fraction: None,
+        };
+        assert_eq!(target.clone().validate().unwrap(), target);
+
+        for href in [
+            "../chapter.xhtml#section",
+            "/OPS/chapter.xhtml",
+            "https:chapter.xhtml",
+            "OPS/chapter.xhtml?query",
+            "OPS/chapter.xhtml#one#two",
+        ] {
+            let invalid = EpubNavigationTarget {
+                cfi: None,
+                href: href.into(),
+                fraction: None,
+            };
+            assert_eq!(
+                invalid.validate().unwrap_err().code,
+                "invalid-epub-target"
+            );
+        }
+    }
+
+    #[test]
+    fn epub_outlines_are_bounded_and_internal() {
+        let outline = EpubOutline {
+            items: vec![EpubOutlineItem {
+                title: "Part One".into(),
+                depth: 0,
+                href: Some("OPS/chapter.xhtml#part-one".into()),
+            }],
+            truncated: false,
+        };
+        assert_eq!(outline.clone().validate().unwrap(), outline);
+
+        let invalid = EpubOutline {
+            items: vec![EpubOutlineItem {
+                title: "External".into(),
+                depth: 0,
+                href: Some("https:example.invalid".into()),
+            }],
+            truncated: false,
+        };
+        assert_eq!(
+            invalid.validate().unwrap_err().code,
+            "invalid-epub-outline"
+        );
+
+        let oversized = EpubOutline {
+            items: (0..385)
+                .map(|_| EpubOutlineItem {
+                    title: "x".repeat(MAX_EPUB_OUTLINE_TITLE_BYTES),
+                    depth: 0,
+                    href: None,
+                })
+                .collect(),
+            truncated: false,
+        };
+        assert_eq!(
+            oversized.validate().unwrap_err().code,
+            "invalid-epub-outline"
+        );
     }
 
     #[test]

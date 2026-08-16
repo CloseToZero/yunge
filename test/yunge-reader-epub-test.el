@@ -256,6 +256,43 @@
               :x 0.35
               :y nil)))))
 
+(ert-deftest yunge-reader-epub-maps-bounded-renderer-outlines ()
+  (let* ((view
+          (yunge-reader-webview--make-view
+           :publication 7
+           :outline-ready t
+           :outline
+           '((items
+              . (((title . "Part One") (depth . 0))
+                 ((title . "Chapter")
+                  (depth . 1)
+                  (href . "OPS/chapter.xhtml#start"))))
+             (truncated))))
+         (document (yunge-reader-epub-test--document))
+         result
+         request-error)
+    (with-temp-buffer
+      (setq yunge-reader-webview--buffer-view view)
+      (yunge-reader-epub--request
+       document 'outline nil
+       (lambda (value error-data)
+         (setq result value
+               request-error error-data))))
+    (should-not request-error)
+    (should (yunge-reader-outline-data-p result))
+    (should-not (yunge-reader-outline-data-truncated result))
+    (let ((items (yunge-reader-outline-data-items result)))
+      (should (= (length items) 2))
+      (should-not (yunge-reader-outline-item-action (car items)))
+      (let* ((action
+              (yunge-reader-outline-item-action (cadr items)))
+             (position (yunge-reader-action-position action)))
+        (should (eq (yunge-reader-action-type action) 'location))
+        (should
+         (equal (yunge-reader-position-unit position)
+                "OPS/chapter.xhtml#start"))
+        (should-not (yunge-reader-position-offset position))))))
+
 (ert-deftest yunge-reader-epub-restores-before-or-after-surface-ready ()
   (let* ((location (yunge-reader-epub-test--location 0.6))
          (position
@@ -282,6 +319,40 @@
          (yunge-reader-epub--restore-location nil position nil))
         (should
          (equal navigations (list (list "go-to" location))))))))
+
+(ert-deftest yunge-reader-epub-keeps-outline-targets-transient ()
+  (let* ((stable (yunge-reader-epub-test--location 0.4))
+         (position
+          (make-yunge-reader-position
+           :unit "OPS/chapter.xhtml#section"))
+         (view
+          (yunge-reader-webview--make-view
+           :publication 3
+           :persistent t
+           :location (copy-tree stable)))
+         navigation)
+    (with-temp-buffer
+      (setq yunge-reader-webview--buffer-view view)
+      (cl-letf
+          (((symbol-function 'yunge-reader-webview--navigate-view)
+            (lambda (_view command _complete &optional target)
+              (setq navigation (list command target)))))
+        (should
+         (eq (yunge-reader-epub--restore-location nil position nil)
+             :deferred))
+        (should-not navigation)
+        (should
+         (equal (yunge-reader-webview--view-pending-target view)
+                '((href . "OPS/chapter.xhtml#section"))))
+        (setf (yunge-reader-webview--view-publication-ready view) t)
+        (yunge-reader-webview--dispatch-pending-target view)))
+    (should
+     (equal navigation
+            '("go-to" ((href . "OPS/chapter.xhtml#section")))))
+    (should-not
+     (yunge-reader-webview--view-pending-target view))
+    (should
+     (equal (yunge-reader-webview--view-location view) stable))))
 
 (ert-deftest yunge-reader-epub-records-only-renderer-locations ()
   (let* ((buffer (generate-new-buffer " *EPUB location owner*"))

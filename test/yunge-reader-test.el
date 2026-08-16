@@ -540,6 +540,71 @@
       (when (buffer-live-p buffer)
         (kill-buffer buffer)))))
 
+(ert-deftest yunge-reader-deferred-outline-jumps-preserve-stable-places ()
+  (let* ((file (expand-file-name "outline-deferred.epub"))
+         (key (yunge-reader--place-file-key file))
+         (old (yunge-reader-test--place 'test 1))
+         (yunge-reader-saved-places
+          (list (cons key (copy-tree old t))))
+         (yunge-reader-drivers nil)
+         (current (make-yunge-reader-position :unit 1))
+         requested
+         buffer)
+    (unwind-protect
+        (save-window-excursion
+          (setq buffer
+                (generate-new-buffer " *reader-outline-deferred*"))
+          (switch-to-buffer buffer)
+          (set-window-parameter
+           (selected-window) 'yunge-jump-history nil)
+          (yunge-reader-mode)
+          (let ((driver
+                 (yunge-reader-register-driver
+                  'test
+                  :match #'ignore :open #'ignore :close #'ignore
+                  :request #'ignore
+                  :location (lambda (_document _window) current)
+                  :restore
+                  (lambda (_document position _window)
+                    (setq requested position)
+                    :deferred))))
+            (setq yunge-reader-document
+                  (make-yunge-reader-document
+                   :file file :driver driver :layout 'reflow)
+                  yunge-reader--place-recording-enabled t)
+            (let ((item
+                   (make-yunge-reader-outline-item
+                    :title "Deferred"
+                    :depth 0
+                    :action
+                    (make-yunge-reader-action
+                     :type 'location
+                     :position
+                     (make-yunge-reader-position :unit 9)))))
+              (let ((inhibit-message t))
+                (should
+                 (eq (yunge-reader--follow-outline-item item)
+                     :deferred)))))
+          (should (= (yunge-reader-position-unit requested) 9))
+          (should (= (yunge-reader-position-unit current) 1))
+          (should
+           (equal (cdr (assoc key yunge-reader-saved-places)) old))
+          (let* ((history
+                  (window-parameter
+                   (selected-window) 'yunge-jump-history))
+                 (entry
+                  (car
+                   (yunge-jump-history--history-entries history)))
+                 (place
+                  (plist-get
+                   (yunge-jump-history--entry-value entry)
+                   :place)))
+            (should
+             (= (plist-get (plist-get place :position) :unit)
+                1))))
+      (when (buffer-live-p buffer)
+        (kill-buffer buffer)))))
+
 (ert-deftest yunge-reader-rejected-outline-jump-rolls-back ()
   (let* ((file (expand-file-name "outline-rejected.pdf"))
          (key (yunge-reader--place-file-key file))

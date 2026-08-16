@@ -170,6 +170,12 @@ A driver that supports places supplies location and restore functions as a
 pair.  EPUB uses that contract without storing an Emacs buffer point, and
 later reflowable drivers can do the same.
 
+A restore result of =:deferred= means that the driver accepted a transient
+navigation target but cannot yet provide its durable destination.  The core
+records the source jump without replacing the current location or saved place;
+only a later stable-location event may commit the destination.  Other non-nil
+results mean that restoration completed synchronously.
+
 Jump history and the saved place answer different questions.  The saved place
 is the most recent successful primary view used when a document is opened
 normally.  Additional views cannot replace it until they become primary.
@@ -244,6 +250,23 @@ Outline loading may complete asynchronously.  The side buffer initially
 shows a loading status.  Completion updates that buffer even if it is hidden,
 but never displays it or changes the selected window.  Reopening it binds the
 outline to the Reader view's current live window before a jump.
+
+EPUB outlines reuse Foliate's EPUB 3 navigation and EPUB 2 NCX parsing.  The
+renderer flattens that tree into the same preorder contract used by PDF and
+marks entries without internal hrefs as structural.  At most 4,096 entries,
+256 nesting levels, 1,024 UTF-8 bytes per title, and 3,072 UTF-8 bytes per
+href cross the renderer boundary.  Rust independently rejects malformed,
+external, or oversized targets before Emacs caches the document-level result.
+
+An EPUB outline href is a one-shot driver anchor, not a durable Reader place.
+Following it records the source jump immediately but leaves the view's last
+stable locator and saved place unchanged.  Only the subsequent relocation
+event, containing a complete CFI, canonical spine href, and optional fraction,
+may commit the destination.  This prevents an interrupted or failed deferred
+jump from replacing a primary view's last place with a partial href.
+If a hidden view's native surface is still being recreated, its logical view
+retains only the latest bounded href and dispatches it after publication ready;
+a publication error discards that transient target.
 
 PDF page links carry format-independent tagged actions, but their source
 rectangles remain disposable PDF adapter state.  Local destinations reuse the
@@ -511,6 +534,13 @@ fraction.  Both text fields are bounded to 3,072 UTF-8 bytes.  Emacs stores the
 latest locator on its owning view rather than in publication-global state.
 Destroying the native surface does not replace that locator.
 
+Publication readiness also carries a bounded, flattened table of contents.
+The logical view retains it across native surface replacement, while the
+Reader document entry coalesces concurrent outline requests and caches one
+immutable result for every view.  Point, folding, focus, and the selected
+jump target remain view-local.  Destroying a view completes any pending
+outline waiter with an error instead of leaving the shared request pending.
+
 Attaching a publication may supply an initial locator.  The renderer tries its
 CFI, then href, then fraction; when none resolves to visible content it opens
 the normal visible text start.  =M-x yunge-reader-webview-previous-screen= and
@@ -619,17 +649,19 @@ destination view mapping, safe cache eviction, Unicode literal matching,
 byte-to-PDFium-index mapping, search and selection cursors and limits, regular
 and singular-angle quadrilateral recovery, cross-page inclusive ranges,
 protocol errors, shutdown ordering, EOF, WebView bounds validation, omitted
-empty parameters, native Reader-key filtering, embedded renderer assets, strict
-renderer IPC, bounded EPUB locators, and bounded EPUB resource catalogs.
+empty parameters, native Reader-key filtering, embedded renderer assets,
+strict renderer IPC, bounded EPUB locators, bounded EPUB outlines, internal
+href targets, and bounded EPUB resource catalogs.
 WebView ERT tests cover the separate handshake, strict capability validation,
 asynchronous renderer event routing, per-view EPUB locations, owning-window
 focus recovery, owning-buffer key dispatch, frame handle parsing, coalesced
 resize requests, destruction after buffer replacement, persistent hidden-view
 recreation,
-multi-surface destruction barriers, and ordered publication release.  EPUB
-driver tests cover registration, reflowable key bindings, native open result
-validation, shared publication ownership, printable place conversion, restore
-timing, and primary-only place recording.
+multi-surface destruction barriers, outline waiter completion, and ordered
+publication release.  EPUB driver tests cover registration, reflowable key
+bindings, native open result validation, shared publication ownership,
+printable place conversion, bounded outline mapping, transient href targets,
+restore timing, and primary-only place recording.
 Isolated graphical Emacs smoke tests open real EPUBs through WebView2, move one
 screen, destroy and recreate the native view, restore the exact CFI, and check
 the href and fraction fallback order.  The formal driver smoke test also opens

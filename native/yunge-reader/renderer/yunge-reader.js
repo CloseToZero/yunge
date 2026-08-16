@@ -27,14 +27,19 @@ const MAX_MEDIA_CANDIDATES = 256
 const MAX_TEXT_NODES = 4096
 const MAX_TEXT_SAMPLE = 4096
 const MAX_TOC_ITEMS = 4096
+const MAX_TOC_DEPTH = 256
+const MAX_TOC_HREF_BYTES = 3072
+const MAX_TOC_TITLE_BYTES = 1024
+const MAX_TOC_TOTAL_TEXT_BYTES = 384 * 1024
 const LOCATION_DELAY_MS = 75
 let generation = 0
 let current = null
 
-const post = (event, { message, location, key } = {}) => {
+const post = (event, { message, location, outline, key } = {}) => {
     const payload = { protocol: 1, event }
     if (message) payload.message = String(message).slice(0, 4096)
     if (location) payload.location = location
+    if (outline) payload.outline = outline
     if (key) payload.key = key
     window.ipc.postMessage(JSON.stringify(payload))
 }
@@ -119,6 +124,19 @@ const checkedLocator = value => {
     return Object.freeze(result)
 }
 
+const checkedNavigationTarget = value => {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) {
+        throw new Error('Invalid EPUB navigation target')
+    }
+    if (value.cfi !== undefined) return checkedLocator(value)
+    const keys = Object.keys(value)
+    const href = checkedOutlineHref(value.href)
+    if (keys.length !== 1 || keys[0] !== 'href' || !href) {
+        throw new Error('Invalid EPUB navigation target')
+    }
+    return Object.freeze({ href })
+}
+
 const fetchResource = async (root, path) => {
     const response = await fetch(root + encodePath(path), {
         cache: 'no-store',
@@ -200,6 +218,86 @@ const closeCurrent = () => {
     current.book.destroy()
     current.view.remove()
     current = null
+}
+
+const boundedOutlineTitle = value => {
+    if (typeof value !== 'string') return { value: null, truncated: false }
+    value = value.replace(/[\u0000-\u001f\u007f]/gu, ' ')
+        .replace(/\s+/gu, ' ').trim()
+    if (!value) return { value: null, truncated: false }
+    if (encoder.encode(value).length <= MAX_TOC_TITLE_BYTES) {
+        return { value, truncated: false }
+    }
+    let result = ''
+    let bytes = 0
+    for (const character of value) {
+        const size = encoder.encode(character).length
+        if (bytes + size > MAX_TOC_TITLE_BYTES) break
+        result += character
+        bytes += size
+    }
+    return { value: result.trim(), truncated: true }
+}
+
+const checkedOutlineHref = value => {
+    if (typeof value !== 'string' || !value
+        || encoder.encode(value).length > MAX_TOC_HREF_BYTES
+        || /[\u0000-\u001f\u007f\\?]/u.test(value)) return null
+    const hash = value.indexOf('#')
+    const path = hash < 0 ? value : value.slice(0, hash)
+    if (!path || path.startsWith('/') || path.includes(':')
+        || (hash >= 0 && value.indexOf('#', hash + 1) >= 0)
+        || path.split('/').some(part =>
+            !part || ['.', '..'].includes(part))) return null
+    return value
+}
+
+const outlineFromBook = toc => {
+    const items = []
+    const roots = Array.isArray(toc) ? toc : []
+    const stack = []
+    let truncated = roots.length > MAX_TOC_ITEMS
+    let textBytes = 0
+    let seen = 0
+    const pushChildren = (children, depth) => {
+        if (!Array.isArray(children) || !children.length) return
+        const available = Math.max(0, MAX_TOC_ITEMS - stack.length)
+        const count = Math.min(children.length, available)
+        if (count < children.length) truncated = true
+        for (let index = count - 1; index >= 0; index--) {
+            stack.push({ item: children[index], depth })
+        }
+    }
+    pushChildren(roots, 0)
+    while (stack.length) {
+        if (seen++ >= MAX_TOC_ITEMS || items.length >= MAX_TOC_ITEMS) {
+            truncated = true
+            break
+        }
+        const { item, depth } = stack.pop()
+        const title = boundedOutlineTitle(item?.label)
+        if (title.truncated) truncated = true
+        const href = checkedOutlineHref(item?.href)
+        if (item?.href && !href) truncated = true
+        let childDepth = depth
+        if (title.value) {
+            const size = encoder.encode(title.value).length
+                + (href ? encoder.encode(href).length : 0)
+            if (textBytes + size > MAX_TOC_TOTAL_TEXT_BYTES) {
+                truncated = true
+                break
+            }
+            const entry = { title: title.value, depth }
+            if (href) entry.href = href
+            items.push(entry)
+            textBytes += size
+            childDepth++
+        }
+        if (childDepth > MAX_TOC_DEPTH) {
+            if (item?.subitems?.length) truncated = true
+        } else pushChildren(item?.subitems, childDepth)
+    }
+    return Object.freeze({ items, truncated })
 }
 
 const firstTocHref = items => {
@@ -409,7 +507,10 @@ const open = async ({ view: viewID, resourceRoot, location }) => {
         session.location ??= locatorFromRelocation(book, view.lastLocation)
         if (session.locationTimer) clearTimeout(session.locationTimer)
         session.locationTimer = null
-        post('publication-ready', { location: session.location })
+        post('publication-ready', {
+            location: session.location,
+            outline: outlineFromBook(book.toc),
+        })
     } catch (error) {
         if (mine !== generation) return
         closeCurrent()
@@ -445,7 +546,8 @@ const navigate = ({ view: viewID, command, location }) => {
         if (typeof command !== 'string') {
             throw new Error('Invalid EPUB navigation command')
         }
-        location = command === 'go-to' ? checkedLocator(location) : null
+        location = command === 'go-to'
+            ? checkedNavigationTarget(location) : null
         const session = current
         session.navigation = session.navigation
             .then(() => runNavigation(session, command, location))

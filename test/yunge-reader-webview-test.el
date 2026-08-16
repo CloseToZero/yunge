@@ -81,6 +81,16 @@
    '((href . "OPS/chapter.xhtml"))
    (when fraction `((fraction . ,fraction)))))
 
+(defun yunge-reader-webview-test--outline ()
+  "Return one valid bounded EPUB test outline."
+  (copy-tree
+   '((items
+      . (((title . "Part One") (depth . 0))
+         ((title . "Chapter")
+          (depth . 1)
+          (href . "OPS/chapter.xhtml#start"))))
+     (truncated))))
+
 (ert-deftest yunge-reader-webview-queues-until-ready ()
   (yunge-reader-webview-test--with-fake-process
     (let (result)
@@ -139,6 +149,20 @@
           (href . "OPS/chapter.xhtml") (fraction . 2))))
     (should-not (yunge-reader-webview--valid-location-p location))))
 
+(ert-deftest yunge-reader-webview-validates-bounded-epub-targets ()
+  (should
+   (yunge-reader-webview--valid-target-p
+    '((href . "OPS/chapter.xhtml#section"))))
+  (should
+   (yunge-reader-webview--valid-outline-p
+    (yunge-reader-webview-test--outline)))
+  (dolist (target
+           '(((href . "../chapter.xhtml"))
+             ((href . "https:chapter.xhtml"))
+             ((href . "OPS/chapter.xhtml?query"))
+             ((href . "OPS/chapter.xhtml#one#two"))))
+    (should-not (yunge-reader-webview--valid-target-p target))))
+
 (ert-deftest yunge-reader-webview-serializes-location-navigation ()
   (yunge-reader-webview-test--with-fake-process
     (yunge-reader-webview-start)
@@ -146,13 +170,14 @@
      'fake-webview-process
      (yunge-reader-webview-test--ready-message))
     (let ((view (yunge-reader-webview--make-view :id 4))
-          (location (yunge-reader-webview-test--location 0.25)))
+          (location (yunge-reader-webview-test--location 0.25))
+          (target '((href . "OPS/chapter.xhtml#section"))))
       (yunge-reader-webview--open-view-publication
        view 7 #'ignore location)
       (yunge-reader-webview--navigate-view
        view "next-screen" #'ignore)
       (yunge-reader-webview--navigate-view
-       view "go-to" #'ignore location)
+       view "go-to" #'ignore target)
       (let* ((requests
               (mapcar
                (lambda (line)
@@ -173,7 +198,7 @@
                 "next-screen"))
         (should
          (equal (alist-get 'location (alist-get 'params go-to))
-                location))))))
+                target))))))
 
 (ert-deftest yunge-reader-webview-wraps-publication-operations ()
   (yunge-reader-webview-test--with-fake-process
@@ -304,10 +329,17 @@
          (yunge-reader-webview--process 'fake-webview-process)
          (yunge-reader-webview--views
           (make-hash-table :test #'eql))
-         warning)
+         warning
+         outline-result
+         outline-error)
     (unwind-protect
         (progn
           (puthash 6 view yunge-reader-webview--views)
+          (yunge-reader-webview--request-view-outline
+           view
+           (lambda (value error-data)
+             (setq outline-result value
+                   outline-error error-data)))
           (yunge-reader-webview--handle-event
            'fake-webview-process
            '((kind . "event")
@@ -316,12 +348,25 @@
              (location
               . ((cfi . "epubcfi(/6/4!/4/2)")
                  (href . "OPS/chapter.xhtml")
-                 (fraction . 0.25)))))
+                 (fraction . 0.25)))
+             (outline
+              . ((items
+                  . (((title . "Part One") (depth . 0))
+                     ((title . "Chapter")
+                      (depth . 1)
+                      (href . "OPS/chapter.xhtml#start"))))
+                 (truncated)))))
           (should
            (yunge-reader-webview--view-publication-ready view))
           (should
            (equal (yunge-reader-webview--view-location view)
                   (yunge-reader-webview-test--location 0.25)))
+          (should
+           (yunge-reader-webview--view-outline-ready view))
+          (should-not outline-error)
+          (should
+           (equal outline-result
+                  (yunge-reader-webview-test--outline)))
           (cl-letf (((symbol-function 'display-warning)
                      (lambda (&rest value) (setq warning value))))
             (yunge-reader-webview--handle-event
@@ -337,6 +382,51 @@
             (should (equal (string-trim (buffer-string))
                            "bad chapter"))))
       (kill-buffer buffer))))
+
+(ert-deftest yunge-reader-webview-finishes-outline-waiters-on-destroy ()
+  (let ((view (yunge-reader-webview--make-view))
+        result
+        request-error)
+    (yunge-reader-webview--request-view-outline
+     view
+     (lambda (value error-data)
+       (setq result value
+             request-error error-data)))
+    (yunge-reader-webview--finish-view-destroy view)
+    (should-not result)
+    (should request-error)
+    (should-not (yunge-reader-webview--view-outline-waiters view))))
+
+(ert-deftest yunge-reader-webview-keeps-publication-error-for-outline ()
+  (let ((view (yunge-reader-webview--make-view :id 41))
+        (yunge-reader-webview--process 'fake-webview-process)
+        (yunge-reader-webview--views
+         (make-hash-table :test #'eql))
+        result
+        request-error)
+    (puthash 41 view yunge-reader-webview--views)
+    (setf (yunge-reader-webview--view-pending-target view)
+          '((href . "OPS/chapter.xhtml#section")))
+    (cl-letf (((symbol-function 'display-warning) #'ignore)
+              ((symbol-function
+                'yunge-reader-webview--set-buffer-message)
+               #'ignore))
+      (yunge-reader-webview--handle-event
+       'fake-webview-process
+       '((kind . "event")
+         (event . "publication-error")
+         (view . 41)
+         (message . "Could not parse EPUB"))))
+    (yunge-reader-webview--request-view-outline
+     view
+     (lambda (value error-data)
+       (setq result value
+             request-error error-data)))
+    (should-not result)
+    (should (equal request-error
+                   '(error "Could not parse EPUB")))
+    (should-not (yunge-reader-webview--view-pending-target view))
+    (should-not (yunge-reader-webview--view-outline-waiters view))))
 
 (ert-deftest yunge-reader-webview-keeps-locations-per-view ()
   (let* ((first (yunge-reader-webview--make-view :id 11))
@@ -523,7 +613,8 @@
           (yunge-reader-webview--make-view
            :buffer buffer
            :persistent t
-           :publication 8))
+           :publication 8
+           :outline-error '(error "old renderer error")))
          (yunge-reader-webview--next-view-id 20)
          (yunge-reader-webview--views
           (make-hash-table :test #'eql))
@@ -545,6 +636,8 @@
           (should (eq requested view))
           (should (= (yunge-reader-webview--view-id view) 21))
           (should (eq (yunge-reader-webview--view-window view) window))
+          (should-not
+           (yunge-reader-webview--view-outline-error view))
           (should (eq (gethash 21 yunge-reader-webview--views) view)))
       (kill-buffer buffer))))
 

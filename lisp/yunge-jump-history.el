@@ -239,10 +239,13 @@ When BRANCH is non-nil, discard entries newer than the current one."
            (history (yunge-jump-history--history window))
            (destination (yunge-jump-history--window-entry window)))
       (when (and origin
-                 destination
+                 (or (eq result :deferred) destination)
                  (not (yunge-jump-history--history-pending history))
-                 (not
-                  (yunge-jump-history--same-place-p origin destination)))
+                 (or
+                  (eq result :deferred)
+                  (not
+                   (yunge-jump-history--same-place-p
+                    origin destination))))
         (yunge-jump-history--push history origin t))
       result)))
 

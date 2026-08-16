@@ -234,6 +234,48 @@
       (and (yunge-reader-webview--valid-location-p location)
            location))))
 
+(defun yunge-reader-epub--position-target (position)
+  "Return the EPUB navigation target represented by POSITION."
+  (or
+   (yunge-reader-epub--position-locator position)
+   (when (and (yunge-reader-position-p position)
+              (null (yunge-reader-position-offset position))
+              (null (yunge-reader-position-x position))
+              (null (yunge-reader-position-y position)))
+     (let ((target
+            (list (cons 'href
+                        (yunge-reader-position-unit position)))))
+       (and (yunge-reader-webview--valid-target-p target)
+            target)))))
+
+(defun yunge-reader-epub--outline-position (href)
+  "Return a one-shot Reader navigation position for EPUB HREF."
+  (when (yunge-reader-webview--valid-target-href-p href)
+    (make-yunge-reader-position :unit href)))
+
+(defun yunge-reader-epub--native-outline-item (value)
+  "Return a generic outline item represented by renderer VALUE."
+  (when (yunge-reader-webview--valid-outline-item-p value)
+    (let* ((href (alist-get 'href value))
+           (position (and href
+                          (yunge-reader-epub--outline-position href))))
+      (make-yunge-reader-outline-item
+       :title (alist-get 'title value)
+       :depth (alist-get 'depth value)
+       :action
+       (and position
+            (make-yunge-reader-action
+             :type 'location :position position))))))
+
+(defun yunge-reader-epub--native-outline (value)
+  "Return a generic EPUB outline represented by renderer VALUE."
+  (when (yunge-reader-webview--valid-outline-p value)
+    (make-yunge-reader-outline-data
+     :items
+     (mapcar #'yunge-reader-epub--native-outline-item
+             (alist-get 'items value))
+     :truncated (eq (alist-get 'truncated value) t))))
+
 (defun yunge-reader-epub--location (_document _window)
   "Return the current stable EPUB position."
   (when-let* ((view yunge-reader-webview--buffer-view)
@@ -251,14 +293,31 @@
     (_document position _window)
   "Restore EPUB POSITION in the current buffer's logical view."
   (when-let* ((view yunge-reader-webview--buffer-view)
-              (location
-               (yunge-reader-epub--position-locator position)))
-    (setf (yunge-reader-webview--view-location view)
-          (copy-tree location))
-    (when (yunge-reader-webview--view-publication-ready view)
-      (yunge-reader-webview--navigate-view
-       view "go-to" #'yunge-reader-epub--restore-complete location))
-    t))
+              (target
+               (yunge-reader-epub--position-target position)))
+    (let ((stable
+           (yunge-reader-webview--valid-location-p target))
+          (ready
+           (yunge-reader-webview--view-publication-ready view)))
+      (cond
+       (stable
+        (setf (yunge-reader-webview--view-location view)
+              (copy-tree target)
+              (yunge-reader-webview--view-pending-target view) nil)
+        (when ready
+          (yunge-reader-webview--navigate-view
+           view "go-to" #'yunge-reader-epub--restore-complete target))
+        t)
+       (t
+        (if ready
+            (progn
+              (setf (yunge-reader-webview--view-pending-target view)
+                    nil)
+              (yunge-reader-webview--navigate-view
+               view "go-to" #'yunge-reader-epub--restore-complete
+               target))
+          (yunge-reader-webview--queue-view-target view target))
+        :deferred)))))
 
 (defun yunge-reader-epub--refresh ()
   "Synchronize the current EPUB surface with its Reader window."
@@ -266,13 +325,44 @@
     (yunge-reader-webview--sync-view
      yunge-reader-webview--buffer-view)))
 
+(defun yunge-reader-epub--outline-complete
+    (complete value error-data)
+  "Call COMPLETE with generic outline VALUE or ERROR-DATA."
+  (if error-data
+      (funcall complete nil error-data)
+    (let ((outline (yunge-reader-epub--native-outline value)))
+      (if outline
+          (funcall complete outline nil)
+        (funcall
+         complete nil
+         (yunge-reader-epub--native-error
+          "The EPUB renderer returned an invalid outline"))))))
+
 (defun yunge-reader-epub--request
-    (_document operation _arguments complete)
-  "Reject unsupported EPUB OPERATION through COMPLETE."
-  (funcall
-   complete nil
-   (yunge-reader-epub--native-error
-    (format "Unsupported EPUB operation: %S" operation))))
+    (document operation _arguments complete)
+  "Dispatch one EPUB DOCUMENT OPERATION through COMPLETE."
+  (pcase operation
+    ('outline
+     (let* ((handle (yunge-reader-document-handle document))
+            (view yunge-reader-webview--buffer-view))
+       (if (and (yunge-reader-epub-handle-p handle)
+                view
+                (not (yunge-reader-webview--view-destroyed view))
+                (= (yunge-reader-epub-handle-publication handle)
+                   (yunge-reader-webview--view-publication view)))
+           (yunge-reader-webview--request-view-outline
+            view
+            (apply-partially
+             #'yunge-reader-epub--outline-complete complete))
+         (funcall
+          complete nil
+          (yunge-reader-epub--native-error
+           "The current EPUB view cannot provide its outline")))))
+    (_
+     (funcall
+      complete nil
+      (yunge-reader-epub--native-error
+       (format "Unsupported EPUB operation: %S" operation))))))
 
 (defun yunge-reader-epub--navigate (command)
   "Run semantic EPUB navigation COMMAND in the current view."

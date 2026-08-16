@@ -27,6 +27,15 @@
 (defconst yunge-reader-webview--max-location-text-bytes 3072
   "Maximum byte length of one EPUB locator text field.")
 
+(defconst yunge-reader-webview--max-outline-depth 256
+  "Maximum nesting depth accepted from one EPUB outline.")
+
+(defconst yunge-reader-webview--max-outline-items 4096
+  "Maximum number of items accepted from one EPUB outline.")
+
+(defconst yunge-reader-webview--max-outline-title-bytes 1024
+  "Maximum byte length of one EPUB outline title.")
+
 (defconst yunge-reader-webview--log-buffer-name
   "*Yunge Reader WebView log*"
   "Name of the WebView helper diagnostic buffer.")
@@ -75,6 +84,11 @@
   publication
   publication-ready
   location
+  pending-target
+  outline
+  outline-ready
+  outline-error
+  outline-waiters
   path
   open-deadline
   open-timer
@@ -193,22 +207,94 @@
        (list cfi href))
       (string-prefix-p "epubcfi(" cfi)
       (string-suffix-p ")" cfi)
-      (not (string-prefix-p "/" href))
-      (not (string-match-p "[\\\\:?#]" href))
-      (cl-every
-       (lambda (part)
-         (not (member part '("" "." ".."))))
-       (split-string href "/"))
+      (yunge-reader-webview--valid-target-href-p href)
+      (not (string-match-p "#" href))
       (or (null fraction)
           (and (numberp fraction)
                (= fraction fraction)
-               (<= 0 fraction 1)))))))
+                  (<= 0 fraction 1)))))))
+
+(defun yunge-reader-webview--valid-target-href-p (href)
+  "Return non-nil when HREF is a bounded internal EPUB target."
+  (and
+   (stringp href)
+   (not (string-empty-p href))
+   (<= (string-bytes href)
+       yunge-reader-webview--max-location-text-bytes)
+   (not (string-match-p "[[:cntrl:]\\\\?]" href))
+   (<= (cl-count ?# href) 1)
+   (let ((path (car (split-string href "#"))))
+     (and
+      (not (string-empty-p path))
+      (not (string-prefix-p "/" path))
+      (not (string-match-p ":" path))
+      (cl-every
+       (lambda (part)
+         (not (member part '("" "." ".."))))
+       (split-string path "/"))))))
+
+(defun yunge-reader-webview--valid-target-p (target)
+  "Return non-nil when TARGET is a bounded EPUB navigation target."
+  (or
+   (yunge-reader-webview--valid-location-p target)
+   (and
+    (listp target)
+    (equal (mapcar #'car-safe target) '(href))
+    (yunge-reader-webview--valid-target-href-p
+     (alist-get 'href target)))))
+
+(defun yunge-reader-webview--valid-outline-item-p (item)
+  "Return non-nil when ITEM is a bounded EPUB outline item."
+  (and
+   (listp item)
+   (cl-every
+    (lambda (entry)
+      (memq (car-safe entry) '(title depth href)))
+    item)
+   (let ((title (alist-get 'title item))
+         (depth (alist-get 'depth item))
+         (href (alist-get 'href item)))
+     (and
+      (stringp title)
+      (not (string-empty-p (string-trim title)))
+      (<= (string-bytes title)
+          yunge-reader-webview--max-outline-title-bytes)
+      (not (string-match-p "[[:cntrl:]]" title))
+      (natnump depth)
+      (<= depth yunge-reader-webview--max-outline-depth)
+      (or (null href)
+          (yunge-reader-webview--valid-target-href-p href))))))
+
+(defun yunge-reader-webview--valid-outline-p (outline)
+  "Return non-nil when OUTLINE is bounded renderer outline data."
+  (and
+   (listp outline)
+   (assq 'items outline)
+   (assq 'truncated outline)
+   (cl-every
+    (lambda (entry)
+      (memq (car-safe entry) '(items truncated)))
+    outline)
+   (let ((items (alist-get 'items outline))
+         (truncated (alist-get 'truncated outline)))
+     (and
+      (listp items)
+      (<= (length items)
+          yunge-reader-webview--max-outline-items)
+      (cl-every #'yunge-reader-webview--valid-outline-item-p items)
+      (memq truncated '(nil t))))))
 
 (defun yunge-reader-webview--check-location (location)
   "Return LOCATION or signal when it is not a valid EPUB locator."
   (unless (yunge-reader-webview--valid-location-p location)
     (error "Invalid EPUB location: %S" location))
   location)
+
+(defun yunge-reader-webview--check-target (target)
+  "Return TARGET or signal when it is not a valid EPUB target."
+  (unless (yunge-reader-webview--valid-target-p target)
+    (error "Invalid EPUB navigation target: %S" target))
+  target)
 
 (defun yunge-reader-webview--open-view-publication
     (view publication callback &optional location)
@@ -238,8 +324,31 @@ LOCATION is required only for the go-to command."
     `((view . ,(yunge-reader-webview--view-id view))
       (command . ,command))
     (when location
-      `((location . ,(yunge-reader-webview--check-location location)))))
+      `((location . ,(yunge-reader-webview--check-target location)))))
    callback))
+
+(defun yunge-reader-webview--queue-view-target (view target)
+  "Queue one transient EPUB TARGET until VIEW's surface is ready."
+  (setf (yunge-reader-webview--view-pending-target view)
+        (copy-tree (yunge-reader-webview--check-target target))))
+
+(defun yunge-reader-webview--pending-target-complete
+    (_result error-data)
+  "Report ERROR-DATA from a queued EPUB navigation target."
+  (when error-data
+    (display-warning
+     'yunge-reader (error-message-string error-data) :warning)))
+
+(defun yunge-reader-webview--dispatch-pending-target (view)
+  "Navigate VIEW to its queued transient target, if any."
+  (when-let* ((target
+               (prog1 (yunge-reader-webview--view-pending-target view)
+                 (setf (yunge-reader-webview--view-pending-target view)
+                       nil))))
+    (yunge-reader-webview--navigate-view
+     view "go-to"
+     #'yunge-reader-webview--pending-target-complete
+     target)))
 
 (defun yunge-reader-webview--set-buffer-message (view message)
   "Replace VIEW's backing buffer contents with MESSAGE."
@@ -273,6 +382,54 @@ LOCATION is required only for the go-to command."
         (format "Could not record EPUB location: %s"
                 (error-message-string error-data))
         :warning)))))
+
+(defun yunge-reader-webview--event-outline (message)
+  "Return the validated EPUB outline carried by event MESSAGE."
+  (let ((outline (alist-get 'outline message)))
+    (unless (yunge-reader-webview--valid-outline-p outline)
+      (error "Malformed EPUB outline event: %S" message))
+    (copy-tree outline)))
+
+(defun yunge-reader-webview--finish-outline-waiters
+    (view outline error-data)
+  "Complete VIEW's outline waiters with OUTLINE or ERROR-DATA."
+  (let ((waiters
+         (prog1 (yunge-reader-webview--view-outline-waiters view)
+           (setf (yunge-reader-webview--view-outline-waiters view)
+                 nil))))
+    (dolist (complete waiters)
+      (funcall complete (and outline (copy-tree outline)) error-data))))
+
+(defun yunge-reader-webview--store-view-outline (view message)
+  "Store VIEW's bounded outline from publication-ready MESSAGE."
+  (let ((outline (yunge-reader-webview--event-outline message)))
+    (setf (yunge-reader-webview--view-outline view) outline
+          (yunge-reader-webview--view-outline-ready view) t
+          (yunge-reader-webview--view-outline-error view) nil)
+    (yunge-reader-webview--finish-outline-waiters view outline nil)))
+
+(defun yunge-reader-webview--request-view-outline (view complete)
+  "Invoke COMPLETE with VIEW's outline when its publication is ready."
+  (unless (functionp complete)
+    (error "Invalid EPUB outline completion: %S" complete))
+  (cond
+   ((or (null view)
+        (yunge-reader-webview--view-destroyed view))
+    (funcall complete nil
+             '(error "The EPUB view is no longer live")))
+   ((yunge-reader-webview--view-outline-ready view)
+    (funcall complete
+             (copy-tree (yunge-reader-webview--view-outline view))
+             nil))
+   ((yunge-reader-webview--view-outline-error view)
+    (funcall complete nil
+             (copy-tree
+              (yunge-reader-webview--view-outline-error view))))
+   (t
+    (setf (yunge-reader-webview--view-outline-waiters view)
+          (append
+           (yunge-reader-webview--view-outline-waiters view)
+           (list complete))))))
 
 (defun yunge-reader-webview--handle-event (process message)
   "Handle one asynchronous WebView MESSAGE from PROCESS."
@@ -322,6 +479,8 @@ LOCATION is required only for the go-to command."
        (when-let* ((view (gethash id yunge-reader-webview--views)))
          (yunge-reader-webview--store-view-location view message)
          (setf (yunge-reader-webview--view-publication-ready view) t)
+         (yunge-reader-webview--store-view-outline view message)
+         (yunge-reader-webview--dispatch-pending-target view)
          (yunge-reader-webview--set-buffer-message
           view
           (format "EPUB renderer ready: %s"
@@ -340,7 +499,12 @@ LOCATION is required only for the go-to command."
          (unless (stringp detail)
            (error "Malformed EPUB renderer error: %S" message))
          (when-let* ((view (gethash id yunge-reader-webview--views)))
-           (setf (yunge-reader-webview--view-publication-ready view) nil)
+           (setf (yunge-reader-webview--view-publication-ready view) nil
+                 (yunge-reader-webview--view-pending-target view) nil
+                 (yunge-reader-webview--view-outline-error view)
+                 (list 'error detail))
+           (yunge-reader-webview--finish-outline-waiters
+            view nil (list 'error detail))
            (yunge-reader-webview--set-buffer-message view detail))
          (display-warning 'yunge-reader detail :warning)))
       (_
@@ -732,7 +896,10 @@ Without FORCE, request graceful shutdown and enforce a deadline."
 (defun yunge-reader-webview--finish-view-destroy (view)
   "Finish permanent destruction of logical VIEW."
   (unless (yunge-reader-webview--view-destroy-finished view)
-    (setf (yunge-reader-webview--view-destroy-finished view) t)
+    (setf (yunge-reader-webview--view-destroy-finished view) t
+          (yunge-reader-webview--view-pending-target view) nil)
+    (yunge-reader-webview--finish-outline-waiters
+     view nil '(error "The EPUB view was destroyed before its outline loaded"))
     (let ((publication
            (prog1 (yunge-reader-webview--view-publication view)
              (setf (yunge-reader-webview--view-publication view) nil))))
@@ -994,6 +1161,7 @@ focused native child forwards one."
             (yunge-reader-webview--view-window view) window
             (yunge-reader-webview--view-created view) nil
             (yunge-reader-webview--view-publication-ready view) nil
+            (yunge-reader-webview--view-outline-error view) nil
             (yunge-reader-webview--view-requested-bounds view)
             (yunge-reader-webview--window-bounds window))
       (puthash id view yunge-reader-webview--views)

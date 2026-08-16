@@ -791,20 +791,18 @@ Do nothing until document opening and any prior place restoration commit."
         yunge-reader-effective-scale nil))
 
 (defun yunge-reader--apply-place (place &optional window)
-  "Apply validated Reader PLACE in WINDOW and return whether it succeeded."
+  "Apply validated Reader PLACE in WINDOW and return its acceptance value."
   (let* ((driver
           (yunge-reader-document-driver yunge-reader-document))
          (restore (yunge-reader-driver-restore-function driver)))
     (when (and restore (yunge-reader--place-p place driver))
       (yunge-reader--restore-view-state place)
       (yunge-reader-refresh)
-      (and
-       (funcall
-        restore yunge-reader-document
-        (yunge-reader--position-from-data
-         (plist-get place :position))
-        (yunge-reader--place-window window))
-       t))))
+      (funcall
+       restore yunge-reader-document
+       (yunge-reader--position-from-data
+        (plist-get place :position))
+       (yunge-reader--place-window window)))))
 
 (defun yunge-reader--restore-live-place (place window)
   "Restore live Reader PLACE in WINDOW without committing partial state."
@@ -826,7 +824,7 @@ Do nothing until document opening and any prior place restoration commit."
         (setq yunge-reader--place-recording-enabled recording)))
     (when failure
       (signal (car failure) (cdr failure)))
-    (when accepted
+    (when (and accepted (not (eq accepted :deferred)))
       (yunge-reader-record-place window))
     accepted))
 
@@ -1583,14 +1581,15 @@ COMPLETE is called exactly once by the driver with a value and error value."
 
 (defun yunge-reader--follow-location-action (action)
   "Follow location ACTION and return non-nil on success."
-  (let ((window (yunge-reader--place-window)))
+  (let ((window (yunge-reader--place-window))
+        accepted)
     (unless window
       (user-error "The Reader buffer is not displayed in a live window"))
-    (unless
-        (yunge-reader--restore-live-place
-         (yunge-reader--action-place action) window)
+    (unless (setq accepted
+                  (yunge-reader--restore-live-place
+                   (yunge-reader--action-place action) window))
       (user-error "The Reader driver rejected the destination"))
-    t))
+    accepted))
 
 (defun yunge-reader--follow-uri-action (action)
   "Open URI ACTION through the configured safe scheme policy."
@@ -1615,12 +1614,13 @@ COMPLETE is called exactly once by the driver with a value and error value."
 
 (defun yunge-reader--follow-outline-item (item)
   "Follow the location action carried by outline ITEM."
-  (let ((action (yunge-reader-outline-item-action item)))
+  (let ((action (yunge-reader-outline-item-action item))
+        accepted)
     (unless action
       (user-error "This outline entry has no supported destination"))
-    (yunge-reader--follow-action action)
+    (setq accepted (yunge-reader--follow-action action))
     (message "Outline: %s" (yunge-reader-outline-item-title item))
-    t))
+    accepted))
 
 (defun yunge-reader--remove-outline-waiters (entry buffer)
   "Remove outline waiters owned by BUFFER from ENTRY."
