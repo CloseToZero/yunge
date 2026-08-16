@@ -419,8 +419,8 @@
            '((kind . "event")
              (event . "accelerator")
              (view . 9)
-             (key . "C-d")))
-          (should (equal routed (list view "C-d" buffer))))
+             (key . "+")))
+          (should (equal routed (list view "+" buffer))))
       (kill-buffer buffer))))
 
 (ert-deftest yunge-reader-webview-rejects-unknown-forwarded-keys ()

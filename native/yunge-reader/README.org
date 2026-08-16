@@ -208,20 +208,22 @@ them to a saved location.  A later =location= event supplies the complete CFI,
 canonical spine href, and fraction that the owning view may persist.
 
 Escape, Control reader keys, and non-character reader keys are captured by the
-native WebView2 accelerator event.  Uppercase character reader keys are
-relayed by the trusted renderer because WebView2 does not classify them as
-accelerators.  Both paths write unsolicited events without request IDs:
+native WebView2 accelerator event.  Uppercase character reader keys and the
+three zoom keys are relayed by the trusted renderer because WebView2 does not
+classify them as accelerators.  Both paths write unsolicited events without
+request IDs:
 
 #+begin_src json
 {"kind":"event","event":"escape","view":1}
 {"kind":"event","event":"accelerator","key":"C-d","view":1}
 {"kind":"event","event":"accelerator","key":"J","view":1}
+{"kind":"event","event":"accelerator","key":"+","view":1}
 #+end_src
 
-The helper accepts only =J=, =K=, =C-d=, =C-u=, =<next>=, and =<prior>=.
-It never interprets them as navigation.  Emacs resolves each normalized key
-through the owning EPUB buffer's active maps, so Reader, Evil, and user
-bindings remain authoritative while focus stays in the child WebView.
+The helper accepts only =J=, =K=, =+=, =-=, ===, =C-d=, =C-u=, =<next>=,
+and =<prior>=.  It never interprets them as commands.  Emacs resolves each
+normalized key through the owning EPUB buffer's active maps, so Reader, Evil,
+and user bindings remain authoritative while focus stays in the child WebView.
 
 View IDs are independent, so multiple Reader views do not share layout or
 scroll state.  Positions must be nonnegative; dimensions must be positive and

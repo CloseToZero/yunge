@@ -99,7 +99,8 @@ inputs.
 
 =J= and =C-d= move to the next reflowed screen; =K= and =C-u= move to the
 previous screen.  Page Down and Page Up provide the same portable commands,
-including after a mouse click gives the child WebView native focus.
+including after a mouse click gives the child WebView native focus.  The same
+focused path forwards =+=, =-=, and === through the active Emacs keymaps.
 =o= displays the bounded EPUB 3 navigation or EPUB 2 NCX outline through the
 same persistent per-view outline UI used by fixed-layout documents.
 
@@ -629,13 +630,13 @@ external navigation.  Renderer IPC accepts only bounded, versioned messages
 from the renderer application origin.
 
 WebView2 forwards Escape, =C-d/C-u=, and Page Down or Page Up through its
-native accelerator event.  A bounded renderer listener forwards =J/K=
-because WebView2 does not classify character keys as accelerators.  Both
-paths emit only normalized key events; they never choose or execute Reader
-commands.  Emacs resolves navigation through the owning EPUB buffer's active
-maps, preserving Reader, Evil, and user bindings while native focus remains
-in the child.  Escape still clears the DOM selection, returns native focus to
-the parent, selects the owning Emacs window, and focuses its frame.
+native accelerator event.  A bounded renderer listener forwards =J/K= and
+=+=, =-=, or === because WebView2 does not classify character keys as
+accelerators.  Both paths emit only normalized key events; they never choose
+or execute commands.  Emacs resolves each key through the owning EPUB buffer's
+active maps, preserving Reader, Evil, and user bindings while native focus
+remains in the child.  Escape still clears the DOM selection, returns native
+focus to the parent, selects the owning Emacs window, and focuses its frame.
 
 =M-x yunge-reader-webview-stop= requests graceful shutdown and then enforces a
 deadline; a prefix argument terminates it immediately.  Emacs exit also ends
@@ -718,8 +719,9 @@ the href and fraction fallback order.  The formal driver smoke test also opens
 through =auto-mode-alist=, hides and recreates a persistent surface, creates an
 independent additional view over the same publication, verifies primary place
 ownership, and closes the resource only after both views detach.
-A focused-key smoke test sends =J= and then =C-d= to a real child WebView and
-requires two forwarded protocol events plus two successive locator changes.
+A focused-key smoke test sends =+=, =-=, and === to a real child WebView,
+requires the expected Reader font-scale changes, and then sends =J= and =C-d=
+to require two successive locator changes.
 
 The integration path installs the pinned Windows library through the public
 setup command, runs its =pdfium-info= smoke test, opens a five-page A4 fixture,

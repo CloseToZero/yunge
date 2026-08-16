@@ -60,7 +60,8 @@ const readerCharacterKey = event => {
             + '[contenteditable]:not([contenteditable="false"])')) {
         return null
     }
-    return ['J', 'K'].includes(event.key) ? event.key : null
+    return ['J', 'K', '+', '-', '='].includes(event.key)
+        ? event.key : null
 }
 
 const relayReaderCharacterKey = event => {

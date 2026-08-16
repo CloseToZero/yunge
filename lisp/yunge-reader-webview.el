@@ -542,8 +542,8 @@ Unless QUIET is non-nil, notify the logical view's owner."
       ("accelerator"
        (let ((key (alist-get 'key message)))
          (unless (member key
-                         '("J" "K" "C-d" "C-u"
-                           "<next>" "<prior>"))
+                          '("J" "K" "+" "-" "=" "C-d" "C-u"
+                            "<next>" "<prior>"))
            (error "Malformed WebView accelerator event: %S" message))
          (when-let* ((view (gethash id yunge-reader-webview--views))
                      (function

@@ -1668,9 +1668,9 @@ fn renderer_event(
             {
                 return None;
             }
-            let key = message
-                .key
-                .filter(|key| matches!(key.as_str(), "J" | "K"))?;
+            let key = message.key.filter(|key| {
+                matches!(key.as_str(), "J" | "K" | "+" | "-" | "=")
+            })?;
             ("accelerator", None, None, None, Some(key))
         }
         RendererEvent::Location => {
@@ -1991,7 +1991,9 @@ mod tests {
             std::str::from_utf8(app_asset("yunge-reader.js").unwrap().1)
                 .unwrap();
         assert!(adapter.contains("post('accelerator', { key })"));
-        assert!(adapter.contains("['J', 'K'].includes(event.key)"));
+        assert!(
+            adapter.contains("['J', 'K', '+', '-', '='].includes(event.key)")
+        );
         assert!(!adapter.contains("['j', 'k'].includes(event.key)"));
         assert!(adapter.contains("applyReadingStyle(view, style)"));
         assert!(adapter.contains("if (view.isFixedLayout) return"));
@@ -2274,16 +2276,24 @@ mod tests {
         assert!(event.outline.is_none());
         assert!(event.key.is_none());
 
-        let accelerator = HttpRequest::builder()
-            .uri(APP_URL)
-            .body(r#"{"protocol":1,"event":"accelerator","key":"J"}"#.into())
-            .unwrap();
-        let event = renderer_event(8, &accelerator).unwrap();
-        assert_eq!(event.event, "accelerator");
-        assert_eq!(event.key.as_deref(), Some("J"));
-        assert!(event.location.is_none());
-        assert!(event.outline.is_none());
-        assert!(event.message.is_none());
+        for key in ["J", "K", "+", "-", "="] {
+            let payload = json!({
+                "protocol": 1,
+                "event": "accelerator",
+                "key": key,
+            })
+            .to_string();
+            let accelerator = HttpRequest::builder()
+                .uri(APP_URL)
+                .body(payload.into())
+                .unwrap();
+            let event = renderer_event(8, &accelerator).unwrap();
+            assert_eq!(event.event, "accelerator");
+            assert_eq!(event.key.as_deref(), Some(key));
+            assert!(event.location.is_none());
+            assert!(event.outline.is_none());
+            assert!(event.message.is_none());
+        }
 
         for request in [
             HttpRequest::builder()
