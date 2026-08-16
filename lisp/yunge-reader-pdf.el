@@ -21,6 +21,11 @@
   :type 'natnum
   :group 'yunge-reader)
 
+(defcustom yunge-reader-pdf-center-pages t
+  "Whether to center PDF pages in their Reader window."
+  :type 'boolean
+  :group 'yunge-reader)
+
 (defcustom yunge-reader-pdf-prefetch-pages 1
   "Number of pages to prefetch on each side of the visible PDF roll."
   :type 'natnum
@@ -1422,6 +1427,11 @@ When SUPPRESS-SCALE is non-nil, do not update the shared effective scale."
                 (yunge-reader-pdf--page-info page) width)))
     `(space . (:width (,width) :height (,height)))))
 
+(defun yunge-reader-pdf--page-prefix (width)
+  "Return the line prefix that centers a PDF display of WIDTH pixels."
+  (when yunge-reader-pdf-center-pages
+    `(space :align-to (- center (,(/ width 2))))))
+
 (defun yunge-reader-pdf--page-position (page)
   "Return the buffer position holding zero-based PDF PAGE."
   (and (vectorp yunge-reader-pdf--page-positions)
@@ -1572,6 +1582,7 @@ When SUPPRESS-SCALE is non-nil, do not update the shared effective scale."
         (add-text-properties
          position (1+ position)
          (list 'display display
+               'line-prefix (yunge-reader-pdf--page-prefix width)
                'yunge-reader-pdf-display-width width))))))
 
 (defun yunge-reader-pdf--paint-pages (pages &optional window)

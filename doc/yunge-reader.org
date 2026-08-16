@@ -15,7 +15,7 @@ The current PDF adapter provides:
 
 - verified PDFium installation and a locked Rust helper build;
 - open, close, page count, labels, and complete page geometry;
-- a continuous, virtualized page roll with bounded image residency;
+- a centered, continuous, virtualized page roll with bounded image residency;
 - replaceable, one-at-a-time background prefetch for the active working set;
 - next, previous, direct page, screen, mouse wheel, and ordinary scrolling;
 - fit-width, fit-page, and bounded manual zoom;
