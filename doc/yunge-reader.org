@@ -6,9 +6,10 @@ without assuming that every document consists of immutable pages.
 
 * Current PDF slice
 
-Run =M-x yunge-reader-native-setup= once, then open a PDF explicitly with
-=M-x yunge-reader-pdf-open=.  Yunge Reader deliberately does not add an entry
-to =auto-mode-alist= while the reader is under development.
+Run =M-x yunge-reader-native-setup= once, then visit a =.pdf= file normally.
+The PDF adapter is autoloaded through =auto-mode-alist= and turns that file
+buffer into a Reader view.  =M-x yunge-reader-pdf-open= remains available as
+an explicit entry point.
 
 The current PDF adapter provides:
 

@@ -344,6 +344,8 @@ document contents.")
   (setq-local yunge-reader--copy-pending nil)
   (add-hook 'post-command-hook
             #'yunge-reader--note-view-activity nil t)
+  (add-hook 'change-major-mode-hook
+            #'yunge-reader--close-document nil t)
   (add-hook 'kill-buffer-hook #'yunge-reader--close-document nil t))
 
 (with-eval-after-load 'evil
@@ -945,7 +947,8 @@ Do nothing until document opening and any prior place restoration commit."
   "Replace the current reader buffer with formatted status text."
   (let ((inhibit-read-only t))
     (erase-buffer)
-    (insert (apply #'format format-string arguments) "\n")))
+    (insert (apply #'format format-string arguments) "\n")
+    (set-buffer-modified-p nil)))
 
 (defun yunge-reader--attach-view (document)
   "Attach DOCUMENT's driver view to the current Reader buffer."
@@ -1250,6 +1253,35 @@ non-nil only after opening and restoration succeed."
                    (yunge-reader--document-entry-requests entry))
                   1)
            (yunge-reader--start-resource-open entry)))))))
+
+(defun yunge-reader--revert-file-buffer (_ignore-auto _noconfirm)
+  "Reopen the document visited by the current Reader file buffer."
+  (unless buffer-file-name
+    (user-error "This Reader buffer is not visiting a file"))
+  (yunge-reader-visit-file buffer-file-name))
+
+(defun yunge-reader-visit-file (file)
+  "Turn the current file buffer into a Reader view of FILE.
+FILE must be the file visited by the current buffer.  Format adapters use this
+entry point from their `auto-mode-alist' mode functions."
+  (setq file (expand-file-name file))
+  (unless (and buffer-file-name
+               (equal file (expand-file-name buffer-file-name)))
+    (error "Reader file buffer does not visit %s" file))
+  (let ((driver (yunge-reader-driver-for-file file)))
+    (unless driver
+      (signal 'yunge-reader-no-driver (list file)))
+    ;; Re-entering this mode runs the old Reader buffer's cleanup hook before
+    ;; clearing its local view state.
+    (yunge-reader-mode)
+    (let ((inhibit-read-only t))
+      (erase-buffer)
+      (set-buffer-multibyte t))
+    (setq-local revert-buffer-function
+                #'yunge-reader--revert-file-buffer)
+    (set-buffer-modified-p nil)
+    (yunge-reader--begin-open (current-buffer) driver file)
+    (current-buffer)))
 
 ;;;###autoload
 (defun yunge-reader-open (file)

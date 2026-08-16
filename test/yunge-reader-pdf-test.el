@@ -122,6 +122,67 @@
          'pdf))
     (should (equal auto-mode-alist modes))))
 
+(ert-deftest yunge-reader-pdf-binds-pdf-file-visits ()
+  (should
+   (eq (cdr (assoc "\\.pdf\\'" auto-mode-alist))
+       'yunge-reader-pdf-mode)))
+
+(ert-deftest yunge-reader-pdf-file-visits-reopen-cleanly ()
+  (let ((file (expand-file-name "visited.pdf"))
+        (yunge-reader-drivers nil)
+        (yunge-reader--document-registry (make-hash-table :test #'equal))
+        (yunge-reader-saved-places nil)
+        (opens 0)
+        (closes 0)
+        (attaches 0)
+        (detaches 0))
+    (cl-letf (((symbol-function 'yunge-reader-pdf--open)
+               (lambda (_file complete)
+                 (cl-incf opens)
+                 (funcall complete 'handle
+                          '(:layout fixed
+                            :metadata (:page-count 1 :pages nil))
+                          nil)))
+              ((symbol-function 'yunge-reader-pdf--close)
+               (lambda (_document) (cl-incf closes)))
+              ((symbol-function 'yunge-reader-pdf--attach)
+               (lambda (_document) (cl-incf attaches)))
+              ((symbol-function 'yunge-reader-pdf--detach)
+               (lambda (_document) (cl-incf detaches))))
+      (let ((buffer
+             (generate-new-buffer "yunge-reader-pdf-file-test")))
+        (unwind-protect
+            (with-current-buffer buffer
+              (setq buffer-file-name file)
+              (set-buffer-multibyte nil)
+              (insert "%PDF binary fixture")
+              (set-buffer-modified-p nil)
+              (set-auto-mode)
+              (should (eq major-mode 'yunge-reader-mode))
+              (should (equal buffer-file-name file))
+              (should enable-multibyte-characters)
+              (should (eq revert-buffer-function
+                          #'yunge-reader--revert-file-buffer))
+              (should yunge-reader-document)
+              (should-not (buffer-modified-p))
+              (should (= opens 1))
+              (should (= attaches 1))
+              (revert-buffer nil t)
+              (should (eq major-mode 'yunge-reader-mode))
+              (should yunge-reader-document)
+              (should-not (buffer-modified-p))
+              (should (= opens 2))
+              (should (= closes 1))
+              (should (= attaches 2))
+              (should (= detaches 1))
+              (should (memq #'yunge-reader--close-document
+                            kill-buffer-hook))
+              (should (kill-buffer buffer)))
+          (when (buffer-live-p buffer)
+            (kill-buffer buffer)))))
+    (should (= closes 2))
+    (should (= detaches 2))))
+
 (ert-deftest yunge-reader-pdf-attaches-and-detaches-its-view ()
   (with-temp-buffer
     (yunge-reader-mode)

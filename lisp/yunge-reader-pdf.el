@@ -952,7 +952,7 @@ requests for the same document share one native open.  VIEW owns any prompt."
       (send t))))
 
 (defun yunge-reader-pdf-register ()
-  "Register the PDF driver without changing `auto-mode-alist'."
+  "Register the PDF driver."
   (yunge-reader-register-driver
    'pdf
    :match #'yunge-reader-pdf--match-p
@@ -965,9 +965,21 @@ requests for the same document share one native open.  VIEW owns any prompt."
    :restore #'yunge-reader-pdf--restore-location))
 
 ;;;###autoload
+(defun yunge-reader-pdf-mode ()
+  "Read the PDF visited by the current buffer with Yunge Reader."
+  (interactive)
+  (unless buffer-file-name
+    (user-error "This buffer is not visiting a PDF file"))
+  (yunge-reader-pdf-register)
+  (yunge-reader-visit-file buffer-file-name))
+
+;;;###autoload
+(add-to-list 'auto-mode-alist
+             '("\\.pdf\\'" . yunge-reader-pdf-mode))
+
+;;;###autoload
 (defun yunge-reader-pdf-open (file)
-  "Open PDF FILE explicitly with Yunge Reader.
-This command does not take ownership of ordinary `.pdf' file visits."
+  "Open PDF FILE explicitly with Yunge Reader."
   (interactive "fRead PDF: ")
   (yunge-reader-pdf-register)
   (yunge-reader-open file))
