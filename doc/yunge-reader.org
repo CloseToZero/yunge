@@ -271,6 +271,13 @@ slot, rerenders for the resized window, and restores that position at the new
 scale.  Manual zoom keeps its scale and only recomputes visible-page work.
 Closing the view or replacing its window makes a pending resize harmless.
 
+While a new zoom width is rendering, each visible slot keeps the nearest
+cached page image and lets Emacs scale it to the target geometry.  This
+temporary image does not satisfy the exact native render request.  The adapter
+retains at most one fallback per working page and removes it as soon as the
+target-width result arrives, so zoom neither blanks the page nor makes image
+residency unbounded.
+
 The Rust helper processes requests serially, so each PDF has at most one
 background prefetch request in flight.  A viewport change replaces every
 unsent task with the new visible and neighboring pages.  Rendering runs before

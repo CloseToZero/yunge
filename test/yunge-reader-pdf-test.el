@@ -1332,6 +1332,9 @@
           [((width . 100.0) (height . 200.0))]
           yunge-reader-pdf--working-pages '(0)
           yunge-reader-pdf--displayed-pages '(0))
+    (puthash '(0 . 901)
+             '((path . "current.png"))
+             yunge-reader-pdf--render-results)
     (let (painted)
       (cl-letf (((symbol-function 'yunge-reader-pdf--page-width)
                  (lambda (_page &optional _window) 901))
@@ -1342,7 +1345,9 @@
          '((path . "stale.png")) nil))
       (should-not painted)
       (should-not
-       (gethash '(0 . 900) yunge-reader-pdf--render-results)))))
+       (gethash '(0 . 900) yunge-reader-pdf--render-results))
+      (should
+       (gethash '(0 . 901) yunge-reader-pdf--render-results)))))
 
 (ert-deftest yunge-reader-pdf-converts-display-to-page-coordinates ()
   (with-temp-buffer
@@ -2017,6 +2022,39 @@
     (should-not yunge-reader-pdf--prefetch-active)
     (should-not yunge-reader-pdf--prefetch-queue)))
 
+(ert-deftest yunge-reader-pdf-retains-one-nearest-render-while-replacing ()
+  (with-temp-buffer
+    (yunge-reader-mode)
+    (yunge-reader-pdf-view-mode 1)
+    (dolist (width '(700 800 1100))
+      (puthash
+       (cons 0 width)
+       `((path . ,(format "%d.png" width)))
+       yunge-reader-pdf--render-results))
+    (puthash '(1 . 800)
+             '((path . "other.png"))
+             yunge-reader-pdf--render-results)
+    (let ((task
+           (make-yunge-reader-pdf--prefetch-task
+            :kind 'render :page 0 :width 900)))
+      (yunge-reader-pdf--prune-working-set '(0) (list task)))
+    (should (= (hash-table-count
+                yunge-reader-pdf--render-results)
+               1))
+    (should
+     (equal
+      (gethash '(0 . 800) yunge-reader-pdf--render-results)
+      '((path . "800.png"))))
+    (puthash '(0 . 900)
+             '((path . "900.png"))
+             yunge-reader-pdf--render-results)
+    (yunge-reader-pdf--prune-page-renders 0 900)
+    (should (= (hash-table-count
+                yunge-reader-pdf--render-results)
+               1))
+    (should
+     (gethash '(0 . 900) yunge-reader-pdf--render-results))))
+
 (ert-deftest yunge-reader-pdf-refresh-builds-and-prefetches-the-roll ()
   (with-temp-buffer
     (yunge-reader-mode)
@@ -2382,6 +2420,47 @@
       (let ((yunge-reader-pdf-center-pages nil))
         (yunge-reader-pdf--paint-page 1))
       (should-not (get-text-property 3 'line-prefix))
+      (should-not (buffer-modified-p)))))
+
+(ert-deftest yunge-reader-pdf-scales-a-cached-page-during-zoom ()
+  (with-temp-buffer
+    (yunge-reader-mode)
+    (yunge-reader-pdf-view-mode 1)
+    (setq yunge-reader-document
+          (yunge-reader-pdf-test--document
+           '((page . 0) (width . 100.0) (height . 200.0))))
+    (yunge-reader-pdf--load-page-infos)
+    (yunge-reader-pdf--build-roll)
+    (setq yunge-reader-pdf--displayed-pages '(0))
+    (puthash '(0 . 800)
+             '((path . "old.png")
+               (pixel-width . 800) (pixel-height . 1600))
+             yunge-reader-pdf--render-results)
+    (cl-letf (((symbol-function 'create-image)
+               (lambda (path &rest properties)
+                 (cons 'image (cons path properties)))))
+      (yunge-reader-pdf--paint-page 0 1000)
+      (should
+       (equal
+        (get-text-property 1 'display)
+        '(image "old.png" nil nil
+                :width 1000 :height 2000
+                :transform-smoothing t)))
+      (should
+       (equal
+        (get-text-property 1 'line-prefix)
+        '(space :align-to (- center (500)))))
+      (should (= (get-text-property
+                  1 'yunge-reader-pdf-display-width)
+                 1000))
+      (puthash '(0 . 1000)
+               '((path . "new.png")
+                 (pixel-width . 1000) (pixel-height . 2000))
+               yunge-reader-pdf--render-results)
+      (yunge-reader-pdf--paint-page 0 1000)
+      (should
+       (equal (get-text-property 1 'display)
+              '(image "new.png" nil nil)))
       (should-not (buffer-modified-p)))))
 
 (ert-deftest yunge-reader-pdf-page-jumps-preserve-logical-selection ()

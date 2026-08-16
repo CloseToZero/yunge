@@ -1386,32 +1386,74 @@ When SUPPRESS-SCALE is non-nil, do not update the shared effective scale."
   "Return the in-memory render key for PAGE and WIDTH."
   (cons page width))
 
-(defun yunge-reader-pdf--display-image-object (page width)
-  "Return an Emacs image object for PAGE rendered at WIDTH."
-  (let* ((result
-          (gethash (yunge-reader-pdf--render-key page width)
-                   yunge-reader-pdf--render-results))
+(defun yunge-reader-pdf--nearest-render-entry (page width)
+  "Return the nearest cached render entry for PAGE at WIDTH.
+The returned value has the render key as its car and the native result as its
+cdr."
+  (when (hash-table-p yunge-reader-pdf--render-results)
+    (let (nearest nearest-distance)
+      (maphash
+       (lambda (key result)
+         (when (and (consp key)
+                    (eql (car key) page)
+                    (natnump (cdr key)))
+           (let ((distance (abs (- (cdr key) width))))
+             (when (or (null nearest-distance)
+                       (< distance nearest-distance))
+               (setq nearest (cons key result)
+                     nearest-distance distance)))))
+       yunge-reader-pdf--render-results)
+      nearest)))
+
+(defun yunge-reader-pdf--display-image-object (page width &optional entry)
+  "Return an Emacs image object for PAGE displayed at WIDTH.
+Use the nearest cached render ENTRY while an exact render is unavailable."
+  (let* ((entry
+          (or entry
+              (yunge-reader-pdf--nearest-render-entry page width)))
+         (render-key (car-safe entry))
+         (result (cdr-safe entry))
          (path (alist-get 'path result))
-         (pixel-width (alist-get 'pixel-width result))
-         (pixel-height (alist-get 'pixel-height result))
          (page-info (yunge-reader-pdf--page-info page))
+         (fallback
+          (and (consp render-key) (/= (cdr render-key) width)))
+         (target-size
+          (and page-info
+               (yunge-reader-pdf--pixel-size page-info width)))
+         (pixel-width
+          (if fallback
+              (car-safe target-size)
+            (alist-get 'pixel-width result)))
+         (pixel-height
+          (if fallback
+              (cdr-safe target-size)
+            (alist-get 'pixel-height result)))
          (text-layer
           (and yunge-reader-pdf--text-cache
                (gethash page yunge-reader-pdf--text-cache))))
-    (if (and text-layer
-             (or (yunge-reader-pdf--selection-offsets page text-layer)
-                 (yunge-reader-pdf--search-offsets page text-layer)))
-        (let ((svg (svg-create pixel-width pixel-height)))
-          (svg-embed svg path "image/png" nil
-                     :x 0 :y 0
-                     :width pixel-width
-                     :height pixel-height)
-          (yunge-reader-pdf--paint-selection
-           svg page page-info text-layer pixel-width pixel-height)
-          (yunge-reader-pdf--paint-search
-           svg page page-info text-layer pixel-width pixel-height)
-          (svg-image svg))
-      (create-image path nil nil))))
+    (when path
+      (if (and text-layer
+               pixel-width
+               pixel-height
+               (or (yunge-reader-pdf--selection-offsets page text-layer)
+                   (yunge-reader-pdf--search-offsets page text-layer)))
+          (let ((svg (svg-create pixel-width pixel-height)))
+            (svg-embed svg path "image/png" nil
+                       :x 0 :y 0
+                       :width pixel-width
+                       :height pixel-height)
+            (yunge-reader-pdf--paint-selection
+             svg page page-info text-layer pixel-width pixel-height)
+            (yunge-reader-pdf--paint-search
+             svg page page-info text-layer pixel-width pixel-height)
+            (svg-image svg))
+        (if fallback
+            (and pixel-width pixel-height
+                 (create-image path nil nil
+                               :width pixel-width
+                               :height pixel-height
+                               :transform-smoothing t))
+          (create-image path nil nil))))))
 
 (defun yunge-reader-pdf--page-width (page &optional window)
   "Return the target render width for PAGE in WINDOW."
@@ -1559,14 +1601,13 @@ When SUPPRESS-SCALE is non-nil, do not update the shared effective scale."
             (or width
                 (yunge-reader-pdf--display-width page)
                 (yunge-reader-pdf--page-width page)))
-           (result
-            (gethash (yunge-reader-pdf--render-key page width)
-                     yunge-reader-pdf--render-results))
+           (entry (yunge-reader-pdf--nearest-render-entry page width))
            (display
-            (if (and result
+            (if (and entry
                      (memq page yunge-reader-pdf--displayed-pages))
                 (condition-case image-error
-                    (or (yunge-reader-pdf--display-image-object page width)
+                    (or (yunge-reader-pdf--display-image-object
+                         page width entry)
                         (error "Emacs rejected the rendered PDF image"))
                   (error
                    (display-warning
@@ -1700,14 +1741,24 @@ When SUPPRESS-SCALE is non-nil, do not update the shared effective scale."
 
 (defun yunge-reader-pdf--prune-working-set (pages tasks)
   "Retain only PAGES and their current render TASKS in memory."
-  (let ((render-keys (make-hash-table :test #'equal)))
+  (let ((render-keys (make-hash-table :test #'equal))
+        (render-widths (make-hash-table :test #'eql)))
     (dolist (task tasks)
       (when (eq (yunge-reader-pdf--prefetch-task-kind task) 'render)
-        (puthash
-         (yunge-reader-pdf--render-key
-          (yunge-reader-pdf--prefetch-task-page task)
-          (yunge-reader-pdf--prefetch-task-width task))
-         t render-keys)))
+        (let ((page (yunge-reader-pdf--prefetch-task-page task))
+              (width (yunge-reader-pdf--prefetch-task-width task)))
+          (puthash (yunge-reader-pdf--render-key page width)
+                   t render-keys)
+          (puthash page width render-widths))))
+    ;; Keep one old render only until each working page has its exact target.
+    (maphash
+     (lambda (page width)
+       (unless (gethash (yunge-reader-pdf--render-key page width)
+                        yunge-reader-pdf--render-results)
+         (when-let* ((entry
+                      (yunge-reader-pdf--nearest-render-entry page width)))
+           (puthash (car entry) t render-keys))))
+     render-widths)
     (yunge-reader-pdf--prune-cache
      yunge-reader-pdf--render-results
      (lambda (key) (gethash key render-keys)))
@@ -1717,6 +1768,14 @@ When SUPPRESS-SCALE is non-nil, do not update the shared effective scale."
     (yunge-reader-pdf--prune-cache
      yunge-reader-pdf--link-cache
      (lambda (page) (memq page pages)))))
+
+(defun yunge-reader-pdf--prune-page-renders (page width)
+  "Retain PAGE's WIDTH render and leave other pages unchanged."
+  (yunge-reader-pdf--prune-cache
+   yunge-reader-pdf--render-results
+   (lambda (key)
+     (or (/= (car key) page)
+         (= (cdr key) width)))))
 
 (defun yunge-reader-pdf--prefetch-task-needed-p (task)
   "Return whether TASK is still useful to the current PDF view."
@@ -1865,7 +1924,8 @@ When SUPPRESS-SCALE is non-nil, do not update the shared effective scale."
                      (hash-table-p yunge-reader-pdf--render-results)
                      (yunge-reader-pdf--retain-render-p page width))
                 (puthash (yunge-reader-pdf--render-key page width)
-                         result yunge-reader-pdf--render-results))
+                         result yunge-reader-pdf--render-results)
+                (yunge-reader-pdf--prune-page-renders page width))
               (when (and yunge-reader-pdf-view-mode
                          (yunge-reader-pdf--retain-render-p page width)
                          (memq page yunge-reader-pdf--displayed-pages))
