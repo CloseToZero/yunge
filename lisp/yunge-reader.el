@@ -99,11 +99,33 @@ and window and returns non-nil after accepting the location."
 
 (cl-defstruct yunge-reader-document
   "An open document resource owned by one reader driver."
+  key
   file
   driver
   handle
   layout
   metadata)
+
+(cl-defstruct (yunge-reader--document-entry
+               (:constructor yunge-reader--make-document-entry))
+  "One canonical document resource and its attached Reader views."
+  key
+  file
+  driver
+  state
+  document
+  requests
+  views
+  primary-view
+  active-view)
+
+(cl-defstruct (yunge-reader--view-request
+               (:constructor yunge-reader--make-view-request))
+  "One Reader buffer waiting to attach to a document resource."
+  buffer
+  generation
+  complete
+  completed)
 
 (cl-defstruct yunge-reader-position
   "A stable position in a document.
@@ -166,12 +188,19 @@ unscaled coordinate system of UNIT."
 (defvar yunge-reader-drivers nil
   "Registered `yunge-reader-driver' objects in precedence order.")
 
+(defvar yunge-reader--document-registry
+  (make-hash-table :test #'equal)
+  "Map canonical document keys to live resource entries.")
+
 (defvar yunge-reader-saved-places nil
   "Most recently used durable Reader places.
 Each entry maps a canonical file name to versioned, printable place data.")
 
 (defvar-local yunge-reader-document nil
   "Document displayed by the current reader buffer.")
+
+(defvar-local yunge-reader--document-entry nil
+  "Shared resource entry attached to the current Reader buffer.")
 
 (defvar-local yunge-reader--view-attached nil
   "Whether the current buffer owns an attached driver view.")
@@ -292,9 +321,12 @@ artifacts.  Functions run in the reader buffer without arguments.")
   (setq-local cursor-type nil)
   (setq-local truncate-lines t)
   (setq-local yunge-reader-scale yunge-reader-default-scale)
+  (setq-local yunge-reader--document-entry nil)
   (setq-local yunge-reader--view-attached nil)
   (setq-local yunge-reader--copy-generation 0)
   (setq-local yunge-reader--copy-pending nil)
+  (add-hook 'post-command-hook
+            #'yunge-reader--note-view-activity nil t)
   (add-hook 'kill-buffer-hook #'yunge-reader--close-document nil t))
 
 (with-eval-after-load 'evil
@@ -365,6 +397,143 @@ new definition highest precedence."
   "Return the canonical durable-place key for FILE."
   (let ((absolute (expand-file-name file)))
     (or (ignore-errors (file-truename absolute)) absolute)))
+
+(defun yunge-reader--document-key (file driver)
+  "Return the registry key for FILE opened through DRIVER."
+  (list (yunge-reader-driver-name driver)
+        (yunge-reader--place-file-key file)))
+
+(defun yunge-reader--entry-current-p (entry)
+  "Return whether ENTRY is the canonical live registry entry."
+  (eq (gethash (yunge-reader--document-entry-key entry)
+               yunge-reader--document-registry)
+      entry))
+
+(defun yunge-reader--view-owns-entry-p (buffer entry)
+  "Return whether live BUFFER is attached to ENTRY."
+  (and (buffer-live-p buffer)
+       (with-current-buffer buffer
+         (and (eq yunge-reader--document-entry entry)
+              (eq yunge-reader-document
+                  (yunge-reader--document-entry-document entry))))))
+
+(defun yunge-reader--entry-live-views (entry)
+  "Return and retain only live Reader views attached to ENTRY."
+  (let ((views
+         (seq-filter
+          (lambda (buffer)
+            (yunge-reader--view-owns-entry-p buffer entry))
+          (yunge-reader--document-entry-views entry))))
+    (setf (yunge-reader--document-entry-views entry) views)
+    (unless (memq (yunge-reader--document-entry-primary-view entry)
+                  views)
+      (setf (yunge-reader--document-entry-primary-view entry)
+            (or (and
+                 (memq (yunge-reader--document-entry-active-view entry)
+                       views)
+                 (yunge-reader--document-entry-active-view entry))
+                (car views))))
+    (unless (memq (yunge-reader--document-entry-active-view entry)
+                  views)
+      (setf (yunge-reader--document-entry-active-view entry)
+            (yunge-reader--document-entry-primary-view entry)))
+    views))
+
+(defun yunge-reader--entry-view (entry &optional preferred)
+  "Return a live view of ENTRY, preferring PREFERRED."
+  (let ((views (yunge-reader--entry-live-views entry)))
+    (cond
+     ((memq preferred views) preferred)
+     ((memq (yunge-reader--document-entry-active-view entry) views)
+      (yunge-reader--document-entry-active-view entry))
+     ((memq (yunge-reader--document-entry-primary-view entry) views)
+      (yunge-reader--document-entry-primary-view entry))
+     (t (car views)))))
+
+(defun yunge-reader--entry-for-document (document)
+  "Return the canonical live registry entry owning DOCUMENT."
+  (when-let* ((key (yunge-reader-document-key document))
+              (entry (gethash key yunge-reader--document-registry)))
+    (and (eq document (yunge-reader--document-entry-document entry))
+         entry)))
+
+(defun yunge-reader--document-view (document &optional preferred)
+  "Return a live Reader view of DOCUMENT, preferring PREFERRED."
+  (or (when-let* ((entry (yunge-reader--entry-for-document document)))
+        (yunge-reader--entry-view entry preferred))
+      (and (buffer-live-p preferred)
+           (with-current-buffer preferred
+             (and (eq document yunge-reader-document) preferred)))
+      (seq-find
+       (lambda (buffer)
+         (and (buffer-live-p buffer)
+              (with-current-buffer buffer
+                (eq document yunge-reader-document))))
+       (buffer-list))))
+
+(defun yunge-reader--document-live-p (document)
+  "Return whether DOCUMENT has at least one live Reader view."
+  (and (yunge-reader--document-view document) t))
+
+(defun yunge-reader--primary-view-p ()
+  "Return whether the current buffer owns durable place updates."
+  (or (null yunge-reader--document-entry)
+      (eq (current-buffer)
+          (yunge-reader--document-entry-primary-view
+           yunge-reader--document-entry))))
+
+(defun yunge-reader--note-view-activity ()
+  "Remember the current buffer as its document's active view."
+  (when (and yunge-reader-document
+             yunge-reader--document-entry
+             (yunge-reader--entry-current-p
+              yunge-reader--document-entry))
+    (setf (yunge-reader--document-entry-active-view
+           yunge-reader--document-entry)
+          (current-buffer))))
+
+(defun yunge-reader--complete-view-request (request success)
+  "Complete REQUEST once with SUCCESS."
+  (unless (yunge-reader--view-request-completed request)
+    (setf (yunge-reader--view-request-completed request) t)
+    (when-let* ((complete
+                 (yunge-reader--view-request-complete request)))
+      (funcall complete success))))
+
+(defun yunge-reader--view-request-current-p (entry request)
+  "Return whether REQUEST still belongs to ENTRY and its Reader buffer."
+  (let ((buffer (yunge-reader--view-request-buffer request))
+        (generation (yunge-reader--view-request-generation request)))
+    (and (buffer-live-p buffer)
+         (with-current-buffer buffer
+           (and (eq yunge-reader--document-entry entry)
+                (= generation yunge-reader--open-generation))))))
+
+(defun yunge-reader--entry-pending-view (entry)
+  "Return the first live Reader buffer waiting on ENTRY."
+  (when-let* ((request
+               (seq-find
+                (lambda (candidate)
+                  (yunge-reader--view-request-current-p
+                   entry candidate))
+                (yunge-reader--document-entry-requests entry))))
+    (yunge-reader--view-request-buffer request)))
+
+(defun yunge-reader--registered-buffer (file)
+  "Return the primary or opening Reader buffer registered for FILE."
+  (let ((file-key (yunge-reader--place-file-key file))
+        found)
+    (maphash
+     (lambda (key entry)
+       (when (and (not found)
+                  (equal (cadr key) file-key))
+         (setq found
+               (or (yunge-reader--entry-view
+                    entry
+                    (yunge-reader--document-entry-primary-view entry))
+                   (yunge-reader--entry-pending-view entry)))))
+     yunge-reader--document-registry)
+    found))
 
 (defun yunge-reader--position-data (position)
   "Return printable durable data for reader POSITION."
@@ -470,6 +639,7 @@ new definition highest precedence."
 Do nothing until document opening and any prior place restoration commit."
   (when (and yunge-reader--place-recording-enabled
              (not yunge-reader--restoring-place)
+             (yunge-reader--primary-view-p)
              yunge-reader-document)
     (condition-case error-data
         (when-let* ((place (yunge-reader--current-place window)))
@@ -556,17 +726,19 @@ Do nothing until document opening and any prior place restoration commit."
 
 (defun yunge-reader--existing-buffer (file)
   "Return a live reader buffer for FILE, or nil."
-  (seq-find
-   (lambda (buffer)
-     (let ((buffer-file (yunge-reader--buffer-file buffer)))
-       (and buffer-file
-            (with-current-buffer buffer
-              (derived-mode-p 'yunge-reader-mode))
-            ;; Reader drivers may accept virtual or not-yet-existing files,
-            ;; for which `file-equal-p' cannot establish identity.
-            (or (ignore-errors (file-equal-p file buffer-file))
-                (equal file (expand-file-name buffer-file))))))
-   (buffer-list)))
+  (or
+   (yunge-reader--registered-buffer file)
+   (seq-find
+    (lambda (buffer)
+      (let ((buffer-file (yunge-reader--buffer-file buffer)))
+        (and buffer-file
+             (with-current-buffer buffer
+               (derived-mode-p 'yunge-reader-mode))
+             ;; Drivers may accept virtual or not-yet-existing files, for
+             ;; which `file-equal-p' cannot establish identity.
+             (or (ignore-errors (file-equal-p file buffer-file))
+                 (equal file (expand-file-name buffer-file))))))
+    (buffer-list))))
 
 (defun yunge-reader--jump-target (window _position)
   "Capture the current Reader location as an immutable jump target."
@@ -756,85 +928,195 @@ Do nothing until document opening and any prior place restoration commit."
       :metadata (plist-get properties :metadata))
      "Could not close late reader document: %s")))
 
-(defun yunge-reader--finish-open
-    (buffer generation driver file handle properties error-data complete)
-  "Finish opening FILE in BUFFER for GENERATION.
-DRIVER produced HANDLE, PROPERTIES, and ERROR-DATA.  Call COMPLETE with
-non-nil after the initial view and pending place are ready."
-  (if (not (and (buffer-live-p buffer)
-                (with-current-buffer buffer
-                  (= generation yunge-reader--open-generation))))
-      (progn
-        (yunge-reader--close-handle driver file handle properties)
-        (when complete
-          (funcall complete nil)))
-    (with-current-buffer buffer
-      (setq yunge-reader--opening-file nil)
-      (if error-data
-          (progn
-            (setq yunge-reader--pending-place nil
-                  yunge-reader--place-recording-enabled nil)
-            (yunge-reader--close-handle
-             driver file handle properties)
-            (yunge-reader--display-status
-             "Could not open %s:\n\n%s"
-             file (error-message-string error-data))
-            (when complete
-              (funcall complete nil)))
-        (let ((layout (plist-get properties :layout)))
-          (unless (memq layout '(fixed reflow))
-            (setq error-data
-                  (list 'error
-                        (format "Driver returned invalid layout: %S"
-                                layout))))
-          (if error-data
+(defun yunge-reader--remove-entry-request (entry request)
+  "Remove REQUEST from ENTRY."
+  (setf (yunge-reader--document-entry-requests entry)
+        (delq request
+              (yunge-reader--document-entry-requests entry))))
+
+(defun yunge-reader--add-entry-view (entry buffer)
+  "Attach BUFFER ownership to ready document ENTRY."
+  (yunge-reader--entry-live-views entry)
+  (unless (memq buffer (yunge-reader--document-entry-views entry))
+    (setf (yunge-reader--document-entry-views entry)
+          (append (yunge-reader--document-entry-views entry)
+                  (list buffer))))
+  (unless (memq (yunge-reader--document-entry-primary-view entry)
+                (yunge-reader--document-entry-views entry))
+    (setf (yunge-reader--document-entry-primary-view entry) buffer))
+  (unless (memq (yunge-reader--document-entry-active-view entry)
+                (yunge-reader--document-entry-views entry))
+    (setf (yunge-reader--document-entry-active-view entry) buffer)))
+
+(defun yunge-reader--remove-entry-view (entry buffer)
+  "Remove BUFFER ownership from document ENTRY and promote a survivor."
+  (let ((views
+         (seq-filter
+          (lambda (candidate)
+            (and (not (eq candidate buffer))
+                 (yunge-reader--view-owns-entry-p candidate entry)))
+          (yunge-reader--document-entry-views entry))))
+    (setf (yunge-reader--document-entry-views entry) views)
+    (when (eq buffer
+              (yunge-reader--document-entry-primary-view entry))
+      (setf (yunge-reader--document-entry-primary-view entry)
+            (or (and
+                 (memq (yunge-reader--document-entry-active-view entry)
+                       views)
+                 (yunge-reader--document-entry-active-view entry))
+                (car views))))
+    (unless (memq (yunge-reader--document-entry-active-view entry)
+                  views)
+      (setf (yunge-reader--document-entry-active-view entry)
+            (yunge-reader--document-entry-primary-view entry)))))
+
+(defun yunge-reader--release-entry-if-unused (entry)
+  "Close ready ENTRY when no attached or pending views remain."
+  (when (and (eq (yunge-reader--document-entry-state entry) 'ready)
+             (null (yunge-reader--document-entry-requests entry))
+             (null (yunge-reader--entry-live-views entry)))
+    (when (yunge-reader--entry-current-p entry)
+      (remhash (yunge-reader--document-entry-key entry)
+               yunge-reader--document-registry))
+    (setf (yunge-reader--document-entry-state entry) 'closed)
+    (yunge-reader--close-resource
+     (yunge-reader--document-entry-document entry)
+     "Could not close reader document: %s")))
+
+(defun yunge-reader--fail-view-request (entry request error-data)
+  "Fail REQUEST for ENTRY with ERROR-DATA."
+  (yunge-reader--remove-entry-request entry request)
+  (let ((buffer (yunge-reader--view-request-buffer request)))
+    (when (yunge-reader--view-request-current-p entry request)
+      (with-current-buffer buffer
+        (setq yunge-reader--opening-file nil
+              yunge-reader--pending-place nil
+              yunge-reader--place-recording-enabled nil
+              yunge-reader--document-entry nil)
+        (yunge-reader--display-status
+         "Could not open %s:\n\n%s"
+         (yunge-reader--document-entry-file entry)
+         (error-message-string error-data))))
+    (yunge-reader--complete-view-request request nil)))
+
+(defun yunge-reader--prepare-view (entry request)
+  "Attach and restore REQUEST as one view of ready ENTRY."
+  (yunge-reader--remove-entry-request entry request)
+  (if (not (yunge-reader--view-request-current-p entry request))
+      (yunge-reader--complete-view-request request nil)
+    (let ((buffer (yunge-reader--view-request-buffer request))
+          (document (yunge-reader--document-entry-document entry)))
+      (with-current-buffer buffer
+        (setq yunge-reader--opening-file nil
+              yunge-reader-document document)
+        (yunge-reader--add-entry-view entry buffer)
+        (yunge-reader--display-status
+         "%s\n\nLayout: %s\nDriver: %s"
+         (file-name-nondirectory
+          (yunge-reader--document-entry-file entry))
+         (yunge-reader-document-layout document)
+         (yunge-reader-driver-name
+          (yunge-reader-document-driver document)))
+        (let (accepted prepare-error)
+          (condition-case error-data
+              (progn
+                (yunge-reader--attach-view document)
+                (setq accepted (yunge-reader--restore-open-place)))
+            (error (setq prepare-error error-data)))
+          (if prepare-error
               (progn
                 (setq yunge-reader--pending-place nil
                       yunge-reader--place-recording-enabled nil)
-                (yunge-reader--close-handle
-                 driver file handle properties)
+                (yunge-reader--detach-view document)
+                (setq yunge-reader-document nil
+                      yunge-reader--document-entry nil)
+                (yunge-reader--remove-entry-view entry buffer)
                 (yunge-reader--display-status
-                 "Could not open %s:\n\n%s"
-                 file (error-message-string error-data))
-                (when complete
-                  (funcall complete nil)))
-            (let ((document
-                   (make-yunge-reader-document
-                    :file file
-                    :driver driver
-                    :handle handle
-                    :layout layout
-                    :metadata (plist-get properties :metadata)))
-                  accepted
-                  prepare-error)
-              (setq yunge-reader-document document)
-              (yunge-reader--display-status
-               "%s\n\nLayout: %s\nDriver: %s"
-               (file-name-nondirectory file)
-               layout
-               (yunge-reader-driver-name driver))
-              (condition-case error-data
-                  (progn
-                    (yunge-reader--attach-view document)
-                    (setq accepted
-                          (yunge-reader--restore-open-place)))
-                (error (setq prepare-error error-data)))
-              (if prepare-error
-                  (progn
-                    (setq yunge-reader--pending-place nil
-                          yunge-reader--place-recording-enabled nil)
-                    (yunge-reader--detach-view document)
-                    (setq yunge-reader-document nil)
-                    (yunge-reader--close-resource
-                     document
-                     "Could not close failed reader document: %s")
-                    (yunge-reader--display-status
-                     "Could not prepare %s:\n\n%s"
-                     file (error-message-string prepare-error)))
-                (when accepted
-                  (yunge-reader-record-place)))
-              (when complete
-                (funcall complete accepted)))))))))
+                 "Could not prepare %s:\n\n%s"
+                 (yunge-reader--document-entry-file entry)
+                 (error-message-string prepare-error)))
+            (when accepted
+              (yunge-reader-record-place)))
+          (yunge-reader--complete-view-request request accepted)))))
+  (yunge-reader--release-entry-if-unused entry))
+
+(defun yunge-reader--finish-resource-open
+    (entry handle properties error-data)
+  "Finish opening the shared resource for ENTRY."
+  (let ((layout (plist-get properties :layout)))
+    (when (and (not error-data)
+               (not (memq layout '(fixed reflow))))
+      (setq error-data
+            (list 'error
+                  (format "Driver returned invalid layout: %S" layout))))
+    (cond
+     ((not (and (yunge-reader--entry-current-p entry)
+                (eq (yunge-reader--document-entry-state entry)
+                    'opening)))
+      (yunge-reader--close-handle
+       (yunge-reader--document-entry-driver entry)
+       (yunge-reader--document-entry-file entry)
+       handle properties)
+      (dolist (request
+               (yunge-reader--document-entry-requests entry))
+        (yunge-reader--complete-view-request request nil))
+      (setf (yunge-reader--document-entry-requests entry) nil))
+     (error-data
+      (yunge-reader--close-handle
+       (yunge-reader--document-entry-driver entry)
+       (yunge-reader--document-entry-file entry)
+       handle properties)
+      (remhash (yunge-reader--document-entry-key entry)
+               yunge-reader--document-registry)
+      (setf (yunge-reader--document-entry-state entry) 'failed)
+      (dolist (request
+               (copy-sequence
+                (yunge-reader--document-entry-requests entry)))
+        (yunge-reader--fail-view-request entry request error-data)))
+     (t
+      (let ((document
+             (make-yunge-reader-document
+              :key (yunge-reader--document-entry-key entry)
+              :file (yunge-reader--document-entry-file entry)
+              :driver (yunge-reader--document-entry-driver entry)
+              :handle handle
+              :layout layout
+              :metadata (plist-get properties :metadata))))
+        (setf (yunge-reader--document-entry-document entry) document
+              (yunge-reader--document-entry-state entry) 'ready)
+        (dolist (request
+                 (copy-sequence
+                  (yunge-reader--document-entry-requests entry)))
+          (yunge-reader--prepare-view entry request))
+        (yunge-reader--release-entry-if-unused entry))))))
+
+(defun yunge-reader--start-resource-open (entry)
+  "Start the one driver resource open owned by ENTRY."
+  (let ((driver (yunge-reader--document-entry-driver entry))
+        (file (yunge-reader--document-entry-file entry))
+        completed)
+    (condition-case error-data
+        (funcall
+         (yunge-reader-driver-open-function driver)
+         file
+         (lambda (handle properties open-error)
+           (if completed
+               (progn
+                 (yunge-reader--close-handle
+                  driver file handle properties)
+                 (display-warning
+                  'yunge-reader
+                  (format "Reader driver %s completed open twice"
+                          (yunge-reader-driver-name driver))
+                  :warning))
+             (setq completed t)
+             (yunge-reader--finish-resource-open
+              entry handle properties open-error))))
+      (error
+       (unless completed
+         (setq completed t)
+         (yunge-reader--finish-resource-open
+          entry nil nil error-data))))))
 
 (defun yunge-reader--begin-open
     (buffer driver file &optional place complete)
@@ -845,44 +1127,54 @@ non-nil only after opening and restoration succeed."
     (error "Reader jump contains an invalid place: %S" place))
   (unless (or (null complete) (functionp complete))
     (error "Reader open completion must be a function: %S" complete))
-  (with-current-buffer buffer
-    (setq yunge-reader--opening-file file
-          yunge-reader--pending-place
-          (or (and place (copy-tree place t))
-              (yunge-reader--saved-place file driver))
-          yunge-reader--place-recording-enabled nil
-          yunge-reader--outline nil
-          yunge-reader--outline-loaded nil
-          yunge-reader--outline-pending nil)
-    (cl-incf yunge-reader--open-generation)
-    (cl-incf yunge-reader--outline-generation)
-    (yunge-reader--display-status "Opening %s..." file)
-    (let ((generation yunge-reader--open-generation)
-          completed)
-      (condition-case error-data
-          (funcall
-           (yunge-reader-driver-open-function driver)
-           file
-           (lambda (handle properties open-error)
-             (if completed
-                 (progn
-                   (yunge-reader--close-handle
-                    driver file handle properties)
-                   (display-warning
-                    'yunge-reader
-                    (format "Reader driver %s completed open twice"
-                            (yunge-reader-driver-name driver))
-                    :warning))
-               (setq completed t)
-               (yunge-reader--finish-open
-                buffer generation driver file handle properties
-                open-error complete))))
-        (error
-         (unless completed
-           (setq completed t)
-           (yunge-reader--finish-open
-            buffer generation driver file nil nil error-data
-            complete)))))))
+  (setq file (expand-file-name file))
+  (let* ((key (yunge-reader--document-key file driver))
+         (registered
+          (gethash key yunge-reader--document-registry))
+         (entry
+          (if (and registered
+                   (memq (yunge-reader--document-entry-state registered)
+                         '(opening ready)))
+              registered
+            (let ((created
+                   (yunge-reader--make-document-entry
+                    :key key
+                    :file file
+                    :driver driver
+                    :state 'opening)))
+              (puthash key created yunge-reader--document-registry)
+              created)))
+         request)
+    (with-current-buffer buffer
+      (when (or yunge-reader-document yunge-reader--document-entry)
+        (error "Reader buffer is already attached to a document"))
+      (setq yunge-reader--opening-file file
+            yunge-reader--pending-place
+            (or (and place (copy-tree place t))
+                (yunge-reader--saved-place file driver))
+            yunge-reader--place-recording-enabled nil
+            yunge-reader--outline nil
+            yunge-reader--outline-loaded nil
+            yunge-reader--outline-pending nil
+            yunge-reader--document-entry entry)
+      (cl-incf yunge-reader--open-generation)
+      (cl-incf yunge-reader--outline-generation)
+      (yunge-reader--display-status "Opening %s..." file)
+      (setq request
+            (yunge-reader--make-view-request
+             :buffer buffer
+             :generation yunge-reader--open-generation
+             :complete complete))
+      (setf (yunge-reader--document-entry-requests entry)
+            (append (yunge-reader--document-entry-requests entry)
+                    (list request)))
+      (pcase (yunge-reader--document-entry-state entry)
+        ('ready (yunge-reader--prepare-view entry request))
+        ('opening
+         (when (= (length
+                   (yunge-reader--document-entry-requests entry))
+                  1)
+           (yunge-reader--start-resource-open entry)))))))
 
 ;;;###autoload
 (defun yunge-reader-open (file)
@@ -909,23 +1201,51 @@ asynchronously."
 
 (defun yunge-reader--close-document ()
   "Detach the current view and close its driver-owned document resource."
-  (cl-incf yunge-reader--open-generation)
-  (cl-incf yunge-reader--search-generation)
-  (cl-incf yunge-reader--outline-generation)
-  (cl-incf yunge-reader--copy-generation)
-  (setq yunge-reader--outline nil
-        yunge-reader--outline-loaded nil
-        yunge-reader--outline-pending nil
-        yunge-reader--copy-pending nil)
-  (when yunge-reader-document
-    (yunge-reader-record-place)
-    (let ((document yunge-reader-document))
-      (setq yunge-reader--pending-place nil
-            yunge-reader--place-recording-enabled nil)
-      (yunge-reader--detach-view document)
-      (setq yunge-reader-document nil)
+  (let ((entry yunge-reader--document-entry)
+        (document yunge-reader-document)
+        cancelled)
+    (cl-incf yunge-reader--open-generation)
+    (cl-incf yunge-reader--search-generation)
+    (cl-incf yunge-reader--outline-generation)
+    (cl-incf yunge-reader--copy-generation)
+    (setq yunge-reader--outline nil
+          yunge-reader--outline-loaded nil
+          yunge-reader--outline-pending nil
+          yunge-reader--copy-pending nil)
+    (when entry
+      (dolist (request
+               (copy-sequence
+                (yunge-reader--document-entry-requests entry)))
+        (when (eq (current-buffer)
+                  (yunge-reader--view-request-buffer request))
+          (yunge-reader--remove-entry-request entry request)
+          (push request cancelled))))
+    (when document
+      (yunge-reader-record-place)
+      (yunge-reader--detach-view document))
+    (setq yunge-reader-document nil
+          yunge-reader--document-entry nil
+          yunge-reader--opening-file nil
+          yunge-reader--pending-place nil
+          yunge-reader--place-recording-enabled nil)
+    (cond
+     ((and document entry
+           (eq document
+               (yunge-reader--document-entry-document entry)))
+      (yunge-reader--remove-entry-view entry (current-buffer))
+      (yunge-reader--release-entry-if-unused entry))
+     (document
       (yunge-reader--close-resource
-       document "Could not close reader document: %s"))))
+       document "Could not close reader document: %s"))
+     ((and entry
+           (eq (yunge-reader--document-entry-state entry) 'opening)
+           (null (yunge-reader--document-entry-requests entry)))
+      (when (yunge-reader--entry-current-p entry)
+        (remhash (yunge-reader--document-entry-key entry)
+                 yunge-reader--document-registry))
+      (setf (yunge-reader--document-entry-state entry) 'abandoned)))
+    (dolist (request cancelled)
+      (yunge-reader--complete-view-request request nil))))
 
 (defun yunge-reader-request (operation arguments complete)
   "Request OPERATION with ARGUMENTS for the current document.

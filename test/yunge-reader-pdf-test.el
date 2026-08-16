@@ -15,8 +15,7 @@
   (make-yunge-reader-pdf-handle
    :session (or session 17)
    :id id
-   :identity 'test-identity
-   :buffer (current-buffer)))
+   :identity 'test-identity))
 
 (defun yunge-reader-pdf-test--link
     (page index bounds target &optional label)
@@ -540,6 +539,80 @@
       (should (= yunge-reader-scale 1.5))
       (should (equal yunge-reader-saved-places saved-places)))))
 
+(ert-deftest yunge-reader-pdf-recovers-for-the-requesting-shared-view ()
+  (let* ((yunge-reader--document-registry
+          (make-hash-table :test #'equal))
+         (file (expand-file-name "shared-recovery.pdf"))
+         (key (list 'pdf (yunge-reader--place-file-key file)))
+         (driver
+          (yunge-reader--make-driver
+           :name 'pdf
+           :close-function #'ignore
+           :detach-function #'ignore))
+         (handle (yunge-reader-pdf-test--handle 7))
+         (document
+          (make-yunge-reader-document
+           :key key :file file :driver driver :handle handle))
+         (entry
+          (yunge-reader--make-document-entry
+           :key key :file file :driver driver :state 'ready
+           :document document))
+         recovery-buffer
+         result
+         completion-error
+         first
+         second)
+    (unwind-protect
+        (progn
+          (setq first (generate-new-buffer " *pdf-shared-primary*")
+                second (generate-new-buffer " *pdf-shared-requester*"))
+          (dolist (buffer (list first second))
+            (with-current-buffer buffer
+              (yunge-reader-mode)
+              (setq yunge-reader-document document
+                    yunge-reader--document-entry entry)))
+          (setf (yunge-reader--document-entry-views entry)
+                (list first second)
+                (yunge-reader--document-entry-primary-view entry) first
+                (yunge-reader--document-entry-active-view entry) first)
+          (puthash key entry yunge-reader--document-registry)
+          (cl-letf
+              (((symbol-function 'yunge-reader-pdf--file-identity)
+                (lambda (_file) 'test-identity))
+               ((symbol-function 'yunge-reader-native-session-live-p)
+                (lambda (session) (= session 22)))
+               ((symbol-function 'yunge-reader-native-start) #'ignore)
+               ((symbol-function 'yunge-reader-native-current-session)
+                (lambda () 22))
+               ((symbol-function 'yunge-reader-pdf--open-in-session)
+                (lambda (_file session buffer _generation _window _state
+                         complete)
+                  (should (= session 22))
+                  (setq recovery-buffer buffer)
+                  (funcall complete '((document . 9)) nil)))
+               ((symbol-function
+                 'yunge-reader-native-request-in-session)
+                (lambda (session operation parameters complete)
+                  (should (= session 22))
+                  (should (equal operation "page-info"))
+                  (should (= (alist-get 'document parameters) 9))
+                  (funcall complete '((page . 0)) nil))))
+            (with-current-buffer second
+              (yunge-reader-pdf--request
+               document 'page-info '(:page 0)
+               (lambda (value error-data)
+                 (setq result value
+                       completion-error error-data)))))
+          (should (eq recovery-buffer second))
+          (should (equal result '((page . 0))))
+          (should-not completion-error)
+          (should (= (yunge-reader-pdf-handle-session handle) 22))
+          (should (= (yunge-reader-pdf-handle-id handle) 9)))
+      (when (buffer-live-p second)
+        (kill-buffer second))
+      (when (buffer-live-p first)
+        (kill-buffer first)))))
+
 (ert-deftest yunge-reader-pdf-does-not-prompt-for-background-recovery ()
   (with-temp-buffer
     (yunge-reader-mode)
@@ -592,7 +665,8 @@
         completion-error)
     (cl-letf
         (((symbol-function 'yunge-reader-pdf--ensure-handle)
-          (lambda (_document complete) (funcall complete nil)))
+          (lambda (_document _view complete)
+            (funcall complete nil)))
          ((symbol-function 'yunge-reader-pdf--dispatch)
           (lambda (_document _operation _arguments complete)
             (cl-incf dispatches)
@@ -621,7 +695,7 @@
         completion-error)
     (cl-letf
         (((symbol-function 'yunge-reader-pdf--ensure-handle)
-          (lambda (_document complete)
+          (lambda (_document _view complete)
             (cl-incf ensures)
             (funcall complete nil)))
          ((symbol-function 'yunge-reader-pdf--dispatch)
@@ -653,7 +727,8 @@
         completion-error)
     (cl-letf
         (((symbol-function 'yunge-reader-pdf--ensure-handle)
-          (lambda (_document complete) (funcall complete nil)))
+          (lambda (_document _view complete)
+            (funcall complete nil)))
          ((symbol-function 'yunge-reader-pdf--dispatch)
           (lambda (_document _operation _arguments complete)
             (cl-incf dispatches)

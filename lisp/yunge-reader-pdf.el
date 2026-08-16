@@ -62,7 +62,6 @@
   session
   id
   identity
-  buffer
   recovering
   waiters
   closed)
@@ -601,8 +600,7 @@ receives the raw native open result and nil, or nil and an error value."
                 (make-yunge-reader-pdf-handle
                  :session session
                  :id (alist-get 'document result)
-                 :identity identity
-                 :buffer buffer)
+                 :identity identity)
                 (yunge-reader-pdf--open-properties result)
                 nil)))))
       (condition-case acquire-error
@@ -659,23 +657,22 @@ receives the raw native open result and nil, or nil and an error value."
       (error nil))))
 
 (defun yunge-reader-pdf--owns-document-p (handle document)
-  "Return whether HANDLE's buffer still owns DOCUMENT."
-  (let ((buffer (yunge-reader-pdf-handle-buffer handle)))
-    (and (not (yunge-reader-pdf-handle-closed handle))
-         (buffer-live-p buffer)
-         (with-current-buffer buffer
-           (eq yunge-reader-document document)))))
+  "Return whether HANDLE still belongs to live DOCUMENT."
+  (and (not (yunge-reader-pdf-handle-closed handle))
+       (yunge-reader--document-live-p document)))
 
-(defun yunge-reader-pdf--recovery-context (handle)
-  "Return password-prompt context for HANDLE's Reader buffer."
-  (let ((buffer (yunge-reader-pdf-handle-buffer handle)))
-    (with-current-buffer buffer
-      (let ((window (yunge-reader--place-window)))
-        (list
-         buffer
-         yunge-reader--open-generation
-         window
-         (and window (yunge-reader--window-state window)))))))
+(defun yunge-reader-pdf--recovery-context (document view)
+  "Return password-prompt context for DOCUMENT, preferring VIEW."
+  (let ((buffer (yunge-reader--document-view document view)))
+    (if (not buffer)
+        (list nil 0 nil nil)
+      (with-current-buffer buffer
+        (let ((window (yunge-reader--place-window)))
+          (list
+           buffer
+           yunge-reader--open-generation
+           window
+           (and window (yunge-reader--window-state window))))))))
 
 (defun yunge-reader-pdf--recover-complete
     (document handle session identity result error-data)
@@ -704,8 +701,8 @@ IDENTITY is the file identity accepted before the open request."
          (yunge-reader-pdf--finish-recovery
           handle recovery-error))))))
 
-(defun yunge-reader-pdf--start-recovery (document handle)
-  "Start one coalesced native recovery for DOCUMENT and HANDLE."
+(defun yunge-reader-pdf--start-recovery (document handle view)
+  "Start recovery for DOCUMENT and HANDLE on behalf of VIEW."
   (condition-case recovery-error
       (progn
         (unless (yunge-reader-pdf--owns-document-p handle document)
@@ -717,7 +714,8 @@ IDENTITY is the file identity accepted before the open request."
             (error "The PDF changed on disk; close and reopen it"))
           (yunge-reader-native-start)
           (let* ((session (yunge-reader-native-current-session))
-                 (context (yunge-reader-pdf--recovery-context handle)))
+                 (context
+                  (yunge-reader-pdf--recovery-context document view)))
             (unless session
               (error "The Yunge Reader helper did not start"))
             (apply
@@ -732,10 +730,10 @@ IDENTITY is the file identity accepted before the open request."
     (error
      (yunge-reader-pdf--finish-recovery handle recovery-error))))
 
-(defun yunge-reader-pdf--ensure-handle (document complete)
+(defun yunge-reader-pdf--ensure-handle (document view complete)
   "Call COMPLETE after DOCUMENT has a live native handle.
 COMPLETE receives nil on success or an error value.  Concurrent recovery
-requests for the same document share one native open."
+requests for the same document share one native open.  VIEW owns any prompt."
   (let ((handle (yunge-reader-document-handle document)))
     (cond
      ((not (yunge-reader-pdf-handle-p handle))
@@ -753,7 +751,7 @@ requests for the same document share one native open."
      (t
       (setf (yunge-reader-pdf-handle-recovering handle) t
             (yunge-reader-pdf-handle-waiters handle) (list complete))
-      (yunge-reader-pdf--start-recovery document handle)))))
+      (yunge-reader-pdf--start-recovery document handle view)))))
 
 (defun yunge-reader-pdf--close (document)
   "Close PDF DOCUMENT and release its native service lease."
@@ -924,7 +922,8 @@ requests for the same document share one native open."
 (defun yunge-reader-pdf--request
     (document operation arguments complete)
   "Dispatch a recoverable PDF DOCUMENT OPERATION to COMPLETE."
-  (let (finished)
+  (let ((view (current-buffer))
+        finished)
     (cl-labels
         ((finish (value error-data)
            (unless finished
@@ -932,7 +931,7 @@ requests for the same document share one native open."
              (funcall complete value error-data)))
          (send (retry)
            (yunge-reader-pdf--ensure-handle
-            document
+            document view
             (lambda (recovery-error)
               (if recovery-error
                   (finish nil recovery-error)

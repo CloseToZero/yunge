@@ -64,11 +64,17 @@ and detach functions, and a request function.  Open and request completion may
 be immediate or asynchronous.  The core guards completions so one driver
 mistake cannot complete an operation twice.
 
-Resource opening finishes before the core attaches the format-specific view.
-Closing detaches that view before releasing the resource.  A partial attach or
-failed initial restore is detached and closed in the same order.  This keeps a
-buffer's rendering state distinct from document identity, which is required
-before one document resource can safely support several independent views.
+The core publishes a canonical opening entry before calling the driver, so
+concurrent Reader buffers for one file share the same asynchronous open.  Each
+successful buffer then attaches its own format-specific view to the ready
+resource.  Closing detaches one view; only the last detach releases the
+resource.  A partial attach or failed initial restore removes only that view.
+
+The first attached buffer is the primary view and alone owns ordinary durable
+place updates.  If it closes, its final location is recorded before the most
+recently active survivor is promoted.  Promotion itself does not immediately
+replace the saved location.  Zoom, viewport, selection, search, render caches,
+and pending UI work remain buffer-local and independent between views.
 
 Opening a document declares one of two layouts:
 
@@ -97,7 +103,8 @@ pair.  Future reflowable drivers can use the same contract without storing an
 Emacs buffer point.
 
 Jump history and the saved place answer different questions.  The saved place
-is the most recent successful view used when a document is opened normally.
+is the most recent successful primary view used when a document is opened
+normally.  Additional views cannot replace it until they become primary.
 Each jump entry instead owns an immutable snapshot of the file, stable
 position, and zoom state at that moment.  Visiting an older entry therefore
 does not consult a newer saved place and cannot change the entry underneath a
@@ -341,14 +348,16 @@ to the replacement helper.  The wire format is documented in
 [[file:../native/yunge-reader/README.org][the native protocol document]].
 
 After an unexpected helper exit, the first affected PDF request starts or
-joins one document-local reopen.  Recovery verifies the canonical file path,
-size, modification time, and file identity before and after native open, then
-publishes the replacement handle atomically.  Concurrent page, text, render,
-search, link, and outline requests share that reopen.  A request interrupted by
-the crash is retried once; another session loss is reported instead of
-looping.  Page, viewport, zoom, selection, search state, and saved places remain
-owned by Emacs and are not reset during recovery.  A changed or closed file is
-never attached to the old Reader document.
+joins one document-local reopen.  The native handle belongs to the shared
+document, not the buffer that first opened it; recovery takes any password
+prompt context from the live view making the request.  Recovery verifies the
+canonical file path, size, modification time, and file identity before and
+after native open, then publishes the replacement handle atomically.
+Concurrent page, text, render, search, link, and outline requests share that
+reopen.  A request interrupted by the crash is retried once; another session
+loss is reported instead of looping.  View state and saved places remain owned
+by Emacs and are not reset.  A changed or closed file is never attached to the
+old Reader document.
 
 Password-protected documents reuse the ordinary bounded password and cache
 path.  Recovery never raises a password prompt from a background or obsolete
@@ -387,11 +396,11 @@ selection, and annotation conformance tests.
 
 * Next PDF slices
 
-The next implementation slice can place open document resources in a canonical
-registry and reference-count attached views.  One primary view should own
-ordinary saved-place updates.  Additional views should keep independent zoom,
-viewport, selection, and search state until the user explicitly promotes one.
-Closing one view must not close a resource still used by another.
+The next implementation slice can expose the internal multiple-view model.
+=yunge-reader-new-view= should clone the current stable place and zoom into a
+new Reader buffer while sharing its document resource.  A separate promotion
+command should make the current buffer primary explicitly.  Ordinary
+=yunge-reader-open= should continue returning to the primary view.
 
 A later slice should add a second format driver to exercise the reflow
 contract.
@@ -401,9 +410,10 @@ extension of the stable position contract, after the reading path is hardened.
 
 * Testing
 
-ERT tests cover driver precedence, document/view lifecycle order, partial view
-cleanup, asynchronous cleanup, zoom, logical selection, native lifecycle,
-strict setup validation, PDF request mapping,
+ERT tests cover driver precedence, canonical open coalescing, shared resource
+release, primary-place ownership, pending-view loss, document/view lifecycle
+order, partial view cleanup, asynchronous cleanup, zoom, logical selection,
+native lifecycle, strict setup validation, PDF request mapping,
 lease balance, fit calculations, stable roll slots, visible-page
 virtualization, prefetch bounds, one-at-a-time render-first scheduling, rapid
 viewport replacement, interactive request priority, explicit-stop queue
@@ -425,9 +435,10 @@ tagged URI validation, allowlisted explicit activation, link request
 coalescing, late link caching, password retry, cancellation, attempt bounds,
 late-prompt rejection, cache replacement, lease balance, cache limits,
 prune-before-stop ordering, and lease races.  Recovery tests cover shared
-reopen, file replacement before and during open, a single interrupted-request
-retry, late close cleanup, background password rejection, view and saved-place
-preservation, and authoritative explicit stop.  Native lifecycle tests
+reopen, requesting-view recovery, file replacement before and during open, a
+single interrupted-request retry, late close cleanup, background password
+rejection, view and saved-place preservation, and authoritative explicit stop.
+Native lifecycle tests
 additionally cover unique helper session identities, one-shot callback
 failure, stale-session request rejection, intentional-stop errors, and
 process-local handle collisions.  Rust tests cover the handshake, strict

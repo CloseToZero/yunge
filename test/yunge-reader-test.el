@@ -18,6 +18,13 @@
    :zoom-mode (or zoom-mode 'fit-width)
    :scale (or scale 1.0)))
 
+(defun yunge-reader-test--buffer (name)
+  "Return a new Reader buffer named NAME."
+  (let ((buffer (generate-new-buffer name)))
+    (with-current-buffer buffer
+      (yunge-reader-mode))
+    buffer))
+
 (ert-deftest yunge-reader-exposes-one-viewer-key-vocabulary ()
   (yunge-test-keymap-keys
    yunge-reader-mode-map
@@ -728,6 +735,258 @@
                    detach close))))
       (when (buffer-live-p buffer)
         (kill-buffer buffer)))))
+
+(ert-deftest yunge-reader-shares-one-resource-between-views ()
+  (let ((yunge-reader--document-registry
+         (make-hash-table :test #'equal))
+        (yunge-reader-drivers nil)
+        (file (expand-file-name "shared.pdf"))
+        (opens 0)
+        open-complete
+        attached
+        detached
+        closed
+        completions
+        first
+        second)
+    (unwind-protect
+        (let ((driver
+               (yunge-reader-register-driver
+                'test
+                :match (lambda (_file) t)
+                :open
+                (lambda (_file complete)
+                  (cl-incf opens)
+                  (setq open-complete complete))
+                :close (lambda (document) (push document closed))
+                :attach
+                (lambda (_document) (push (current-buffer) attached))
+                :detach
+                (lambda (_document) (push (current-buffer) detached))
+                :request #'ignore)))
+          (setq first
+                (yunge-reader-test--buffer " *reader-shared-one*")
+                second
+                (yunge-reader-test--buffer " *reader-shared-two*"))
+          (yunge-reader--begin-open
+           first driver file nil
+           (lambda (success)
+             (push (list first success) completions)))
+          (yunge-reader--begin-open
+           second driver file nil
+           (lambda (success)
+             (push (list second success) completions)))
+          (should (= opens 1))
+          (funcall open-complete 'handle '(:layout fixed) nil)
+          (should
+           (equal (reverse attached) (list first second)))
+          (should (= (length completions) 2))
+          (should (cl-every #'cadr completions))
+          (let ((first-document
+                 (buffer-local-value 'yunge-reader-document first))
+                (second-document
+                 (buffer-local-value 'yunge-reader-document second))
+                (entry
+                 (buffer-local-value
+                  'yunge-reader--document-entry first)))
+            (should (eq first-document second-document))
+            (should
+             (eq (yunge-reader--document-entry-primary-view entry)
+                 first))
+            (should
+             (equal (yunge-reader--document-entry-views entry)
+                    (list first second)))
+            (should (eq (yunge-reader--existing-buffer file) first))
+            (kill-buffer second)
+            (should-not closed)
+            (should (equal detached (list second)))
+            (setq second nil)
+            (should (yunge-reader--document-live-p first-document))
+            (should (= (hash-table-count
+                        yunge-reader--document-registry)
+                       1))
+            (kill-buffer first)
+            (setq first nil)
+            (should (= (length closed) 1))
+            (should (eq (car closed) first-document))
+            (should (zerop
+                     (hash-table-count
+                      yunge-reader--document-registry)))))
+      (when (buffer-live-p second)
+        (kill-buffer second))
+      (when (buffer-live-p first)
+        (kill-buffer first)))))
+
+(ert-deftest yunge-reader-primary-view-alone-records-durable-place ()
+  (let ((yunge-reader--document-registry
+         (make-hash-table :test #'equal))
+        (yunge-reader-saved-places nil)
+        (yunge-reader-drivers nil)
+        (file (expand-file-name "primary.pdf"))
+        (positions (make-hash-table :test #'eq))
+        first
+        second)
+    (unwind-protect
+        (save-window-excursion
+          (let ((driver
+                 (yunge-reader-register-driver
+                  'test
+                  :match (lambda (_file) t)
+                  :open
+                  (lambda (_file complete)
+                    (funcall complete 'handle '(:layout fixed) nil))
+                  :close #'ignore
+                  :request #'ignore
+                  :location
+                  (lambda (_document _window)
+                    (make-yunge-reader-position
+                     :unit (gethash (current-buffer) positions)))
+                  :restore (lambda (&rest _arguments) t))))
+            (setq first
+                  (yunge-reader-test--buffer " *reader-primary*")
+                  second
+                  (yunge-reader-test--buffer " *reader-additional*"))
+            (puthash first 10 positions)
+            (puthash second 20 positions)
+            (switch-to-buffer first)
+            (yunge-reader--begin-open first driver file)
+            (yunge-reader--begin-open second driver file)
+            (let* ((key (yunge-reader--place-file-key file))
+                   (entry
+                    (buffer-local-value
+                     'yunge-reader--document-entry first)))
+              (with-current-buffer second
+                (yunge-reader-record-place))
+              (should
+               (= (plist-get
+                   (plist-get
+                    (cdr (assoc key yunge-reader-saved-places))
+                    :position)
+                   :unit)
+                  10))
+              (switch-to-buffer second)
+              (with-current-buffer second
+                (yunge-reader--note-view-activity))
+              (kill-buffer first)
+              (setq first nil)
+              (should
+               (eq (yunge-reader--document-entry-primary-view entry)
+                   second))
+              (should (eq (yunge-reader--existing-buffer file) second))
+              (should
+               (= (plist-get
+                   (plist-get
+                    (cdr (assoc key yunge-reader-saved-places))
+                    :position)
+                   :unit)
+                  10))
+              (with-current-buffer second
+                (yunge-reader-record-place))
+              (should
+               (= (plist-get
+                   (plist-get
+                    (cdr (assoc key yunge-reader-saved-places))
+                    :position)
+                   :unit)
+                  20)))))
+      (when (buffer-live-p second)
+        (kill-buffer second))
+      (when (buffer-live-p first)
+        (kill-buffer first)))))
+
+(ert-deftest yunge-reader-keeps-resource-after-one-view-attach-fails ()
+  (let ((yunge-reader--document-registry
+         (make-hash-table :test #'equal))
+        (yunge-reader-drivers nil)
+        failing-buffer
+        completion
+        closed
+        first
+        second)
+    (unwind-protect
+        (let ((driver
+               (yunge-reader-register-driver
+                'test
+                :match (lambda (_file) t)
+                :open
+                (lambda (_file complete)
+                  (funcall complete 'handle '(:layout fixed) nil))
+                :close (lambda (document) (push document closed))
+                :attach
+                (lambda (_document)
+                  (when (eq (current-buffer) failing-buffer)
+                    (error "attach failed")))
+                :detach #'ignore
+                :request #'ignore)))
+          (setq first
+                (yunge-reader-test--buffer " *reader-attach-ok*")
+                second
+                (yunge-reader-test--buffer " *reader-attach-bad*")
+                failing-buffer second)
+          (yunge-reader--begin-open first driver "partial-shared.pdf")
+          (yunge-reader--begin-open
+           second driver "partial-shared.pdf" nil
+           (lambda (success) (setq completion success)))
+          (should-not completion)
+          (should-not closed)
+          (should-not
+           (buffer-local-value 'yunge-reader-document second))
+          (should
+           (buffer-local-value 'yunge-reader-document first))
+          (kill-buffer second)
+          (setq second nil)
+          (should-not closed)
+          (kill-buffer first)
+          (setq first nil)
+          (should (= (length closed) 1)))
+      (when (buffer-live-p second)
+        (kill-buffer second))
+      (when (buffer-live-p first)
+        (kill-buffer first)))))
+
+(ert-deftest yunge-reader-opening-survives-losing-one-pending-view ()
+  (let ((yunge-reader--document-registry
+         (make-hash-table :test #'equal))
+        (yunge-reader-drivers nil)
+        open-complete
+        first-completion
+        second-completion
+        first
+        second)
+    (unwind-protect
+        (let ((driver
+               (yunge-reader-register-driver
+                'test
+                :match (lambda (_file) t)
+                :open
+                (lambda (_file complete)
+                  (setq open-complete complete))
+                :close #'ignore
+                :request #'ignore)))
+          (setq first
+                (yunge-reader-test--buffer " *reader-pending-one*")
+                second
+                (yunge-reader-test--buffer " *reader-pending-two*"))
+          (yunge-reader--begin-open
+           first driver "pending-shared.pdf" nil
+           (lambda (success) (setq first-completion success)))
+          (yunge-reader--begin-open
+           second driver "pending-shared.pdf" nil
+           (lambda (success) (setq second-completion success)))
+          (kill-buffer first)
+          (setq first nil)
+          (should-not first-completion)
+          (should (= (hash-table-count
+                      yunge-reader--document-registry)
+                     1))
+          (funcall open-complete 'handle '(:layout fixed) nil)
+          (should second-completion)
+          (should
+           (buffer-local-value 'yunge-reader-document second)))
+      (when (buffer-live-p second)
+        (kill-buffer second))
+      (when (buffer-live-p first)
+        (kill-buffer first)))))
 
 (ert-deftest yunge-reader-cleans-up-a-failed-view-attach ()
   (let* ((file (expand-file-name "attach-failure.pdf"))
