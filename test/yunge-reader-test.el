@@ -817,6 +817,253 @@
       (when (buffer-live-p first)
         (kill-buffer first)))))
 
+(ert-deftest yunge-reader-new-view-clones-the-live-place ()
+  (let ((yunge-reader--document-registry
+         (make-hash-table :test #'equal))
+        (yunge-reader-saved-places nil)
+        (yunge-reader-drivers nil)
+        (file (expand-file-name "new-view.pdf"))
+        (positions (make-hash-table :test #'eq))
+        (opens 0)
+        attached
+        first
+        second)
+    (unwind-protect
+        (save-window-excursion
+          (let ((driver
+                 (yunge-reader-register-driver
+                  'test
+                  :match (lambda (_file) t)
+                  :open
+                  (lambda (_file complete)
+                    (cl-incf opens)
+                    (funcall complete 'handle '(:layout fixed) nil))
+                  :close #'ignore
+                  :attach
+                  (lambda (_document)
+                    (push (current-buffer) attached))
+                  :detach #'ignore
+                  :request #'ignore
+                  :location
+                  (lambda (_document window)
+                    (should (eq (window-buffer window)
+                                (current-buffer)))
+                    (when-let* ((unit
+                                 (gethash (current-buffer) positions)))
+                      (make-yunge-reader-position :unit unit)))
+                  :restore
+                  (lambda (_document position window)
+                    (should (eq (window-buffer window)
+                                (current-buffer)))
+                    (puthash
+                     (current-buffer)
+                     (yunge-reader-position-unit position)
+                     positions)
+                    t))))
+            (setq first
+                  (yunge-reader-test--buffer
+                   " *reader-new-view-primary*"))
+            (puthash first 3 positions)
+            (switch-to-buffer first)
+            (yunge-reader--begin-open first driver file)
+            (let ((document yunge-reader-document)
+                  (key (yunge-reader--place-file-key file)))
+              (setq yunge-reader-zoom-mode 'manual
+                    yunge-reader-scale 1.75
+                    yunge-reader-selection 'source-selection
+                    yunge-reader-search-query "source search")
+              (puthash first 23 positions)
+              (setq second (yunge-reader-new-view))
+              (should (eq (current-buffer) second))
+              (should (= opens 1))
+              (should (equal (reverse attached) (list first second)))
+              (with-current-buffer second
+                (should (eq yunge-reader-document document))
+                (should (eq yunge-reader-zoom-mode 'manual))
+                (should (= yunge-reader-scale 1.75))
+                (should (= (gethash second positions) 23))
+                (should-not yunge-reader-selection)
+                (should-not yunge-reader-search-query))
+              (let ((entry
+                     (buffer-local-value
+                      'yunge-reader--document-entry first)))
+                (should
+                 (eq (yunge-reader--document-entry-primary-view entry)
+                     first))
+                (should
+                 (equal (yunge-reader--document-entry-views entry)
+                        (list first second))))
+              (should
+               (= (plist-get
+                   (plist-get
+                    (cdr (assoc key yunge-reader-saved-places))
+                    :position)
+                   :unit)
+                  3)))))
+      (when (buffer-live-p second)
+        (kill-buffer second))
+      (when (buffer-live-p first)
+        (kill-buffer first)))))
+
+(ert-deftest yunge-reader-new-view-requires-a-stable-place ()
+  (let ((yunge-reader--document-registry
+         (make-hash-table :test #'equal))
+        (yunge-reader-saved-places nil)
+        (yunge-reader-drivers nil)
+        (file (expand-file-name "new-view-unstable.pdf"))
+        (unit 8)
+        first)
+    (unwind-protect
+        (save-window-excursion
+          (let ((driver
+                 (yunge-reader-register-driver
+                  'test
+                  :match (lambda (_file) t)
+                  :open
+                  (lambda (_file complete)
+                    (funcall complete 'handle '(:layout fixed) nil))
+                  :close #'ignore
+                  :request #'ignore
+                  :location
+                  (lambda (_document _window)
+                    (when unit
+                      (make-yunge-reader-position :unit unit)))
+                  :restore (lambda (&rest _arguments) t))))
+            (setq first
+                  (yunge-reader-test--buffer
+                   " *reader-new-view-unstable*"))
+            (switch-to-buffer first)
+            (yunge-reader--begin-open first driver file)
+            (let ((entry yunge-reader--document-entry)
+                  (saved (copy-tree yunge-reader-saved-places t)))
+              (setq unit nil)
+              (should-error (yunge-reader-new-view) :type 'user-error)
+              (should
+               (equal (yunge-reader--document-entry-views entry)
+                      (list first)))
+              (should (equal yunge-reader-saved-places saved)))))
+      (when (buffer-live-p first)
+        (kill-buffer first)))))
+
+(ert-deftest yunge-reader-make-primary-saves-the-current-view ()
+  (let ((yunge-reader--document-registry
+         (make-hash-table :test #'equal))
+        (yunge-reader-saved-places nil)
+        (yunge-reader-drivers nil)
+        (file (expand-file-name "make-primary.pdf"))
+        (positions (make-hash-table :test #'eq))
+        (opens 0)
+        first
+        second)
+    (unwind-protect
+        (save-window-excursion
+          (let ((driver
+                 (yunge-reader-register-driver
+                  'test
+                  :match (lambda (_file) t)
+                  :open
+                  (lambda (_file complete)
+                    (cl-incf opens)
+                    (funcall complete 'handle '(:layout fixed) nil))
+                  :close #'ignore
+                  :request #'ignore
+                  :location
+                  (lambda (_document _window)
+                    (when-let* ((unit
+                                 (gethash (current-buffer) positions)))
+                      (make-yunge-reader-position :unit unit)))
+                  :restore
+                  (lambda (_document position _window)
+                    (puthash
+                     (current-buffer)
+                     (yunge-reader-position-unit position)
+                     positions)
+                    t))))
+            (setq first
+                  (yunge-reader-test--buffer
+                   " *reader-make-primary-one*"))
+            (puthash first 4 positions)
+            (switch-to-buffer first)
+            (yunge-reader--begin-open first driver file)
+            (setq second (yunge-reader-new-view))
+            (puthash second 29 positions)
+            (setq yunge-reader-zoom-mode 'manual
+                  yunge-reader-scale 2.0)
+            (should (eq (yunge-reader-make-primary) second))
+            (let* ((entry yunge-reader--document-entry)
+                   (key (yunge-reader--place-file-key file))
+                   (place
+                    (cdr (assoc key yunge-reader-saved-places))))
+              (should
+               (eq (yunge-reader--document-entry-primary-view entry)
+                   second))
+              (should
+               (eq (yunge-reader--document-entry-active-view entry)
+                   second))
+              (should
+               (= (plist-get (plist-get place :position) :unit) 29))
+              (should (eq (plist-get place :zoom-mode) 'manual))
+              (should (= (plist-get place :scale) 2.0))
+              (should (eq (yunge-reader-open file) second))
+              (should (= opens 1)))))
+      (when (buffer-live-p second)
+        (kill-buffer second))
+      (when (buffer-live-p first)
+        (kill-buffer first)))))
+
+(ert-deftest yunge-reader-make-primary-rejects-an-unstable-view ()
+  (let ((yunge-reader--document-registry
+         (make-hash-table :test #'equal))
+        (yunge-reader-saved-places nil)
+        (yunge-reader-drivers nil)
+        (file (expand-file-name "make-primary-unstable.pdf"))
+        (positions (make-hash-table :test #'eq))
+        first
+        second)
+    (unwind-protect
+        (save-window-excursion
+          (let ((driver
+                 (yunge-reader-register-driver
+                  'test
+                  :match (lambda (_file) t)
+                  :open
+                  (lambda (_file complete)
+                    (funcall complete 'handle '(:layout fixed) nil))
+                  :close #'ignore
+                  :request #'ignore
+                  :location
+                  (lambda (_document _window)
+                    (when-let* ((unit
+                                 (gethash (current-buffer) positions)))
+                      (make-yunge-reader-position :unit unit)))
+                  :restore
+                  (lambda (_document position _window)
+                    (puthash
+                     (current-buffer)
+                     (yunge-reader-position-unit position)
+                     positions)
+                    t))))
+            (setq first
+                  (yunge-reader-test--buffer
+                   " *reader-make-primary-stable*"))
+            (puthash first 6 positions)
+            (switch-to-buffer first)
+            (yunge-reader--begin-open first driver file)
+            (setq second (yunge-reader-new-view))
+            (let ((entry yunge-reader--document-entry)
+                  (saved (copy-tree yunge-reader-saved-places t)))
+              (remhash second positions)
+              (should-error
+               (yunge-reader-make-primary) :type 'user-error)
+              (should
+               (eq (yunge-reader--document-entry-primary-view entry)
+                   first))
+              (should (equal yunge-reader-saved-places saved)))))
+      (when (buffer-live-p second)
+        (kill-buffer second))
+      (when (buffer-live-p first)
+        (kill-buffer first)))))
+
 (ert-deftest yunge-reader-primary-view-alone-records-durable-place ()
   (let ((yunge-reader--document-registry
          (make-hash-table :test #'equal))

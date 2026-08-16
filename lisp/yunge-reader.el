@@ -482,6 +482,17 @@ new definition highest precedence."
           (yunge-reader--document-entry-primary-view
            yunge-reader--document-entry))))
 
+(defun yunge-reader--ready-view-entry ()
+  "Return the canonical ready entry attached to the current view."
+  (let ((entry yunge-reader--document-entry))
+    (when (and yunge-reader-document
+               entry
+               (eq (yunge-reader--document-entry-state entry) 'ready)
+               (yunge-reader--entry-current-p entry)
+               (memq (current-buffer)
+                     (yunge-reader--entry-live-views entry)))
+      entry)))
+
 (defun yunge-reader--note-view-activity ()
   "Remember the current buffer as its document's active view."
   (when (and yunge-reader-document
@@ -633,6 +644,12 @@ new definition highest precedence."
             (error "Reader driver returned an invalid place: %S"
                    position))
           (yunge-reader--make-place driver position))))))
+
+(defun yunge-reader--stable-place ()
+  "Return the current committed view place, or nil."
+  (when yunge-reader--place-recording-enabled
+    (when-let* ((window (yunge-reader--place-window)))
+      (yunge-reader--current-place window))))
 
 (defun yunge-reader-record-place (&optional window)
   "Record the current durable Reader place as viewed in WINDOW.
@@ -1198,6 +1215,59 @@ asynchronously."
         (pop-to-buffer buffer)
         (yunge-reader--begin-open buffer driver file)
         buffer))))
+
+(defun yunge-reader-new-view ()
+  "Display another Reader view of the current document.
+The new buffer starts from the current stable location and zoom state.  It
+shares the driver-owned document resource while keeping its view state
+independent.  The current view remains primary."
+  (interactive)
+  (let ((entry (yunge-reader--ready-view-entry)))
+    (unless entry
+      (user-error "This Reader view has no ready document"))
+    (let ((place (yunge-reader--stable-place)))
+      (unless place
+        (user-error "This Reader view has no stable location yet"))
+      (let* ((document
+              (yunge-reader--document-entry-document entry))
+             (file (yunge-reader-document-file document))
+             (driver (yunge-reader-document-driver document))
+             (buffer
+              (generate-new-buffer
+               (format "*Reader: %s*"
+                       (file-name-nondirectory file)))))
+        (condition-case error-data
+            (progn
+              (with-current-buffer buffer
+                (yunge-reader-mode))
+              (pop-to-buffer buffer)
+              (yunge-reader--begin-open buffer driver file place)
+              buffer)
+          (error
+           (when (buffer-live-p buffer)
+             (kill-buffer buffer))
+           (signal (car error-data) (cdr error-data))))))))
+
+(defun yunge-reader-make-primary ()
+  "Make the current Reader view own durable place updates.
+Capture and save this view's stable place before changing the primary view."
+  (interactive)
+  (let ((entry (yunge-reader--ready-view-entry)))
+    (unless entry
+      (user-error "This Reader view has no ready document"))
+    (unless (eq (current-buffer)
+                (yunge-reader--document-entry-primary-view entry))
+      (let ((place (yunge-reader--stable-place)))
+        (unless place
+          (user-error "This Reader view has no stable location yet"))
+        (yunge-reader--store-place
+         (yunge-reader--document-entry-file entry) place)
+        (setf (yunge-reader--document-entry-primary-view entry)
+              (current-buffer)
+              (yunge-reader--document-entry-active-view entry)
+              (current-buffer))
+        (message "Current Reader view is now primary")))
+    (current-buffer)))
 
 (defun yunge-reader--close-document ()
   "Detach the current view and close its driver-owned document resource."
