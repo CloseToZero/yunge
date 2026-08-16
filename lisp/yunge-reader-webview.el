@@ -36,6 +36,10 @@
 (defconst yunge-reader-webview--max-outline-title-bytes 1024
   "Maximum byte length of one EPUB outline title.")
 
+(defconst yunge-reader-webview--epub-style-keys
+  '(font-scale line-height content-width side-padding)
+  "Semantic fields in one EPUB reading style.")
+
 (defconst yunge-reader-webview--log-buffer-name
   "*Yunge Reader WebView log*"
   "Name of the WebView helper diagnostic buffer.")
@@ -83,6 +87,7 @@
   bounds-pending
   publication
   publication-ready
+  style
   location
   pending-target
   outline
@@ -296,16 +301,55 @@
     (error "Invalid EPUB navigation target: %S" target))
   target)
 
+(defun yunge-reader-webview--valid-style-p (style)
+  "Return non-nil when STYLE is a bounded EPUB reading style."
+  (and
+   (listp style)
+   (= (length style)
+      (length yunge-reader-webview--epub-style-keys))
+   (cl-every
+    (lambda (entry)
+      (memq (car-safe entry)
+            yunge-reader-webview--epub-style-keys))
+    style)
+   (cl-every (lambda (key) (assq key style))
+             yunge-reader-webview--epub-style-keys)
+   (let ((font-scale (alist-get 'font-scale style))
+         (line-height (alist-get 'line-height style))
+         (content-width (alist-get 'content-width style))
+         (side-padding (alist-get 'side-padding style)))
+     (and
+      (numberp font-scale)
+      (= font-scale font-scale)
+      (<= 0.5 font-scale 3.0)
+      (numberp line-height)
+      (= line-height line-height)
+      (<= 1.0 line-height 3.0)
+      (integerp content-width)
+      (<= 320 content-width 1600)
+      (numberp side-padding)
+      (= side-padding side-padding)
+      (<= 0 side-padding 20)))))
+
+(defun yunge-reader-webview--check-style (style)
+  "Return STYLE or signal when it is not a valid EPUB reading style."
+  (unless (yunge-reader-webview--valid-style-p style)
+    (error "Invalid EPUB reading style: %S" style))
+  style)
+
 (defun yunge-reader-webview--open-view-publication
-    (view publication callback &optional location)
-  "Open PUBLICATION in native VIEW at LOCATION, then invoke CALLBACK."
+    (view publication callback &optional location style)
+  "Open PUBLICATION in native VIEW with LOCATION and STYLE.
+Invoke CALLBACK when the native request completes."
   (yunge-reader-webview--request
    "view-open-publication"
    (append
     `((view . ,(yunge-reader-webview--view-id view))
       (publication . ,publication))
     (when location
-      `((location . ,(yunge-reader-webview--check-location location)))))
+      `((location . ,(yunge-reader-webview--check-location location))))
+    (when style
+      `((style . ,(yunge-reader-webview--check-style style)))))
    callback))
 
 (defun yunge-reader-webview--navigate-view
@@ -367,11 +411,14 @@ LOCATION is required only for the go-to command."
       (error "Malformed EPUB location event: %S" message))
     (copy-tree location)))
 
-(defun yunge-reader-webview--store-view-location (view message)
-  "Store VIEW's locator from MESSAGE and notify its owner."
+(defun yunge-reader-webview--store-view-location
+    (view message &optional quiet)
+  "Store VIEW's locator from MESSAGE.
+Unless QUIET is non-nil, notify the logical view's owner."
   (setf (yunge-reader-webview--view-location view)
         (yunge-reader-webview--event-location message))
-  (when-let* ((function
+  (when-let* (((not quiet))
+              (function
                (yunge-reader-webview--view-location-changed-function
                 view)))
     (condition-case error-data
@@ -477,7 +524,7 @@ LOCATION is required only for the go-to command."
          (select-frame-set-input-focus (window-frame window))))
       ("publication-ready"
        (when-let* ((view (gethash id yunge-reader-webview--views)))
-         (yunge-reader-webview--store-view-location view message)
+         (yunge-reader-webview--store-view-location view message t)
          (setf (yunge-reader-webview--view-publication-ready view) t)
          (yunge-reader-webview--store-view-outline view message)
          (yunge-reader-webview--dispatch-pending-target view)
@@ -1010,7 +1057,8 @@ Without FORCE, request graceful shutdown and enforce a deadline."
        (yunge-reader-webview--view-publication view)
        (apply-partially
         #'yunge-reader-webview--open-complete view id)
-       (yunge-reader-webview--view-location view)))))
+       (yunge-reader-webview--view-location view)
+       (yunge-reader-webview--view-style view)))))
 
 (defun yunge-reader-webview--current-ready-view ()
   "Return the current buffer's ready EPUB WebView."
@@ -1023,16 +1071,18 @@ Without FORCE, request graceful shutdown and enforce a deadline."
 
 (defun yunge-reader-webview--attach-shared-publication
     (publication &optional location location-changed-function
-                 accelerator-function)
+                 accelerator-function style)
   "Attach shared PUBLICATION to the current Reader buffer.
 Restore bounded LOCATION when supplied.  Invoke LOCATION-CHANGED-FUNCTION
 with the logical view whenever its renderer reports a stable location.
 Invoke ACCELERATOR-FUNCTION with the view and a normalized key when the
-focused native child forwards one."
+focused native child forwards one.  STYLE is copied into the logical view."
   (unless (and (integerp publication) (> publication 0))
     (error "Invalid EPUB publication ID: %S" publication))
   (when location
     (yunge-reader-webview--check-location location))
+  (when style
+    (yunge-reader-webview--check-style style))
   (when (and location-changed-function
              (not (functionp location-changed-function)))
     (error "Invalid EPUB location callback: %S"
@@ -1050,6 +1100,7 @@ focused native child forwards one."
           :buffer (current-buffer)
           :persistent t
           :publication publication
+          :style (and style (copy-tree style))
           :location (and location (copy-tree location))
           :location-changed-function location-changed-function
           :accelerator-function accelerator-function)))

@@ -1,5 +1,6 @@
 import './foliate-js/view.js'
 import { EPUB } from './foliate-js/epub.js'
+import { collapse as collapseCFI } from './foliate-js/epubcfi.js'
 
 const BOOK_ROOT = 'https://yunge-reader-book.localhost/'
 const CATALOG_PATH = '.yunge/resources.json'
@@ -32,6 +33,13 @@ const MAX_TOC_HREF_BYTES = 3072
 const MAX_TOC_TITLE_BYTES = 1024
 const MAX_TOC_TOTAL_TEXT_BYTES = 384 * 1024
 const LOCATION_DELAY_MS = 75
+const USER_MOVEMENT_WINDOW_MS = 1000
+const DEFAULT_STYLE = Object.freeze({
+    'font-scale': 1.0,
+    'line-height': 1.6,
+    'content-width': 720,
+    'side-padding': 7.0,
+})
 let generation = 0
 let current = null
 
@@ -67,6 +75,18 @@ const installReaderCharacterKeys = target => {
     target.addEventListener('keydown', relayReaderCharacterKey, true)
 }
 
+const installLocationActivity = (target, session) => {
+    const note = event => {
+        if (event.type !== 'pointermove' || event.buttons) {
+            session.userMovementDeadline = performance.now()
+                + USER_MOVEMENT_WINDOW_MS
+        }
+    }
+    for (const type of ['wheel', 'pointerdown', 'pointermove', 'touchstart']) {
+        target.addEventListener(type, note, { capture: true, passive: true })
+    }
+}
+
 installReaderCharacterKeys(document)
 
 const encodePath = path => path.split('/').map(encodeURIComponent).join('/')
@@ -85,6 +105,54 @@ const checkedView = value => {
         throw new Error('Invalid Yunge Reader view identifier')
     }
     return value
+}
+
+const checkedStyle = value => {
+    value ??= DEFAULT_STYLE
+    const keys = value && typeof value === 'object' && !Array.isArray(value)
+        ? Object.keys(value) : []
+    if (!value || typeof value !== 'object' || Array.isArray(value)
+        || keys.length !== 4
+        || keys.some(key => ![
+            'font-scale', 'line-height', 'content-width', 'side-padding',
+        ].includes(key))) {
+        throw new Error('Invalid EPUB reading style')
+    }
+    const fontScale = value['font-scale']
+    const lineHeight = value['line-height']
+    const contentWidth = value['content-width']
+    const sidePadding = value['side-padding']
+    if (!Number.isFinite(fontScale) || fontScale < 0.5 || fontScale > 3
+        || !Number.isFinite(lineHeight)
+        || lineHeight < 1 || lineHeight > 3
+        || !Number.isSafeInteger(contentWidth)
+        || contentWidth < 320 || contentWidth > 1600
+        || !Number.isFinite(sidePadding)
+        || sidePadding < 0 || sidePadding > 20) {
+        throw new Error('Invalid EPUB reading style')
+    }
+    return Object.freeze({
+        fontScale,
+        lineHeight,
+        contentWidth,
+        sidePadding,
+    })
+}
+
+const applyReadingStyle = (view, style) => {
+    if (view.isFixedLayout) return
+    view.renderer.setAttribute('max-inline-size',
+        `${style.contentWidth}px`)
+    view.renderer.setAttribute('gap', `${style.sidePadding}%`)
+    view.renderer.setStyles(`
+        body {
+            font-size: ${style.fontScale}em !important;
+            line-height: ${style.lineHeight} !important;
+        }
+        p, li, blockquote, dd {
+            line-height: ${style.lineHeight} !important;
+        }
+    `)
 }
 
 const checkedLocatorText = (value, name) => {
@@ -421,7 +489,8 @@ const locatorFromRelocation = (book, relocation) => {
     const index = relocation?.section?.current
     const href = Number.isInteger(index) ? book.sections[index]?.id : null
     const value = {
-        cfi: relocation?.cfi,
+        cfi: typeof relocation?.cfi === 'string'
+            ? collapseCFI(relocation.cfi) : relocation?.cfi,
         href,
         fraction: relocation?.fraction,
     }
@@ -437,19 +506,29 @@ const flushLocation = session => {
 
 const queueLocation = (session, relocation) => {
     if (current !== session) return
+    const reason = relocation?.reason
+    const userMovement = performance.now()
+        <= session.userMovementDeadline
+    if (!session.opening
+        && !session.commandNavigation
+        && reason !== 'navigation'
+        && reason !== 'page'
+        && reason !== 'snap'
+        && !(reason === 'scroll' && userMovement)) return
     try {
         session.location = locatorFromRelocation(session.book, relocation)
     } catch (error) {
         console.warn(error)
         return
     }
+    if (session.opening) return
     if (!session.locationTimer) {
         session.locationTimer = setTimeout(
             () => flushLocation(session), LOCATION_DELAY_MS)
     }
 }
 
-const open = async ({ view: viewID, resourceRoot, location }) => {
+const open = async ({ view: viewID, resourceRoot, location, style }) => {
     const mine = ++generation
     closeCurrent()
     status.hidden = false
@@ -457,19 +536,23 @@ const open = async ({ view: viewID, resourceRoot, location }) => {
     try {
         viewID = checkedView(viewID)
         location = location ? checkedLocator(location) : null
+        style = checkedStyle(style)
         const root = checkedRoot(resourceRoot)
         const loader = await makeLoader(root)
         const book = await new EPUB(loader).init()
         protectBook(book)
         const view = document.createElement('foliate-view')
+        let session
         view.addEventListener('load', event => {
             installReaderCharacterKeys(event.detail.doc)
+            installLocationActivity(event.detail.doc, session)
         })
         view.addEventListener('external-link', event => {
             event.preventDefault()
         })
         await view.open(book)
         view.renderer.setAttribute('flow', 'scrolled')
+        applyReadingStyle(view, style)
         Object.assign(view.renderer.style, {
             display: 'block',
             height: '100%',
@@ -481,18 +564,25 @@ const open = async ({ view: viewID, resourceRoot, location }) => {
             return
         }
         reader.append(view)
-        const session = {
+        session = {
             generation: mine,
             viewID,
             book,
             view,
             location: null,
             locationTimer: null,
+            opening: true,
+            commandNavigation: false,
+            userMovementDeadline: 0,
             navigation: Promise.resolve(),
         }
+        installLocationActivity(view, session)
         current = session
-        view.addEventListener('relocate', event => {
-            queueLocation(session, event.detail)
+        view.renderer.addEventListener('relocate', event => {
+            queueLocation(session, {
+                ...view.lastLocation,
+                reason: event.detail.reason,
+            })
         })
         status.hidden = true
         if (location) {
@@ -507,6 +597,7 @@ const open = async ({ view: viewID, resourceRoot, location }) => {
         session.location ??= locatorFromRelocation(book, view.lastLocation)
         if (session.locationTimer) clearTimeout(session.locationTimer)
         session.locationTimer = null
+        session.opening = false
         post('publication-ready', {
             location: session.location,
             outline: outlineFromBook(book.toc),
@@ -522,18 +613,23 @@ const open = async ({ view: viewID, resourceRoot, location }) => {
 
 const runNavigation = async (session, command, location) => {
     if (current !== session) return
-    switch (command) {
-    case 'previous-screen':
-        await session.view.prev()
-        break
-    case 'next-screen':
-        await session.view.next()
-        break
-    case 'go-to':
-        await showLocation(session.view, location)
-        break
-    default:
-        throw new Error(`Unsupported EPUB navigation command: ${command}`)
+    session.commandNavigation = true
+    try {
+        switch (command) {
+        case 'previous-screen':
+            await session.view.prev()
+            break
+        case 'next-screen':
+            await session.view.next()
+            break
+        case 'go-to':
+            await showLocation(session.view, location)
+            break
+        default:
+            throw new Error(`Unsupported EPUB navigation command: ${command}`)
+        }
+    } finally {
+        session.commandNavigation = false
     }
 }
 

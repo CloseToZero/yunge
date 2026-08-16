@@ -91,6 +91,13 @@
           (href . "OPS/chapter.xhtml#start"))))
      (truncated))))
 
+(defun yunge-reader-webview-test--style ()
+  "Return one valid semantic EPUB reading style."
+  '((font-scale . 1.25)
+    (line-height . 1.6)
+    (content-width . 760)
+    (side-padding . 8.0)))
+
 (ert-deftest yunge-reader-webview-queues-until-ready ()
   (yunge-reader-webview-test--with-fake-process
     (let (result)
@@ -163,6 +170,36 @@
              ((href . "OPS/chapter.xhtml#one#two"))))
     (should-not (yunge-reader-webview--valid-target-p target))))
 
+(ert-deftest yunge-reader-webview-validates-bounded-epub-styles ()
+  (let ((style (yunge-reader-webview-test--style)))
+    (should (yunge-reader-webview--valid-style-p style))
+    (should
+     (yunge-reader-webview--valid-style-p (reverse style)))
+    (should (eq (yunge-reader-webview--check-style style) style)))
+  (dolist
+      (style
+       '(((font-scale . 0.49)
+          (line-height . 1.6)
+          (content-width . 720)
+          (side-padding . 7.0))
+         ((font-scale . 1.0)
+          (line-height . 3.1)
+          (content-width . 720)
+          (side-padding . 7.0))
+         ((font-scale . 1.0)
+          (line-height . 1.6)
+          (content-width . 319)
+          (side-padding . 7.0))
+         ((font-scale . 1.0)
+          (line-height . 1.6)
+          (content-width . 720)
+          (side-padding . 20.1))
+         ((font-scale . 1.0)
+          (line-height . 1.6)
+          (content-width . 720)
+          (color . "red"))))
+    (should-not (yunge-reader-webview--valid-style-p style))))
+
 (ert-deftest yunge-reader-webview-serializes-location-navigation ()
   (yunge-reader-webview-test--with-fake-process
     (yunge-reader-webview-start)
@@ -171,9 +208,10 @@
      (yunge-reader-webview-test--ready-message))
     (let ((view (yunge-reader-webview--make-view :id 4))
           (location (yunge-reader-webview-test--location 0.25))
+          (style (yunge-reader-webview-test--style))
           (target '((href . "OPS/chapter.xhtml#section"))))
       (yunge-reader-webview--open-view-publication
-       view 7 #'ignore location)
+       view 7 #'ignore location style)
       (yunge-reader-webview--navigate-view
        view "next-screen" #'ignore)
       (yunge-reader-webview--navigate-view
@@ -193,6 +231,9 @@
         (should
          (equal (alist-get 'location (alist-get 'params open))
                 location))
+        (should
+         (equal (alist-get 'style (alist-get 'params open))
+                style))
         (should
          (equal (alist-get 'command (alist-get 'params next))
                 "next-screen"))
@@ -330,11 +371,15 @@
          (yunge-reader-webview--views
           (make-hash-table :test #'eql))
          warning
+         (location-notifications 0)
          outline-result
          outline-error)
     (unwind-protect
         (progn
           (puthash 6 view yunge-reader-webview--views)
+          (setf
+           (yunge-reader-webview--view-location-changed-function view)
+           (lambda (_value) (cl-incf location-notifications)))
           (yunge-reader-webview--request-view-outline
            view
            (lambda (value error-data)
@@ -361,12 +406,28 @@
           (should
            (equal (yunge-reader-webview--view-location view)
                   (yunge-reader-webview-test--location 0.25)))
+          (should (zerop location-notifications))
           (should
            (yunge-reader-webview--view-outline-ready view))
           (should-not outline-error)
           (should
            (equal outline-result
                   (yunge-reader-webview-test--outline)))
+          (yunge-reader-webview--handle-event
+           'fake-webview-process
+           '((kind . "event")
+             (event . "location")
+             (view . 6)
+             (location
+              . ((cfi . "epubcfi(/6/6!/4/2)")
+                 (href . "OPS/next.xhtml")
+                 (fraction . 0.3)))))
+          (should (= location-notifications 1))
+          (should
+           (equal (yunge-reader-webview--view-location view)
+                  '((cfi . "epubcfi(/6/6!/4/2)")
+                    (href . "OPS/next.xhtml")
+                    (fraction . 0.3))))
           (cl-letf (((symbol-function 'display-warning)
                      (lambda (&rest value) (setq warning value))))
             (yunge-reader-webview--handle-event
@@ -640,6 +701,41 @@
            (yunge-reader-webview--view-outline-error view))
           (should (eq (gethash 21 yunge-reader-webview--views) view)))
       (kill-buffer buffer))))
+
+(ert-deftest yunge-reader-webview-reopens-with-view-local-style ()
+  (let* ((location (yunge-reader-webview-test--location 0.4))
+         (style (yunge-reader-webview-test--style))
+         (view
+          (yunge-reader-webview--make-view
+           :id 22 :created t :publication 8
+           :location location :style style))
+         opened)
+    (cl-letf
+        (((symbol-function
+           'yunge-reader-webview--open-view-publication)
+          (lambda (value publication _complete
+                         &optional target reading-style)
+            (setq opened
+                  (list value publication target reading-style)))))
+      (yunge-reader-webview--try-open-publication view))
+    (should (equal opened (list view 8 location style)))))
+
+(ert-deftest yunge-reader-webview-copies-attached-reading-style ()
+  (let ((style (yunge-reader-webview-test--style))
+        (yunge-reader-webview--logical-views
+         (make-hash-table :test #'eq)))
+    (with-temp-buffer
+      (let ((view
+             (yunge-reader-webview--attach-shared-publication
+              8 nil nil nil style)))
+        (should
+         (equal (yunge-reader-webview--view-style view) style))
+        (should-not (eq (yunge-reader-webview--view-style view) style))
+        (setcdr (assq 'font-scale style) 2.0)
+        (should
+         (= (alist-get 'font-scale
+                       (yunge-reader-webview--view-style view))
+            1.25))))))
 
 (ert-deftest yunge-reader-webview-waits-for-every-obsolete-surface ()
   (let* ((view

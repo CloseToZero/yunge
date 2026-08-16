@@ -137,6 +137,23 @@ resource origin.  Its bundled, script-disabled Foliate renderer provides CSS
 layout, native text selection, links, relocation events, and semantic screen
 navigation without exposing the local EPUB path.
 
+=view-open-publication= attaches an open publication to a child view.  It
+accepts an optional stable locator and a complete semantic reading style:
+
+#+begin_src json
+{"id":2,"op":"view-open-publication",
+ "params":{"view":1,"publication":1,
+           "style":{"font-scale":1.0,"line-height":1.6,
+                    "content-width":720,"side-padding":7.0}}}
+#+end_src
+
+Font scale is bounded to 0.5--3.0, line height to 1.0--3.0, content width to
+320--1,600 CSS pixels, and side padding to 0--20 percent.  Omission selects
+the same defaults shown above.  Unknown or partial style objects are rejected;
+arbitrary CSS, fonts, and colors never cross the protocol boundary.  The
+renderer maps these fields to reflowable layout before its first navigation
+and leaves fixed-layout publication geometry unchanged.
+
 Successful publication readiness is an unsolicited event containing the
 first complete locator and a flattened EPUB 3 nav or EPUB 2 NCX outline:
 

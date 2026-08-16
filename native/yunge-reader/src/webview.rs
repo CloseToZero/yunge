@@ -69,6 +69,13 @@ const MAX_EPUB_OUTLINE_DEPTH: u32 = 256;
 const MAX_EPUB_OUTLINE_ITEMS: usize = 4_096;
 const MAX_EPUB_OUTLINE_TITLE_BYTES: usize = 1_024;
 const MAX_EPUB_OUTLINE_TEXT_BYTES: usize = 384 * 1_024;
+const MIN_EPUB_FONT_SCALE: f64 = 0.5;
+const MAX_EPUB_FONT_SCALE: f64 = 3.0;
+const MIN_EPUB_LINE_HEIGHT: f64 = 1.0;
+const MAX_EPUB_LINE_HEIGHT: f64 = 3.0;
+const MIN_EPUB_CONTENT_WIDTH: u32 = 320;
+const MAX_EPUB_CONTENT_WIDTH: u32 = 1_600;
+const MAX_EPUB_SIDE_PADDING: f64 = 20.0;
 const MAX_RENDERER_MESSAGE_BYTES: usize = 1_024 * 1_024;
 const MAX_RENDERER_ERROR_BYTES: usize = 4 * 1_024;
 const RESOURCE_CATALOG_PATH: &str = ".yunge/resources.json";
@@ -201,6 +208,17 @@ struct ViewPublicationParams {
     publication: u64,
     #[serde(default)]
     location: Option<EpubLocator>,
+    #[serde(default)]
+    style: EpubStyle,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(deny_unknown_fields, rename_all = "kebab-case")]
+struct EpubStyle {
+    font_scale: f64,
+    line_height: f64,
+    content_width: u32,
+    side_padding: f64,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
@@ -532,6 +550,39 @@ impl EpubLocator {
             return Err(ServiceError::new(
                 "invalid-epub-location",
                 "EPUB locator fraction must be between zero and one",
+            ));
+        }
+        Ok(self)
+    }
+}
+
+impl Default for EpubStyle {
+    fn default() -> Self {
+        Self {
+            font_scale: 1.0,
+            line_height: 1.6,
+            content_width: 720,
+            side_padding: 7.0,
+        }
+    }
+}
+
+impl EpubStyle {
+    fn validate(self) -> Result<Self, ServiceError> {
+        if !self.font_scale.is_finite()
+            || !(MIN_EPUB_FONT_SCALE..=MAX_EPUB_FONT_SCALE)
+                .contains(&self.font_scale)
+            || !self.line_height.is_finite()
+            || !(MIN_EPUB_LINE_HEIGHT..=MAX_EPUB_LINE_HEIGHT)
+                .contains(&self.line_height)
+            || !(MIN_EPUB_CONTENT_WIDTH..=MAX_EPUB_CONTENT_WIDTH)
+                .contains(&self.content_width)
+            || !self.side_padding.is_finite()
+            || !(0.0..=MAX_EPUB_SIDE_PADDING).contains(&self.side_padding)
+        {
+            return Err(ServiceError::new(
+                "invalid-epub-style",
+                "EPUB reading style is outside its supported bounds",
             ));
         }
         Ok(self)
@@ -905,6 +956,7 @@ impl Service {
         let params: ViewPublicationParams = Self::parse(params)?;
         let location =
             params.location.map(EpubLocator::validate).transpose()?;
+        let style = params.style.validate()?;
         let view = self.view(params.view)?;
         if !view.loaded.load(Ordering::Acquire) {
             return Err(ServiceError::new(
@@ -924,6 +976,7 @@ impl Service {
             params.view,
             &resource_root,
             location.as_ref(),
+            &style,
         );
         self.view(params.view)?
             .webview
@@ -1650,11 +1703,13 @@ fn publication_open_script(
     view: u64,
     resource_root: &str,
     location: Option<&EpubLocator>,
+    style: &EpubStyle,
 ) -> String {
     let payload = serde_json::to_string(&json!({
         "view": view,
         "resourceRoot": resource_root,
         "location": location,
+        "style": style,
     }))
     .expect("publication open payload is serializable");
     format!("void globalThis.yungeReader.open({payload});")
@@ -1889,6 +1944,12 @@ mod tests {
         assert!(adapter.contains("post('accelerator', { key })"));
         assert!(adapter.contains("['J', 'K'].includes(event.key)"));
         assert!(!adapter.contains("['j', 'k'].includes(event.key)"));
+        assert!(adapter.contains("applyReadingStyle(view, style)"));
+        assert!(adapter.contains("if (view.isFixedLayout) return"));
+        assert!(adapter.contains("collapseCFI(relocation.cfi)"));
+        assert!(adapter.contains("session.commandNavigation"));
+        assert!(adapter.contains("if (session.opening) return"));
+        assert!(adapter.contains("view.renderer.addEventListener('relocate'"));
         for path in ["foliate-js/paginator.js", "foliate-js/fixed-layout.js"] {
             let source =
                 std::str::from_utf8(app_asset(path).unwrap().1).unwrap();
@@ -2210,11 +2271,16 @@ mod tests {
             4,
             "https://yunge-reader-book.localhost/token/",
             Some(&location),
+            &EpubStyle::default(),
         );
         assert!(script.starts_with("void globalThis.yungeReader.open("));
         assert!(script.contains(r#""view":4"#));
         assert!(script.contains(r#""resourceRoot":"https://"#));
         assert!(script.contains(r#""cfi":"epubcfi(/6/4!/4/2)"#));
+        assert!(script.contains(r#""font-scale":1.0"#));
+        assert!(script.contains(r#""line-height":1.6"#));
+        assert!(script.contains(r#""content-width":720"#));
+        assert!(script.contains(r#""side-padding":7.0"#));
         assert!(!script.contains("eval"));
 
         let target = EpubNavigationTarget {
@@ -2270,6 +2336,62 @@ mod tests {
                 "invalid-epub-location"
             );
         }
+    }
+
+    #[test]
+    fn epub_styles_are_bounded_semantic_values() {
+        let default = EpubStyle::default();
+        assert_eq!(default.validate().unwrap(), default);
+
+        let parsed = Service::parse::<ViewPublicationParams>(json!({
+            "view": 4,
+            "publication": 7,
+        }))
+        .unwrap();
+        assert_eq!(parsed.style, default);
+
+        for invalid in [
+            EpubStyle {
+                font_scale: 0.49,
+                ..default
+            },
+            EpubStyle {
+                line_height: 3.1,
+                ..default
+            },
+            EpubStyle {
+                content_width: 319,
+                ..default
+            },
+            EpubStyle {
+                side_padding: 20.1,
+                ..default
+            },
+            EpubStyle {
+                font_scale: f64::NAN,
+                ..default
+            },
+        ] {
+            assert_eq!(
+                invalid.validate().unwrap_err().code,
+                "invalid-epub-style"
+            );
+        }
+
+        assert!(
+            Service::parse::<ViewPublicationParams>(json!({
+                "view": 4,
+                "publication": 7,
+                "style": {
+                    "font-scale": 1.0,
+                    "line-height": 1.6,
+                    "content-width": 720,
+                    "side-padding": 7.0,
+                    "color": "red",
+                },
+            }))
+            .is_err()
+        );
     }
 
     #[test]

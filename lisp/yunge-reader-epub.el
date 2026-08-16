@@ -16,6 +16,26 @@
   closing
   closed)
 
+(defcustom yunge-reader-epub-default-font-scale 1.0
+  "Default font scale for reflowable EPUB views."
+  :type 'number
+  :group 'yunge-reader)
+
+(defcustom yunge-reader-epub-default-line-height 1.6
+  "Default unitless line height for reflowable EPUB views."
+  :type 'number
+  :group 'yunge-reader)
+
+(defcustom yunge-reader-epub-default-content-width 720
+  "Default maximum EPUB content width in CSS pixels."
+  :type 'integer
+  :group 'yunge-reader)
+
+(defcustom yunge-reader-epub-default-side-padding 7.0
+  "Default EPUB side padding as a percentage of the view width."
+  :type 'number
+  :group 'yunge-reader)
+
 (defconst yunge-reader-epub-normal-bindings
   '(("C-d" yunge-reader-epub-next-screen "next screen")
     ("C-u" yunge-reader-epub-previous-screen "previous screen")
@@ -180,6 +200,14 @@
         (yunge-reader-record-place
          (yunge-reader-webview--view-window view))))))
 
+(defun yunge-reader-epub--default-style ()
+  "Return a fresh, validated default EPUB reading style."
+  (yunge-reader-webview--check-style
+   `((font-scale . ,yunge-reader-epub-default-font-scale)
+     (line-height . ,yunge-reader-epub-default-line-height)
+     (content-width . ,yunge-reader-epub-default-content-width)
+     (side-padding . ,yunge-reader-epub-default-side-padding))))
+
 (defun yunge-reader-epub--attach (document)
   "Attach a persistent EPUB WebView for DOCUMENT."
   (let ((handle (yunge-reader-document-handle document)))
@@ -191,7 +219,8 @@
     (yunge-reader-webview--attach-shared-publication
      (yunge-reader-epub-handle-publication handle)
      nil #'yunge-reader-epub--location-changed
-     #'yunge-reader-epub--accelerator)))
+     #'yunge-reader-epub--accelerator
+     (yunge-reader-epub--default-style))))
 
 (defun yunge-reader-epub--detach-complete (handle)
   "Finish one native view detach belonging to HANDLE."

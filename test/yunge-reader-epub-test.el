@@ -146,6 +146,14 @@
      (= (plist-get (plist-get properties :metadata) :entry-count)
         12))))
 
+(ert-deftest yunge-reader-epub-builds-independent-default-styles ()
+  (let ((first (yunge-reader-epub--default-style))
+        (second (yunge-reader-epub--default-style)))
+    (should (equal first second))
+    (should-not (eq first second))
+    (setcdr (assq 'font-scale first) 2.0)
+    (should (= (alist-get 'font-scale second) 1.0))))
+
 (ert-deftest yunge-reader-epub-rejects-unsupported-hosts-before-open ()
   (let (completed opened)
     (cl-letf
@@ -173,12 +181,13 @@
           (((symbol-function
              'yunge-reader-webview--attach-shared-publication)
             (lambda (publication _location location-function
-                                 accelerator-function)
+                                 accelerator-function style)
               (setq yunge-reader-webview--buffer-view
                     (yunge-reader-webview--make-view
                      :buffer (current-buffer)
                      :publication publication
                      :persistent t
+                     :style (copy-tree style)
                      :location-changed-function location-function
                      :accelerator-function accelerator-function))))
            ((symbol-function
@@ -202,6 +211,14 @@
          (eq (yunge-reader-webview--view-accelerator-function
               yunge-reader-webview--buffer-view)
              #'yunge-reader-epub--accelerator))
+        (should
+         (equal
+          (yunge-reader-webview--view-style
+           yunge-reader-webview--buffer-view)
+          '((font-scale . 1.0)
+            (line-height . 1.6)
+            (content-width . 720)
+            (side-padding . 7.0))))
         (yunge-reader-epub--detach document)
         (should-not yunge-reader-epub-view-mode)
         (should (= (yunge-reader-epub-handle-pending-detaches

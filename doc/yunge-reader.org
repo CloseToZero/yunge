@@ -91,12 +91,41 @@ relocations update only the primary view's durable place.  An additional view
 can move independently and becomes a durable-place owner only through
 =yunge-reader-make-primary=.
 
+The renderer collapses each visible-range CFI to its start before emitting a
+durable locator.  The endpoint depends on window width, font metrics, and
+reading style, so retaining the whole range would make an otherwise stable
+place change during reflow.  Previously saved range CFIs remain valid restore
+inputs.
+
 =J= and =C-d= move to the next reflowed screen; =K= and =C-u= move to the
 previous screen.  Page Down and Page Up provide the same portable commands,
 including after a mouse click gives the child WebView native focus.
-The current slice retains browser-native text selection, copying, links, CSS
-layout, and width reflow.  Reader outline, search, selection-copy integration,
-and reading styles remain later work.
+=o= displays the bounded EPUB 3 navigation or EPUB 2 NCX outline through the
+same persistent per-view outline UI used by fixed-layout documents.
+
+Each logical EPUB view owns a semantic reading style.  The initial style uses
+a 1.0 font scale, 1.6 line height, 720 CSS-pixel maximum content width, and 7%
+side padding.  The four values are configurable through
+=yunge-reader-epub-default-font-scale=,
+=yunge-reader-epub-default-line-height=,
+=yunge-reader-epub-default-content-width=, and
+=yunge-reader-epub-default-side-padding=.  They are copied when the view is
+created, validated at the Emacs, Rust, and renderer boundaries, and applied
+before its first navigation.  Hiding and recreating a surface therefore keeps
+that view's style, while another view may later diverge independently.
+Fixed-layout EPUBs retain their publisher geometry.
+
+A =publication-ready= locator updates only the logical view.  Readiness means
+that an initial target or retained location finished restoring; it is not user
+navigation and therefore cannot replace the primary durable place.  Later
+screen movement, scrolling, and explicit navigation relocations retain the
+normal place-recording rules.  Layout-anchor and text-selection relocations do
+not masquerade as reading movement.  Explicit view closure still records its
+current stable location.
+
+The current slice retains browser-native text selection, ordinary copying,
+links, CSS layout, and width reflow.  Reader search, =y= selection-copy
+integration, and interactive style controls remain later work.
 
 * Library boundary
 
@@ -651,7 +680,8 @@ and singular-angle quadrilateral recovery, cross-page inclusive ranges,
 protocol errors, shutdown ordering, EOF, WebView bounds validation, omitted
 empty parameters, native Reader-key filtering, embedded renderer assets,
 strict renderer IPC, bounded EPUB locators, bounded EPUB outlines, internal
-href targets, and bounded EPUB resource catalogs.
+href targets, bounded semantic EPUB styles, and bounded EPUB resource
+catalogs.
 WebView ERT tests cover the separate handshake, strict capability validation,
 asynchronous renderer event routing, per-view EPUB locations, owning-window
 focus recovery, owning-buffer key dispatch, frame handle parsing, coalesced
@@ -661,7 +691,7 @@ multi-surface destruction barriers, outline waiter completion, and ordered
 publication release.  EPUB driver tests cover registration, reflowable key
 bindings, native open result validation, shared publication ownership,
 printable place conversion, bounded outline mapping, transient href targets,
-restore timing, and primary-only place recording.
+view-local reading styles, restore timing, and primary-only place recording.
 Isolated graphical Emacs smoke tests open real EPUBs through WebView2, move one
 screen, destroy and recreate the native view, restore the exact CFI, and check
 the href and fraction fallback order.  The formal driver smoke test also opens
