@@ -426,10 +426,54 @@ The native protocol remains an engine boundary.  A pure-Rust engine can become
 another backend after it meets the same rendering, encryption, text geometry,
 selection, and annotation conformance tests.
 
+* Reflowable WebView spike
+
+The first EPUB architecture spike uses a second mode of the Rust helper on
+Windows.  =M-x yunge-reader-webview-spike= places a self-contained HTML test
+page over the selected Emacs window body.  It is not an EPUB driver yet.  The
+spike answers the earlier architectural question before an EPUB library is
+selected: a native child WebView can follow an Emacs window across live splits
+and resizes without rasterizing the document.
+
+The child surface is the preferred reflowable path.  It retains browser-native
+text selection, copying, links, accessibility, and CSS layout, and can reflow
+the same DOM when its width changes.  An image path would require layout and
+rasterization after every width change and would recreate text hit testing and
+selection in Lisp.  Image rendering remains appropriate for fixed-layout
+documents and as a possible compatibility fallback, but it is not the primary
+EPUB representation.
+
+Each logical Reader view receives its own numeric native view and WebView
+instance.  Emacs sends the frame window ID plus the body pixel rectangle.
+Window size, state, and buffer changes resynchronize that rectangle.  Only one
+bounds request per view may be outstanding; intermediate resize rectangles are
+coalesced into the newest value.  Replacing the buffer, deleting its window,
+or killing the spike buffer destroys that native view without affecting other
+views.  The local validation exercised two simultaneous child views with
+independent rectangles.
+
+The spike page has a restrictive content security policy, denies WebView
+permissions, and rejects navigation.  These are baseline constraints for
+opening untrusted EPUB contents, not a complete EPUB sandbox.
+
+=M-x yunge-reader-webview-stop= requests graceful shutdown and then enforces a
+deadline; a prefix argument terminates it immediately.  Emacs exit also ends
+the process.  The ordinary PDF helper and the WebView helper are separate
+process instances, so testing reflow does not interrupt open PDF documents.
+
+No platform dependency is installed automatically.  Windows reports the
+detected WebView2 Runtime version or tells the user to install the runtime.
+Future macOS and Linux implementations must likewise detect WKWebView or
+WebKitGTK and report a missing environment.  The current embedding command is
+deliberately Windows-only while focus routing and cross-platform parent-view
+ownership remain under evaluation.
+
 * Next Reader slices
 
-The next substantial implementation slice should add a second format driver
-to exercise the reflow contract.
+The next substantial implementation slice should harden child focus and key
+routing, then compare Readium Web and foliate-js behind the existing native
+view boundary.  Only after that comparison should the EPUB driver commit to a
+renderer and stable locator format.
 
 Annotation anchors and independent decoration layers remain a planned
 extension of the stable position contract, after the reading path is hardened.
@@ -475,7 +519,10 @@ parameters, stable PDF password errors, bounded outline, link labels and URIs,
 destination view mapping, safe cache eviction, Unicode literal matching,
 byte-to-PDFium-index mapping, search and selection cursors and limits, regular
 and singular-angle quadrilateral recovery, cross-page inclusive ranges,
-protocol errors, shutdown ordering, and EOF.
+protocol errors, shutdown ordering, EOF, WebView bounds validation, omitted
+empty parameters, and the self-contained spike page.  WebView ERT tests cover
+the separate handshake, strict capability validation, frame handle parsing,
+coalesced resize requests, and view destruction after buffer replacement.
 
 The integration path installs the pinned Windows library through the public
 setup command, runs its =pdfium-info= smoke test, opens a five-page A4 fixture,

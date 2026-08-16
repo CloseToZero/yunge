@@ -14,6 +14,9 @@ use std::io::{self, BufRead, Write};
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
+#[cfg(target_os = "windows")]
+mod webview;
+
 type Error = Box<dyn std::error::Error>;
 
 const PROTOCOL_VERSION: u32 = 1;
@@ -1728,6 +1731,14 @@ fn serve(input: impl BufRead, mut output: impl Write) -> Result<(), Error> {
 }
 
 fn main() {
+    #[cfg(target_os = "windows")]
+    if env::args().nth(1).as_deref() == Some("--webview") {
+        if let Err(error) = webview::serve() {
+            eprintln!("yunge-reader webview: {error}");
+            std::process::exit(1);
+        }
+        return;
+    }
     if let Err(error) = serve(io::stdin().lock(), io::stdout().lock()) {
         eprintln!("yunge-reader: {error}");
         std::process::exit(1);

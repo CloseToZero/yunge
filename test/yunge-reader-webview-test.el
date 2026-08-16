@@ -1,0 +1,165 @@
+;;; yunge-reader-webview-test.el --- WebView tests -*- lexical-binding: t; -*-
+;; SPDX-FileCopyrightText: 2026 Chen Zhexuan
+;; SPDX-License-Identifier: MIT
+
+(require 'yunge-test-helper)
+(require 'yunge-reader-webview)
+
+(defmacro yunge-reader-webview-test--with-fake-process (&rest body)
+  "Run BODY with an isolated fake WebView process implementation."
+  (declare (indent 0) (debug t))
+  `(let ((system-type 'windows-nt)
+         (yunge-reader-webview--process nil)
+         (yunge-reader-webview--callbacks
+          (make-hash-table :test #'eql))
+         (yunge-reader-webview--outbound-queue nil)
+         (yunge-reader-webview--next-request-id 0)
+         (yunge-reader-webview--next-view-id 0)
+         (yunge-reader-webview--views
+          (make-hash-table :test #'eql))
+         (yunge-reader-webview--force-stop-timer nil)
+         (properties (make-hash-table :test #'equal))
+         (live nil)
+         sent)
+     (cl-letf
+         (((symbol-function
+            'yunge-reader-webview--program-available-p)
+           (lambda () t))
+          ((symbol-function 'yunge-reader-native--build-id)
+           (lambda () "test-build"))
+          ((symbol-function 'make-process)
+           (lambda (&rest _arguments)
+             (setq live t)
+             'fake-webview-process))
+          ((symbol-function 'process-live-p)
+           (lambda (process)
+             (and live (eq process 'fake-webview-process))))
+          ((symbol-function 'process-status)
+           (lambda (process)
+             (if (and live (eq process 'fake-webview-process))
+                 'run
+               'exit)))
+          ((symbol-function 'process-put)
+           (lambda (process property value)
+             (puthash (cons process property) value properties)))
+          ((symbol-function 'process-get)
+           (lambda (process property)
+             (gethash (cons process property) properties)))
+          ((symbol-function 'process-send-string)
+           (lambda (_process string)
+             (push string sent)))
+          ((symbol-function 'delete-process)
+           (lambda (_process)
+             (setq live nil))))
+       ,@body)))
+
+(defun yunge-reader-webview-test--ready-message ()
+  "Return one valid test ready message."
+  '((kind . "webview-ready")
+    (protocol . 1)
+    (build-id . "test-build")
+    (platform . "windows")
+    (engine . "webview2")
+    (available . t)
+    (version . "test-version")
+    (capabilities
+     . ("view-bounds" "view-create" "view-destroy" "view-focus"
+        "view-info" "view-status" "view-visible"))))
+
+(ert-deftest yunge-reader-webview-queues-until-ready ()
+  (yunge-reader-webview-test--with-fake-process
+    (let (result)
+      (yunge-reader-webview--request
+       "view-info" nil
+       (lambda (value error-data)
+         (should-not error-data)
+         (setq result value)))
+      (should-not sent)
+      (yunge-reader-webview--handle-message
+       'fake-webview-process
+       (yunge-reader-webview-test--ready-message))
+      (should (= (length sent) 1))
+      (let ((request
+             (json-parse-string (car sent) :object-type 'alist)))
+        (should (equal (alist-get 'op request) "view-info")))
+      (yunge-reader-webview--handle-message
+       'fake-webview-process
+       '((id . 1)
+         (ok . t)
+         (result . ((available . t)))))
+      (should (alist-get 'available result)))))
+
+(ert-deftest yunge-reader-webview-rejects-incomplete-handshakes ()
+  (yunge-reader-webview-test--with-fake-process
+    (let ((message (yunge-reader-webview-test--ready-message)))
+      (setf (alist-get 'capabilities message)
+            '("view-create" "view-destroy"))
+      (should-error
+       (yunge-reader-webview--validate-ready message)
+       :type 'error))))
+
+(ert-deftest yunge-reader-webview-parses-decimal-and-hex-frame-handles ()
+  (cl-letf (((symbol-function 'frame-parameter)
+             (lambda (_frame _parameter) "12345")))
+    (should (= (yunge-reader-webview--frame-handle 'frame) 12345)))
+  (cl-letf (((symbol-function 'frame-parameter)
+             (lambda (_frame _parameter) "0x2a")))
+    (should (= (yunge-reader-webview--frame-handle 'frame) 42))))
+
+(ert-deftest yunge-reader-webview-coalesces-window-resizes ()
+  (let* ((view
+          (yunge-reader-webview--make-view
+           :id 7
+           :created t
+           :bounds '((x . 0) (y . 0) (width . 100) (height . 100))
+           :requested-bounds
+           '((x . 0) (y . 0) (width . 200) (height . 100))))
+         requests)
+    (cl-letf
+        (((symbol-function 'yunge-reader-webview--request)
+          (lambda (_operation parameters complete)
+            (push (cons parameters complete) requests))))
+      (yunge-reader-webview--send-latest-bounds view)
+      (setf (yunge-reader-webview--view-requested-bounds view)
+            '((x . 0) (y . 0) (width . 300) (height . 100)))
+      (yunge-reader-webview--send-latest-bounds view)
+      (should (= (length requests) 1))
+      (funcall (cdar requests) nil nil)
+      (should (= (length requests) 2))
+      (should
+       (= (alist-get
+           'width
+           (alist-get 'bounds (caar requests)))
+          300)))))
+
+(ert-deftest yunge-reader-webview-destroys-a-replaced-window-view ()
+  (let* ((buffer (generate-new-buffer " *webview owner*"))
+         (other (generate-new-buffer " *webview replacement*"))
+         (window (selected-window))
+         (view
+          (yunge-reader-webview--make-view
+           :id 9
+           :window window
+           :buffer buffer
+           :created t))
+         requests)
+    (unwind-protect
+        (let ((yunge-reader-webview--views
+               (make-hash-table :test #'eql)))
+          (puthash 9 view yunge-reader-webview--views)
+          (cl-letf
+              (((symbol-function 'window-buffer)
+                (lambda (_window) other))
+               ((symbol-function 'process-live-p)
+                (lambda (_process) t))
+               ((symbol-function 'yunge-reader-webview--request)
+                (lambda (operation parameters _complete)
+                  (push (list operation parameters) requests))))
+            (yunge-reader-webview--sync-view view))
+          (should (yunge-reader-webview--view-destroyed view))
+          (should-not (gethash 9 yunge-reader-webview--views))
+          (should (equal (caar requests) "view-destroy")))
+      (kill-buffer buffer)
+      (kill-buffer other))))
+
+;;; yunge-reader-webview-test.el ends here

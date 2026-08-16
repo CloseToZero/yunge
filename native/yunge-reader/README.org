@@ -77,6 +77,50 @@ real directory rather than a symbolic link.  Individual removal failures do
 not stop the scan; =failed-files= and =over-budget= let Emacs report an
 incomplete cleanup.
 
+* Windows WebView spike mode
+
+Starting the same executable with =--webview= selects a separate NDJSON
+service.  It does not load PDFium or share document handles with the ordinary
+service.  Its handshake reports the installed WebView2 Runtime without
+installing or downloading it:
+
+#+begin_src json
+{"available":true,"build-id":"HASH",
+ "capabilities":["view-bounds","view-create","view-destroy",
+                 "view-focus","view-info","view-status","view-visible"],
+ "engine":"webview2","kind":"webview-ready","platform":"windows",
+ "protocol":1,"version":"151.0.4129.86"}
+#+end_src
+
+When the runtime is missing, =available= is false and =message= tells the user
+which environment to install.  The process remains responsive so
+=view-info= and =shutdown= still work.
+
+=view-create= accepts a logical =view= ID, a live Emacs frame HWND as
+=parent=, a physical-pixel =bounds= object, and optional =visible=.  The
+current spike loads only its built-in local HTML page.
+
+#+begin_src json
+{"id":1,"op":"view-create",
+ "params":{"view":1,"parent":1902902,
+           "bounds":{"x":968,"y":0,"width":944,"height":988},
+           "visible":true}}
+#+end_src
+
+=view-bounds= moves or resizes one child, =view-visible= changes its
+visibility, =view-focus= gives it native focus, and =view-destroy= removes it.
+=view-status= reports whether the built-in page finished loading, together
+with the last accepted bounds and visibility.
+View IDs are independent, so multiple Reader views do not share layout or
+scroll state.  Positions must be nonnegative; dimensions must be positive and
+at most 32,768 physical pixels.  Duplicate views, unknown views, invalid HWNDs,
+unknown parameters, and unavailable runtimes return stable protocol errors.
+
+The helper pumps native messages on its main thread while a background thread
+reads stdin.  =shutdown= and EOF drop every child view before exit.  This mode
+is Windows-only until equivalent parent ownership is implemented and tested
+for WKWebView and WebKitGTK.
+
 * PDF operations
 
 =pdfium-info= loads the configured library and reports backend, API, and
