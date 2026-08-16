@@ -1803,6 +1803,12 @@
                  (lambda (&rest _arguments) (pop events)))
                 ((symbol-function 'posn-window)
                  (lambda (_position) 'window))
+                ((symbol-function 'posn-x-y)
+                 (lambda (position)
+                   (pcase position
+                     ('start-position '(0 . 0))
+                     ('motion-position '(8 . 0))
+                     ('release-position '(12 . 0)))))
                 ((symbol-function 'yunge-reader-pdf--event-page-point)
                  (lambda (position &optional _noerror)
                    (list :page 0 :point position)))
@@ -1813,18 +1819,56 @@
                 ((symbol-function 'yunge-reader-pdf--message-selection)
                  (lambda () (cl-incf messages))))
         (yunge-reader-pdf--track-selection-events
-         '(:page 0 :point start-position) 'window))
+         '(:page 0 :point start-position) 'start-position 'window))
       (should-not mark-active)
       (should
        (equal
         (nreverse calls)
         '(((:page 0 :point start-position)
-           (:page 0 :point start-position) (t nil window))
-          ((:page 0 :point start-position)
            (:page 0 :point motion-position) (t t window))
           ((:page 0 :point start-position)
            (:page 0 :point release-position) (t t window)))))
       (should (= messages 1)))))
+
+(ert-deftest yunge-reader-pdf-click-clears-selection-without-selecting ()
+  (with-temp-buffer
+    (let ((events '(motion release))
+          (repaints 0)
+          (selects 0))
+      (setq yunge-reader-selection
+            (make-yunge-reader-selection
+             :start (make-yunge-reader-position :unit 0 :offset 4)
+             :end (make-yunge-reader-position :unit 0 :offset 11)))
+      (cl-letf (((symbol-function 'event-start)
+                 (lambda (event)
+                   (if (eq event 'motion)
+                       'motion-position
+                     'start-position)))
+                ((symbol-function 'event-end)
+                 (lambda (_event) 'release-position))
+                ((symbol-function 'event-basic-type)
+                 (lambda (_event) 'mouse-1))
+                ((symbol-function 'mouse-movement-p)
+                 (lambda (event) (eq event 'motion)))
+                ((symbol-function 'read-event)
+                 (lambda (&rest _arguments) (pop events)))
+                ((symbol-function 'posn-window)
+                 (lambda (_position) 'window))
+                ((symbol-function 'posn-x-y)
+                 (lambda (position)
+                   (pcase position
+                     ('start-position '(20 . 20))
+                     ('motion-position '(22 . 21))
+                     ('release-position '(21 . 20)))))
+                ((symbol-function 'yunge-reader-pdf--select-points)
+                 (lambda (&rest _arguments) (cl-incf selects)))
+                ((symbol-function 'yunge-reader-pdf--repaint-selection)
+                 (lambda (_window) (cl-incf repaints))))
+        (yunge-reader-pdf--track-selection-events
+         '(:page 0 :point start) 'start-position 'window))
+      (should-not yunge-reader-selection)
+      (should (= selects 0))
+      (should (= repaints 1)))))
 
 (ert-deftest yunge-reader-pdf-forces-selection-redisplay ()
   (let (painted forced redisplayed)

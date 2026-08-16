@@ -41,6 +41,11 @@
   :type 'number
   :group 'yunge-reader)
 
+(defcustom yunge-reader-pdf-selection-drag-threshold 3
+  "Pointer travel in pixels before a press starts PDF selection."
+  :type 'natnum
+  :group 'yunge-reader)
+
 (defcustom yunge-reader-pdf-search-color "#ff7800"
   "Color painted behind the current PDF search match."
   :type 'color
@@ -2594,41 +2599,69 @@ WINDOW is redisplayed immediately after a successful update."
   "Return the final position represented by mouse EVENT."
   (or (event-end event) (event-start event)))
 
+(defun yunge-reader-pdf--selection-drag-p
+    (start-position position)
+  "Return non-nil when POSITION moved far enough from START-POSITION."
+  (let ((start (posn-x-y start-position))
+        (current (posn-x-y position)))
+    (and (numberp (car-safe start))
+         (numberp (cdr-safe start))
+         (numberp (car-safe current))
+         (numberp (cdr-safe current))
+         (or (> (abs (- (car current) (car start)))
+                yunge-reader-pdf-selection-drag-threshold)
+             (> (abs (- (cdr current) (cdr start)))
+                yunge-reader-pdf-selection-drag-threshold)))))
+
+(defun yunge-reader-pdf--clear-click-selection (window)
+  "Clear the logical PDF selection after a click in WINDOW."
+  (when yunge-reader-selection
+    (yunge-reader-clear-selection t)
+    (yunge-reader-pdf--repaint-selection window)))
+
 (defun yunge-reader-pdf--track-selection-events
-    (start-location window)
-  "Track selection events from START-LOCATION in WINDOW."
-  (let (moved done)
+    (start-location start-position window)
+  "Track selection from START-LOCATION and START-POSITION in WINDOW."
+  (let (dragging done)
     (setq mark-active nil)
-    (yunge-reader-pdf--select-points
-     start-location start-location t nil window)
     (while (not done)
       (let ((next (read-event)))
         (cond
          ((null next)
           (setq done t))
          ((mouse-movement-p next)
-          (setq moved t)
           (let ((position (event-start next)))
             (when (eq window (posn-window position))
-              (when-let* ((location
-                           (yunge-reader-pdf--event-page-point
-                            position t)))
-                (yunge-reader-pdf--select-points
-                 start-location location t t window)))))
+              (when (or dragging
+                        (yunge-reader-pdf--selection-drag-p
+                         start-position position))
+                (setq dragging t)
+                (when-let* ((location
+                             (yunge-reader-pdf--event-page-point
+                              position t)))
+                  (yunge-reader-pdf--select-points
+                   start-location location t t window))))))
          ((memq (event-basic-type next) '(mouse-1 drag-mouse-1))
           (let ((position
                  (yunge-reader-pdf--selection-event-position next)))
-            (when (and moved (eq window (posn-window position)))
-              (when-let* ((location
-                           (yunge-reader-pdf--event-page-point
-                            position t)))
-                (yunge-reader-pdf--select-points
-                 start-location location t t window)))
+            (when (eq window (posn-window position))
+              (if (or dragging
+                      (yunge-reader-pdf--selection-drag-p
+                       start-position position))
+                  (progn
+                    (setq dragging t)
+                    (when-let* ((location
+                                 (yunge-reader-pdf--event-page-point
+                                  position t)))
+                      (yunge-reader-pdf--select-points
+                       start-location location t t window)))
+                (yunge-reader-pdf--clear-click-selection window)))
             (setq done t)))
          (t
           (push next unread-command-events)
           (setq done t)))))
-    (yunge-reader-pdf--message-selection)))
+    (when dragging
+      (yunge-reader-pdf--message-selection))))
 
 (defun yunge-reader-pdf--track-selection (event)
   "Track PDF text selection continuously from down-mouse EVENT."
@@ -2641,7 +2674,7 @@ WINDOW is redisplayed immediately after a successful update."
              (yunge-reader-pdf--event-page-point start-position)))
         (track-mouse
           (yunge-reader-pdf--track-selection-events
-           start-location window))))))
+           start-location start-position window))))))
 
 (defun yunge-reader-pdf--activate-page-point (location data)
   "Follow a link at LOCATION in DATA, returning nil when none exists."
