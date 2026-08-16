@@ -35,6 +35,7 @@
      ("N" . yunge-reader-search-previous)
      ("P" . yunge-reader-fit-page)
      ("W" . yunge-reader-fit-width)
+     ("<escape>" . yunge-reader-escape)
      ("gr" . yunge-reader-refresh)
      ("n" . yunge-reader-search-next)
      ("o" . yunge-reader-outline)
@@ -87,6 +88,48 @@
     (evil-refresh-cursor 'visual)
     (should (equal evil-visual-state-cursor '(nil)))
     (should-not cursor-type)))
+
+(ert-deftest yunge-reader-evil-escape-clears-a-logical-selection ()
+  (yunge-test-enable-evil)
+  (with-temp-buffer
+    (yunge-reader-mode)
+    (let ((refreshes 0))
+      (setq yunge-reader-selection
+            (make-yunge-reader-selection
+             :start (make-yunge-reader-position :unit 0 :offset 1)
+             :end (make-yunge-reader-position :unit 0 :offset 2)))
+      (add-hook 'yunge-reader-refresh-hook
+                (lambda () (cl-incf refreshes)) nil t)
+      (let ((this-command nil))
+        (evil-force-normal-state))
+      (should yunge-reader-selection)
+      (save-window-excursion
+        (switch-to-buffer (current-buffer))
+        (should (eq (key-binding (kbd "<escape>"))
+                    'evil-force-normal-state))
+        (execute-kbd-macro (kbd "<escape>")))
+      (should-not yunge-reader-selection)
+      (should (= refreshes 1)))))
+
+(ert-deftest yunge-reader-escape-clears-or-uses-the-ordinary-action ()
+  (with-temp-buffer
+    (yunge-reader-mode)
+    (let ((refreshes 0)
+          escaped)
+      (setq yunge-reader-selection
+            (make-yunge-reader-selection
+             :start (make-yunge-reader-position :unit 0 :offset 1)
+             :end (make-yunge-reader-position :unit 0 :offset 2)))
+      (add-hook 'yunge-reader-refresh-hook
+                (lambda () (cl-incf refreshes)) nil t)
+      (yunge-reader-escape)
+      (should-not yunge-reader-selection)
+      (should (= refreshes 1))
+      (cl-letf (((symbol-function 'keyboard-escape-quit)
+                 (lambda () (setq escaped t))))
+        (yunge-reader-escape))
+      (should escaped)
+      (should (= refreshes 1)))))
 
 (ert-deftest yunge-reader-opens-only-allowlisted-uri-actions ()
   (let* ((yunge-reader-uri-schemes '("https" "mailto"))

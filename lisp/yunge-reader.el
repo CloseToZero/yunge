@@ -331,6 +331,7 @@ document contents.")
   "P" #'yunge-reader-fit-page
   "W" #'yunge-reader-fit-width
   "C-g" #'yunge-reader-clear-selection
+  "<escape>" #'yunge-reader-escape
   "g r" #'yunge-reader-refresh
   "n" #'yunge-reader-search-next
   "o" #'yunge-reader-outline
@@ -348,6 +349,14 @@ document contents.")
       (evil-refresh-cursor
        (and (boundp 'evil-state) (symbol-value 'evil-state))
        (current-buffer)))))
+
+(defun yunge-reader--clear-selection-after-force-normal-state
+    (&rest _arguments)
+  "Clear a Reader selection after an interactive Evil escape."
+  (when (and (eq this-command 'evil-force-normal-state)
+             (derived-mode-p 'yunge-reader-mode)
+             yunge-reader-selection)
+    (yunge-reader-clear-selection)))
 
 (define-derived-mode yunge-reader-mode special-mode "Yunge Reader"
   "Major mode shared by Yunge Reader document adapters."
@@ -369,6 +378,9 @@ document contents.")
   (evil-set-initial-state 'yunge-reader-mode 'normal)
   (yunge-key-evil-define 'normal yunge-reader-mode-map
                          yunge-reader-normal-bindings)
+  (advice-add
+   'evil-force-normal-state :after
+   #'yunge-reader--clear-selection-after-force-normal-state)
   (dolist (buffer (buffer-list))
     (with-current-buffer buffer
       (when (derived-mode-p 'yunge-reader-mode)
@@ -1994,6 +2006,13 @@ driver that already resolved the selected glyphs."
   (setq yunge-reader-selection nil
         yunge-reader--copy-pending nil)
   (yunge-reader-refresh))
+
+(defun yunge-reader-escape ()
+  "Clear a Reader selection or perform the ordinary escape action."
+  (interactive)
+  (if yunge-reader-selection
+      (yunge-reader-clear-selection)
+    (keyboard-escape-quit)))
 
 (defun yunge-reader--selection-batch-valid-p (batch)
   "Return non-nil when BATCH follows the selection text contract."

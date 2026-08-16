@@ -43,7 +43,9 @@ page, =gp= for a page prompt, =RET= for a visible link prompt, and Page Down
 or Page Up for screen scrolling.  Mouse-1 selects one character, dragging
 selects text, and Ctrl-Mouse-1 follows a link when hit.
 Evil starts Reader buffers in Normal state and leaves Visual =y= as
-=evil-yank=.
+=evil-yank=.  =C-g= clears the logical text selection.  =ESC= does the same
+from Evil's Normal state while retaining its usual force-normal and search
+highlight cleanup; without Evil it clears the selection directly.
 =M-x yunge-reader-clear-search= removes the active match highlight.
 
 =M-x yunge-reader-new-view= creates an independent buffer at the current
