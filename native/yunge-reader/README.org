@@ -77,7 +77,7 @@ real directory rather than a symbolic link.  Individual removal failures do
 not stop the scan; =failed-files= and =over-budget= let Emacs report an
 incomplete cleanup.
 
-* Windows WebView spike mode
+* Windows WebView service
 
 Starting the same executable with =--webview= selects a separate NDJSON
 service.  It does not load PDFium or share document handles with the ordinary
@@ -86,7 +86,8 @@ installing or downloading it:
 
 #+begin_src json
 {"available":true,"build-id":"HASH",
- "capabilities":["view-bounds","view-clear-selection","view-create",
+ "capabilities":["publication-close","publication-info","publication-open",
+                 "view-bounds","view-clear-selection","view-create",
                  "view-destroy","view-events","view-focus",
                  "view-focus-parent","view-info","view-status",
                  "view-visible"],
@@ -97,6 +98,20 @@ installing or downloading it:
 When the runtime is missing, =available= is false and =message= tells the user
 which environment to install.  The process remains responsive so
 =view-info= and =shutdown= still work.
+
+=publication-open= accepts an absolute local EPUB path.  Rust validates and
+owns the ZIP container, returns the package path and minimal OPF metadata, and
+assigns a process-local publication ID.  It does not expose the filesystem
+path to JavaScript.  =publication-info= repeats the bounded metadata and
+resource statistics, while =publication-close= releases the ZIP handle.
+
+#+begin_src json
+{"id":1,"op":"publication-open",
+ "params":{"path":"D:/books/example.epub"}}
+#+end_src
+
+The current child page is not yet attached to a publication.  Resource
+transport and EPUB rendering are separate later protocol slices.
 
 =view-create= accepts a logical =view= ID, a live Emacs frame HWND as
 =parent=, a physical-pixel =bounds= object, and optional =visible=.  The
@@ -132,9 +147,9 @@ at most 32,768 physical pixels.  Duplicate views, unknown views, invalid HWNDs,
 unknown parameters, and unavailable runtimes return stable protocol errors.
 
 The helper pumps native messages on its main thread while a background thread
-reads stdin.  =shutdown= and EOF drop every child view before exit.  This mode
-is Windows-only until equivalent parent ownership is implemented and tested
-for WKWebView and WebKitGTK.
+reads stdin.  =shutdown= and EOF drop every child view and publication before
+exit.  This mode is Windows-only until equivalent parent ownership is
+implemented and tested for WKWebView and WebKitGTK.
 
 * PDF operations
 

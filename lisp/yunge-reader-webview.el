@@ -8,6 +8,9 @@
 (require 'yunge-reader)
 (require 'yunge-reader-native)
 
+(define-error 'yunge-reader-webview-native-error
+  "The Yunge Reader WebView helper reported an error")
+
 (defcustom yunge-reader-webview-stop-timeout 1.0
   "Seconds allowed for graceful WebView helper shutdown."
   :type 'number
@@ -90,7 +93,8 @@
          (cl-every
           (lambda (capability)
             (member capability (alist-get 'capabilities message)))
-          '("view-bounds" "view-clear-selection" "view-create"
+          '("publication-close" "publication-info" "publication-open"
+            "view-bounds" "view-clear-selection" "view-create"
             "view-destroy" "view-events" "view-focus"
             "view-focus-parent" "view-info" "view-status"
             "view-visible")))
@@ -112,9 +116,33 @@
   "Return an Emacs error value represented by response MESSAGE."
   (let ((object (alist-get 'error message)))
     (list
-     'error
+     'yunge-reader-webview-native-error
+     (or (alist-get 'code object) "webview-error")
      (or (alist-get 'message object)
          "The Yunge Reader WebView helper failed"))))
+
+(defun yunge-reader-webview--open-publication (path callback)
+  "Open the local EPUB at PATH and invoke CALLBACK with its result."
+  (unless (and (stringp path)
+               (file-name-absolute-p path)
+               (not (file-remote-p path)))
+    (error "EPUB publication path must be absolute and local"))
+  (yunge-reader-webview--request
+   "publication-open" `((path . ,(expand-file-name path))) callback))
+
+(defun yunge-reader-webview--publication-info (publication callback)
+  "Query PUBLICATION and invoke CALLBACK with its result."
+  (unless (and (integerp publication) (> publication 0))
+    (error "Invalid EPUB publication ID: %S" publication))
+  (yunge-reader-webview--request
+   "publication-info" `((publication . ,publication)) callback))
+
+(defun yunge-reader-webview--close-publication (publication callback)
+  "Close PUBLICATION and invoke CALLBACK with its result."
+  (unless (and (integerp publication) (> publication 0))
+    (error "Invalid EPUB publication ID: %S" publication))
+  (yunge-reader-webview--request
+   "publication-close" `((publication . ,publication)) callback))
 
 (defun yunge-reader-webview--handle-event (process message)
   "Handle one asynchronous WebView MESSAGE from PROCESS."

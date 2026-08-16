@@ -28,6 +28,7 @@ const MAX_TOTAL_BYTES: u64 = 4 * 1_024 * 1_024 * 1_024;
 const MAX_XML_NODES: u32 = 100_000;
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "kebab-case")]
 pub struct PublicationMetadata {
     pub package_path: String,
     pub title: Option<String>,

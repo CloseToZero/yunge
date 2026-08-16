@@ -30,11 +30,15 @@ use wry::{
     PageLoadEvent, PermissionResponse, Rect, WebView, WebViewBuilder,
     WebViewExtWindows,
 };
+use yunge_reader::epub::{EpubError, Publication};
 
 use super::{BUILD_ID, Error};
 
 const PROTOCOL_VERSION: u32 = 1;
-const CAPABILITIES: [&str; 10] = [
+const CAPABILITIES: [&str; 13] = [
+    "publication-close",
+    "publication-info",
+    "publication-open",
     "view-bounds",
     "view-clear-selection",
     "view-create",
@@ -119,6 +123,18 @@ struct ViewParams {
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
+struct PublicationOpenParams {
+    path: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PublicationParams {
+    publication: u64,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct BoundsParams {
     view: u64,
     bounds: Bounds,
@@ -182,6 +198,8 @@ impl HasWindowHandle for ParentWindow {
 
 struct Service {
     views: HashMap<u64, NativeView>,
+    publications: HashMap<u64, Publication>,
+    next_publication: u64,
     version: Result<String, String>,
     event_sender: Sender<ViewEvent>,
 }
@@ -259,6 +277,8 @@ impl Service {
     fn new(event_sender: Sender<ViewEvent>) -> Self {
         Self {
             views: HashMap::new(),
+            publications: HashMap::new(),
+            next_publication: 1,
             version: wry::webview_version().map_err(|error| error.to_string()),
             event_sender,
         }
@@ -276,6 +296,55 @@ impl Service {
     fn info(&self, params: Value) -> Result<Value, ServiceError> {
         Self::parse::<EmptyParams>(params)?;
         Ok(info_result(&self.version))
+    }
+
+    fn open_publication(
+        &mut self,
+        params: Value,
+    ) -> Result<Value, ServiceError> {
+        let params: PublicationOpenParams = Self::parse(params)?;
+        let path = std::path::Path::new(&params.path);
+        if !path.is_absolute() {
+            return Err(ServiceError::new(
+                "invalid-publication-path",
+                "publication path must be absolute",
+            ));
+        }
+        let publication =
+            Publication::open(path).map_err(ServiceError::from)?;
+        let id = self.next_publication;
+        self.next_publication = id.checked_add(1).ok_or_else(|| {
+            ServiceError::new(
+                "publication-id-exhausted",
+                "no publication IDs remain",
+            )
+        })?;
+        let result = publication_result(id, &publication);
+        self.publications.insert(id, publication);
+        Ok(result)
+    }
+
+    fn publication_info(&self, params: Value) -> Result<Value, ServiceError> {
+        let params: PublicationParams = Self::parse(params)?;
+        let publication = self
+            .publications
+            .get(&params.publication)
+            .ok_or_else(|| unknown_publication(params.publication))?;
+        Ok(publication_result(params.publication, publication))
+    }
+
+    fn close_publication(
+        &mut self,
+        params: Value,
+    ) -> Result<Value, ServiceError> {
+        let params: PublicationParams = Self::parse(params)?;
+        if self.publications.remove(&params.publication).is_none() {
+            return Err(unknown_publication(params.publication));
+        }
+        Ok(json!({
+            "publication": params.publication,
+            "closed": true,
+        }))
     }
 
     fn create_view(&mut self, params: Value) -> Result<Value, ServiceError> {
@@ -449,6 +518,7 @@ impl Service {
         if request.op == "shutdown" {
             let result = Self::parse::<EmptyParams>(request.params).map(|_| {
                 self.views.clear();
+                self.publications.clear();
                 json!({ "stopped": true })
             });
             let control = if result.is_ok() {
@@ -459,6 +529,9 @@ impl Service {
             return (response(request.id, result), control);
         }
         let result = match request.op.as_str() {
+            "publication-open" => self.open_publication(request.params),
+            "publication-info" => self.publication_info(request.params),
+            "publication-close" => self.close_publication(request.params),
             "view-info" => self.info(request.params),
             "view-create" => self.create_view(request.params),
             "view-bounds" => self.set_bounds(request.params),
@@ -483,6 +556,28 @@ fn default_visible() -> bool {
 
 fn unknown_view(id: u64) -> ServiceError {
     ServiceError::new("unknown-view", format!("view {id} does not exist"))
+}
+
+fn unknown_publication(id: u64) -> ServiceError {
+    ServiceError::new(
+        "unknown-publication",
+        format!("publication {id} does not exist"),
+    )
+}
+
+fn publication_result(id: u64, publication: &Publication) -> Value {
+    json!({
+        "publication": id,
+        "metadata": publication.metadata(),
+        "entry-count": publication.entry_count(),
+        "expanded-bytes": publication.expanded_size(),
+    })
+}
+
+impl From<EpubError> for ServiceError {
+    fn from(error: EpubError) -> Self {
+        Self::new(error.code(), error.message())
+    }
 }
 
 fn is_escape_key(kind: COREWEBVIEW2_KEY_EVENT_KIND, key: u32) -> bool {
@@ -684,6 +779,7 @@ pub(super) fn serve() -> Result<(), Error> {
         }
     }
     service.views.clear();
+    service.publications.clear();
     pump_messages();
     Ok(())
 }
@@ -691,7 +787,68 @@ pub(super) fn serve() -> Result<(), Error> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs::{self, File};
+    use std::io::Write;
+    use std::path::PathBuf;
+    use std::sync::atomic::AtomicU64;
     use webview2_com::Microsoft::Web::WebView2::Win32 as WebView2;
+    use zip::write::SimpleFileOptions;
+    use zip::{CompressionMethod, ZipWriter};
+
+    static TEMPORARY_ID: AtomicU64 = AtomicU64::new(1);
+
+    struct TemporaryEpub(PathBuf);
+
+    impl Drop for TemporaryEpub {
+        fn drop(&mut self) {
+            let _ = fs::remove_file(&self.0);
+        }
+    }
+
+    fn test_epub() -> TemporaryEpub {
+        let id = TEMPORARY_ID.fetch_add(1, Ordering::Relaxed);
+        let path = std::env::temp_dir().join(format!(
+            "yunge-reader-webview-{}-{id}.epub",
+            std::process::id()
+        ));
+        let container = concat!(
+            "<container xmlns=\"",
+            "urn:oasis:names:tc:opendocument:xmlns:container",
+            "\" version=\"1.0\"><rootfiles>",
+            "<rootfile full-path=\"OPS/package.opf\" media-type=\"",
+            "application/oebps-package+xml",
+            "\"/></rootfiles></container>"
+        );
+        let package = concat!(
+            "<package xmlns=\"http://www.idpf.org/2007/opf\" ",
+            "version=\"3.0\"><metadata xmlns:dc=\"",
+            "http://purl.org/dc/elements/1.1/",
+            "\"><dc:title>Protocol Book</dc:title>",
+            "</metadata></package>"
+        );
+        let file = File::create(&path).unwrap();
+        let mut archive = ZipWriter::new(file);
+        for (name, contents, method) in [
+            (
+                "mimetype",
+                "application/epub+zip",
+                CompressionMethod::Stored,
+            ),
+            (
+                "META-INF/container.xml",
+                container,
+                CompressionMethod::Deflated,
+            ),
+            ("OPS/package.opf", package, CompressionMethod::Deflated),
+        ] {
+            let options =
+                SimpleFileOptions::default().compression_method(method);
+            archive.start_file(name, options).unwrap();
+            archive.write_all(contents.as_bytes()).unwrap();
+        }
+        archive.finish().unwrap();
+        TemporaryEpub(path)
+    }
 
     #[test]
     fn bounds_reject_empty_negative_and_extreme_rectangles() {
@@ -731,6 +888,68 @@ mod tests {
     #[test]
     fn omitted_empty_parameters_are_accepted() {
         Service::parse::<EmptyParams>(Value::Null).unwrap();
+    }
+
+    #[test]
+    fn publication_operations_own_query_and_release_one_epub() {
+        let epub = test_epub();
+        let (sender, _receiver) = mpsc::channel();
+        let mut service = Service::new(sender);
+        let path = epub.0.to_string_lossy().into_owned();
+        let (opened, control) = service.handle(Request {
+            id: 1,
+            op: "publication-open".into(),
+            params: json!({ "path": path }),
+        });
+
+        assert_eq!(control, Control::Continue);
+        assert!(opened.ok);
+        let result = opened.result.unwrap();
+        assert_eq!(result["publication"], 1);
+        assert_eq!(result["metadata"]["package-path"], "OPS/package.opf");
+        assert_eq!(result["metadata"]["title"], "Protocol Book");
+        assert_eq!(result["entry-count"], 3);
+        assert!(result["expanded-bytes"].as_u64().unwrap() > 0);
+
+        let (info, _) = service.handle(Request {
+            id: 2,
+            op: "publication-info".into(),
+            params: json!({ "publication": 1 }),
+        });
+        assert_eq!(info.result.unwrap()["metadata"]["title"], "Protocol Book");
+
+        let (closed, _) = service.handle(Request {
+            id: 3,
+            op: "publication-close".into(),
+            params: json!({ "publication": 1 }),
+        });
+        assert_eq!(closed.result.unwrap()["closed"], true);
+
+        let (missing, _) = service.handle(Request {
+            id: 4,
+            op: "publication-info".into(),
+            params: json!({ "publication": 1 }),
+        });
+        assert_eq!(missing.error.unwrap().code, "unknown-publication");
+    }
+
+    #[test]
+    fn publication_open_requires_an_absolute_strict_path() {
+        let (sender, _receiver) = mpsc::channel();
+        let mut service = Service::new(sender);
+        let (relative, _) = service.handle(Request {
+            id: 1,
+            op: "publication-open".into(),
+            params: json!({ "path": "book.epub" }),
+        });
+        assert_eq!(relative.error.unwrap().code, "invalid-publication-path");
+
+        let (unknown, _) = service.handle(Request {
+            id: 2,
+            op: "publication-open".into(),
+            params: json!({ "path": "book.epub", "extra": true }),
+        });
+        assert_eq!(unknown.error.unwrap().code, "invalid-params");
     }
 
     #[test]

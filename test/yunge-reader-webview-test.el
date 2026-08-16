@@ -55,18 +55,20 @@
 
 (defun yunge-reader-webview-test--ready-message ()
   "Return one valid test ready message."
-  '((kind . "webview-ready")
-    (protocol . 1)
-    (build-id . "test-build")
-    (platform . "windows")
-    (engine . "webview2")
-    (available . t)
-    (version . "test-version")
-    (capabilities
-     . ("view-bounds" "view-clear-selection" "view-create"
-        "view-destroy" "view-events" "view-focus"
-        "view-focus-parent" "view-info" "view-status"
-        "view-visible"))))
+  (copy-tree
+   '((kind . "webview-ready")
+     (protocol . 1)
+     (build-id . "test-build")
+     (platform . "windows")
+     (engine . "webview2")
+     (available . t)
+     (version . "test-version")
+     (capabilities
+      . ("publication-close" "publication-info" "publication-open"
+         "view-bounds" "view-clear-selection" "view-create"
+         "view-destroy" "view-events" "view-focus"
+         "view-focus-parent" "view-info" "view-status"
+         "view-visible")))))
 
 (ert-deftest yunge-reader-webview-queues-until-ready ()
   (yunge-reader-webview-test--with-fake-process
@@ -99,6 +101,43 @@
       (should-error
        (yunge-reader-webview--validate-ready message)
        :type 'error))))
+
+(ert-deftest yunge-reader-webview-preserves-native-error-codes ()
+  (should
+   (equal
+    (yunge-reader-webview--response-error
+     '((error
+        . ((code . "epub-limit-exceeded")
+           (message . "EPUB is too large")))))
+    '(yunge-reader-webview-native-error
+      "epub-limit-exceeded" "EPUB is too large"))))
+
+(ert-deftest yunge-reader-webview-wraps-publication-operations ()
+  (yunge-reader-webview-test--with-fake-process
+    (yunge-reader-webview-start)
+    (yunge-reader-webview--handle-message
+     'fake-webview-process
+     (yunge-reader-webview-test--ready-message))
+    (let ((path (expand-file-name "book.epub" temporary-file-directory)))
+      (yunge-reader-webview--open-publication
+       path (lambda (_value _error-data)))
+      (yunge-reader-webview--publication-info
+       7 (lambda (_value _error-data)))
+      (yunge-reader-webview--close-publication
+       7 (lambda (_value _error-data)))
+      (let ((requests
+             (mapcar
+              (lambda (line)
+                (json-parse-string line :object-type 'alist))
+              (nreverse sent))))
+        (should
+         (equal
+          (mapcar (lambda (request) (alist-get 'op request)) requests)
+          '("publication-open" "publication-info" "publication-close")))
+        (should
+         (equal
+          (alist-get 'path (alist-get 'params (car requests)))
+          path))))))
 
 (ert-deftest yunge-reader-webview-routes-escape-to-its-owning-window ()
   (let* ((window (selected-window))
