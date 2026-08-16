@@ -81,6 +81,14 @@
   links
   truncated)
 
+(cl-defstruct yunge-reader-pdf--prefetch-task
+  "One replaceable, low-priority PDF prefetch task."
+  document
+  kind
+  page
+  width
+  generation)
+
 (defvar-local yunge-reader-pdf-page 0
   "Zero-based page currently displayed in the PDF adapter.")
 
@@ -122,6 +130,18 @@
 
 (defvar-local yunge-reader-pdf--link-activation-generation 0
   "Generation used to reject late interactive PDF link completions.")
+
+(defvar-local yunge-reader-pdf--working-pages nil
+  "Pages retained by the current visible PDF working set.")
+
+(defvar-local yunge-reader-pdf--prefetch-queue nil
+  "Replaceable PDF prefetch tasks waiting behind the active task.")
+
+(defvar-local yunge-reader-pdf--prefetch-active nil
+  "The one PDF prefetch task currently owned by the native helper.")
+
+(defvar-local yunge-reader-pdf--prefetch-running nil
+  "Non-nil while the PDF prefetch scheduler is dispatching tasks.")
 
 (defvar-keymap yunge-reader-pdf--image-map
   "<mouse-1>" #'yunge-reader-pdf-select-at-mouse
@@ -171,6 +191,10 @@
         (setq-local yunge-reader-pdf--link-pending
                     (make-hash-table :test #'eql))
         (setq-local yunge-reader-pdf--link-activation-generation 0)
+        (setq-local yunge-reader-pdf--working-pages nil)
+        (setq-local yunge-reader-pdf--prefetch-queue nil)
+        (setq-local yunge-reader-pdf--prefetch-active nil)
+        (setq-local yunge-reader-pdf--prefetch-running nil)
         (setq-local yunge-reader-pdf--pending-location nil)
         (add-hook 'yunge-reader-refresh-hook
                   #'yunge-reader-pdf--refresh nil t)
@@ -199,7 +223,11 @@
           yunge-reader-pdf--text-pending nil
           yunge-reader-pdf--link-cache nil
           yunge-reader-pdf--link-pending nil
-          yunge-reader-pdf--link-activation-generation 0)))
+          yunge-reader-pdf--link-activation-generation 0
+          yunge-reader-pdf--working-pages nil
+          yunge-reader-pdf--prefetch-queue nil
+          yunge-reader-pdf--prefetch-active nil
+          yunge-reader-pdf--prefetch-running nil)))
 
 (with-eval-after-load 'evil
   (yunge-key-evil-define-minor-mode
@@ -560,6 +588,10 @@ receives the raw native open result and nil, or nil and an error value."
 (defun yunge-reader-pdf--session-error-p (error-data)
   "Return whether ERROR-DATA reports a lost native helper session."
   (eq (car-safe error-data) 'yunge-reader-native-session-lost))
+
+(defun yunge-reader-pdf--stopped-error-p (error-data)
+  "Return whether ERROR-DATA reports an intentional helper stop."
+  (eq (car-safe error-data) 'yunge-reader-native-session-stopped))
 
 (defun yunge-reader-pdf--recovery-error (message)
   "Return a native-session recovery error containing MESSAGE."
@@ -1533,6 +1565,162 @@ When SUPPRESS-SCALE is non-nil, do not update the shared effective scale."
        do (cl-pushnew candidate expanded)))
     (sort expanded #'<)))
 
+(defun yunge-reader-pdf--prefetch-task-same-p (left right)
+  "Return whether prefetch tasks LEFT and RIGHT describe the same work."
+  (and left right
+       (eq (yunge-reader-pdf--prefetch-task-document left)
+           (yunge-reader-pdf--prefetch-task-document right))
+       (eq (yunge-reader-pdf--prefetch-task-kind left)
+           (yunge-reader-pdf--prefetch-task-kind right))
+       (eql (yunge-reader-pdf--prefetch-task-page left)
+            (yunge-reader-pdf--prefetch-task-page right))
+       (equal (yunge-reader-pdf--prefetch-task-width left)
+              (yunge-reader-pdf--prefetch-task-width right))))
+
+(defun yunge-reader-pdf--retain-page-p (page)
+  "Return whether PAGE belongs to the current in-memory working set."
+  (or (null yunge-reader-pdf--working-pages)
+      (memq page yunge-reader-pdf--working-pages)))
+
+(defun yunge-reader-pdf--retain-render-p (page width)
+  "Return whether PAGE at WIDTH belongs to the current render set."
+  (or (null yunge-reader-pdf--working-pages)
+      (and (memq page yunge-reader-pdf--working-pages)
+           (yunge-reader-pdf--page-info page)
+           (= width (yunge-reader-pdf--page-width page)))))
+
+(defun yunge-reader-pdf--prune-cache (table retain)
+  "Remove entries from hash TABLE unless RETAIN accepts their key."
+  (when (hash-table-p table)
+    (let (removed)
+      (maphash
+       (lambda (key _value)
+         (unless (funcall retain key)
+           (push key removed)))
+       table)
+      (dolist (key removed)
+        (remhash key table)))))
+
+(defun yunge-reader-pdf--prune-working-set (pages tasks)
+  "Retain only PAGES and their current render TASKS in memory."
+  (let ((render-keys (make-hash-table :test #'equal)))
+    (dolist (task tasks)
+      (when (eq (yunge-reader-pdf--prefetch-task-kind task) 'render)
+        (puthash
+         (yunge-reader-pdf--render-key
+          (yunge-reader-pdf--prefetch-task-page task)
+          (yunge-reader-pdf--prefetch-task-width task))
+         t render-keys)))
+    (yunge-reader-pdf--prune-cache
+     yunge-reader-pdf--render-results
+     (lambda (key) (gethash key render-keys)))
+    (yunge-reader-pdf--prune-cache
+     yunge-reader-pdf--text-cache
+     (lambda (page) (memq page pages)))
+    (yunge-reader-pdf--prune-cache
+     yunge-reader-pdf--link-cache
+     (lambda (page) (memq page pages)))))
+
+(defun yunge-reader-pdf--prefetch-task-needed-p (task)
+  "Return whether TASK is still useful to the current PDF view."
+  (let ((document
+         (yunge-reader-pdf--prefetch-task-document task))
+        (kind (yunge-reader-pdf--prefetch-task-kind task))
+        (page (yunge-reader-pdf--prefetch-task-page task))
+        (width (yunge-reader-pdf--prefetch-task-width task)))
+    (and yunge-reader-pdf-view-mode
+         (eq document yunge-reader-document)
+         (memq page yunge-reader-pdf--working-pages)
+         (pcase kind
+           ('render
+            (not
+             (gethash (yunge-reader-pdf--render-key page width)
+                      yunge-reader-pdf--render-results)))
+           ('text (not (gethash page yunge-reader-pdf--text-cache)))
+           ('links (not (gethash page yunge-reader-pdf--link-cache)))
+           (_ nil)))))
+
+(defun yunge-reader-pdf--dispatch-prefetch-task (task)
+  "Dispatch low-priority PDF prefetch TASK and return its state."
+  (pcase (yunge-reader-pdf--prefetch-task-kind task)
+    ('render
+     (yunge-reader-pdf--request-render
+      (yunge-reader-pdf--prefetch-task-generation task)
+      (yunge-reader-pdf--prefetch-task-page task)
+      (yunge-reader-pdf--prefetch-task-width task)))
+    ('text
+     (yunge-reader-pdf--request-text
+      (yunge-reader-pdf--prefetch-task-page task)))
+    ('links
+     (yunge-reader-pdf--request-links
+      (yunge-reader-pdf--prefetch-task-page task)))
+    (_ 'cached)))
+
+(defun yunge-reader-pdf--run-prefetch ()
+  "Dispatch at most one current PDF prefetch task."
+  (unless yunge-reader-pdf--prefetch-running
+    (let ((yunge-reader-pdf--prefetch-running t))
+      (while (and (not yunge-reader-pdf--prefetch-active)
+                  yunge-reader-pdf--prefetch-queue)
+        (let ((task (pop yunge-reader-pdf--prefetch-queue)))
+          (when (yunge-reader-pdf--prefetch-task-needed-p task)
+            (setq yunge-reader-pdf--prefetch-active task)
+            (condition-case error-data
+                (when
+                    (eq (yunge-reader-pdf--dispatch-prefetch-task task)
+                        'cached)
+                  (setq yunge-reader-pdf--prefetch-active nil))
+              (error
+               (setq yunge-reader-pdf--prefetch-active nil)
+               (display-warning
+                'yunge-reader
+                (format "Could not prefetch PDF page %d: %s"
+                        (1+ (yunge-reader-pdf--prefetch-task-page task))
+                        (error-message-string error-data))
+                :warning)))))))))
+
+(defun yunge-reader-pdf--finish-prefetch
+    (document kind page &optional width error-data)
+  "Finish DOCUMENT prefetch for KIND, PAGE, WIDTH, and ERROR-DATA."
+  (let ((task yunge-reader-pdf--prefetch-active))
+    (when (and task
+               (eq document
+                   (yunge-reader-pdf--prefetch-task-document task))
+               (eq kind (yunge-reader-pdf--prefetch-task-kind task))
+               (eql page (yunge-reader-pdf--prefetch-task-page task))
+               (or (not (eq kind 'render))
+                   (equal width
+                          (yunge-reader-pdf--prefetch-task-width task))))
+      (setq yunge-reader-pdf--prefetch-active nil)
+      (if (yunge-reader-pdf--stopped-error-p error-data)
+          (setq yunge-reader-pdf--prefetch-queue nil)
+        (yunge-reader-pdf--run-prefetch)))))
+
+(defun yunge-reader-pdf--prefetch-tasks (pages)
+  "Return image-first background tasks for PDF PAGES."
+  (let ((document yunge-reader-document)
+        (generation yunge-reader-pdf--generation))
+    (append
+     (mapcar
+      (lambda (page)
+        (make-yunge-reader-pdf--prefetch-task
+         :document document
+         :kind 'render
+         :page page
+         :width (yunge-reader-pdf--page-width page)
+         :generation generation))
+      pages)
+     (mapcar
+      (lambda (page)
+        (make-yunge-reader-pdf--prefetch-task
+         :document document :kind 'text :page page))
+      pages)
+     (mapcar
+      (lambda (page)
+        (make-yunge-reader-pdf--prefetch-task
+         :document document :kind 'links :page page))
+      pages))))
+
 (defun yunge-reader-pdf--update-header ()
   "Update the continuous PDF roll header."
   (setq header-line-format
@@ -1542,155 +1730,224 @@ When SUPPRESS-SCALE is non-nil, do not update the shared effective scale."
                 (* 100 yunge-reader-effective-scale))))
 
 (defun yunge-reader-pdf--render-complete
-    (buffer generation page width result error-data)
+    (buffer document generation page width result error-data)
   "Store one rendered PAGE result in BUFFER for GENERATION and WIDTH."
   (when (buffer-live-p buffer)
     (with-current-buffer buffer
-      (let ((render-key (yunge-reader-pdf--render-key page width)))
-        (when (and (hash-table-p yunge-reader-pdf--render-pending)
-                   (eql (gethash render-key
-                                 yunge-reader-pdf--render-pending)
-                        generation))
-          (remhash render-key yunge-reader-pdf--render-pending)))
-      (if error-data
-          (when (and yunge-reader-pdf-view-mode
-                     (yunge-reader-pdf--page-info page)
-                     (= width (yunge-reader-pdf--page-width page)))
-            (display-warning
-             'yunge-reader
-             (format "Could not render PDF page %d: %s"
-                     (1+ page) (error-message-string error-data))
-             :warning))
-        (when (hash-table-p yunge-reader-pdf--render-results)
-          (puthash (yunge-reader-pdf--render-key page width)
-                   result yunge-reader-pdf--render-results))
-        (when (and yunge-reader-pdf-view-mode
-                   (yunge-reader-pdf--page-info page)
-                   (memq page yunge-reader-pdf--displayed-pages)
-                   (= width (yunge-reader-pdf--page-width page)))
-          (yunge-reader-pdf--paint-page page)
-          (when (yunge-reader-pdf--search-page-p page)
-            (yunge-reader-pdf--scroll-to-search-result)))))))
+      (unwind-protect
+          (when (eq document yunge-reader-document)
+            (let* ((render-key
+                    (yunge-reader-pdf--render-key page width))
+                   (pending
+                    (and
+                     (hash-table-p yunge-reader-pdf--render-pending)
+                     (gethash render-key
+                              yunge-reader-pdf--render-pending))))
+              (when (and (eq (car-safe pending) document)
+                         (eql (cdr-safe pending) generation))
+                (remhash render-key yunge-reader-pdf--render-pending)))
+            (if error-data
+                (when (and (not
+                            (yunge-reader-pdf--stopped-error-p
+                             error-data))
+                           yunge-reader-pdf-view-mode
+                           (yunge-reader-pdf--retain-render-p page width))
+                  (display-warning
+                   'yunge-reader
+                   (format "Could not render PDF page %d: %s"
+                           (1+ page)
+                           (error-message-string error-data))
+                   :warning))
+              (when (and
+                     (hash-table-p yunge-reader-pdf--render-results)
+                     (yunge-reader-pdf--retain-render-p page width))
+                (puthash (yunge-reader-pdf--render-key page width)
+                         result yunge-reader-pdf--render-results))
+              (when (and yunge-reader-pdf-view-mode
+                         (yunge-reader-pdf--retain-render-p page width)
+                         (memq page yunge-reader-pdf--displayed-pages))
+                (yunge-reader-pdf--paint-page page)
+                (when (yunge-reader-pdf--search-page-p page)
+                  (yunge-reader-pdf--scroll-to-search-result)))))
+        (yunge-reader-pdf--finish-prefetch
+         document 'render page width error-data)))))
 
-(defun yunge-reader-pdf--request-render (generation page)
+(defun yunge-reader-pdf--request-render
+    (generation page &optional width)
   "Request a render of PAGE for GENERATION unless it is cached."
-  (let* ((width (yunge-reader-pdf--page-width page))
-         (render-key (yunge-reader-pdf--render-key page width)))
-    (unless (or (gethash render-key yunge-reader-pdf--render-results)
-                (gethash render-key yunge-reader-pdf--render-pending))
+  (let* ((width (or width (yunge-reader-pdf--page-width page)))
+         (render-key (yunge-reader-pdf--render-key page width))
+         (document yunge-reader-document))
+    (cond
+     ((gethash render-key yunge-reader-pdf--render-results) 'cached)
+     ((gethash render-key yunge-reader-pdf--render-pending) 'pending)
+     (t
       (let ((buffer (current-buffer)))
-        (puthash render-key generation yunge-reader-pdf--render-pending)
-        (yunge-reader-request
-         'render-page
-         (list :page page
-               :width width
-               :cache-key (yunge-reader-pdf--cache-key page width))
-         (lambda (result error-data)
-           (yunge-reader-pdf--render-complete
-            buffer generation page width result error-data)))))))
+        (puthash
+         render-key (cons document generation)
+         yunge-reader-pdf--render-pending)
+        (condition-case error-data
+            (yunge-reader-request
+             'render-page
+             (list :page page
+                   :width width
+                   :cache-key (yunge-reader-pdf--cache-key page width))
+             (lambda (result request-error)
+               (yunge-reader-pdf--render-complete
+                buffer document generation page width
+                result request-error)))
+          (error
+           (remhash render-key yunge-reader-pdf--render-pending)
+           (signal (car error-data) (cdr error-data))))
+        'started)))))
 
 (defun yunge-reader-pdf--text-complete
-    (buffer page result error-data)
+    (buffer document page result error-data)
   "Store PAGE text RESULT in BUFFER, or report ERROR-DATA."
   (when (buffer-live-p buffer)
     (with-current-buffer buffer
-      (when (hash-table-p yunge-reader-pdf--text-pending)
-        (remhash page yunge-reader-pdf--text-pending))
-      (if error-data
-          (display-warning
-           'yunge-reader
-           (format "Could not load PDF page text: %s"
-                   (error-message-string error-data))
-           :warning)
-        (when (hash-table-p yunge-reader-pdf--text-cache)
-          (puthash page result yunge-reader-pdf--text-cache))
-        (when (and (memq page yunge-reader-pdf--displayed-pages)
-                   (or yunge-reader-selection
-                       (yunge-reader-pdf--search-page-p page)))
-          (yunge-reader-pdf--paint-page page))
-        (when (yunge-reader-pdf--search-page-p page)
-          (yunge-reader-pdf--scroll-to-search-result))))))
+      (unwind-protect
+          (when (eq document yunge-reader-document)
+            (when (and (hash-table-p yunge-reader-pdf--text-pending)
+                       (eq (car-safe
+                            (gethash page
+                                     yunge-reader-pdf--text-pending))
+                           document))
+              (remhash page yunge-reader-pdf--text-pending))
+            (if error-data
+                (when (and (not
+                            (yunge-reader-pdf--stopped-error-p
+                             error-data))
+                           (yunge-reader-pdf--retain-page-p page))
+                  (display-warning
+                   'yunge-reader
+                   (format "Could not load PDF page text: %s"
+                           (error-message-string error-data))
+                   :warning))
+              (when (and (hash-table-p yunge-reader-pdf--text-cache)
+                         (yunge-reader-pdf--retain-page-p page))
+                (puthash page result yunge-reader-pdf--text-cache))
+              (when (and (memq page yunge-reader-pdf--displayed-pages)
+                         (or yunge-reader-selection
+                             (yunge-reader-pdf--search-page-p page)))
+                (yunge-reader-pdf--paint-page page))
+              (when (yunge-reader-pdf--search-page-p page)
+                (yunge-reader-pdf--scroll-to-search-result))))
+        (yunge-reader-pdf--finish-prefetch
+         document 'text page nil error-data)))))
 
 (defun yunge-reader-pdf--request-text (page)
   "Request and cache canonical text geometry for PAGE."
-  (unless (or (gethash page yunge-reader-pdf--text-cache)
-              (gethash page yunge-reader-pdf--text-pending))
-    (let ((buffer (current-buffer)))
-      (puthash page t yunge-reader-pdf--text-pending)
-      (yunge-reader-request
-       'page-text (list :page page)
-       (lambda (result error-data)
-         (yunge-reader-pdf--text-complete
-          buffer page result error-data))))))
+  (cond
+   ((gethash page yunge-reader-pdf--text-cache) 'cached)
+   ((gethash page yunge-reader-pdf--text-pending) 'pending)
+   (t
+    (let ((buffer (current-buffer))
+          (document yunge-reader-document))
+      (puthash page (list document) yunge-reader-pdf--text-pending)
+      (condition-case error-data
+          (yunge-reader-request
+           'page-text (list :page page)
+           (lambda (result request-error)
+             (yunge-reader-pdf--text-complete
+              buffer document page result request-error)))
+        (error
+         (remhash page yunge-reader-pdf--text-pending)
+         (signal (car error-data) (cdr error-data))))
+      'started))))
 
 (defun yunge-reader-pdf--link-complete
     (buffer document page result error-data)
   "Store PAGE link RESULT for DOCUMENT in BUFFER and notify waiters."
   (when (buffer-live-p buffer)
     (with-current-buffer buffer
-      (when (eq document yunge-reader-document)
-        (let ((callbacks
-               (and (hash-table-p yunge-reader-pdf--link-pending)
-                    (gethash page yunge-reader-pdf--link-pending))))
-          (when (hash-table-p yunge-reader-pdf--link-pending)
-            (remhash page yunge-reader-pdf--link-pending))
-          (unless (or error-data
-                      (yunge-reader-pdf-link-data-p result))
-            (setq error-data
-                  (list 'error
-                        "Reader driver returned invalid PDF link data")))
-          (if error-data
-              (display-warning
-               'yunge-reader
-               (format "Could not load PDF page links: %s"
-                       (error-message-string error-data))
-               :warning)
-            (when (hash-table-p yunge-reader-pdf--link-cache)
-              (puthash page result yunge-reader-pdf--link-cache)))
-          (dolist (callback (delq nil callbacks))
-            (condition-case callback-error
-                (funcall callback result error-data)
-              (error
-               (display-warning
-                'yunge-reader
-                (format "Could not finish PDF link action: %s"
-                        (error-message-string callback-error))
-                :warning)))))))))
+      (unwind-protect
+          (when (eq document yunge-reader-document)
+            (let ((callbacks
+                   (and (hash-table-p yunge-reader-pdf--link-pending)
+                        (gethash page yunge-reader-pdf--link-pending))))
+              (when (hash-table-p yunge-reader-pdf--link-pending)
+                (remhash page yunge-reader-pdf--link-pending))
+              (unless (or error-data
+                          (yunge-reader-pdf-link-data-p result))
+                (setq error-data
+                      (list
+                       'error
+                       "Reader driver returned invalid PDF link data")))
+              (if error-data
+                  (when (and (not
+                              (yunge-reader-pdf--stopped-error-p
+                               error-data))
+                             (yunge-reader-pdf--retain-page-p page))
+                    (display-warning
+                     'yunge-reader
+                     (format "Could not load PDF page links: %s"
+                             (error-message-string error-data))
+                     :warning))
+                (when (and (hash-table-p yunge-reader-pdf--link-cache)
+                           (yunge-reader-pdf--retain-page-p page))
+                  (puthash page result yunge-reader-pdf--link-cache)))
+              (dolist (callback (delq nil callbacks))
+                (condition-case callback-error
+                    (funcall callback result error-data)
+                  (error
+                   (display-warning
+                    'yunge-reader
+                    (format "Could not finish PDF link action: %s"
+                            (error-message-string callback-error))
+                    :warning))))))
+        (yunge-reader-pdf--finish-prefetch
+         document 'links page nil error-data)))))
 
 (defun yunge-reader-pdf--request-links (page &optional complete)
   "Request and cache PDF links for PAGE, then call COMPLETE."
   (if-let* ((cached
              (and (hash-table-p yunge-reader-pdf--link-cache)
                   (gethash page yunge-reader-pdf--link-cache))))
-      (when complete
-        (funcall complete cached nil))
+      (progn
+        (when complete
+          (funcall complete cached nil))
+        'cached)
     (let ((pending
            (and (hash-table-p yunge-reader-pdf--link-pending)
                 (gethash page yunge-reader-pdf--link-pending))))
       (if pending
-          (when complete
-            (puthash
-             page (cons complete pending)
-             yunge-reader-pdf--link-pending))
+          (progn
+            (when complete
+              (puthash
+               page (cons complete pending)
+               yunge-reader-pdf--link-pending))
+            'pending)
         (let ((buffer (current-buffer))
               (document yunge-reader-document))
           (puthash page (list complete)
                    yunge-reader-pdf--link-pending)
-          (yunge-reader-request
-           'page-links (list :page page)
-           (lambda (result error-data)
-             (yunge-reader-pdf--link-complete
-              buffer document page result error-data))))))))
+          (condition-case error-data
+              (yunge-reader-request
+               'page-links (list :page page)
+               (lambda (result request-error)
+                 (yunge-reader-pdf--link-complete
+                  buffer document page result request-error)))
+            (error
+             (remhash page yunge-reader-pdf--link-pending)
+             (signal (car error-data) (cdr error-data))))
+          'started)))))
 
 (defun yunge-reader-pdf--queue-pages (pages)
-  "Queue render, text, and link work for PAGES in image-first order."
-  (let ((generation yunge-reader-pdf--generation))
-    (dolist (page pages)
-      (yunge-reader-pdf--request-render generation page))
-    (dolist (page pages)
-      (yunge-reader-pdf--request-text page))
-    (dolist (page pages)
-      (yunge-reader-pdf--request-links page))))
+  "Replace low-priority PDF work with image-first tasks for PAGES."
+  (let* ((pages (cl-remove-duplicates (copy-sequence pages)))
+         (tasks (yunge-reader-pdf--prefetch-tasks pages)))
+    (setq yunge-reader-pdf--working-pages pages)
+    (yunge-reader-pdf--prune-working-set pages tasks)
+    (setq yunge-reader-pdf--prefetch-queue
+          (if yunge-reader-pdf--prefetch-active
+              (seq-remove
+               (lambda (task)
+                 (yunge-reader-pdf--prefetch-task-same-p
+                  task yunge-reader-pdf--prefetch-active))
+               tasks)
+            tasks))
+    (yunge-reader-pdf--run-prefetch)))
 
 (defun yunge-reader-pdf--sync-current-page (&optional window)
   "Update the current page from WINDOW's topmost roll slot."

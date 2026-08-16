@@ -15,6 +15,7 @@ The current PDF adapter provides:
 - verified PDFium installation and a locked Rust helper build;
 - open, close, page count, labels, and complete page geometry;
 - a continuous, virtualized page roll with bounded image residency;
+- replaceable, one-at-a-time background prefetch for the active working set;
 - next, previous, direct page, screen, mouse wheel, and ordinary scrolling;
 - fit-width, fit-page, and bounded manual zoom;
 - canonical bounds and rotated glyph quadrilaterals for local hit testing;
@@ -27,6 +28,7 @@ The current PDF adapter provides:
 - window-local back and forward history for semantic Reader jumps;
 - immutable render keys, stale-response rejection, and bounded disk cache
   eviction;
+- bounded in-memory render, text, and link caches for working pages;
 - session-bound native handles that cannot alias after a helper restart; and
 - graceful, forced, idle, EOF, and Emacs-exit service shutdown paths.
 
@@ -224,6 +226,13 @@ returns to the equal-size placeholder while its immutable cache path remains
 available for reuse.  Navigation moves to an existing slot rather than
 rebuilding the buffer, so logical positions and window anchors remain stable.
 
+The Rust helper processes requests serially, so each PDF has at most one
+background prefetch request in flight.  A viewport change replaces every
+unsent task with the new visible and neighboring pages.  Rendering runs before
+text and link discovery, while interactive search, selection, and link
+requests bypass the background queue.  Explicit helper shutdown also clears
+that queue, so background work cannot restart a service the user stopped.
+
 The chosen zoom maps each page to a pixel width between 16 and 8192.  A render
 key includes the file's canonical name, size, modification time, page, width,
 PDFium API, and native source build ID.  The helper derives the output path
@@ -239,11 +248,17 @@ approximates LRU without a second cache index.  The helper operates only on
 ordinary files named by exact render keys.  It never removes unknown files,
 temporary files, directories, or symbolic links.
 
-Text geometry is cached by page because it does not change with zoom.  After
-a click or drag, Emacs embeds each visible selected PNG in an SVG and projects
-that page's part of the logical range over it.  Rotated characters use SVG
-polygons; older or exceptional geometry uses rectangles.  The source PNG
-cache remains independent of ephemeral selection paint.
+In-memory render results, text geometry, and link maps retain only the current
+visible and neighboring page set.  Obsolete render widths are discarded too.
+Returning to an evicted page can reuse its immutable disk render while text
+and links are fetched again.  Stable page slots and canonical page geometry
+remain linear in the page count by design; image residency, queued background
+work, and page-content caches remain bounded by the viewport working set.
+
+After a click or drag, Emacs embeds each visible selected PNG in an SVG and
+projects that page's part of the logical range over it.  Rotated characters
+use SVG polygons; older or exceptional geometry uses rectangles.  The source
+PNG cache remains independent of ephemeral selection paint.
 
 Document search is cooperatively paged.  One native request scans at most a
 configured number of document units and returns a bounded match list plus the
@@ -348,7 +363,7 @@ selection, and annotation conformance tests.
 
 The next implementation slices should add, in order:
 
-1. large-document stress coverage; and
+1. bounded, cooperatively batched multi-page copy requests; and
 2. a second format driver to exercise the reflow contract.
 
 Annotation anchors and independent decoration layers remain a planned
@@ -359,29 +374,35 @@ extension of the stable position contract, after the reading path is hardened.
 ERT tests cover driver precedence, asynchronous cleanup, zoom, logical
 selection, native lifecycle, strict setup validation, PDF request mapping,
 lease balance, fit calculations, stable roll slots, visible-page
-virtualization, prefetch bounds, text caching, cross-page hit testing, copying,
-rotated polygon painting, rectangle fallback, bounded search continuation,
-stale search rejection, independent match painting, precise match scrolling,
-canonical viewport capture, cross-scale place restoration, page clamping,
-deferred window restoration, failed-open place protection, rejected restores,
-immutable Reader jump capture, failed live-jump rollback, asynchronous reopen,
-late-window protection, semantic page tracking, outline caching, unique
-outline completion labels, outline-place restoration, keyed render
-completions, bounded link mapping and hit testing, tagged URI validation,
-allowlisted explicit activation, link request coalescing, late link caching,
-password retry, cancellation, attempt bounds, late-prompt rejection, cache
-replacement, lease balance, cache limits, prune-before-stop ordering, and
-lease races.  Recovery tests cover shared reopen, file replacement before and
-during open, a single interrupted-request retry, late close cleanup, background
-password rejection, view and saved-place preservation, and authoritative
-explicit stop.  Native lifecycle tests additionally cover unique helper
-session identities, one-shot callback failure, stale-session request rejection,
-intentional-stop errors, and process-local handle collisions.  Rust tests cover
-the handshake, strict parameters, stable PDF password errors, bounded outline,
-link labels, and URIs, destination view mapping, safe cache eviction, Unicode
-literal matching, byte-to-PDFium-index mapping, search cursors and limits,
-regular and singular-angle quadrilateral recovery, cross-page inclusive
-ranges, protocol errors, shutdown ordering, and EOF.
+virtualization, prefetch bounds, one-at-a-time render-first scheduling, rapid
+viewport replacement, interactive request priority, explicit-stop queue
+cancellation, error continuation, and exact working-set cache pruning.  A
+50,000-page roll test checks stable first, middle, and last slots without live
+page images, while 1,000 viewport replacements verify bounded queued work.
+Further tests cover stale render widths, text caching, cross-page hit testing,
+copying, rotated polygon painting, rectangle fallback, bounded search
+continuation, stale search rejection, independent match painting, precise
+match scrolling, canonical viewport capture, cross-scale place restoration,
+page clamping, deferred window restoration, failed-open place protection,
+rejected restores, immutable Reader jump capture, failed live-jump rollback,
+asynchronous reopen, late-window protection, semantic page tracking, outline
+caching, unique outline completion labels, outline-place restoration, keyed
+render completions, bounded link mapping and hit testing, tagged URI
+validation, allowlisted explicit activation, link request coalescing, late
+link caching, password retry, cancellation, attempt bounds, late-prompt
+rejection, cache replacement, lease balance, cache limits,
+prune-before-stop ordering, and lease races.  Recovery tests cover shared
+reopen, file replacement before and during open, a single interrupted-request
+retry, late close cleanup, background password rejection, view and saved-place
+preservation, and authoritative explicit stop.  Native lifecycle tests
+additionally cover unique helper session identities, one-shot callback
+failure, stale-session request rejection, intentional-stop errors, and
+process-local handle collisions.  Rust tests cover the handshake, strict
+parameters, stable PDF password errors, bounded outline, link labels and URIs,
+destination view mapping, safe cache eviction, Unicode literal matching,
+byte-to-PDFium-index mapping, search cursors and limits, regular and
+singular-angle quadrilateral recovery, cross-page inclusive ranges, protocol
+errors, shutdown ordering, and EOF.
 
 The integration path installs the pinned Windows library through the public
 setup command, runs its =pdfium-info= smoke test, opens a five-page A4 fixture,
@@ -429,3 +450,9 @@ helper.  The same Reader document reopens in a distinct session and completes a
 page 3 information request without changing its page, zoom, place-recording
 state, or saved places.  Its replacement native document then closes and
 releases the original service lease normally.
+
+A real background-prefetch smoke check opens the public five-page fixture and
+waits for render, text, and link tasks for pages 0 and 1 to drain in order.  It
+then replaces the working set with page 3 and confirms that all three
+in-memory caches shrink from two pages to that single page.  The native
+document closes and its service lease is released normally.
