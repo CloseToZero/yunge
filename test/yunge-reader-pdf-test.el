@@ -44,6 +44,8 @@
   (yunge-test-keymap-keys
    yunge-reader-pdf-view-mode-map
    '(("RET" . yunge-reader-pdf-follow-link)
+     ("C-d" . yunge-reader-pdf-scroll-down)
+     ("C-u" . yunge-reader-pdf-scroll-up)
      ("G" . yunge-reader-pdf-last-page)
      ("J" . yunge-reader-pdf-next-page)
      ("K" . yunge-reader-pdf-previous-page)
@@ -97,6 +99,8 @@
      'normal
      '(("RET" . yunge-reader-pdf-follow-link)
        ("/" . yunge-reader-search)
+       ("C-d" . yunge-reader-pdf-scroll-down)
+       ("C-u" . yunge-reader-pdf-scroll-up)
        ("G" . yunge-reader-pdf-last-page)
        ("J" . yunge-reader-pdf-next-page)
        ("K" . yunge-reader-pdf-previous-page)
@@ -110,6 +114,31 @@
      "g" '(("g" nil "first page")
            ("p" nil "go to page")
            ("r" nil "refresh")))))
+
+(ert-deftest yunge-reader-pdf-scrolls-half-windows-by-pixels ()
+  (let (scrolls updates)
+    (cl-letf (((symbol-function 'window-text-height)
+               (lambda (&rest _arguments) 601))
+              ((symbol-function 'selected-window)
+               (lambda () 'window))
+              ((symbol-function
+                'pixel-scroll-precision-scroll-up-page)
+               (lambda (pixels)
+                 (push (list 'up pixels) scrolls)))
+              ((symbol-function
+                'pixel-scroll-precision-scroll-down-page)
+               (lambda (pixels)
+                 (push (list 'down pixels) scrolls)))
+              ((symbol-function
+                'yunge-reader-pdf--update-visible-pages)
+               (lambda (&optional window)
+                 (push window updates))))
+      (yunge-reader-pdf-scroll-up 2)
+      (yunge-reader-pdf-scroll-down 1))
+    (should
+     (equal (nreverse scrolls)
+            '((up 300) (up 300) (down 300))))
+    (should (equal updates '(window window)))))
 
 (ert-deftest yunge-reader-pdf-registers-only-when-requested ()
   (let ((yunge-reader-drivers nil)

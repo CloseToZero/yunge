@@ -160,6 +160,8 @@
 
 (defconst yunge-reader-pdf-normal-bindings
   '(("RET" yunge-reader-pdf-follow-link "follow link")
+    ("C-d" yunge-reader-pdf-scroll-down "scroll down")
+    ("C-u" yunge-reader-pdf-scroll-up "scroll up")
     ("G" yunge-reader-pdf-last-page "last page")
     ("J" yunge-reader-pdf-next-page "next page")
     ("K" yunge-reader-pdf-previous-page "previous page")
@@ -170,6 +172,8 @@
 
 (defvar-keymap yunge-reader-pdf-view-mode-map
   "RET" #'yunge-reader-pdf-follow-link
+  "C-d" #'yunge-reader-pdf-scroll-down
+  "C-u" #'yunge-reader-pdf-scroll-up
   "G" #'yunge-reader-pdf-last-page
   "J" #'yunge-reader-pdf-next-page
   "K" #'yunge-reader-pdf-previous-page
@@ -2710,6 +2714,32 @@ When SINGLE is non-nil, use the event start for both points."
           (set-window-vscroll window 0 t))))
     (yunge-reader-pdf--update-visible-pages)
     yunge-reader-pdf-page))
+
+(defun yunge-reader-pdf--scroll-half-window (direction count)
+  "Scroll in DIRECTION by half a window COUNT times."
+  (let ((function
+         (if (eq direction 'up)
+             #'pixel-scroll-precision-scroll-up-page
+           #'pixel-scroll-precision-scroll-down-page)))
+    (dotimes (_ (abs count))
+      (funcall
+       function
+       (max 1 (/ (window-text-height nil t) 2))))
+    (yunge-reader-pdf--update-visible-pages (selected-window))))
+
+(defun yunge-reader-pdf-scroll-up (&optional count)
+  "Scroll backward by half a PDF window COUNT times."
+  (interactive "p")
+  (setq count (or count 1))
+  (yunge-reader-pdf--scroll-half-window
+   (if (< count 0) 'down 'up) count))
+
+(defun yunge-reader-pdf-scroll-down (&optional count)
+  "Scroll forward by half a PDF window COUNT times."
+  (interactive "p")
+  (setq count (or count 1))
+  (yunge-reader-pdf--scroll-half-window
+   (if (< count 0) 'up 'down) count))
 
 (defun yunge-reader-pdf-next-page (&optional count)
   "Move forward COUNT PDF pages, defaulting to one."

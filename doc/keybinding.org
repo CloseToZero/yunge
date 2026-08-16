@@ -345,11 +345,12 @@ Reader view administration remains under the mode-local leader:
 These commands execute once and do not enter a persistent Reader control map.
 
 In fixed-layout readers, ~J/K~ move to the next or previous page, ~gg/G~ move
-to the first or last page, and ~gp~ prompts for a page.  Page Down and Page Up
-retain screen-scrolling behavior.  These page keys stay separate from search
-repeat keys.  Search-result changes and ~gg/G/gp~ are semantic jumps, so
-~C-o/C-i~ can revisit them.  Paging and ordinary scrolling do not add jump
-entries.
+to the first or last page, and ~gp~ prompts for a page.  ~C-d/C-u~ scroll by
+half a screen in pixels; they must not interpret one rendered page as one
+text line.  Page Down and Page Up retain screen-scrolling behavior.  These
+page keys stay separate from search repeat keys.  Search-result changes and
+~gg/G/gp~ are semantic jumps, so ~C-o/C-i~ can revisit them.  Paging and
+ordinary scrolling do not add jump entries.
 
 Mouse-1 selects one character and dragging selects a text range.
 Ctrl-Mouse-1 follows a link at the pointer.  ~RET~ remains the portable primary
