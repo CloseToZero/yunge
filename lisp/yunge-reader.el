@@ -9,7 +9,11 @@
 (require 'yunge-key)
 
 (declare-function browse-url "browse-url" (url &rest arguments))
+(declare-function evil-refresh-cursor
+                  "evil-common" (&optional state buffer))
 (declare-function evil-set-initial-state "evil-core" (mode state))
+(declare-function evil-state-property
+                  "evil-common" (state property &optional value))
 
 (defgroup yunge-reader nil
   "Read fixed-layout and reflowable documents."
@@ -333,9 +337,22 @@ document contents.")
   "q" #'quit-window
   "y" #'yunge-reader-copy-selection)
 
+(defun yunge-reader--hide-evil-cursor ()
+  "Keep Evil from restoring a visible cursor in this Reader buffer."
+  (when (fboundp 'evil-state-property)
+    (dolist (entry (evil-state-property t :cursor))
+      (when (and (symbolp (cdr entry)) (boundp (cdr entry)))
+        (set (make-local-variable (cdr entry)) '(nil))))
+    (when (and (bound-and-true-p evil-local-mode)
+               (fboundp 'evil-refresh-cursor))
+      (evil-refresh-cursor
+       (and (boundp 'evil-state) (symbol-value 'evil-state))
+       (current-buffer)))))
+
 (define-derived-mode yunge-reader-mode special-mode "Yunge Reader"
   "Major mode shared by Yunge Reader document adapters."
   (setq-local cursor-type nil)
+  (yunge-reader--hide-evil-cursor)
   (setq-local truncate-lines t)
   (setq-local yunge-reader-scale yunge-reader-default-scale)
   (setq-local yunge-reader--document-entry nil)
@@ -351,7 +368,11 @@ document contents.")
 (with-eval-after-load 'evil
   (evil-set-initial-state 'yunge-reader-mode 'normal)
   (yunge-key-evil-define 'normal yunge-reader-mode-map
-                         yunge-reader-normal-bindings))
+                         yunge-reader-normal-bindings)
+  (dolist (buffer (buffer-list))
+    (with-current-buffer buffer
+      (when (derived-mode-p 'yunge-reader-mode)
+        (yunge-reader--hide-evil-cursor)))))
 
 (with-eval-after-load 'which-key
   (yunge-key-add-which-key-descriptions

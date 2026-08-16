@@ -77,6 +77,17 @@
    'yunge-reader-mode
    '(("y" . evil-yank))))
 
+(ert-deftest yunge-reader-keeps-the-cursor-hidden-with-evil ()
+  (yunge-test-enable-evil)
+  (with-temp-buffer
+    (yunge-reader-mode)
+    (evil-refresh-cursor 'normal)
+    (should (equal evil-normal-state-cursor '(nil)))
+    (should-not cursor-type)
+    (evil-refresh-cursor 'visual)
+    (should (equal evil-visual-state-cursor '(nil)))
+    (should-not cursor-type)))
+
 (ert-deftest yunge-reader-opens-only-allowlisted-uri-actions ()
   (let* ((yunge-reader-uri-schemes '("https" "mailto"))
          (allowed
