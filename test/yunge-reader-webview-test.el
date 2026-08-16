@@ -17,6 +17,8 @@
          (yunge-reader-webview--next-view-id 0)
          (yunge-reader-webview--views
           (make-hash-table :test #'eql))
+         (yunge-reader-webview--logical-views
+          (make-hash-table :test #'eq))
          (yunge-reader-webview--force-stop-timer nil)
          (properties (make-hash-table :test #'equal))
          (live nil)
@@ -349,7 +351,10 @@
            :bounds '((x . 0) (y . 0) (width . 100) (height . 100))
            :requested-bounds
            '((x . 0) (y . 0) (width . 200) (height . 100))))
+         (yunge-reader-webview--views
+          (make-hash-table :test #'eql))
          requests)
+    (puthash 7 view yunge-reader-webview--views)
     (cl-letf
         (((symbol-function 'yunge-reader-webview--request)
           (lambda (_operation parameters complete)
@@ -364,8 +369,35 @@
       (should
        (= (alist-get
            'width
-           (alist-get 'bounds (caar requests)))
+          (alist-get 'bounds (caar requests)))
           300)))))
+
+(ert-deftest yunge-reader-webview-ignores-obsolete-surface-bounds ()
+  (let* ((view
+          (yunge-reader-webview--make-view
+           :id 7
+           :created t
+           :bounds '((x . 0) (y . 0) (width . 100) (height . 100))
+           :requested-bounds
+           '((x . 0) (y . 0) (width . 200) (height . 100))))
+         (yunge-reader-webview--views
+          (make-hash-table :test #'eql))
+         requests)
+    (puthash 7 view yunge-reader-webview--views)
+    (cl-letf
+        (((symbol-function 'yunge-reader-webview--request)
+          (lambda (_operation parameters complete)
+            (push (cons parameters complete) requests))))
+      (yunge-reader-webview--send-latest-bounds view)
+      (remhash 7 yunge-reader-webview--views)
+      (setf (yunge-reader-webview--view-id view) 8
+            (yunge-reader-webview--view-bounds view) nil
+            (yunge-reader-webview--view-bounds-pending view) t)
+      (puthash 8 view yunge-reader-webview--views)
+      (funcall (cdar requests) nil nil)
+      (should (yunge-reader-webview--view-bounds-pending view))
+      (should-not (yunge-reader-webview--view-bounds view))
+      (should (= (length requests) 1)))))
 
 (ert-deftest yunge-reader-webview-destroys-a-replaced-window-view ()
   (let* ((buffer (generate-new-buffer " *webview owner*"))
@@ -397,11 +429,126 @@
       (kill-buffer buffer)
       (kill-buffer other))))
 
+(ert-deftest yunge-reader-webview-hides-persistent-native-surfaces ()
+  (let* ((buffer (generate-new-buffer " *persistent EPUB owner*"))
+         (other (generate-new-buffer " *persistent EPUB replacement*"))
+         (window (selected-window))
+         (location (yunge-reader-webview-test--location 0.4))
+         (view
+          (yunge-reader-webview--make-view
+           :id 15
+           :window window
+           :buffer buffer
+           :created t
+           :persistent t
+           :publication 6
+           :location location))
+         (yunge-reader-webview--process 'fake-webview-process)
+         (yunge-reader-webview--views
+          (make-hash-table :test #'eql))
+         (yunge-reader-webview--logical-views
+          (make-hash-table :test #'eq))
+         requests)
+    (unwind-protect
+        (progn
+          (puthash 15 view yunge-reader-webview--views)
+          (puthash view t yunge-reader-webview--logical-views)
+          (cl-letf
+              (((symbol-function 'window-buffer)
+                (lambda (_window) other))
+               ((symbol-function 'get-buffer-window)
+                (lambda (&rest _arguments) nil))
+               ((symbol-function 'process-live-p)
+                (lambda (_process) t))
+               ((symbol-function 'yunge-reader-webview--request)
+                (lambda (operation parameters _complete)
+                  (push (list operation parameters) requests))))
+            (yunge-reader-webview--sync-view view))
+          (should-not (yunge-reader-webview--view-destroyed view))
+          (should-not (yunge-reader-webview--view-id view))
+          (should (gethash view yunge-reader-webview--logical-views))
+          (should (equal (yunge-reader-webview--view-location view)
+                         location))
+          (should (equal (caar requests) "view-destroy"))
+          (should-not
+           (cl-find-if
+            (lambda (request)
+              (equal (car request) "publication-close"))
+            requests)))
+      (kill-buffer buffer)
+      (kill-buffer other))))
+
+(ert-deftest yunge-reader-webview-recreates-visible-persistent-surfaces ()
+  (let* ((buffer (generate-new-buffer " *persistent EPUB visible*"))
+         (window (selected-window))
+         (view
+          (yunge-reader-webview--make-view
+           :buffer buffer
+           :persistent t
+           :publication 8))
+         (yunge-reader-webview--next-view-id 20)
+         (yunge-reader-webview--views
+          (make-hash-table :test #'eql))
+         requested)
+    (unwind-protect
+        (cl-letf
+            (((symbol-function 'get-buffer-window)
+              (lambda (&rest _arguments) window))
+             ((symbol-function 'window-buffer)
+              (lambda (_window) buffer))
+             ((symbol-function 'window-live-p)
+              (lambda (_window) t))
+             ((symbol-function 'yunge-reader-webview--window-bounds)
+              (lambda (_window)
+                '((x . 0) (y . 0) (width . 800) (height . 600))))
+             ((symbol-function 'yunge-reader-webview--request-create)
+              (lambda (value) (setq requested value))))
+          (yunge-reader-webview--sync-view view)
+          (should (eq requested view))
+          (should (= (yunge-reader-webview--view-id view) 21))
+          (should (eq (yunge-reader-webview--view-window view) window))
+          (should (eq (gethash 21 yunge-reader-webview--views) view)))
+      (kill-buffer buffer))))
+
+(ert-deftest yunge-reader-webview-waits-for-every-obsolete-surface ()
+  (let* ((view
+          (yunge-reader-webview--make-view
+           :id 31 :created t :persistent t :publication 8))
+         (yunge-reader-webview--process 'fake-webview-process)
+         (yunge-reader-webview--views
+          (make-hash-table :test #'eql))
+         (yunge-reader-webview--logical-views
+          (make-hash-table :test #'eq))
+         requests
+         finished)
+    (puthash 31 view yunge-reader-webview--views)
+    (puthash view t yunge-reader-webview--logical-views)
+    (cl-letf
+        (((symbol-function 'process-live-p) (lambda (_process) t))
+         ((symbol-function 'yunge-reader-webview--request)
+          (lambda (_operation parameters complete)
+            (push (cons (alist-get 'view parameters) complete)
+                  requests))))
+      (yunge-reader-webview--release-surface view)
+      (setf (yunge-reader-webview--view-id view) 32
+            (yunge-reader-webview--view-created view) t)
+      (puthash 32 view yunge-reader-webview--views)
+      (yunge-reader-webview--destroy-view
+       view (lambda () (setq finished t)))
+      (should (= (length requests) 2))
+      (funcall (cdr (assq 32 requests)) nil nil)
+      (should-not finished)
+      (funcall (cdr (assq 31 requests)) nil nil)
+      (should finished)
+      (should
+       (yunge-reader-webview--view-destroy-finished view)))))
+
 (ert-deftest yunge-reader-webview-closes-publication-after-destroy ()
   (let* ((location (yunge-reader-webview-test--location 0.6))
          (view
           (yunge-reader-webview--make-view
-           :id 10 :created t :publication 3 :location location))
+           :id 10 :created t :publication 3 :location location
+           :owns-publication t))
          (yunge-reader-webview--process 'fake-webview-process)
          (yunge-reader-webview--views
           (make-hash-table :test #'eql))

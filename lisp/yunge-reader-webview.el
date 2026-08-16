@@ -47,7 +47,11 @@
   "Last logical WebView identifier allocated by Emacs.")
 
 (defvar yunge-reader-webview--views (make-hash-table :test #'eql)
-  "Live WebView records indexed by logical view identifier.")
+  "Native WebView surfaces indexed by their current identifier.")
+
+(defvar yunge-reader-webview--logical-views
+  (make-hash-table :test #'eq)
+  "Live logical WebView records, including temporarily hidden views.")
 
 (defvar yunge-reader-webview--force-stop-timer nil
   "Timer enforcing the graceful WebView shutdown deadline.")
@@ -63,6 +67,8 @@
   buffer
   created
   destroyed
+  persistent
+  owns-publication
   bounds
   requested-bounds
   bounds-pending
@@ -71,7 +77,11 @@
   location
   path
   open-deadline
-  open-timer)
+  open-timer
+  pending-destroys
+  destroy-waiters
+  destroy-finished
+  location-changed-function)
 
 (define-derived-mode yunge-reader-webview-spike-mode special-mode
   "Yunge-WebView"
@@ -247,6 +257,22 @@ LOCATION is required only for the go-to command."
       (error "Malformed EPUB location event: %S" message))
     (copy-tree location)))
 
+(defun yunge-reader-webview--store-view-location (view message)
+  "Store VIEW's locator from MESSAGE and notify its owner."
+  (setf (yunge-reader-webview--view-location view)
+        (yunge-reader-webview--event-location message))
+  (when-let* ((function
+               (yunge-reader-webview--view-location-changed-function
+                view)))
+    (condition-case error-data
+        (funcall function view)
+      (error
+       (display-warning
+        'yunge-reader
+        (format "Could not record EPUB location: %s"
+                (error-message-string error-data))
+        :warning)))))
+
 (defun yunge-reader-webview--handle-event (process message)
   "Handle one asynchronous WebView MESSAGE from PROCESS."
   (unless (eq process yunge-reader-webview--process)
@@ -272,8 +298,7 @@ LOCATION is required only for the go-to command."
          (select-frame-set-input-focus (window-frame window))))
       ("publication-ready"
        (when-let* ((view (gethash id yunge-reader-webview--views)))
-         (setf (yunge-reader-webview--view-location view)
-               (yunge-reader-webview--event-location message))
+         (yunge-reader-webview--store-view-location view message)
          (setf (yunge-reader-webview--view-publication-ready view) t)
          (yunge-reader-webview--set-buffer-message
           view
@@ -282,8 +307,7 @@ LOCATION is required only for the go-to command."
                       "publication")))))
       ("location"
        (when-let* ((view (gethash id yunge-reader-webview--views)))
-         (setf (yunge-reader-webview--view-location view)
-               (yunge-reader-webview--event-location message))))
+         (yunge-reader-webview--store-view-location view message)))
       ("navigation-error"
        (let ((detail (alist-get 'message message)))
          (unless (stringp detail)
@@ -524,6 +548,26 @@ Without FORCE, request graceful shutdown and enforce a deadline."
   (remove-hook 'window-buffer-change-functions
                #'yunge-reader-webview--sync-views))
 
+(defun yunge-reader-webview--register-view (view)
+  "Register logical VIEW and synchronize its native surface."
+  (puthash view t yunge-reader-webview--logical-views)
+  (yunge-reader-webview--install-hooks)
+  (yunge-reader-webview--sync-view view)
+  view)
+
+(defun yunge-reader-webview--unregister-view (view)
+  "Forget logical VIEW and remove global hooks when none remain."
+  (remhash view yunge-reader-webview--logical-views)
+  (when (zerop (hash-table-count
+                yunge-reader-webview--logical-views))
+    (yunge-reader-webview--remove-hooks)))
+
+(defun yunge-reader-webview--surface-current-p (view id)
+  "Return whether ID is VIEW's current native surface."
+  (and (integerp id)
+       (eql id (yunge-reader-webview--view-id view))
+       (eq (gethash id yunge-reader-webview--views) view)))
+
 (defun yunge-reader-webview--send-latest-bounds (view)
   "Send VIEW's latest requested bounds unless one is in flight."
   (when (and (yunge-reader-webview--view-created view)
@@ -531,42 +575,65 @@ Without FORCE, request graceful shutdown and enforce a deadline."
              (not (yunge-reader-webview--view-bounds-pending view)))
     (let ((bounds (yunge-reader-webview--view-requested-bounds view)))
       (unless (equal bounds (yunge-reader-webview--view-bounds view))
-        (setf (yunge-reader-webview--view-bounds-pending view) t)
-        (yunge-reader-webview--request
-         "view-bounds"
-         `((view . ,(yunge-reader-webview--view-id view))
-           (bounds . ,bounds))
-         (lambda (_result error-data)
-           (setf (yunge-reader-webview--view-bounds-pending view) nil)
-           (unless error-data
-             (setf (yunge-reader-webview--view-bounds view) bounds))
-           (when error-data
-             (display-warning
-              'yunge-reader
-              (error-message-string error-data)
-              :warning))
-           (yunge-reader-webview--send-latest-bounds view)))))))
+        (let ((id (yunge-reader-webview--view-id view)))
+          (setf (yunge-reader-webview--view-bounds-pending view) t)
+          (yunge-reader-webview--request
+           "view-bounds"
+           `((view . ,id) (bounds . ,bounds))
+           (lambda (_result error-data)
+             (when (yunge-reader-webview--surface-current-p view id)
+               (setf (yunge-reader-webview--view-bounds-pending view)
+                     nil)
+               (unless error-data
+                 (setf (yunge-reader-webview--view-bounds view)
+                       bounds))
+               (when error-data
+                 (display-warning
+                  'yunge-reader
+                  (error-message-string error-data)
+                  :warning))
+               (yunge-reader-webview--send-latest-bounds view)))))))))
 
-(defun yunge-reader-webview--sync-view (view)
-  "Synchronize native VIEW with its tracked Emacs window."
+(defun yunge-reader-webview--visible-window (view)
+  "Return a live window displaying VIEW's buffer, if any."
   (let ((window (yunge-reader-webview--view-window view))
         (buffer (yunge-reader-webview--view-buffer view)))
-    (if (and (window-live-p window)
-             (buffer-live-p buffer)
-             (eq (window-buffer window) buffer))
-        (progn
-          (setf (yunge-reader-webview--view-requested-bounds view)
-                (yunge-reader-webview--window-bounds window))
-          (yunge-reader-webview--send-latest-bounds view))
-      (yunge-reader-webview--destroy-view view))))
+    (when (buffer-live-p buffer)
+      (if (and window
+               (window-live-p window)
+               (eq (window-buffer window) buffer))
+          window
+        (get-buffer-window buffer t)))))
+
+(defun yunge-reader-webview--sync-view (view)
+  "Synchronize logical VIEW with its currently visible window."
+  (unless (yunge-reader-webview--view-destroyed view)
+    (let ((window (yunge-reader-webview--visible-window view))
+          (current (yunge-reader-webview--view-window view))
+          (id (yunge-reader-webview--view-id view)))
+      (cond
+       ((and window id (eq window current))
+        (setf (yunge-reader-webview--view-requested-bounds view)
+              (yunge-reader-webview--window-bounds window))
+        (yunge-reader-webview--send-latest-bounds view))
+       (id
+        (yunge-reader-webview--release-surface view)
+        (if window
+            (yunge-reader-webview--start-surface view window)
+          (unless (yunge-reader-webview--view-persistent view)
+            (yunge-reader-webview--destroy-view view))))
+       (window
+        (yunge-reader-webview--start-surface view window))
+       ((not (yunge-reader-webview--view-persistent view))
+        (yunge-reader-webview--destroy-view view))))))
 
 (defun yunge-reader-webview--sync-views (&rest _ignored)
-  "Synchronize every native view after an Emacs window change."
+  "Synchronize every logical view after an Emacs window change."
   (let (views)
     (maphash
-     (lambda (_id view)
+     (lambda (view _present)
        (push view views))
-     yunge-reader-webview--views)
+     yunge-reader-webview--logical-views)
     (dolist (view views)
       (yunge-reader-webview--sync-view view))))
 
@@ -584,35 +651,127 @@ Without FORCE, request graceful shutdown and enforce a deadline."
     (yunge-reader-webview--close-publication
      publication (lambda (_result _error-data)))))
 
-(defun yunge-reader-webview--destroy-view (view)
-  "Destroy native VIEW and forget its Emacs ownership."
-  (unless (yunge-reader-webview--view-destroyed view)
+(defun yunge-reader-webview--queue-surface-destroy
+    (view id complete)
+  "Run COMPLETE after pending surface ID for VIEW is destroyed."
+  (let ((entry (assoc id
+                      (yunge-reader-webview--view-pending-destroys
+                       view))))
+    (if entry
+        (when complete
+          (setcdr entry (append (cdr entry) (list complete))))
+      (push (append (list id) (when complete (list complete)))
+            (yunge-reader-webview--view-pending-destroys view)))))
+
+(defun yunge-reader-webview--finish-surface-destroy (view id)
+  "Finish callbacks waiting for VIEW's obsolete surface ID."
+  (let* ((entries
+          (yunge-reader-webview--view-pending-destroys view))
+         (entry (assoc id entries)))
+    (setf (yunge-reader-webview--view-pending-destroys view)
+          (delete entry entries))
+    (dolist (complete (cdr entry))
+      (funcall complete))
+    (yunge-reader-webview--maybe-finish-view-destroy view)))
+
+(defun yunge-reader-webview--release-surface
+    (view &optional complete)
+  "Release VIEW's native surface while retaining its logical state."
+  (let ((id (yunge-reader-webview--view-id view))
+        (created (yunge-reader-webview--view-created view)))
     (yunge-reader-webview--cancel-open-timer view)
-    (setf (yunge-reader-webview--view-destroyed view) t)
-    (remhash (yunge-reader-webview--view-id view)
-             yunge-reader-webview--views)
+    (when id
+      (remhash id yunge-reader-webview--views))
+    (setf (yunge-reader-webview--view-id view) nil
+          (yunge-reader-webview--view-window view) nil
+          (yunge-reader-webview--view-created view) nil
+          (yunge-reader-webview--view-publication-ready view) nil
+          (yunge-reader-webview--view-bounds view) nil
+          (yunge-reader-webview--view-requested-bounds view) nil
+          (yunge-reader-webview--view-bounds-pending view) nil)
+    (cond
+     ((not id)
+      (when complete
+        (funcall complete)))
+     ((not (process-live-p yunge-reader-webview--process))
+      (when complete
+        (funcall complete)))
+     (created
+      (yunge-reader-webview--queue-surface-destroy
+       view id complete)
+      (yunge-reader-webview--request
+       "view-destroy" `((view . ,id))
+       (lambda (_result _error-data)
+         (yunge-reader-webview--finish-surface-destroy view id))))
+     (t
+      (yunge-reader-webview--queue-surface-destroy
+       view id complete)))))
+
+(defun yunge-reader-webview--finish-view-destroy (view)
+  "Finish permanent destruction of logical VIEW."
+  (unless (yunge-reader-webview--view-destroy-finished view)
+    (setf (yunge-reader-webview--view-destroy-finished view) t)
     (let ((publication
            (prog1 (yunge-reader-webview--view-publication view)
              (setf (yunge-reader-webview--view-publication view) nil))))
-      (if (and (yunge-reader-webview--view-created view)
-               (process-live-p yunge-reader-webview--process))
-          (yunge-reader-webview--request
-           "view-destroy"
-           `((view . ,(yunge-reader-webview--view-id view)))
-           (lambda (_result _error-data)
-             (yunge-reader-webview--close-owned-publication publication)))
+      (when (yunge-reader-webview--view-owns-publication view)
         (yunge-reader-webview--close-owned-publication publication)))
-    (when (zerop (hash-table-count yunge-reader-webview--views))
-      (yunge-reader-webview--remove-hooks))))
+    (let ((waiters
+           (prog1
+               (yunge-reader-webview--view-destroy-waiters view)
+             (setf (yunge-reader-webview--view-destroy-waiters view)
+                   nil))))
+      (dolist (complete waiters)
+        (funcall complete)))))
+
+(defun yunge-reader-webview--maybe-finish-view-destroy (view)
+  "Finish destroyed VIEW after all obsolete surfaces are gone."
+  (when (and (yunge-reader-webview--view-destroyed view)
+             (null (yunge-reader-webview--view-id view))
+             (null
+              (yunge-reader-webview--view-pending-destroys view)))
+    (yunge-reader-webview--finish-view-destroy view)))
+
+(defun yunge-reader-webview--destroy-view (view &optional complete)
+  "Destroy logical VIEW and invoke COMPLETE after its surface is gone."
+  (cond
+   ((yunge-reader-webview--view-destroy-finished view)
+    (when complete
+      (funcall complete)))
+   ((yunge-reader-webview--view-destroyed view)
+    (when complete
+      (setf (yunge-reader-webview--view-destroy-waiters view)
+            (append
+             (yunge-reader-webview--view-destroy-waiters view)
+             (list complete)))))
+   (t
+    (when complete
+      (setf (yunge-reader-webview--view-destroy-waiters view)
+            (list complete)))
+    (setf (yunge-reader-webview--view-destroyed view) t)
+    (yunge-reader-webview--unregister-view view)
+    (yunge-reader-webview--release-surface view)
+    (yunge-reader-webview--maybe-finish-view-destroy view)))
+  view)
 
 (defun yunge-reader-webview--forget-all-views ()
   "Forget all native views without sending protocol messages."
-  (maphash
-   (lambda (_id view)
-     (yunge-reader-webview--cancel-open-timer view)
-     (setf (yunge-reader-webview--view-destroyed view) t))
-   yunge-reader-webview--views)
+  (let (views)
+    (maphash
+     (lambda (view _present)
+       (push view views))
+     yunge-reader-webview--logical-views)
+    (dolist (view views)
+      (yunge-reader-webview--cancel-open-timer view)
+      (setf (yunge-reader-webview--view-id view) nil
+            (yunge-reader-webview--view-window view) nil
+            (yunge-reader-webview--view-created view) nil
+            (yunge-reader-webview--view-destroyed view) t
+            (yunge-reader-webview--view-publication-ready view) nil
+            (yunge-reader-webview--view-pending-destroys view) nil)
+      (yunge-reader-webview--finish-view-destroy view)))
   (clrhash yunge-reader-webview--views)
+  (clrhash yunge-reader-webview--logical-views)
   (yunge-reader-webview--remove-hooks))
 
 (defun yunge-reader-webview--kill-buffer ()
@@ -628,10 +787,10 @@ Without FORCE, request graceful shutdown and enforce a deadline."
        (cadr error-data)))
 
 (defun yunge-reader-webview--open-complete
-    (view _result error-data)
-  "Finish one attempt to attach VIEW's EPUB publication."
+    (view id _result error-data)
+  "Finish VIEW surface ID's attempt to attach its publication."
   (cond
-   ((yunge-reader-webview--view-destroyed view))
+   ((not (yunge-reader-webview--surface-current-p view id)))
    ((and error-data
          (equal (yunge-reader-webview--open-error-code error-data)
                 "view-not-ready")
@@ -656,11 +815,13 @@ Without FORCE, request graceful shutdown and enforce a deadline."
   (when (and (yunge-reader-webview--view-created view)
              (not (yunge-reader-webview--view-destroyed view))
              (yunge-reader-webview--view-publication view))
-    (yunge-reader-webview--open-view-publication
-     view
-     (yunge-reader-webview--view-publication view)
-     (apply-partially #'yunge-reader-webview--open-complete view)
-     (yunge-reader-webview--view-location view))))
+    (let ((id (yunge-reader-webview--view-id view)))
+      (yunge-reader-webview--open-view-publication
+       view
+       (yunge-reader-webview--view-publication view)
+       (apply-partially
+        #'yunge-reader-webview--open-complete view id)
+       (yunge-reader-webview--view-location view)))))
 
 (defun yunge-reader-webview--current-ready-view ()
   "Return the current buffer's ready EPUB WebView."
@@ -670,6 +831,44 @@ Without FORCE, request graceful shutdown and enforce a deadline."
                  (yunge-reader-webview--view-publication-ready view))
       (user-error "The current buffer has no ready EPUB view"))
     view))
+
+(defun yunge-reader-webview--attach-shared-publication
+    (publication &optional location location-changed-function)
+  "Attach shared PUBLICATION to the current Reader buffer.
+Restore bounded LOCATION when supplied.  Invoke LOCATION-CHANGED-FUNCTION
+with the logical view whenever its renderer reports a stable location."
+  (unless (and (integerp publication) (> publication 0))
+    (error "Invalid EPUB publication ID: %S" publication))
+  (when location
+    (yunge-reader-webview--check-location location))
+  (when (and location-changed-function
+             (not (functionp location-changed-function)))
+    (error "Invalid EPUB location callback: %S"
+           location-changed-function))
+  (when (and yunge-reader-webview--buffer-view
+             (not (yunge-reader-webview--view-destroyed
+                   yunge-reader-webview--buffer-view)))
+    (error "Current buffer already owns an EPUB view"))
+  (let ((view
+         (yunge-reader-webview--make-view
+          :buffer (current-buffer)
+          :persistent t
+          :publication publication
+          :location (and location (copy-tree location))
+          :location-changed-function location-changed-function)))
+    (setq yunge-reader-webview--buffer-view view)
+    (yunge-reader-webview--register-view view)
+    view))
+
+(defun yunge-reader-webview--detach-shared-publication
+    (&optional complete)
+  "Detach the current buffer's shared EPUB view and invoke COMPLETE."
+  (let ((view yunge-reader-webview--buffer-view))
+    (setq yunge-reader-webview--buffer-view nil)
+    (if view
+        (yunge-reader-webview--destroy-view view complete)
+      (when complete
+        (funcall complete)))))
 
 (defun yunge-reader-webview--navigation-complete (_result error-data)
   "Report an asynchronous EPUB navigation ERROR-DATA."
@@ -695,42 +894,81 @@ Without FORCE, request graceful shutdown and enforce a deadline."
    "next-screen"
    #'yunge-reader-webview--navigation-complete))
 
+(defun yunge-reader-webview--destroy-obsolete-surface
+    (view id)
+  "Destroy obsolete native surface ID and finish VIEW's waiters."
+  (if (process-live-p yunge-reader-webview--process)
+      (yunge-reader-webview--request
+       "view-destroy" `((view . ,id))
+       (lambda (_result _error-data)
+         (yunge-reader-webview--finish-surface-destroy view id)))
+    (yunge-reader-webview--finish-surface-destroy view id)))
+
 (defun yunge-reader-webview--create-complete
-    (view _result error-data)
-  "Complete creation of VIEW with ERROR-DATA when it failed."
-  (if error-data
-      (progn
-        (yunge-reader-webview--destroy-view view)
-        (yunge-reader-webview--set-buffer-message
-         view (error-message-string error-data))
-        (display-warning
-         'yunge-reader (error-message-string error-data) :warning))
-    (setf (yunge-reader-webview--view-created view) t)
-    (if (yunge-reader-webview--view-destroyed view)
-        (when (process-live-p yunge-reader-webview--process)
-          (yunge-reader-webview--request
-           "view-destroy"
-           `((view . ,(yunge-reader-webview--view-id view)))
-           (lambda (_value _error))))
-      (setf (yunge-reader-webview--view-bounds view)
-            (yunge-reader-webview--view-requested-bounds view))
-      (yunge-reader-webview--sync-view view)
-      (when (yunge-reader-webview--view-publication view)
-        (setf (yunge-reader-webview--view-open-deadline view)
-              (+ (float-time) yunge-reader-webview-open-timeout))
-        (yunge-reader-webview--try-open-publication view)))))
+    (view id _result error-data)
+  "Complete native surface ID creation for logical VIEW."
+  (cond
+   ((not (yunge-reader-webview--surface-current-p view id))
+    (if error-data
+        (yunge-reader-webview--finish-surface-destroy view id)
+      (yunge-reader-webview--destroy-obsolete-surface view id)))
+   (error-data
+    (remhash id yunge-reader-webview--views)
+    (setf (yunge-reader-webview--view-id view) nil
+          (yunge-reader-webview--view-window view) nil
+          (yunge-reader-webview--view-created view) nil
+          (yunge-reader-webview--view-requested-bounds view) nil)
+    (yunge-reader-webview--set-buffer-message
+     view (error-message-string error-data))
+    (display-warning
+     'yunge-reader (error-message-string error-data) :warning)
+    (unless (yunge-reader-webview--view-persistent view)
+      (yunge-reader-webview--destroy-view view)))
+   (t
+    (setf (yunge-reader-webview--view-created view) t
+          (yunge-reader-webview--view-bounds view)
+          (yunge-reader-webview--view-requested-bounds view))
+    (yunge-reader-webview--sync-view view)
+    (when (and (yunge-reader-webview--surface-current-p view id)
+               (yunge-reader-webview--view-publication view))
+      (setf (yunge-reader-webview--view-open-deadline view)
+            (+ (float-time) yunge-reader-webview-open-timeout))
+      (yunge-reader-webview--try-open-publication view)))))
 
 (defun yunge-reader-webview--request-create (view)
   "Ask the helper to create native VIEW."
-  (let* ((window (yunge-reader-webview--view-window view))
+  (let* ((id (yunge-reader-webview--view-id view))
+         (window (yunge-reader-webview--view-window view))
          (frame (window-frame window)))
     (yunge-reader-webview--request
      "view-create"
-     `((view . ,(yunge-reader-webview--view-id view))
+     `((view . ,id)
        (parent . ,(yunge-reader-webview--frame-handle frame))
        (bounds . ,(yunge-reader-webview--view-requested-bounds view))
        (visible . t))
-     (apply-partially #'yunge-reader-webview--create-complete view))))
+     (apply-partially
+      #'yunge-reader-webview--create-complete view id))))
+
+(defun yunge-reader-webview--start-surface (view window)
+  "Create VIEW's native surface in live WINDOW."
+  (unless (and (window-live-p window)
+               (eq (window-buffer window)
+                   (yunge-reader-webview--view-buffer view)))
+    (error "Cannot attach EPUB surface to an unrelated window"))
+  (unless (or (null (yunge-reader-webview--view-id view))
+              (yunge-reader-webview--view-destroyed view))
+    (error "EPUB view already owns a native surface"))
+  (unless (yunge-reader-webview--view-destroyed view)
+    (let ((id (cl-incf yunge-reader-webview--next-view-id)))
+      (setf (yunge-reader-webview--view-id view) id
+            (yunge-reader-webview--view-window view) window
+            (yunge-reader-webview--view-created view) nil
+            (yunge-reader-webview--view-publication-ready view) nil
+            (yunge-reader-webview--view-requested-bounds view)
+            (yunge-reader-webview--window-bounds window))
+      (puthash id view yunge-reader-webview--views)
+      (yunge-reader-webview--request-create view)))
+  view)
 
 (defun yunge-reader-webview--publication-open-complete
     (view result error-data)
@@ -747,8 +985,9 @@ Without FORCE, request graceful shutdown and enforce a deadline."
         (error "Malformed EPUB publication result: %S" result))
       (if (yunge-reader-webview--view-destroyed view)
           (yunge-reader-webview--close-owned-publication publication)
-        (setf (yunge-reader-webview--view-publication view) publication)
-        (yunge-reader-webview--request-create view)))))
+        (setf (yunge-reader-webview--view-publication view) publication
+              (yunge-reader-webview--view-owns-publication view) t)
+        (yunge-reader-webview--register-view view)))))
 
 ;;;###autoload
 (defun yunge-reader-webview-spike (&optional window)
@@ -760,17 +999,12 @@ This command is an architecture spike, not an EPUB reader yet."
   (unless (eq system-type 'windows-nt)
     (user-error "The current WebView spike supports Windows only"))
   (let* ((window (or window (selected-window)))
-         (id (cl-incf yunge-reader-webview--next-view-id))
          (buffer
           (generate-new-buffer
-           (format "*Yunge Reader WebView %d*" id)))
-         (bounds (yunge-reader-webview--window-bounds window))
+           "*Yunge Reader WebView*"))
          (view
           (yunge-reader-webview--make-view
-           :id id
-           :window window
-           :buffer buffer
-           :requested-bounds bounds)))
+           :buffer buffer)))
     (with-current-buffer buffer
       (yunge-reader-webview-spike-mode)
       (setq yunge-reader-webview--buffer-view view)
@@ -778,9 +1012,7 @@ This command is an architecture spike, not an EPUB reader yet."
         (insert "Creating native WebView...\n")
         (set-buffer-modified-p nil)))
     (set-window-buffer window buffer)
-    (puthash id view yunge-reader-webview--views)
-    (yunge-reader-webview--install-hooks)
-    (yunge-reader-webview--request-create view)
+    (yunge-reader-webview--register-view view)
     buffer))
 
 ;;;###autoload
@@ -802,19 +1034,14 @@ save a durable reading position."
   (when location
     (yunge-reader-webview--check-location location))
   (let* ((window (or window (selected-window)))
-         (id (cl-incf yunge-reader-webview--next-view-id))
          (buffer
           (generate-new-buffer
            (format "*Yunge EPUB %s*" (file-name-nondirectory file))))
-         (bounds (yunge-reader-webview--window-bounds window))
          (view
           (yunge-reader-webview--make-view
-           :id id
-           :window window
            :buffer buffer
            :location (and location (copy-tree location))
-           :path file
-           :requested-bounds bounds)))
+           :path file)))
     (with-current-buffer buffer
       (yunge-reader-webview-spike-mode)
       (setq yunge-reader-webview--buffer-view view)
@@ -822,8 +1049,6 @@ save a durable reading position."
         (insert "Validating EPUB publication...\n")
         (set-buffer-modified-p nil)))
     (set-window-buffer window buffer)
-    (puthash id view yunge-reader-webview--views)
-    (yunge-reader-webview--install-hooks)
     (yunge-reader-webview--open-publication
      file
      (apply-partially
