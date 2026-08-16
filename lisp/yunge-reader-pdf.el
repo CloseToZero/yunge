@@ -1596,7 +1596,8 @@ Use the nearest cached render ENTRY while an exact render is unavailable."
   (if (not yunge-reader-search-result)
       (when yunge-reader-pdf--displayed-pages
         (yunge-reader-pdf--paint-pages
-         yunge-reader-pdf--displayed-pages))
+         yunge-reader-pdf--displayed-pages)
+        (yunge-reader-pdf--force-redisplay))
     (let ((page
            (yunge-reader-position-unit
             (yunge-reader-search-result-start
@@ -1607,7 +1608,8 @@ Use the nearest cached render ENTRY while an exact render is unavailable."
         (yunge-reader-pdf--request-text page)
         (yunge-reader-pdf--paint-pages
          yunge-reader-pdf--displayed-pages)
-        (yunge-reader-pdf--scroll-to-search-result)))))
+        (yunge-reader-pdf--scroll-to-search-result)
+        (yunge-reader-pdf--force-redisplay)))))
 
 (defun yunge-reader-pdf--paint-page (page &optional width)
   "Paint PAGE at WIDTH, using its current width when WIDTH is nil."
@@ -2005,12 +2007,18 @@ Use the nearest cached render ENTRY while an exact render is unavailable."
               (when (and (hash-table-p yunge-reader-pdf--text-cache)
                          (yunge-reader-pdf--retain-page-p page))
                 (puthash page result yunge-reader-pdf--text-cache))
-              (when (and (memq page yunge-reader-pdf--displayed-pages)
-                         (or yunge-reader-selection
-                             (yunge-reader-pdf--search-page-p page)))
-                (yunge-reader-pdf--paint-page page))
-              (when (yunge-reader-pdf--search-page-p page)
-                (yunge-reader-pdf--scroll-to-search-result))))
+              (let ((repainted
+                     (when (and
+                            (memq page
+                                  yunge-reader-pdf--displayed-pages)
+                            (or yunge-reader-selection
+                                (yunge-reader-pdf--search-page-p page)))
+                       (yunge-reader-pdf--paint-page page)
+                       t)))
+                (when (yunge-reader-pdf--search-page-p page)
+                  (yunge-reader-pdf--scroll-to-search-result))
+                (when repainted
+                  (yunge-reader-pdf--force-redisplay)))))
         (yunge-reader-pdf--finish-prefetch
          document 'text page nil error-data)))))
 
@@ -2524,13 +2532,23 @@ When NOERROR is non-nil, return nil for positions outside page images."
       (unless noerror
         (user-error "Keep the PDF selection pointer on a page image")))))
 
+(defun yunge-reader-pdf--force-redisplay (&optional window)
+  "Immediately redisplay WINDOW or every window showing this buffer."
+  (let (updated)
+    (dolist (target
+             (if window
+                 (list window)
+               (get-buffer-window-list (current-buffer) nil t)))
+      (when (window-live-p target)
+        (force-window-update target)
+        (setq updated t)))
+    (when (and updated (display-graphic-p))
+      (redisplay t))))
+
 (defun yunge-reader-pdf--repaint-selection (window)
   "Repaint the current selection and update live WINDOW immediately."
   (yunge-reader-pdf--paint-pages yunge-reader-pdf--displayed-pages)
-  (when (window-live-p window)
-    (force-window-update window))
-  (when (display-graphic-p)
-    (redisplay t)))
+  (yunge-reader-pdf--force-redisplay window))
 
 (defun yunge-reader-pdf--message-selection ()
   "Describe the current PDF selection in the echo area."
