@@ -2406,17 +2406,76 @@
        '((characters
           . (((index . 4)
               (bounds . ((left . 10.0) (bottom . 10.0)
-                         (right . 20.0) (top . 20.0))))
+                         (right . 20.0) (top . 20.0)))
+              (quad . (((x . 10.0) (y . 10.0))
+                       ((x . 20.0) (y . 10.0))
+                       ((x . 20.0) (y . 20.0))
+                       ((x . 10.0) (y . 20.0)))))
              ((index . 5)
               (bounds . ((left . 22.0) (bottom . 10.0)
-                         (right . 32.0) (top . 20.0)))))))
+                         (right . 32.0) (top . 20.0)))
+              (quad . (((x . 22.0) (y . 10.0))
+                       ((x . 32.0) (y . 10.0))
+                       ((x . 32.0) (y . 20.0))
+                       ((x . 22.0) (y . 20.0))))))))
        1000 1000)
-      (let ((rectangles (dom-by-tag svg 'rect)))
-        (should (= (length rectangles) 2))
-        (should (= (dom-attr (car rectangles) 'x) 100.0))
-        (should (= (dom-attr (car rectangles) 'y) 900.0))
-        (should (= (dom-attr (car rectangles) 'width) 100.0))
-         (should (= (dom-attr (car rectangles) 'height) 50.0))))))
+      (let ((paths (dom-by-tag svg 'path)))
+        (should (= (length paths) 1))
+        (should
+         (equal
+          (dom-attr (car paths) 'd)
+          (concat
+           "M 100.0 900.0 L 320.0 900.0 320.0 950.0 "
+           "100.0 950.0 Z")))
+        (should
+         (= (dom-attr (car paths) 'fill-opacity)
+            yunge-reader-pdf-selection-opacity))))))
+
+(ert-deftest yunge-reader-pdf-composites-overlapping-highlights-once ()
+  (let ((svg (svg-create 100 100)))
+    (yunge-reader-pdf--paint-range
+     svg '(0 . 1)
+     '((characters
+        . (((index . 0)
+            (bounds . ((left . 10.0) (bottom . 10.0)
+                       (right . 25.0) (top . 20.0))))
+           ((index . 1)
+            (bounds . ((left . 20.0) (bottom . 10.0)
+                       (right . 35.0) (top . 20.0)))))))
+     '((width . 100.0) (height . 100.0))
+     100 100
+     yunge-reader-pdf-selection-color
+     yunge-reader-pdf-selection-opacity)
+    (should-not (dom-by-tag svg 'rect))
+    (let* ((paths (dom-by-tag svg 'path))
+           (path (car paths)))
+      (should (= (length paths) 1))
+      (should (= (cl-count ?M (dom-attr path 'd)) 1))
+      (should
+       (= (dom-attr path 'fill-opacity)
+          yunge-reader-pdf-selection-opacity)))))
+
+(ert-deftest yunge-reader-pdf-keeps-separated-highlight-runs ()
+  (let ((svg (svg-create 100 100)))
+    (yunge-reader-pdf--paint-range
+     svg '(0 . 2)
+     '((characters
+        . (((index . 0)
+            (bounds . ((left . 10.0) (bottom . 10.0)
+                       (right . 20.0) (top . 20.0))))
+           ((index . 1)
+            (bounds . ((left . 50.0) (bottom . 10.0)
+                       (right . 60.0) (top . 20.0))))
+           ((index . 2)
+            (bounds . ((left . 50.0) (bottom . 30.0)
+                       (right . 60.0) (top . 40.0)))))))
+     '((width . 100.0) (height . 100.0))
+     100 100
+     yunge-reader-pdf-selection-color
+     yunge-reader-pdf-selection-opacity)
+    (let ((paths (dom-by-tag svg 'path)))
+      (should (= (length paths) 1))
+      (should (= (cl-count ?M (dom-attr (car paths) 'd)) 3)))))
 
 (ert-deftest yunge-reader-pdf-paints-search-independently-from-selection ()
   (with-temp-buffer
@@ -2443,25 +2502,25 @@
        svg 0 page-info text-layer 1000 1000)
       (yunge-reader-pdf--paint-search
        svg 0 page-info text-layer 1000 1000)
-      (let ((rectangles (dom-by-tag svg 'rect)))
-        (should (= (length rectangles) 2))
+      (let ((paths (dom-by-tag svg 'path)))
+        (should (= (length paths) 2))
         (should
          (member yunge-reader-pdf-selection-color
                  (mapcar (lambda (node) (dom-attr node 'fill))
-                         rectangles)))
+                         paths)))
         (should
          (member yunge-reader-pdf-search-color
                  (mapcar (lambda (node) (dom-attr node 'fill))
-                         rectangles))))
+                         paths))))
       (setq yunge-reader-search-highlight-visible nil)
       (let ((hidden-svg (svg-create 1000 1000)))
         (yunge-reader-pdf--paint-selection
          hidden-svg 0 page-info text-layer 1000 1000)
         (yunge-reader-pdf--paint-search
          hidden-svg 0 page-info text-layer 1000 1000)
-        (let ((rectangles (dom-by-tag hidden-svg 'rect)))
-          (should (= (length rectangles) 1))
-          (should (equal (dom-attr (car rectangles) 'fill)
+        (let ((paths (dom-by-tag hidden-svg 'path)))
+          (should (= (length paths) 1))
+          (should (equal (dom-attr (car paths) 'fill)
                          yunge-reader-pdf-selection-color)))))))
 
 (ert-deftest yunge-reader-pdf-scrolls-to-search-character-geometry ()
@@ -2552,7 +2611,7 @@
       (should (= scrolls 1))
       (should (= redisplays 2)))))
 
-(ert-deftest yunge-reader-pdf-paints-rotated-selection-as-polygon ()
+(ert-deftest yunge-reader-pdf-paints-rotated-selection-in-one-path ()
   (with-temp-buffer
     (setq yunge-reader-selection
           (make-yunge-reader-selection
@@ -2574,14 +2633,17 @@
              ((index . 5) (generated . t)
               (bounds . ((left . 10.0) (bottom . 10.0)
                          (right . 20.0) (top . 20.0)))))))
-       1000 1000)
+      1000 1000)
       (should-not (dom-by-tag svg 'rect))
-      (let ((polygons (dom-by-tag svg 'polygon)))
-        (should (= (length polygons) 1))
+      (should-not (dom-by-tag svg 'polygon))
+      (let ((paths (dom-by-tag svg 'path)))
+        (should (= (length paths) 1))
         (should
          (equal
-          (dom-attr (car polygons) 'points)
-          "0.0 500.0, 500.0 0.0, 1000.0 500.0, 500.0 1000.0"))))))
+          (dom-attr (car paths) 'd)
+          (concat
+           "M 0.0 500.0 L 500.0 0.0 1000.0 500.0 "
+           "500.0 1000.0 Z")))))))
 
 (ert-deftest yunge-reader-pdf-hits-rotated-character-quads ()
   (with-temp-buffer

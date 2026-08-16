@@ -80,6 +80,11 @@ The implementation is divided into four pieces:
 - =yunge-reader-pdf.el= maps the format-independent interface onto PDFium,
   virtualizes a continuous page roll, and paints visible selections.
 
+PDF selection and search geometry uses one compound SVG path per page and
+highlight kind.  Overlapping glyph bounds therefore share one opacity pass
+instead of producing darker intersections.  Adjacent axis-aligned glyphs
+coalesce into continuous line runs without bridging columns or line breaks.
+
 The core never depends on PDFium, PDF page objects, or PNG.  A driver supplies
 a name and file matcher, resource open and close functions, buffer view attach
 and detach functions, and a request function.  Open and request completion may

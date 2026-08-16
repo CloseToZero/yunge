@@ -1332,10 +1332,9 @@ When SUPPRESS-SCALE is non-nil, do not update the shared effective scale."
             page-height))))
    quad))
 
-(defun yunge-reader-pdf--paint-bounds
-    (svg bounds page-width page-height pixel-width pixel-height
-         &optional color opacity)
-  "Paint canonical BOUNDS onto SVG."
+(defun yunge-reader-pdf--svg-bounds
+    (bounds page-width page-height pixel-width pixel-height)
+  "Project canonical BOUNDS to four SVG points."
   (let* ((left (alist-get 'left bounds))
          (bottom (alist-get 'bottom bounds))
          (right (alist-get 'right bounds))
@@ -1346,40 +1345,149 @@ When SUPPRESS-SCALE is non-nil, do not update the shared effective scale."
           (max 1 (* pixel-width (/ (- right left) page-width))))
          (height
           (max 1 (* pixel-height (/ (- top bottom) page-height)))))
-    (svg-rectangle
-     svg x y width height
-     :fill-color (or color yunge-reader-pdf-selection-color)
-     :fill-opacity (or opacity yunge-reader-pdf-selection-opacity))))
+    (list (cons x y)
+          (cons (+ x width) y)
+          (cons (+ x width) (+ y height))
+          (cons x (+ y height)))))
 
-(defun yunge-reader-pdf--paint-character
-    (svg character page-width page-height pixel-width pixel-height
-         &optional color opacity)
-  "Paint CHARACTER geometry onto SVG."
-  (if-let* ((quad (yunge-reader-pdf--quad-points character)))
-      (svg-polygon
-       svg
-       (yunge-reader-pdf--svg-quad
-        quad page-width page-height pixel-width pixel-height)
-       :fill-color (or color yunge-reader-pdf-selection-color)
-       :fill-opacity (or opacity yunge-reader-pdf-selection-opacity))
-    (when-let* ((bounds (alist-get 'bounds character)))
-      (yunge-reader-pdf--paint-bounds
-       svg bounds page-width page-height pixel-width pixel-height
-       color opacity))))
+(defun yunge-reader-pdf--axis-aligned-quad-p (quad)
+  "Return non-nil when every edge of canonical QUAD is axis-aligned."
+  (let* ((xs (mapcar (lambda (point) (alist-get 'x point)) quad))
+         (ys (mapcar (lambda (point) (alist-get 'y point)) quad))
+         (span
+          (max (- (apply #'max xs) (apply #'min xs))
+               (- (apply #'max ys) (apply #'min ys))))
+         (tolerance (max 0.000001 (* span 0.001)))
+         (previous (car (last quad)))
+         (aligned t))
+    (dolist (current quad aligned)
+      (unless
+          (or (<= (abs (- (alist-get 'x previous)
+                          (alist-get 'x current)))
+                  tolerance)
+              (<= (abs (- (alist-get 'y previous)
+                          (alist-get 'y current)))
+                  tolerance))
+        (setq aligned nil))
+      (setq previous current))))
+
+(defun yunge-reader-pdf--highlight-bounds-height (bounds)
+  "Return canonical height of highlight BOUNDS."
+  (- (alist-get 'top bounds) (alist-get 'bottom bounds)))
+
+(defun yunge-reader-pdf--same-highlight-run-p (left right)
+  "Return non-nil when LEFT and RIGHT bounds form one text-line run."
+  (let* ((left-height
+          (yunge-reader-pdf--highlight-bounds-height left))
+         (right-height
+          (yunge-reader-pdf--highlight-bounds-height right))
+         (overlap
+          (- (min (alist-get 'top left) (alist-get 'top right))
+             (max (alist-get 'bottom left)
+                  (alist-get 'bottom right))))
+         (gap
+          (max 0.0
+               (- (max (alist-get 'left left)
+                       (alist-get 'left right))
+                  (min (alist-get 'right left)
+                       (alist-get 'right right))))))
+    (and (> left-height 0)
+         (> right-height 0)
+         (>= overlap (* 0.5 (min left-height right-height)))
+         (<= gap (* 0.75 (max left-height right-height))))))
+
+(defun yunge-reader-pdf--merge-highlight-bounds (left right)
+  "Return the bounding union of canonical bounds LEFT and RIGHT."
+  `((left . ,(min (alist-get 'left left)
+                  (alist-get 'left right)))
+    (bottom . ,(min (alist-get 'bottom left)
+                    (alist-get 'bottom right)))
+    (right . ,(max (alist-get 'right left)
+                   (alist-get 'right right)))
+    (top . ,(max (alist-get 'top left)
+                 (alist-get 'top right)))))
+
+(defun yunge-reader-pdf--polygon-signed-area (points)
+  "Return twice the signed area enclosed by SVG POINTS."
+  (let ((area 0.0)
+        (previous (car (last points))))
+    (dolist (current points area)
+      (cl-incf area
+               (- (* (car previous) (cdr current))
+                  (* (car current) (cdr previous))))
+      (setq previous current))))
+
+(defun yunge-reader-pdf--highlight-path-commands (points)
+  "Return one consistently wound closed SVG subpath for POINTS."
+  (when points
+    (let ((points
+           (if (< (yunge-reader-pdf--polygon-signed-area points) 0)
+               (reverse points)
+             points)))
+      (list
+       (list 'moveto (list (car points)))
+       (list 'lineto (cdr points))
+       (list 'closepath)))))
+
+(defun yunge-reader-pdf--prepend-highlight-path (points commands)
+  "Prepend POINTS as a closed subpath to reversed COMMANDS."
+  (dolist (command
+           (yunge-reader-pdf--highlight-path-commands points)
+           commands)
+    (push command commands)))
 
 (defun yunge-reader-pdf--paint-range
     (svg range text-layer page-info pixel-width pixel-height color opacity)
   "Paint inclusive text RANGE onto SVG with COLOR and OPACITY."
   (let ((page-width (alist-get 'width page-info))
-        (page-height (alist-get 'height page-info)))
-    (dolist (character (alist-get 'characters text-layer))
-      (let ((index (alist-get 'index character)))
-        (when (and (<= (car range) index)
-                   (<= index (cdr range))
-                   (not (alist-get 'generated character)))
-          (yunge-reader-pdf--paint-character
-           svg character page-width page-height
-           pixel-width pixel-height color opacity))))))
+        (page-height (alist-get 'height page-info))
+        commands run previous-bounds)
+    (cl-labels
+        ((flush-run
+          ()
+          (when run
+            (setq commands
+                  (yunge-reader-pdf--prepend-highlight-path
+                   (yunge-reader-pdf--svg-bounds
+                    run page-width page-height
+                    pixel-width pixel-height)
+                   commands)
+                  run nil
+                  previous-bounds nil))))
+      (dolist (character (alist-get 'characters text-layer))
+        (let ((index (alist-get 'index character)))
+          (when (and (<= (car range) index)
+                     (<= index (cdr range))
+                     (not (alist-get 'generated character)))
+            (let ((quad (yunge-reader-pdf--quad-points character))
+                  (bounds (alist-get 'bounds character)))
+              (if (and bounds
+                       (or (null quad)
+                           (yunge-reader-pdf--axis-aligned-quad-p quad)))
+                  (if (and previous-bounds
+                           (yunge-reader-pdf--same-highlight-run-p
+                            previous-bounds bounds))
+                      (setq run
+                            (yunge-reader-pdf--merge-highlight-bounds
+                             run bounds)
+                            previous-bounds bounds)
+                    (flush-run)
+                    (setq run bounds
+                          previous-bounds bounds))
+                (flush-run)
+                (when quad
+                  (setq commands
+                        (yunge-reader-pdf--prepend-highlight-path
+                         (yunge-reader-pdf--svg-quad
+                          quad page-width page-height
+                          pixel-width pixel-height)
+                         commands))))))))
+      (flush-run))
+    (when commands
+      (svg-path
+       svg (nreverse commands)
+       :fill-color color
+       :fill-opacity opacity))))
 
 (defun yunge-reader-pdf--paint-selection
     (svg page page-info text-layer pixel-width pixel-height)
