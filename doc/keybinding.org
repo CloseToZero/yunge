@@ -339,7 +339,8 @@ Shared reader bindings are:
   page to the window.
 - ~o~ toggles the document outline side window when the active format
   provides one.
-- ~gr~ refreshes the rendered view and ~q~ quits its window.
+- ~gr~ refreshes the rendered view.  A persistent document view does not
+  repurpose ~q~ as a window command; Evil retains macro recording there.
 
 Reader view administration remains under the mode-local leader:
 

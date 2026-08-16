@@ -235,6 +235,45 @@ ENTRY and DOCUMENT identify the shared resource.  Render optional OUTLINE."
             (yunge-reader--remove-outline-waiters
              entry reader)))))))
 
+(defun yunge-reader-outline--view-live-p ()
+  "Return whether this outline's logical Reader view is still live."
+  (let ((reader yunge-reader-outline--reader-buffer)
+        (entry yunge-reader-outline--entry)
+        (document yunge-reader-outline--document))
+    (and (buffer-live-p reader)
+         (yunge-reader--document-entry-p entry)
+         (yunge-reader-document-p document)
+         (yunge-reader--entry-current-p entry)
+         (eq (yunge-reader--document-entry-state entry) 'ready)
+         (eq document
+             (yunge-reader--document-entry-document entry))
+         (with-current-buffer reader
+           (and (eq entry yunge-reader--document-entry)
+                (eq document yunge-reader-document))))))
+
+(defun yunge-reader-outline--resolve-reader-window (&optional display)
+  "Return a live window for this outline's Reader view.
+When DISPLAY is non-nil, redisplay a hidden live view if necessary."
+  (let* ((reader yunge-reader-outline--reader-buffer)
+         (stored yunge-reader-outline--reader-window)
+         (window
+          (or (and (window-live-p stored)
+                   (eq (window-buffer stored) reader)
+                   stored)
+              (get-buffer-window reader t)
+              (and display
+                   (display-buffer
+                    reader
+                    '((display-buffer-reuse-window
+                       display-buffer-in-previous-window
+                       display-buffer-use-some-window
+                       display-buffer-pop-up-window)
+                      (inhibit-same-window . t)))))))
+    (when (and (window-live-p window)
+               (eq (window-buffer window) reader))
+      (setq yunge-reader-outline--reader-window window)
+      window)))
+
 (defun yunge-reader-outline-display-buffer (buffer)
   "Display BUFFER as a selected left side window."
   (let ((reader
@@ -246,11 +285,14 @@ ENTRY and DOCUMENT identify the shared resource.  Render optional OUTLINE."
         (document
          (buffer-local-value
           'yunge-reader-outline--document buffer))
-        (reader-window
-         (buffer-local-value
-          'yunge-reader-outline--reader-window buffer)))
-    (unless (window-live-p reader-window)
-      (user-error "The Reader window for this outline is no longer live"))
+        reader-window)
+    (with-current-buffer buffer
+      (unless (yunge-reader-outline--view-live-p)
+        (user-error "The Reader view for this outline is no longer live"))
+      (setq reader-window
+            (yunge-reader-outline--resolve-reader-window)))
+    (unless reader-window
+      (user-error "The Reader view for this outline is not displayed"))
     (let ((outline-window
            (with-selected-window reader-window
              (display-buffer-in-side-window
@@ -273,21 +315,12 @@ ENTRY and DOCUMENT identify the shared resource.  Render optional OUTLINE."
 (defun yunge-reader-outline--target ()
   "Return the Reader buffer and window controlled by this outline view."
   (let ((reader yunge-reader-outline--reader-buffer)
-        (window yunge-reader-outline--reader-window)
-        (entry yunge-reader-outline--entry)
-        (document yunge-reader-outline--document))
-    (unless
-        (and (buffer-live-p reader)
-             (window-live-p window)
-             (eq (window-buffer window) reader)
-             (yunge-reader--entry-current-p entry)
-             (eq (yunge-reader--document-entry-state entry) 'ready)
-             (eq document
-                 (yunge-reader--document-entry-document entry))
-             (with-current-buffer reader
-               (and (eq entry yunge-reader--document-entry)
-                    (eq document yunge-reader-document))))
+        window)
+    (unless (yunge-reader-outline--view-live-p)
       (user-error "The Reader view for this outline is no longer live"))
+    (setq window (yunge-reader-outline--resolve-reader-window t))
+    (unless window
+      (user-error "The Reader view for this outline could not be displayed"))
     (list reader window)))
 
 (defun yunge-reader-outline--follow (select-reader)

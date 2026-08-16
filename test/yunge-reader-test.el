@@ -40,7 +40,7 @@
      ("gr" . yunge-reader-refresh)
      ("n" . yunge-reader-search-next)
      ("o" . yunge-reader-outline)
-     ("q" . quit-window)
+     ("q" . undefined)
      ("y" . yunge-reader-copy-selection)))
   (should-not
    (eq (lookup-key yunge-reader-mode-map (kbd "M-w"))
@@ -61,7 +61,7 @@
      ("gr" . yunge-reader-refresh)
      ("n" . yunge-reader-search-next)
      ("o" . yunge-reader-outline)
-     ("q" . quit-window)
+     ("q" . evil-record-macro)
      ("SPC m p" . yunge-reader-make-primary)
      ("SPC m v" . yunge-reader-new-view)
      ("y" . yunge-reader-copy-selection)

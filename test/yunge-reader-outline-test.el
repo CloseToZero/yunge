@@ -194,4 +194,92 @@
       (when (buffer-live-p reader)
         (kill-buffer reader)))))
 
+(ert-deftest yunge-reader-outline-rebinds-a-persistent-hidden-view ()
+  (let ((yunge-reader--document-registry
+         (make-hash-table :test #'equal))
+        (yunge-reader-drivers nil)
+        (unit 1)
+        reader
+        outline
+        other)
+    (unwind-protect
+        (save-window-excursion
+          (setq reader (generate-new-buffer " *reader-outline-hidden*"))
+          (switch-to-buffer reader)
+          (yunge-reader-mode)
+          (let* ((driver
+                  (yunge-reader-register-driver
+                   'test
+                   :match (lambda (_file) t)
+                   :open #'ignore
+                   :close #'ignore
+                   :request #'ignore
+                   :location
+                   (lambda (_document _window)
+                     (make-yunge-reader-position :unit unit))
+                   :restore
+                   (lambda (_document position _window)
+                     (setq unit (yunge-reader-position-unit position))
+                     t)))
+                 (file (expand-file-name "outline-hidden.pdf"))
+                 (key (yunge-reader--document-key file driver))
+                 (document
+                  (make-yunge-reader-document
+                   :key key :file file :driver driver :layout 'fixed))
+                 (data
+                  (make-yunge-reader-outline-data
+                   :items
+                   (list
+                    (yunge-reader-outline-test--item
+                     "Destination" 0 9))))
+                 (entry
+                  (yunge-reader--make-document-entry
+                   :key key :file file :driver driver :state 'ready
+                   :document document :views (list reader)
+                   :primary-view reader :active-view reader
+                   :outline data :outline-loaded t)))
+            (puthash key entry yunge-reader--document-registry)
+            (setq yunge-reader-document document
+                  yunge-reader--document-entry entry
+                  yunge-reader--place-recording-enabled t)
+            (yunge-reader-outline)
+            (setq outline (current-buffer))
+            (with-current-buffer outline
+              (yunge-reader-outline-visit))
+            (should (= unit 9))
+            (setq other
+                  (generate-new-buffer " *reader-outline-other*"))
+            (let ((reader-window (get-buffer-window reader t))
+                  (outline-window (get-buffer-window outline t)))
+              (set-window-buffer reader-window other)
+              (select-window outline-window))
+            (should (buffer-live-p reader))
+            (should-not (get-buffer-window reader t))
+            (should (get-buffer-window outline t))
+            (setq unit 1)
+            (with-current-buffer outline
+              (yunge-reader-outline-visit))
+            (should (= unit 9))
+            (should (eq (window-buffer (selected-window)) reader))
+            (let* ((reader-window (selected-window))
+                   (outline-window (get-buffer-window outline t))
+                   (other-window
+                    (split-window reader-window nil 'below)))
+              (set-window-buffer other-window other)
+              (delete-window reader-window)
+              (select-window outline-window))
+            (should (buffer-live-p reader))
+            (should-not (get-buffer-window reader t))
+            (setq unit 2)
+            (with-current-buffer outline
+              (yunge-reader-outline-visit))
+            (should (= unit 9))
+            (should (eq (window-buffer (selected-window)) reader))))
+      (when (buffer-live-p outline)
+        (kill-buffer outline))
+      (when (buffer-live-p reader)
+        (kill-buffer reader))
+      (when (buffer-live-p other)
+        (kill-buffer other)))))
+
 ;;; yunge-reader-outline-test.el ends here

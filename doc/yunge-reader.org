@@ -37,8 +37,7 @@ The current PDF adapter provides:
 The reader uses one key vocabulary with or without Evil.  Shared keys are
 =y= to copy the logical selection, =o= to toggle the outline side window,
 =/= to start a search, =n/N= to visit the next or previous match, =gr= to
-refresh, =+/-= to zoom, === to reset zoom, =W/P= to fit width or page, and
-=q= to quit.  PDF
+refresh, =+/-= to zoom, === to reset zoom, and =W/P= to fit width or page.  PDF
 views use =J/K= for the next or previous page, =gg/G= for the first or last
 page, =gp= for a page prompt, =RET= for a visible link prompt, and Page Down
 or Page Up for screen scrolling.  =C-d/C-u= scroll by half a screen in
@@ -48,12 +47,14 @@ link when hit.  Pointer motion outside a page image does not extend the
 selection until it returns to a page.  Reader handles the initial mouse-down
 itself and deactivates any ordinary Emacs region, so buffer text before the
 page cannot acquire a second, unrelated region highlight.
-Evil starts Reader buffers in Normal state and leaves Visual =y= as
-=evil-yank=.  =C-g= clears the logical text selection.  One =ESC= clears both
-the logical selection and the active Reader search highlight.  From Evil's
-Normal state it retains the ordinary force-normal behavior; without Evil it
-uses the same Reader cleanup directly.
-=M-x yunge-reader-clear-search= removes the active match highlight.
+Evil starts Reader buffers in Normal state, leaves Visual =y= as =evil-yank=,
+and retains =q= for macro recording.  Main Reader buffers do not bind =q= to
+window dismissal because a document view is persistent rather than temporary.
+=C-g= and =ESC= clear the logical text selection and hide the active search
+highlight without discarding its query or results.  A later =n/N= resumes the
+same search and shows its highlight again.  With no Reader highlight to
+dismiss, the keys retain their ordinary quit or force-normal behavior.
+=M-x yunge-reader-clear-search= ends the search session completely.
 
 =M-x yunge-reader-new-view= creates an independent buffer at the current
 stable location and zoom while sharing the open document resource.  It refuses
@@ -96,6 +97,11 @@ place updates.  If it closes, its final location is recorded before the most
 recently active survivor is promoted.  Promotion itself does not immediately
 replace the saved location.  Zoom, viewport, selection, search, render caches,
 and pending UI work remain buffer-local and independent between views.
+
+A Reader view is owned by its buffer, not by a window.  Removing, replacing,
+or deleting a window only hides that view; displaying its buffer attaches the
+same view state to a live window again.  Killing the view buffer performs the
+actual detach and may release the shared document when no views remain.
 
 Opening a document declares one of two layouts:
 
@@ -184,8 +190,10 @@ cancelling another view's request.
 =o= selects a left side window whose fractional width defaults to
 =yunge-reader-outline-window-width=.  The tree uses =j/k= and =gg/G= for
 movement, =TAB= to fold or expand children, and =q= to close the side window.
-=RET= follows a destination and selects its exact Reader window; =gf= follows
-the same destination while retaining outline focus.  A structural heading
+=RET= follows a destination and selects a window displaying its Reader view;
+=gf= follows the same destination while retaining outline focus.  If a live
+view was temporarily hidden, the outline displays its buffer again before
+following the destination.  A structural heading
 without a destination folds or expands instead.  A rejected target rolls
 back view and zoom state and cannot replace the saved place.  PDF XYZ,
 fit-page, and fit-width hints map to Reader zoom modes; unsupported fit

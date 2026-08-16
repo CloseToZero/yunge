@@ -339,7 +339,6 @@ document contents.")
     ("gr" yunge-reader-refresh "refresh")
     ("n" yunge-reader-search-next "next match")
     ("o" yunge-reader-outline "outline")
-    ("q" quit-window "quit")
     ("y" yunge-reader-copy-selection "copy selection")
     ([localleader] ,yunge-reader-command-map nil))
   "Normal-state bindings shared by Yunge Reader adapters.")
@@ -358,7 +357,7 @@ document contents.")
   "g r" #'yunge-reader-refresh
   "n" #'yunge-reader-search-next
   "o" #'yunge-reader-outline
-  "q" #'quit-window
+  "q" #'undefined
   "y" #'yunge-reader-copy-selection)
 
 (defun yunge-reader--hide-evil-cursor ()
@@ -402,6 +401,9 @@ document contents.")
   (evil-set-initial-state 'yunge-reader-mode 'normal)
   (yunge-key-evil-define 'normal yunge-reader-mode-map
                          yunge-reader-normal-bindings)
+  (yunge-key-evil-define
+   'normal yunge-reader-mode-map
+   '(("q" evil-record-macro nil)))
   (advice-add
    'evil-force-normal-state :after
    #'yunge-reader--dismiss-after-force-normal-state)
