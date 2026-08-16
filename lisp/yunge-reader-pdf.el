@@ -1568,10 +1568,11 @@ When SUPPRESS-SCALE is non-nil, do not update the shared effective scale."
                    (yunge-reader-pdf--placeholder page width)))
               (yunge-reader-pdf--placeholder page width)))
             (inhibit-read-only t))
-      (add-text-properties
-       position (1+ position)
-       (list 'display display
-             'yunge-reader-pdf-display-width width)))))
+      (with-silent-modifications
+        (add-text-properties
+         position (1+ position)
+         (list 'display display
+               'yunge-reader-pdf-display-width width))))))
 
 (defun yunge-reader-pdf--paint-pages (pages &optional window)
   "Paint PAGES for WINDOW and virtualize all former live images."

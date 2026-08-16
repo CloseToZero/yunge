@@ -2371,7 +2371,8 @@
       (yunge-reader-pdf--paint-pages '(1))
       (should (eq (car (get-text-property 1 'display)) 'space))
       (should (equal (get-text-property 3 'display)
-                     '(image "one.png"))))))
+                     '(image "one.png")))
+      (should-not (buffer-modified-p)))))
 
 (ert-deftest yunge-reader-pdf-page-jumps-preserve-logical-selection ()
   (with-temp-buffer
