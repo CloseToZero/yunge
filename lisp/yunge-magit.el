@@ -79,6 +79,7 @@
   `(("RET" magit-visit-thing "visit")
     ("<tab>" magit-section-toggle "toggle section")
     ("g<" magit-process-buffer "show process output")
+    ("gf" magit-diff-show-or-scroll-up "show revision")
     ("gr" magit-refresh "refresh")
     ("gR" magit-refresh-all "refresh all")
     ("y" ,yunge-magit-copy-map "copy")
@@ -115,6 +116,7 @@
 (defconst yunge-magit-log-select-normal-bindings
   '(("RET" magit-log-select-pick "select")
     ("<tab>" magit-section-toggle "toggle section")
+    ("gf" magit-diff-show-or-scroll-up "show commit")
     ("q" magit-log-select-quit "cancel")))
 
 (defconst yunge-magit-mode-quit-normal-bindings
@@ -127,6 +129,7 @@
 
 (defconst yunge-magit-rebase-normal-bindings
   '(("RET" git-rebase-show-commit "show commit")
+    ("gf" git-rebase-show-or-scroll-up "show commit")
     ("M-j" git-rebase-move-line-down "move line down")
     ("M-k" git-rebase-move-line-up "move line up")
     ("p" git-rebase-pick "pick")
@@ -150,6 +153,7 @@
 
 (defconst yunge-magit-blame-normal-bindings
   '(("RET" magit-show-commit "show commit")
+    ("gf" magit-diff-show-or-scroll-up "show commit")
     ("C-j" magit-blame-next-chunk "next chunk")
     ("C-k" magit-blame-previous-chunk "previous chunk")
     ("M-j" magit-blame-next-chunk-same-commit

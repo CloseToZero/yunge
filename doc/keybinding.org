@@ -95,6 +95,9 @@ Grep and Occur follow the same navigation shape: ~j/k~ move by line,
 and ~i~ enters the result editor.  Grep also uses ~[[/]]~ to move by file.
 From a Consult project search, ~M-a E~ exports the results to Grep.
 
+In Magit views, ~RET~ visits the item at point, while ~gf~ previews its
+revision without selecting the window used for the preview.
+
 * Edit sessions
 
 An edit session is a temporary editing state with mode-specific finish and

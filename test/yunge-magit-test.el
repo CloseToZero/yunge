@@ -14,6 +14,8 @@
 (declare-function magit-blob-mode "magit-files")
 (declare-function magit-cherry-mode "magit-log")
 (declare-function magit-diff-mode "magit-diff")
+(declare-function magit-display-buffer "magit-mode"
+                  (buffer &optional display-function))
 (declare-function magit-insert-heading "magit-section")
 (declare-function magit-insert-section--create "magit-section")
 (declare-function magit-insert-section--finish "magit-section")
@@ -108,6 +110,7 @@
       ("RET" . magit-visit-thing)
       ("<tab>" . magit-section-toggle)
       ("g<" . magit-process-buffer)
+      ("gf" . magit-diff-show-or-scroll-up)
       ("q" . ,quit-command)
       ("gr" . magit-refresh)
       ("gR" . magit-refresh-all)
@@ -324,6 +327,7 @@
       ("C-k" . magit-section-backward)
       ("RET" . magit-log-select-pick)
       ("<tab>" . magit-section-toggle)
+      ("gf" . magit-diff-show-or-scroll-up)
       ("q" . magit-log-select-quit)
       ("C-i" . yunge-jump-history-forward))
     yunge-magit-test-horizontal-bindings)))
@@ -346,6 +350,44 @@
     (beginning-of-line)
     (evil-normal-state)
     (yunge-test-key "RET" 'magit-show-commit)))
+
+(ert-deftest yunge-magit-log-gf-previews-without-selecting-its-window ()
+  (yunge-test-enable-evil)
+  (require 'magit-autoloads)
+  (yunge-test-load-package-config 'yunge-magit)
+  (require 'magit-log)
+
+  (let ((preview-buffer (generate-new-buffer " *yunge-magit-preview*")))
+    (unwind-protect
+        (with-temp-buffer
+          (magit-log-mode)
+          (let ((inhibit-read-only t))
+            (setq magit-root-section nil)
+            (magit-insert-section (log)
+              (magit-insert-section (commit "deadbeef")
+                (magit-insert-heading "commit"))))
+          (goto-char (point-min))
+          (search-forward "commit")
+          (beginning-of-line)
+          (evil-normal-state)
+          (save-window-excursion
+            (delete-other-windows)
+            (switch-to-buffer (current-buffer))
+            (let ((origin-window (selected-window))
+                  (preview-window (split-window-right)))
+              (cl-letf (((symbol-function 'magit-show-commit)
+                         (lambda (&rest _arguments)
+                           (magit-display-buffer
+                            preview-buffer
+                            (lambda (_buffer)
+                              (set-window-buffer preview-window
+                                                 preview-buffer)
+                              preview-window)))))
+                (execute-kbd-macro (kbd "gf")))
+              (should (eq (selected-window) origin-window))
+              (should (eq (window-buffer preview-window)
+                          preview-buffer)))))
+      (kill-buffer preview-buffer))))
 
 (ert-deftest yunge-magit-visual-stage-selects-exact-untracked-files ()
   (should
@@ -422,6 +464,7 @@
    'git-rebase-mode
    (append
     '(("RET" . git-rebase-show-commit)
+      ("gf" . git-rebase-show-or-scroll-up)
       ("M-j" . git-rebase-move-line-down)
       ("M-k" . git-rebase-move-line-up)
       ("p" . git-rebase-pick)
@@ -460,6 +503,7 @@
    'magit-blame-read-only-mode
    (append
     '(("RET" . magit-show-commit)
+      ("gf" . magit-diff-show-or-scroll-up)
       ("C-j" . magit-blame-next-chunk)
       ("C-k" . magit-blame-previous-chunk)
       ("M-j" . magit-blame-next-chunk-same-commit)
