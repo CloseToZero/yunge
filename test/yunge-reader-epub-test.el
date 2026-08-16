@@ -154,6 +154,75 @@
     (setcdr (assq 'font-scale first) 2.0)
     (should (= (alist-get 'font-scale second) 1.0))))
 
+(ert-deftest yunge-reader-epub-opens-with-a-pending-manual-scale ()
+  (let ((yunge-reader-epub-default-font-scale 1.25)
+        (document (yunge-reader-epub-test--document))
+        attached-style)
+    (with-temp-buffer
+      (yunge-reader-mode)
+      (setq yunge-reader--pending-place
+            '(:zoom-mode manual :scale 1.8))
+      (cl-letf
+          (((symbol-function
+             'yunge-reader-webview--attach-shared-publication)
+            (lambda (_publication _location _location-function
+                     _accelerator-function style)
+              (setq attached-style style))))
+        (yunge-reader-epub--attach document))
+      (should yunge-reader-epub-view-mode)
+      (should (= yunge-reader-default-scale 1.25))
+      (should (= yunge-reader-minimum-scale 0.5))
+      (should (= yunge-reader-maximum-scale 3.0))
+      (should (eq yunge-reader-zoom-mode 'manual))
+      (should (= yunge-reader-scale 1.8))
+      (should (= yunge-reader-effective-scale 1.8))
+      (should (= (alist-get 'font-scale attached-style) 1.8))
+      (should (string-match-p "Font 180%" header-line-format)))))
+
+(ert-deftest yunge-reader-epub-rejects-a-nonmanual-pending-place ()
+  (with-temp-buffer
+    (yunge-reader-mode)
+    (setq yunge-reader--pending-place
+          '(:zoom-mode fit-width :scale 1.0))
+    (should-error
+     (yunge-reader-epub--initial-font-scale))))
+
+(ert-deftest yunge-reader-epub-maps-reader-zoom-to-font-scale ()
+  (let ((yunge-reader-epub-default-font-scale 1.25)
+        applied-style
+        (syncs 0)
+        (records 0))
+    (with-temp-buffer
+      (yunge-reader-mode)
+      (let ((view
+             (yunge-reader-webview--make-view
+              :style (yunge-reader-epub--default-style))))
+        (setq yunge-reader-webview--buffer-view view)
+        (yunge-reader-epub--configure-zoom)
+        (yunge-reader-epub-view-mode 1)
+        (cl-letf
+            (((symbol-function 'yunge-reader-webview--set-view-style)
+              (lambda (value style)
+                (setq applied-style (copy-tree style))
+                (setf (yunge-reader-webview--view-style value)
+                      (copy-tree style))))
+             ((symbol-function 'yunge-reader-webview--sync-view)
+              (lambda (_view) (cl-incf syncs)))
+             ((symbol-function 'yunge-reader-record-place)
+              (lambda (&optional _window) (cl-incf records))))
+          (should (= (yunge-reader-zoom-in) 1.5))
+          (should (= (alist-get 'font-scale applied-style) 1.5))
+          (should (= yunge-reader-effective-scale 1.5))
+          (yunge-reader-zoom-in 10)
+          (should (= yunge-reader-scale 3.0))
+          (yunge-reader-zoom-out 20)
+          (should (= yunge-reader-scale 0.5))
+          (should (= (yunge-reader-zoom-reset) 1.25))
+          (should (= (alist-get 'font-scale applied-style) 1.25))
+          (should (string-match-p "Font 125%" header-line-format))
+          (should (= syncs 4))
+          (should (= records 4)))))))
+
 (ert-deftest yunge-reader-epub-rejects-unsupported-hosts-before-open ()
   (let (completed opened)
     (cl-letf

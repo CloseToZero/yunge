@@ -1880,6 +1880,20 @@
       (should (eq (yunge-reader-fit-page) 'fit-page))
       (should (= refreshes 4)))))
 
+(ert-deftest yunge-reader-rejects-fit-modes-for-reflowable-documents ()
+  (with-temp-buffer
+    (yunge-reader-mode)
+    (let ((yunge-reader-document
+           (make-yunge-reader-document :layout 'reflow))
+          (refreshes 0))
+      (add-hook 'yunge-reader-refresh-hook
+                (lambda () (cl-incf refreshes)) nil t)
+      (should-error (yunge-reader-fit-width) :type 'user-error)
+      (should-error (yunge-reader-fit-page) :type 'user-error)
+      (should (eq yunge-reader-zoom-mode 'fit-width))
+      (should-not yunge-reader-effective-scale)
+      (should (zerop refreshes)))))
+
 (ert-deftest yunge-reader-copies-cached-and-driver-resolved-selections ()
   (with-temp-buffer
     (yunge-reader-mode)

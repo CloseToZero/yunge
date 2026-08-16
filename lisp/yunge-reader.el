@@ -2033,6 +2033,12 @@ At the first loaded match, finish the bounded search before wrapping."
 
 (defun yunge-reader--set-fit-mode (mode)
   "Use fit MODE and refresh the current reader view."
+  (when (and yunge-reader-document
+             (eq (yunge-reader-document-layout
+                  yunge-reader-document)
+                 'reflow))
+    (user-error
+     "Fit modes are not available for reflowable documents"))
   (setq yunge-reader-zoom-mode mode
         yunge-reader-effective-scale nil)
   (yunge-reader-refresh)

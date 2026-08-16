@@ -36,6 +36,12 @@
   :type 'number
   :group 'yunge-reader)
 
+(defconst yunge-reader-epub-minimum-font-scale 0.5
+  "Smallest font scale accepted by the EPUB renderer.")
+
+(defconst yunge-reader-epub-maximum-font-scale 3.0
+  "Largest font scale accepted by the EPUB renderer.")
+
 (defconst yunge-reader-epub-normal-bindings
   '(("C-d" yunge-reader-epub-next-screen "next screen")
     ("C-u" yunge-reader-epub-previous-screen "previous screen")
@@ -66,6 +72,9 @@
                  #'yunge-reader-epub--refresh t)
     (remove-hook 'yunge-reader-view-role-change-hook
                  #'yunge-reader-epub--update-header t)
+    (kill-local-variable 'yunge-reader-default-scale)
+    (kill-local-variable 'yunge-reader-minimum-scale)
+    (kill-local-variable 'yunge-reader-maximum-scale)
     (setq header-line-format nil)))
 
 (with-eval-after-load 'evil
@@ -186,9 +195,16 @@
           (pcase (yunge-reader-view-role)
             ('primary "Primary")
             ('additional "Additional")
-            (_ "Reader"))))
+            (_ "Reader")))
+         (font-percent
+          (round
+           (* 100
+              (or yunge-reader-effective-scale
+                  yunge-reader-scale
+                  yunge-reader-epub-default-font-scale)))))
     (setq header-line-format
-          (format " %s  EPUB  %s " role title))))
+          (format " %s  EPUB  Font %d%%  %s "
+                  role font-percent title))))
 
 (defun yunge-reader-epub--location-changed (view)
   "Record the stable location reported by EPUB VIEW."
@@ -200,10 +216,49 @@
         (yunge-reader-record-place
          (yunge-reader-webview--view-window view))))))
 
-(defun yunge-reader-epub--default-style ()
-  "Return a fresh, validated default EPUB reading style."
+(defun yunge-reader-epub--font-scale (scale)
+  "Return EPUB font SCALE restricted to renderer bounds."
+  (unless (and (numberp scale) (= scale scale))
+    (error "Invalid EPUB font scale: %S" scale))
+  (max yunge-reader-epub-minimum-font-scale
+       (min yunge-reader-epub-maximum-font-scale scale)))
+
+(defun yunge-reader-epub--initial-font-scale ()
+  "Return the font scale to use before the EPUB surface opens."
+  (yunge-reader-epub--font-scale
+   (cond
+    ((null yunge-reader--pending-place)
+     yunge-reader-epub-default-font-scale)
+    ((eq (plist-get yunge-reader--pending-place :zoom-mode)
+         'manual)
+     (plist-get yunge-reader--pending-place :scale))
+    (t
+     (error
+      "EPUB place has an unsupported zoom mode: %S"
+      (plist-get yunge-reader--pending-place :zoom-mode))))))
+
+(defun yunge-reader-epub--configure-zoom ()
+  "Configure Reader zoom state for one EPUB view and return its scale."
+  (let ((default
+         (yunge-reader-epub--font-scale
+          yunge-reader-epub-default-font-scale))
+        (scale (yunge-reader-epub--initial-font-scale)))
+    (setq-local yunge-reader-default-scale default)
+    (setq-local yunge-reader-minimum-scale
+                yunge-reader-epub-minimum-font-scale)
+    (setq-local yunge-reader-maximum-scale
+                yunge-reader-epub-maximum-font-scale)
+    (setq yunge-reader-zoom-mode 'manual
+          yunge-reader-scale scale
+          yunge-reader-effective-scale scale)
+    scale))
+
+(defun yunge-reader-epub--default-style (&optional font-scale)
+  "Return a fresh EPUB style using optional FONT-SCALE."
   (yunge-reader-webview--check-style
-   `((font-scale . ,yunge-reader-epub-default-font-scale)
+   `((font-scale
+      . ,(yunge-reader-epub--font-scale
+          (or font-scale yunge-reader-epub-default-font-scale)))
      (line-height . ,yunge-reader-epub-default-line-height)
      (content-width . ,yunge-reader-epub-default-content-width)
      (side-padding . ,yunge-reader-epub-default-side-padding))))
@@ -212,15 +267,16 @@
   "Attach a persistent EPUB WebView for DOCUMENT."
   (let ((handle (yunge-reader-document-handle document)))
     (unless (and (yunge-reader-epub-handle-p handle)
-                 (not (yunge-reader-epub-handle-closing handle)))
+                  (not (yunge-reader-epub-handle-closing handle)))
       (error "EPUB document has no live publication"))
-    (yunge-reader-epub-view-mode 1)
-    (yunge-reader-epub--update-header)
-    (yunge-reader-webview--attach-shared-publication
-     (yunge-reader-epub-handle-publication handle)
-     nil #'yunge-reader-epub--location-changed
-     #'yunge-reader-epub--accelerator
-     (yunge-reader-epub--default-style))))
+    (let ((font-scale (yunge-reader-epub--configure-zoom)))
+      (yunge-reader-epub-view-mode 1)
+      (yunge-reader-epub--update-header)
+      (yunge-reader-webview--attach-shared-publication
+       (yunge-reader-epub-handle-publication handle)
+       nil #'yunge-reader-epub--location-changed
+       #'yunge-reader-epub--accelerator
+       (yunge-reader-epub--default-style font-scale)))))
 
 (defun yunge-reader-epub--detach-complete (handle)
   "Finish one native view detach belonging to HANDLE."
@@ -350,9 +406,24 @@
 
 (defun yunge-reader-epub--refresh ()
   "Synchronize the current EPUB surface with its Reader window."
-  (when yunge-reader-webview--buffer-view
-    (yunge-reader-webview--sync-view
-     yunge-reader-webview--buffer-view)))
+  (when-let* ((view yunge-reader-webview--buffer-view)
+              ((not (yunge-reader-webview--view-destroyed view))))
+    (unless (eq yunge-reader-zoom-mode 'manual)
+      (error "EPUB views require manual Reader zoom mode"))
+    (let* ((scale
+            (yunge-reader-epub--font-scale yunge-reader-scale))
+           (style
+            (copy-tree
+             (or (yunge-reader-webview--view-style view)
+                 (yunge-reader-epub--default-style scale)))))
+      (setq yunge-reader-scale scale
+            yunge-reader-effective-scale scale)
+      (setcdr (assq 'font-scale style) scale)
+      (yunge-reader-webview--set-view-style view style)
+      (yunge-reader-webview--sync-view view)
+      (yunge-reader-epub--update-header)
+      (yunge-reader-record-place
+       (yunge-reader-webview--view-window view)))))
 
 (defun yunge-reader-epub--outline-complete
     (complete value error-data)

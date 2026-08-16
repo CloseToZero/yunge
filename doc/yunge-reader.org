@@ -123,6 +123,16 @@ renderer coalesces updates within one animation frame, and Foliate retains the
 visible-range anchor across reflow.  Layout-only anchor movement remains
 transient and cannot replace the primary durable place.
 
+Reader's manual scale is the logical view's EPUB font scale and is bounded to
+0.5 through 3.0.  The generic zoom-in, zoom-out, and reset commands update the
+complete style in place; reset uses =yunge-reader-epub-default-font-scale=.
+The header reports the effective font percentage.  A user-requested change
+records the new scale with the current stable CFI, while an additional view
+cannot replace the primary durable place.  A copied view starts with the source
+view's manual scale before its surface opens.  EPUB places using a fit mode are
+rejected rather than migrated.  Fit-width and fit-page are also
+rejected for reflowable documents until they gain distinct layout semantics.
+
 A =publication-ready= locator updates only the logical view.  Readiness means
 that an initial target or retained location finished restoring; it is not user
 navigation and therefore cannot replace the primary durable place.  Later
@@ -133,7 +143,7 @@ current stable location.
 
 The current slice retains browser-native text selection, ordinary copying,
 links, CSS layout, and width reflow.  Reader search, =y= selection-copy
-integration, and interactive style controls remain later work.
+integration, and interactive width and line-height controls remain later work.
 
 * Library boundary
 
@@ -590,8 +600,7 @@ text selection, copying, links, accessibility, and CSS layout, and can reflow
 the same DOM when its width changes.  An image path would require layout and
 rasterization after every width change and would recreate text hit testing and
 selection in Lisp.  Image rendering remains appropriate for fixed-layout
-documents and as a possible compatibility fallback, but it is not the primary
-EPUB representation.
+documents, but it is not the primary EPUB representation.
 
 Each logical Reader view receives its own numeric native view and WebView
 instance.  Emacs sends the frame window ID plus the body pixel rectangle.
@@ -701,7 +710,8 @@ opening-time reconciliation, surface reset, and retryable failures.  EPUB
 driver tests cover registration, reflowable key
 bindings, native open result validation, shared publication ownership,
 printable place conversion, bounded outline mapping, transient href targets,
-view-local reading styles, restore timing, and primary-only place recording.
+view-local reading styles, bounded font zoom, strict zoom-state validation,
+restore timing, and primary-only place recording.
 Isolated graphical Emacs smoke tests open real EPUBs through WebView2, move one
 screen, destroy and recreate the native view, restore the exact CFI, and check
 the href and fraction fallback order.  The formal driver smoke test also opens
