@@ -41,8 +41,8 @@ zoom, === to reset zoom, =W/P= to fit width or page, and =q= to quit.  PDF
 views use =J/K= for the next or previous page, =gg/G= for the first or last
 page, =gp= for a page prompt, =RET= for a visible link prompt, and Page Down
 or Page Up for screen scrolling.  =C-d/C-u= scroll by half a screen in
-pixels.  Mouse-1 selects one character, dragging selects text, and
-Ctrl-Mouse-1 follows a link when hit.
+pixels, while =j/k= scroll by one screen line.  Mouse-1 selects one
+character, dragging selects text, and Ctrl-Mouse-1 follows a link when hit.
 Evil starts Reader buffers in Normal state and leaves Visual =y= as
 =evil-yank=.  =C-g= clears the logical text selection.  =ESC= does the same
 from Evil's Normal state while retaining its usual force-normal and search

@@ -167,7 +167,9 @@
     ("K" yunge-reader-pdf-previous-page "previous page")
     ("gg" yunge-reader-pdf-first-page "first page")
     ("gp" yunge-reader-pdf-goto-page "go to page")
-    ("gr" yunge-reader-refresh "refresh"))
+    ("gr" yunge-reader-refresh "refresh")
+    ("j" yunge-reader-pdf-scroll-down-line "scroll down one line")
+    ("k" yunge-reader-pdf-scroll-up-line "scroll up one line"))
   "Normal-state bindings for the PDF view adapter.")
 
 (defvar-keymap yunge-reader-pdf-view-mode-map
@@ -181,7 +183,9 @@
   "<prior>" #'scroll-down-command
   "g g" #'yunge-reader-pdf-first-page
   "g p" #'yunge-reader-pdf-goto-page
-  "g r" #'yunge-reader-refresh)
+  "g r" #'yunge-reader-refresh
+  "j" #'yunge-reader-pdf-scroll-down-line
+  "k" #'yunge-reader-pdf-scroll-up-line)
 
 (define-minor-mode yunge-reader-pdf-view-mode
   "Display a fixed-layout PDF through the Yunge Reader PDF driver."
@@ -2739,6 +2743,32 @@ When SINGLE is non-nil, use the event start for both points."
   (interactive "p")
   (setq count (or count 1))
   (yunge-reader-pdf--scroll-half-window
+   (if (< count 0) 'up 'down) count))
+
+(defun yunge-reader-pdf--scroll-line (direction count)
+  "Scroll in DIRECTION by one screen line COUNT times."
+  (let ((function
+         (if (eq direction 'up)
+             #'pixel-scroll-precision-scroll-up-page
+           #'pixel-scroll-precision-scroll-down-page))
+        (pixels
+         (max 1 (frame-char-height (window-frame)))))
+    (dotimes (_ (abs count))
+      (funcall function pixels))
+    (yunge-reader-pdf--update-visible-pages (selected-window))))
+
+(defun yunge-reader-pdf-scroll-up-line (&optional count)
+  "Scroll backward by one PDF screen line COUNT times."
+  (interactive "p")
+  (setq count (or count 1))
+  (yunge-reader-pdf--scroll-line
+   (if (< count 0) 'down 'up) count))
+
+(defun yunge-reader-pdf-scroll-down-line (&optional count)
+  "Scroll forward by one PDF screen line COUNT times."
+  (interactive "p")
+  (setq count (or count 1))
+  (yunge-reader-pdf--scroll-line
    (if (< count 0) 'up 'down) count))
 
 (defun yunge-reader-pdf-next-page (&optional count)

@@ -51,7 +51,9 @@
      ("K" . yunge-reader-pdf-previous-page)
      ("gg" . yunge-reader-pdf-first-page)
      ("gp" . yunge-reader-pdf-goto-page)
-     ("gr" . yunge-reader-refresh)))
+     ("gr" . yunge-reader-refresh)
+     ("j" . yunge-reader-pdf-scroll-down-line)
+     ("k" . yunge-reader-pdf-scroll-up-line)))
   (should-not
    (eq (lookup-key yunge-reader-pdf-view-mode-map (kbd "n"))
        #'yunge-reader-pdf-next-page))
@@ -107,6 +109,8 @@
        ("gg" . yunge-reader-pdf-first-page)
        ("gp" . yunge-reader-pdf-goto-page)
        ("gr" . yunge-reader-refresh)
+       ("j" . yunge-reader-pdf-scroll-down-line)
+       ("k" . yunge-reader-pdf-scroll-up-line)
        ("n" . yunge-reader-search-next)
        ("y" . yunge-reader-copy-selection)
        ("b" . evil-backward-word-begin)))
@@ -138,6 +142,33 @@
     (should
      (equal (nreverse scrolls)
             '((up 300) (up 300) (down 300))))
+    (should (equal updates '(window window)))))
+
+(ert-deftest yunge-reader-pdf-scrolls-screen-lines-by-pixels ()
+  (let (scrolls updates)
+    (cl-letf (((symbol-function 'window-frame)
+               (lambda (&optional _window) 'frame))
+              ((symbol-function 'frame-char-height)
+               (lambda (&optional _frame) 19))
+              ((symbol-function 'selected-window)
+               (lambda () 'window))
+              ((symbol-function
+                'pixel-scroll-precision-scroll-up-page)
+               (lambda (pixels)
+                 (push (list 'up pixels) scrolls)))
+              ((symbol-function
+                'pixel-scroll-precision-scroll-down-page)
+               (lambda (pixels)
+                 (push (list 'down pixels) scrolls)))
+              ((symbol-function
+                'yunge-reader-pdf--update-visible-pages)
+               (lambda (&optional window)
+                 (push window updates))))
+      (yunge-reader-pdf-scroll-up-line 2)
+      (yunge-reader-pdf-scroll-down-line 1))
+    (should
+     (equal (nreverse scrolls)
+            '((up 19) (up 19) (down 19))))
     (should (equal updates '(window window)))))
 
 (ert-deftest yunge-reader-pdf-registers-only-when-requested ()
