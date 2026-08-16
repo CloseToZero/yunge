@@ -1,15 +1,16 @@
 // SPDX-FileCopyrightText: 2026 Chen Zhexuan
 // SPDX-License-Identifier: MIT
 
+use getrandom::getrandom;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::collections::HashMap;
 use std::io::{self, BufRead, Write};
 use std::num::NonZeroIsize;
 use std::panic::{AssertUnwindSafe, catch_unwind};
-use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
+use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 use webview2_com::AcceleratorKeyPressedEventHandler;
@@ -22,23 +23,41 @@ use windows::Win32::UI::WindowsAndMessaging::{
     DispatchMessageW, IsWindow, MSG, PM_REMOVE, PeekMessageW, TranslateMessage,
 };
 use wry::dpi::{PhysicalPosition, PhysicalSize};
+use wry::http::{Method, Request as HttpRequest, Response as HttpResponse};
 use wry::raw_window_handle::{
     HandleError, HasWindowHandle, RawWindowHandle, Win32WindowHandle,
     WindowHandle,
 };
 use wry::{
     PageLoadEvent, PermissionResponse, Rect, WebView, WebViewBuilder,
-    WebViewExtWindows,
+    WebViewBuilderExtWindows, WebViewExtWindows,
 };
 use yunge_reader::epub::{EpubError, Publication};
 
 use super::{BUILD_ID, Error};
 
 const PROTOCOL_VERSION: u32 = 1;
-const CAPABILITIES: [&str; 13] = [
+const BOOK_PROTOCOL: &str = "yunge-reader-book";
+const MAX_RESOURCE_REQUESTS: usize = 8;
+const MAX_RESOURCE_URI_PATH_BYTES: usize = 196_605;
+const RESOURCE_CSP: &str = concat!(
+    "default-src 'none'; ",
+    "img-src 'self' data:; ",
+    "style-src 'self' 'unsafe-inline'; ",
+    "font-src 'self' data:; ",
+    "media-src 'self'; ",
+    "script-src 'none'; ",
+    "object-src 'none'; ",
+    "frame-src 'none'; ",
+    "connect-src 'none'; ",
+    "base-uri 'none'; ",
+    "form-action 'none'"
+);
+const CAPABILITIES: [&str; 14] = [
     "publication-close",
     "publication-info",
     "publication-open",
+    "publication-resources",
     "view-bounds",
     "view-clear-selection",
     "view-create",
@@ -172,6 +191,21 @@ struct NativeView {
     visible: bool,
 }
 
+struct StoredPublication {
+    token: String,
+    publication: Publication,
+}
+
+#[derive(Default)]
+struct PublicationStore {
+    entries: HashMap<u64, StoredPublication>,
+    tokens: HashMap<String, u64>,
+}
+
+type SharedPublications = Arc<Mutex<PublicationStore>>;
+
+struct ResourcePermit(Arc<AtomicUsize>);
+
 impl Drop for NativeView {
     fn drop(&mut self) {
         // SAFETY: The token was registered on this controller, and all
@@ -196,9 +230,74 @@ impl HasWindowHandle for ParentWindow {
     }
 }
 
+impl PublicationStore {
+    fn insert(
+        &mut self,
+        id: u64,
+        publication: Publication,
+    ) -> Result<&StoredPublication, ServiceError> {
+        let token = loop {
+            let candidate = publication_token()?;
+            if !self.tokens.contains_key(&candidate) {
+                break candidate;
+            }
+        };
+        self.tokens.insert(token.clone(), id);
+        self.entries
+            .insert(id, StoredPublication { token, publication });
+        Ok(self
+            .entries
+            .get(&id)
+            .expect("inserted publication is present"))
+    }
+
+    fn remove(&mut self, id: u64) -> Option<StoredPublication> {
+        let publication = self.entries.remove(&id)?;
+        self.tokens.remove(&publication.token);
+        Some(publication)
+    }
+
+    fn by_token_mut(&mut self, token: &str) -> Option<&mut StoredPublication> {
+        let id = self.tokens.get(token).copied()?;
+        self.entries.get_mut(&id)
+    }
+
+    fn clear(&mut self) {
+        self.entries.clear();
+        self.tokens.clear();
+    }
+}
+
+impl ResourcePermit {
+    fn acquire(active: Arc<AtomicUsize>) -> Option<Self> {
+        let mut current = active.load(Ordering::Acquire);
+        loop {
+            if current >= MAX_RESOURCE_REQUESTS {
+                return None;
+            }
+            match active.compare_exchange_weak(
+                current,
+                current + 1,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            ) {
+                Ok(_) => return Some(Self(active)),
+                Err(updated) => current = updated,
+            }
+        }
+    }
+}
+
+impl Drop for ResourcePermit {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Ordering::AcqRel);
+    }
+}
+
 struct Service {
     views: HashMap<u64, NativeView>,
-    publications: HashMap<u64, Publication>,
+    publications: SharedPublications,
+    resource_requests: Arc<AtomicUsize>,
     next_publication: u64,
     version: Result<String, String>,
     event_sender: Sender<ViewEvent>,
@@ -277,7 +376,8 @@ impl Service {
     fn new(event_sender: Sender<ViewEvent>) -> Self {
         Self {
             views: HashMap::new(),
-            publications: HashMap::new(),
+            publications: Arc::new(Mutex::new(PublicationStore::default())),
+            resource_requests: Arc::new(AtomicUsize::new(0)),
             next_publication: 1,
             version: wry::webview_version().map_err(|error| error.to_string()),
             event_sender,
@@ -319,15 +419,17 @@ impl Service {
                 "no publication IDs remain",
             )
         })?;
-        let result = publication_result(id, &publication);
-        self.publications.insert(id, publication);
+        let mut publications = lock_publications(&self.publications)?;
+        let publication = publications.insert(id, publication)?;
+        let result = publication_result(id, publication);
         Ok(result)
     }
 
     fn publication_info(&self, params: Value) -> Result<Value, ServiceError> {
         let params: PublicationParams = Self::parse(params)?;
-        let publication = self
-            .publications
+        let publications = lock_publications(&self.publications)?;
+        let publication = publications
+            .entries
             .get(&params.publication)
             .ok_or_else(|| unknown_publication(params.publication))?;
         Ok(publication_result(params.publication, publication))
@@ -338,7 +440,8 @@ impl Service {
         params: Value,
     ) -> Result<Value, ServiceError> {
         let params: PublicationParams = Self::parse(params)?;
-        if self.publications.remove(&params.publication).is_none() {
+        let mut publications = lock_publications(&self.publications)?;
+        if publications.remove(params.publication).is_none() {
             return Err(unknown_publication(params.publication));
         }
         Ok(json!({
@@ -386,11 +489,35 @@ impl Service {
         let html = spike_html(params.view);
         let loaded = Arc::new(AtomicBool::new(false));
         let load_state = Arc::clone(&loaded);
+        let publications = Arc::clone(&self.publications);
+        let resource_requests = Arc::clone(&self.resource_requests);
         let build = || {
             WebViewBuilder::new()
                 .with_bounds(bounds.rect())
                 .with_focused(false)
                 .with_visible(params.visible)
+                .with_asynchronous_custom_protocol(
+                    BOOK_PROTOCOL.into(),
+                    move |_webview_id, request, responder| {
+                        let Some(permit) = ResourcePermit::acquire(Arc::clone(
+                            &resource_requests,
+                        )) else {
+                            responder.respond(resource_error_response(
+                                503,
+                                "too many EPUB resource requests",
+                            ));
+                            return;
+                        };
+                        let publications = Arc::clone(&publications);
+                        thread::spawn(move || {
+                            let response =
+                                resource_response(&publications, request);
+                            responder.respond(response);
+                            drop(permit);
+                        });
+                    },
+                )
+                .with_https_scheme(true)
                 .with_html(html)
                 .with_navigation_handler(|url| url == "about:blank")
                 .with_on_page_load_handler(move |event, _url| {
@@ -516,11 +643,12 @@ impl Service {
 
     fn handle(&mut self, request: Request) -> (Response, Control) {
         if request.op == "shutdown" {
-            let result = Self::parse::<EmptyParams>(request.params).map(|_| {
-                self.views.clear();
-                self.publications.clear();
-                json!({ "stopped": true })
-            });
+            let result =
+                Self::parse::<EmptyParams>(request.params).and_then(|_| {
+                    self.views.clear();
+                    lock_publications(&self.publications)?.clear();
+                    Ok(json!({ "stopped": true }))
+                });
             let control = if result.is_ok() {
                 Control::Shutdown
             } else {
@@ -558,6 +686,178 @@ fn unknown_view(id: u64) -> ServiceError {
     ServiceError::new("unknown-view", format!("view {id} does not exist"))
 }
 
+fn publication_token() -> Result<String, ServiceError> {
+    let mut bytes = [0_u8; 16];
+    getrandom(&mut bytes).map_err(|error| {
+        ServiceError::new(
+            "publication-token-unavailable",
+            format!("could not create a publication token: {error}"),
+        )
+    })?;
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let mut token = String::with_capacity(bytes.len() * 2);
+    for byte in bytes {
+        token.push(HEX[(byte >> 4) as usize] as char);
+        token.push(HEX[(byte & 0x0f) as usize] as char);
+    }
+    Ok(token)
+}
+
+fn lock_publications(
+    publications: &SharedPublications,
+) -> Result<std::sync::MutexGuard<'_, PublicationStore>, ServiceError> {
+    publications.lock().map_err(|_| {
+        ServiceError::new(
+            "publication-store-failed",
+            "the publication store is unavailable",
+        )
+    })
+}
+
+fn resource_response(
+    publications: &SharedPublications,
+    request: HttpRequest<Vec<u8>>,
+) -> HttpResponse<Vec<u8>> {
+    if request.method() != Method::GET && request.method() != Method::HEAD {
+        return resource_error_response(405, "method not allowed");
+    }
+    let (token, path) = match resource_request_target(request.uri()) {
+        Ok(target) => target,
+        Err(message) => return resource_error_response(400, message),
+    };
+    let mut publications = match publications.lock() {
+        Ok(publications) => publications,
+        Err(_) => {
+            return resource_error_response(500, "publication store failed");
+        }
+    };
+    let Some(publication) = publications.by_token_mut(&token) else {
+        return resource_error_response(404, "publication not found");
+    };
+    let resource = match publication.publication.read_resource(&path) {
+        Ok(resource) => resource,
+        Err(error) => return epub_resource_error_response(error),
+    };
+    let content_length = resource.bytes().len();
+    let media_type = resource.media_type().to_owned();
+    let body = if request.method() == Method::HEAD {
+        Vec::new()
+    } else {
+        resource.into_bytes()
+    };
+    build_resource_response(200, &media_type, content_length, body)
+}
+
+fn resource_request_target(
+    uri: &wry::http::Uri,
+) -> Result<(String, String), &'static str> {
+    if uri.scheme_str() != Some(BOOK_PROTOCOL) {
+        return Err("invalid EPUB resource scheme");
+    }
+    if uri.query().is_some() {
+        return Err("EPUB resource queries are not supported");
+    }
+    let token = uri
+        .authority()
+        .map(|authority| authority.as_str())
+        .filter(|authority| {
+            authority.len() == 32
+                && authority.bytes().all(|byte| {
+                    byte.is_ascii_digit() || matches!(byte, b'a'..=b'f')
+                })
+        })
+        .ok_or("invalid EPUB publication token")?;
+    let encoded = uri
+        .path()
+        .strip_prefix('/')
+        .filter(|path| !path.is_empty())
+        .ok_or("EPUB resource path is empty")?;
+    if encoded.len() > MAX_RESOURCE_URI_PATH_BYTES {
+        return Err("EPUB resource path is too long");
+    }
+    validate_percent_encoding(encoded)?;
+    let path = percent_encoding::percent_decode_str(encoded)
+        .decode_utf8()
+        .map_err(|_| "EPUB resource path is not UTF-8")?;
+    if path.starts_with('/')
+        || path.contains(['\\', '\0'])
+        || path.split('/').any(|component| {
+            component.is_empty() || matches!(component, "." | "..")
+        })
+    {
+        return Err("EPUB resource path is not normalized");
+    }
+    Ok((token.to_owned(), path.into_owned()))
+}
+
+fn validate_percent_encoding(value: &str) -> Result<(), &'static str> {
+    let bytes = value.as_bytes();
+    let mut index = 0;
+    while index < bytes.len() {
+        if bytes[index] != b'%' {
+            index += 1;
+            continue;
+        }
+        if index + 2 >= bytes.len()
+            || !bytes[index + 1].is_ascii_hexdigit()
+            || !bytes[index + 2].is_ascii_hexdigit()
+        {
+            return Err("EPUB resource path has invalid percent encoding");
+        }
+        let first = bytes[index + 1].to_ascii_lowercase();
+        let second = bytes[index + 2].to_ascii_lowercase();
+        if matches!((first, second), (b'2', b'f') | (b'5', b'c') | (b'0', b'0'))
+        {
+            return Err("EPUB resource path encodes a separator");
+        }
+        index += 3;
+    }
+    Ok(())
+}
+
+fn epub_resource_error_response(error: EpubError) -> HttpResponse<Vec<u8>> {
+    let status = match error.code() {
+        "invalid-epub-path" => 400,
+        "epub-resource-not-found" => 404,
+        "epub-limit-exceeded" => 413,
+        "unsupported-epub-resource" => 415,
+        _ => 500,
+    };
+    resource_error_response(status, error.message())
+}
+
+fn resource_error_response(
+    status: u16,
+    message: impl AsRef<str>,
+) -> HttpResponse<Vec<u8>> {
+    let body = message.as_ref().as_bytes().to_vec();
+    build_resource_response(
+        status,
+        "text/plain; charset=utf-8",
+        body.len(),
+        body,
+    )
+}
+
+fn build_resource_response(
+    status: u16,
+    media_type: &str,
+    content_length: usize,
+    body: Vec<u8>,
+) -> HttpResponse<Vec<u8>> {
+    HttpResponse::builder()
+        .status(status)
+        .header("Content-Type", media_type)
+        .header("Content-Length", content_length)
+        .header("Cache-Control", "no-store")
+        .header("Access-Control-Allow-Origin", "*")
+        .header("X-Content-Type-Options", "nosniff")
+        .header("Referrer-Policy", "no-referrer")
+        .header("Content-Security-Policy", RESOURCE_CSP)
+        .body(body)
+        .expect("resource response headers are valid")
+}
+
 fn unknown_publication(id: u64) -> ServiceError {
     ServiceError::new(
         "unknown-publication",
@@ -565,12 +865,16 @@ fn unknown_publication(id: u64) -> ServiceError {
     )
 }
 
-fn publication_result(id: u64, publication: &Publication) -> Value {
+fn publication_result(id: u64, publication: &StoredPublication) -> Value {
     json!({
         "publication": id,
-        "metadata": publication.metadata(),
-        "entry-count": publication.entry_count(),
-        "expanded-bytes": publication.expanded_size(),
+        "metadata": publication.publication.metadata(),
+        "entry-count": publication.publication.entry_count(),
+        "expanded-bytes": publication.publication.expanded_size(),
+        "resource-root": format!(
+            "{BOOK_PROTOCOL}://{}/",
+            publication.token
+        ),
     })
 }
 
@@ -779,7 +1083,9 @@ pub(super) fn serve() -> Result<(), Error> {
         }
     }
     service.views.clear();
-    service.publications.clear();
+    if let Ok(mut publications) = service.publications.lock() {
+        publications.clear();
+    }
     pump_messages();
     Ok(())
 }
@@ -824,7 +1130,10 @@ mod tests {
             "version=\"3.0\"><metadata xmlns:dc=\"",
             "http://purl.org/dc/elements/1.1/",
             "\"><dc:title>Protocol Book</dc:title>",
-            "</metadata></package>"
+            "</metadata><manifest>",
+            "<item id=\"chapter\" href=\"chapter.xhtml\" media-type=\"",
+            "application/xhtml+xml\"/>",
+            "</manifest></package>"
         );
         let file = File::create(&path).unwrap();
         let mut archive = ZipWriter::new(file);
@@ -840,6 +1149,11 @@ mod tests {
                 CompressionMethod::Deflated,
             ),
             ("OPS/package.opf", package, CompressionMethod::Deflated),
+            (
+                "OPS/chapter.xhtml",
+                "<html><body>Chapter</body></html>",
+                CompressionMethod::Deflated,
+            ),
         ] {
             let options =
                 SimpleFileOptions::default().compression_method(method);
@@ -908,15 +1222,51 @@ mod tests {
         assert_eq!(result["publication"], 1);
         assert_eq!(result["metadata"]["package-path"], "OPS/package.opf");
         assert_eq!(result["metadata"]["title"], "Protocol Book");
-        assert_eq!(result["entry-count"], 3);
+        assert_eq!(result["entry-count"], 4);
         assert!(result["expanded-bytes"].as_u64().unwrap() > 0);
+        let resource_root =
+            result["resource-root"].as_str().unwrap().to_owned();
+        assert!(resource_root.starts_with("yunge-reader-book://"));
+
+        let resource = resource_response(
+            &service.publications,
+            HttpRequest::builder()
+                .uri(format!("{resource_root}OPS/chapter.xhtml"))
+                .body(Vec::new())
+                .unwrap(),
+        );
+        assert_eq!(resource.status(), 200);
+        assert_eq!(resource.headers()["Content-Type"], "application/xhtml+xml");
+        assert_eq!(resource.headers()["Cache-Control"], "no-store");
+        assert_eq!(resource.headers()["X-Content-Type-Options"], "nosniff");
+        assert!(
+            resource.headers()["Content-Security-Policy"]
+                .to_str()
+                .unwrap()
+                .contains("script-src 'none'")
+        );
+        assert_eq!(resource.body(), b"<html><body>Chapter</body></html>");
+
+        let head = resource_response(
+            &service.publications,
+            HttpRequest::builder()
+                .method(Method::HEAD)
+                .uri(format!("{resource_root}OPS/chapter.xhtml"))
+                .body(Vec::new())
+                .unwrap(),
+        );
+        assert_eq!(head.status(), 200);
+        assert_eq!(head.headers()["Content-Length"], "33");
+        assert!(head.body().is_empty());
 
         let (info, _) = service.handle(Request {
             id: 2,
             op: "publication-info".into(),
             params: json!({ "publication": 1 }),
         });
-        assert_eq!(info.result.unwrap()["metadata"]["title"], "Protocol Book");
+        let info = info.result.unwrap();
+        assert_eq!(info["metadata"]["title"], "Protocol Book");
+        assert_eq!(info["resource-root"], resource_root);
 
         let (closed, _) = service.handle(Request {
             id: 3,
@@ -924,6 +1274,15 @@ mod tests {
             params: json!({ "publication": 1 }),
         });
         assert_eq!(closed.result.unwrap()["closed"], true);
+
+        let released = resource_response(
+            &service.publications,
+            HttpRequest::builder()
+                .uri(format!("{resource_root}OPS/chapter.xhtml"))
+                .body(Vec::new())
+                .unwrap(),
+        );
+        assert_eq!(released.status(), 404);
 
         let (missing, _) = service.handle(Request {
             id: 4,
@@ -950,6 +1309,52 @@ mod tests {
             params: json!({ "path": "book.epub", "extra": true }),
         });
         assert_eq!(unknown.error.unwrap().code, "invalid-params");
+    }
+
+    #[test]
+    fn resource_protocol_rejects_unsafe_targets_and_methods() {
+        let token = "0123456789abcdef0123456789abcdef";
+        let valid = format!("{BOOK_PROTOCOL}://{token}/OPS/chapter.xhtml");
+        assert_eq!(
+            resource_request_target(&valid.parse().unwrap()).unwrap(),
+            (token.into(), "OPS/chapter.xhtml".into())
+        );
+        for uri in [
+            format!("{BOOK_PROTOCOL}://short/OPS/chapter.xhtml"),
+            format!("{BOOK_PROTOCOL}://{token}/"),
+            format!("{BOOK_PROTOCOL}://{token}/OPS/%2e%2e/chapter.xhtml"),
+            format!("{BOOK_PROTOCOL}://{token}/OPS/a%2fchapter.xhtml"),
+            format!("{BOOK_PROTOCOL}://{token}/OPS/chapter.xhtml?x=1"),
+        ] {
+            let parsed = uri.parse().unwrap();
+            assert!(
+                resource_request_target(&parsed).is_err(),
+                "accepted {uri}"
+            );
+        }
+
+        let (sender, _receiver) = mpsc::channel();
+        let service = Service::new(sender);
+        let response = resource_response(
+            &service.publications,
+            HttpRequest::builder()
+                .method(Method::POST)
+                .uri(valid)
+                .body(Vec::new())
+                .unwrap(),
+        );
+        assert_eq!(response.status(), 405);
+    }
+
+    #[test]
+    fn resource_request_permits_are_bounded_and_released() {
+        let active = Arc::new(AtomicUsize::new(0));
+        let permits: Vec<_> = (0..MAX_RESOURCE_REQUESTS)
+            .map(|_| ResourcePermit::acquire(Arc::clone(&active)).unwrap())
+            .collect();
+        assert!(ResourcePermit::acquire(Arc::clone(&active)).is_none());
+        drop(permits);
+        assert!(ResourcePermit::acquire(active).is_some());
     }
 
     #[test]

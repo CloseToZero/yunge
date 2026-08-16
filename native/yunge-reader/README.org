@@ -87,7 +87,8 @@ installing or downloading it:
 #+begin_src json
 {"available":true,"build-id":"HASH",
  "capabilities":["publication-close","publication-info","publication-open",
-                 "view-bounds","view-clear-selection","view-create",
+                 "publication-resources","view-bounds",
+                 "view-clear-selection","view-create",
                  "view-destroy","view-events","view-focus",
                  "view-focus-parent","view-info","view-status",
                  "view-visible"],
@@ -103,15 +104,35 @@ which environment to install.  The process remains responsive so
 owns the ZIP container, returns the package path and minimal OPF metadata, and
 assigns a process-local publication ID.  It does not expose the filesystem
 path to JavaScript.  =publication-info= repeats the bounded metadata and
-resource statistics, while =publication-close= releases the ZIP handle.
+resource statistics, while =publication-close= releases the ZIP handle.  Both
+open and info also return a private =resource-root= capability URL.
 
 #+begin_src json
 {"id":1,"op":"publication-open",
  "params":{"path":"D:/books/example.epub"}}
+{"id":1,"ok":true,
+ "result":{"publication":1,
+           "resource-root":"yunge-reader-book://TOKEN/",...}}
 #+end_src
 
-The current child page is not yet attached to a publication.  Resource
-transport and EPUB rendering are separate later protocol slices.
+Every child WebView registers =yunge-reader-book= as an asynchronous HTTPS
+custom protocol.  A request below =resource-root= reads only a normalized ZIP
+entry belonging to that random 128-bit publication token.  Closing the
+publication invalidates the token.  At most eight resource requests may be
+active, each expanded response is limited to 128 MiB, and ZIP access remains
+serialized per process.
+
+Only =GET= and =HEAD= are accepted.  Query strings, absolute paths, encoded
+separators, dot components, missing entries, resources absent from the OPF
+manifest, and media types outside the browser allowlist receive explicit HTTP
+errors.  Package and =META-INF= XML remain available for the EPUB loader.
+JavaScript media types are deliberately outside the allowlist.  Responses deny
+sniffing and caching, allow token-bearing cross-origin reads, and apply a CSP
+that blocks scripts, objects, frames, forms, connections, and external
+subresources.
+
+The current child page is not yet attached to a publication.  The transport
+is ready for the renderer adapter, but it does not render EPUB content yet.
 
 =view-create= accepts a logical =view= ID, a live Emacs frame HWND as
 =parent=, a physical-pixel =bounds= object, and optional =visible=.  The

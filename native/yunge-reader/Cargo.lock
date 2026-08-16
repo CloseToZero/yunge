@@ -2715,8 +2715,10 @@ dependencies = [
 name = "yunge-reader"
 version = "0.1.0"
 dependencies = [
+ "getrandom",
  "image",
  "pdfium-render",
+ "percent-encoding",
  "regex",
  "roxmltree",
  "serde",

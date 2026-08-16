@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Chen Zhexuan
 // SPDX-License-Identifier: MIT
 
+use percent_encoding::percent_decode_str;
 use roxmltree::{Document, Node, ParsingOptions};
 use serde::Serialize;
 use std::collections::{HashMap, HashSet};
@@ -23,7 +24,9 @@ const MAX_COMPRESSION_RATIO: u64 = 1_000;
 const MAX_CONTAINER_BYTES: u64 = 512 * 1_024;
 const MAX_ENTRY_BYTES: u64 = 512 * 1_024 * 1_024;
 const MAX_FILE_NAME_BYTES: usize = 255;
+const MAX_MEDIA_TYPE_BYTES: usize = 255;
 const MAX_PACKAGE_BYTES: u64 = 8 * 1_024 * 1_024;
+const MAX_RESOURCE_BYTES: u64 = 128 * 1_024 * 1_024;
 const MAX_TOTAL_BYTES: u64 = 4 * 1_024 * 1_024 * 1_024;
 const MAX_XML_NODES: u32 = 100_000;
 
@@ -48,6 +51,13 @@ pub struct Publication {
     entries: HashMap<String, usize>,
     expanded_size: u64,
     metadata: PublicationMetadata,
+    resources: HashMap<String, String>,
+}
+
+#[derive(Debug)]
+pub struct PublicationResource {
+    bytes: Vec<u8>,
+    media_type: String,
 }
 
 impl EpubError {
@@ -124,13 +134,14 @@ impl Publication {
             &package_path,
             MAX_PACKAGE_BYTES,
         )?;
-        let metadata = parse_package(&package_path, &package)?;
+        let (metadata, resources) = parse_package(&package_path, &package)?;
 
         Ok(Self {
             archive,
             entries,
             expanded_size,
             metadata,
+            resources,
         })
     }
 
@@ -146,10 +157,67 @@ impl Publication {
         self.expanded_size
     }
 
-    pub fn read_resource(&mut self, path: &str) -> Result<Vec<u8>, EpubError> {
+    pub fn read_resource(
+        &mut self,
+        path: &str,
+    ) -> Result<PublicationResource, EpubError> {
         let path = normalize_archive_path(path, false)
             .map_err(|message| EpubError::new("invalid-epub-path", message))?;
-        read_entry(&mut self.archive, &self.entries, &path, MAX_ENTRY_BYTES)
+        let media_type = self.resource_media_type(&path)?;
+        let bytes = read_entry(
+            &mut self.archive,
+            &self.entries,
+            &path,
+            MAX_RESOURCE_BYTES,
+        )?;
+        Ok(PublicationResource { bytes, media_type })
+    }
+
+    fn resource_media_type(&self, path: &str) -> Result<String, EpubError> {
+        if !self.entries.contains_key(path) {
+            return Err(EpubError::new(
+                "epub-resource-not-found",
+                format!("EPUB resource does not exist: {path}"),
+            ));
+        }
+        let media_type = if path == CONTAINER_PATH
+            || (path.starts_with("META-INF/") && path.ends_with(".xml"))
+        {
+            "application/xml"
+        } else if path == self.metadata.package_path {
+            OPF_MEDIA_TYPE
+        } else {
+            self.resources
+                .get(path)
+                .map(String::as_str)
+                .ok_or_else(|| {
+                    EpubError::new(
+                        "unsupported-epub-resource",
+                        format!("EPUB resource is not in the manifest: {path}"),
+                    )
+                })?
+        };
+        if !browser_media_type_allowed(media_type) {
+            return Err(EpubError::new(
+                "unsupported-epub-resource",
+                format!("EPUB resource type is not allowed: {media_type}"),
+            ));
+        }
+        Ok(media_type.to_owned())
+    }
+}
+
+impl PublicationResource {
+    pub fn media_type(&self) -> &str {
+        &self.media_type
+    }
+
+    pub fn bytes(&self) -> &[u8] {
+        &self.bytes
+    }
+
+    pub fn into_bytes(self) -> Vec<u8> {
+        self.bytes
     }
 }
 
@@ -307,6 +375,182 @@ fn normalize_archive_path(
     Ok(path.to_owned())
 }
 
+fn resolve_archive_reference(
+    base_path: &str,
+    reference: &str,
+) -> Result<Option<String>, EpubError> {
+    if reference.is_empty() {
+        return Err(EpubError::new(
+            "invalid-epub",
+            "manifest item href is empty",
+        ));
+    }
+    let path = reference.split(['?', '#']).next().unwrap_or_default();
+    if path.is_empty() {
+        return Err(EpubError::new(
+            "invalid-epub",
+            format!("manifest item href has no path: {reference}"),
+        ));
+    }
+    if path.starts_with("//") || uri_scheme(path).is_some() {
+        return Ok(None);
+    }
+    if path.starts_with('/') || path.contains(['\\', '\0']) {
+        return Err(EpubError::new(
+            "invalid-epub",
+            format!("manifest item href is not a safe relative URI: {path}"),
+        ));
+    }
+    reject_encoded_separator(path)?;
+    let decoded = percent_decode_str(path).decode_utf8().map_err(|_| {
+        EpubError::new(
+            "invalid-epub",
+            format!("manifest item href is not UTF-8: {path}"),
+        )
+    })?;
+    let mut components: Vec<&str> = base_path.split('/').collect();
+    components.pop();
+    for component in decoded.split('/') {
+        match component {
+            "" => {
+                return Err(EpubError::new(
+                    "invalid-epub",
+                    format!(
+                        "manifest item href has an empty component: {path}"
+                    ),
+                ));
+            }
+            "." => {}
+            ".." => {
+                if components.pop().is_none() {
+                    return Err(EpubError::new(
+                        "invalid-epub",
+                        format!(
+                            "manifest item href escapes the archive: {path}"
+                        ),
+                    ));
+                }
+            }
+            value => components.push(value),
+        }
+    }
+    let resolved = components.join("/");
+    normalize_archive_path(&resolved, false)
+        .map(Some)
+        .map_err(|message| EpubError::new("invalid-epub", message))
+}
+
+fn uri_scheme(value: &str) -> Option<&str> {
+    let end = value.find(':')?;
+    let scheme = &value[..end];
+    (!scheme.is_empty()
+        && scheme.bytes().enumerate().all(|(index, byte)| {
+            byte.is_ascii_alphabetic()
+                || (index > 0
+                    && (byte.is_ascii_digit()
+                        || matches!(byte, b'+' | b'-' | b'.')))
+        }))
+    .then_some(scheme)
+}
+
+fn reject_encoded_separator(value: &str) -> Result<(), EpubError> {
+    let bytes = value.as_bytes();
+    let mut index = 0;
+    while index < bytes.len() {
+        if bytes[index] != b'%' {
+            index += 1;
+            continue;
+        }
+        if index + 2 >= bytes.len()
+            || !bytes[index + 1].is_ascii_hexdigit()
+            || !bytes[index + 2].is_ascii_hexdigit()
+        {
+            return Err(EpubError::new(
+                "invalid-epub",
+                format!("manifest item href has invalid escaping: {value}"),
+            ));
+        }
+        let first = bytes[index + 1].to_ascii_lowercase();
+        let second = bytes[index + 2].to_ascii_lowercase();
+        if matches!((first, second), (b'2', b'f') | (b'5', b'c') | (b'0', b'0'))
+        {
+            return Err(EpubError::new(
+                "invalid-epub",
+                format!("manifest item href encodes a separator: {value}"),
+            ));
+        }
+        index += 3;
+    }
+    Ok(())
+}
+
+fn browser_media_type_allowed(media_type: &str) -> bool {
+    matches!(
+        media_type,
+        "application/font-sfnt"
+            | "application/oebps-package+xml"
+            | "application/smil+xml"
+            | "application/ttml+xml"
+            | "application/vnd.ms-opentype"
+            | "application/xhtml+xml"
+            | "application/xml"
+            | "audio/aac"
+            | "audio/mp4"
+            | "audio/mpeg"
+            | "audio/ogg"
+            | "audio/opus"
+            | "font/otf"
+            | "font/ttf"
+            | "font/woff"
+            | "font/woff2"
+            | "image/avif"
+            | "image/gif"
+            | "image/jpeg"
+            | "image/png"
+            | "image/svg+xml"
+            | "image/webp"
+            | "text/css"
+            | "text/html"
+            | "text/vtt"
+            | "video/mp4"
+            | "video/ogg"
+            | "video/webm"
+    )
+}
+
+fn valid_media_type(media_type: &str) -> bool {
+    if media_type.is_empty() || media_type.len() > MAX_MEDIA_TYPE_BYTES {
+        return false;
+    }
+    let Some((kind, subtype)) = media_type.split_once('/') else {
+        return false;
+    };
+    !kind.is_empty()
+        && !subtype.is_empty()
+        && !subtype.contains('/')
+        && media_type.bytes().all(|byte| {
+            byte.is_ascii_alphanumeric()
+                || byte == b'/'
+                || matches!(
+                    byte,
+                    b'!' | b'#'
+                        | b'$'
+                        | b'%'
+                        | b'&'
+                        | b'\''
+                        | b'*'
+                        | b'+'
+                        | b'-'
+                        | b'.'
+                        | b'^'
+                        | b'_'
+                        | b'`'
+                        | b'|'
+                        | b'~'
+                )
+        })
+}
+
 fn read_entry<R: Read + Seek>(
     archive: &mut ZipArchive<R>,
     entries: &HashMap<String, usize>,
@@ -406,7 +650,7 @@ fn parse_container(bytes: &[u8]) -> Result<String, EpubError> {
 fn parse_package(
     package_path: &str,
     bytes: &[u8],
-) -> Result<PublicationMetadata, EpubError> {
+) -> Result<(PublicationMetadata, HashMap<String, String>), EpubError> {
     let text = std::str::from_utf8(bytes).map_err(|_| {
         EpubError::new(
             "invalid-epub",
@@ -450,13 +694,82 @@ fn parse_package(
         .or_else(|| identifiers.first())
         .and_then(|node| normalized_text(*node));
 
-    Ok(PublicationMetadata {
-        package_path: package_path.to_owned(),
-        title: first_dc_text(metadata, "title"),
-        language: first_dc_text(metadata, "language"),
-        identifier,
-        version: root.attribute("version").map(str::to_owned),
-    })
+    let manifest = root
+        .children()
+        .find(|node| is_opf_element(*node, "manifest"))
+        .ok_or_else(|| {
+            EpubError::new(
+                "invalid-epub",
+                format!("package document has no manifest: {package_path}"),
+            )
+        })?;
+    let resources = parse_manifest(package_path, manifest)?;
+    Ok((
+        PublicationMetadata {
+            package_path: package_path.to_owned(),
+            title: first_dc_text(metadata, "title"),
+            language: first_dc_text(metadata, "language"),
+            identifier,
+            version: root.attribute("version").map(str::to_owned),
+        },
+        resources,
+    ))
+}
+
+fn parse_manifest(
+    package_path: &str,
+    manifest: Node<'_, '_>,
+) -> Result<HashMap<String, String>, EpubError> {
+    let mut resources = HashMap::new();
+    let mut ids = HashSet::new();
+    for item in manifest
+        .children()
+        .filter(|node| is_opf_element(*node, "item"))
+    {
+        let id = required_attribute(item, "id", package_path)?;
+        if !ids.insert(id) {
+            return Err(EpubError::new(
+                "invalid-epub",
+                format!("duplicate manifest item ID: {id}"),
+            ));
+        }
+        let href = required_attribute(item, "href", package_path)?;
+        let media_type = required_attribute(item, "media-type", package_path)?;
+        if !valid_media_type(media_type) {
+            return Err(EpubError::new(
+                "invalid-epub",
+                format!("invalid manifest media type: {media_type}"),
+            ));
+        }
+        let Some(path) = resolve_archive_reference(package_path, href)? else {
+            continue;
+        };
+        if let Some(previous) =
+            resources.insert(path.clone(), media_type.into())
+            && previous != media_type
+        {
+            return Err(EpubError::new(
+                "invalid-epub",
+                format!("conflicting media types for manifest path: {path}"),
+            ));
+        }
+    }
+    Ok(resources)
+}
+
+fn required_attribute<'a>(
+    node: Node<'a, '_>,
+    name: &str,
+    package_path: &str,
+) -> Result<&'a str, EpubError> {
+    node.attribute(name)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| {
+            EpubError::new(
+                "invalid-epub",
+                format!("manifest item lacks {name}: {package_path}"),
+            )
+        })
 }
 
 fn parse_xml<'a>(text: &'a str, name: &str) -> Result<Document<'a>, EpubError> {
@@ -477,6 +790,12 @@ fn is_dc_element(node: Node<'_, '_>, name: &str) -> bool {
     node.is_element()
         && node.tag_name().name() == name
         && node.tag_name().namespace() == Some(DC_NAMESPACE)
+}
+
+fn is_opf_element(node: Node<'_, '_>, name: &str) -> bool {
+    node.is_element()
+        && node.tag_name().name() == name
+        && node.tag_name().namespace() == Some(OPF_NAMESPACE)
 }
 
 fn first_dc_text(metadata: Node<'_, '_>, name: &str) -> Option<String> {
@@ -531,6 +850,10 @@ mod tests {
     <dc:title>  Test   Book  </dc:title>
     <dc:language>en</dc:language>
   </metadata>
+  <manifest>
+    <item id="chapter" href="chapter.xhtml"
+          media-type="application/xhtml+xml"/>
+  </manifest>
 </package>"#;
 
     struct TemporaryFile(PathBuf);
@@ -594,10 +917,9 @@ mod tests {
             Some("urn:uuid:123")
         );
         assert_eq!(publication.metadata().version.as_deref(), Some("3.0"));
-        assert_eq!(
-            publication.read_resource("OPS/chapter.xhtml").unwrap(),
-            b"<html><body>Chapter</body></html>"
-        );
+        let resource = publication.read_resource("OPS/chapter.xhtml").unwrap();
+        assert_eq!(resource.media_type(), "application/xhtml+xml");
+        assert_eq!(resource.bytes(), b"<html><body>Chapter</body></html>");
     }
 
     #[test]
@@ -692,6 +1014,64 @@ mod tests {
         let error = publication.read_resource("../outside").unwrap_err();
 
         assert_eq!(error.code(), "invalid-epub-path");
+    }
+
+    #[test]
+    fn resolves_manifest_hrefs_without_leaving_the_archive() {
+        assert_eq!(
+            resolve_archive_reference(
+                "OPS/package.opf",
+                "./Text/a%20b.xhtml#section"
+            )
+            .unwrap()
+            .as_deref(),
+            Some("OPS/Text/a b.xhtml")
+        );
+        assert_eq!(
+            resolve_archive_reference("OPS/package.opf", "https://host/book")
+                .unwrap(),
+            None
+        );
+        for href in ["../../book", "/book", "a%2fbook", "a%5Cbook", "a%zzbook"]
+        {
+            assert!(
+                resolve_archive_reference("OPS/package.opf", href).is_err(),
+                "accepted {href:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn browser_resources_require_manifested_safe_media_types() {
+        let mut entries = valid_entries();
+        entries.push(("OPS/script.js".into(), b"alert(1)".to_vec()));
+        entries.push(("OPS/unlisted.css".into(), b"body {}".to_vec()));
+        entries[2].1 = PACKAGE
+            .replace(
+                "</manifest>",
+                concat!(
+                    "<item id=\"script\" href=\"script.js\" ",
+                    "media-type=\"text/javascript\"/></manifest>"
+                ),
+            )
+            .into_bytes();
+        let file = write_archive("browser-resources", &entries);
+        let mut publication = Publication::open(&file.0).unwrap();
+
+        assert_eq!(
+            publication
+                .read_resource("OPS/script.js")
+                .unwrap_err()
+                .code(),
+            "unsupported-epub-resource"
+        );
+        assert_eq!(
+            publication
+                .read_resource("OPS/unlisted.css")
+                .unwrap_err()
+                .code(),
+            "unsupported-epub-resource"
+        );
     }
 
     #[test]

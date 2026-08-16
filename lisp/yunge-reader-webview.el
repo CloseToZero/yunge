@@ -94,7 +94,8 @@
           (lambda (capability)
             (member capability (alist-get 'capabilities message)))
           '("publication-close" "publication-info" "publication-open"
-            "view-bounds" "view-clear-selection" "view-create"
+            "publication-resources" "view-bounds"
+            "view-clear-selection" "view-create"
             "view-destroy" "view-events" "view-focus"
             "view-focus-parent" "view-info" "view-status"
             "view-visible")))
