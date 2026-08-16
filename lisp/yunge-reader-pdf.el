@@ -116,6 +116,12 @@
 (defvar-local yunge-reader-pdf--pending-location nil
   "Stable PDF position waiting for a live viewport window.")
 
+(defvar-local yunge-reader-pdf--resize-timer nil
+  "Idle timer coalescing changes to the current PDF viewport size.")
+
+(defvar-local yunge-reader-pdf--pending-resize nil
+  "Latest PDF viewport resize waiting for redisplay to settle.")
+
 (defvar-local yunge-reader-pdf--text-cache nil
   "Page-indexed cache of canonical PDF text geometry.")
 
@@ -196,6 +202,8 @@
         (setq-local yunge-reader-pdf--prefetch-active nil)
         (setq-local yunge-reader-pdf--prefetch-running nil)
         (setq-local yunge-reader-pdf--pending-location nil)
+        (setq-local yunge-reader-pdf--resize-timer nil)
+        (setq-local yunge-reader-pdf--pending-resize nil)
         (add-hook 'yunge-reader-refresh-hook
                   #'yunge-reader-pdf--refresh nil t)
         (add-hook 'yunge-reader-search-result-hook
@@ -203,7 +211,10 @@
         (add-hook 'window-size-change-functions
                   #'yunge-reader-pdf--window-size-change nil t)
         (add-hook 'window-scroll-functions
-                  #'yunge-reader-pdf--window-scrolled nil t))
+                  #'yunge-reader-pdf--window-scrolled nil t)
+        (add-hook 'kill-buffer-hook
+                  #'yunge-reader-pdf--cancel-resize nil t))
+    (yunge-reader-pdf--cancel-resize)
     (remove-hook 'yunge-reader-refresh-hook
                  #'yunge-reader-pdf--refresh t)
     (remove-hook 'yunge-reader-search-result-hook
@@ -212,6 +223,8 @@
                  #'yunge-reader-pdf--window-size-change t)
     (remove-hook 'window-scroll-functions
                  #'yunge-reader-pdf--window-scrolled t)
+    (remove-hook 'kill-buffer-hook
+                 #'yunge-reader-pdf--cancel-resize t)
     (kill-local-variable 'line-spacing)
     (setq yunge-reader-pdf--page-infos nil
           yunge-reader-pdf--page-positions nil
@@ -219,6 +232,8 @@
           yunge-reader-pdf--render-pending nil
           yunge-reader-pdf--displayed-pages nil
           yunge-reader-pdf--pending-location nil
+          yunge-reader-pdf--resize-timer nil
+          yunge-reader-pdf--pending-resize nil
           yunge-reader-pdf--text-cache nil
           yunge-reader-pdf--text-pending nil
           yunge-reader-pdf--link-cache nil
@@ -1022,6 +1037,15 @@ When SUPPRESS-SCALE is non-nil, do not update the shared effective scale."
       (error "PDF page geometry must be positive"))
     (cons width (max 1 (round (* width (/ page-height page-width)))))))
 
+(defun yunge-reader-pdf--display-width (page)
+  "Return the pixel width currently painted for PAGE, or nil."
+  (when-let* ((position (yunge-reader-pdf--page-position page))
+              (_ (< position (point-max)))
+              (width
+               (get-text-property
+                position 'yunge-reader-pdf-display-width)))
+    (and (natnump width) (> width 0) width)))
+
 (defun yunge-reader-pdf--location (_document window)
   "Return the stable PDF position visible at the top left of WINDOW."
   (when (and (window-live-p window)
@@ -1035,7 +1059,9 @@ When SUPPRESS-SCALE is non-nil, do not update the shared effective scale."
            (page
             (max 0 (min (1- (yunge-reader-pdf--page-count)) page)))
            (page-info (yunge-reader-pdf--page-info page))
-           (width (yunge-reader-pdf--page-width page window))
+           (width
+            (or (yunge-reader-pdf--display-width page)
+                (yunge-reader-pdf--page-width page window)))
            (size (yunge-reader-pdf--pixel-size page-info width))
            (pixel-width (car size))
            (pixel-height (cdr size))
@@ -1495,10 +1521,13 @@ When SUPPRESS-SCALE is non-nil, do not update the shared effective scale."
          yunge-reader-pdf--displayed-pages)
         (yunge-reader-pdf--scroll-to-search-result)))))
 
-(defun yunge-reader-pdf--paint-page (page)
-  "Paint PAGE as an image when visible, otherwise as a placeholder."
+(defun yunge-reader-pdf--paint-page (page &optional width)
+  "Paint PAGE at WIDTH, using its current width when WIDTH is nil."
   (when-let* ((position (yunge-reader-pdf--page-position page)))
-    (let* ((width (yunge-reader-pdf--page-width page))
+    (let* ((width
+            (or width
+                (yunge-reader-pdf--display-width page)
+                (yunge-reader-pdf--page-width page)))
            (result
             (gethash (yunge-reader-pdf--render-key page width)
                      yunge-reader-pdf--render-results))
@@ -1517,15 +1546,20 @@ When SUPPRESS-SCALE is non-nil, do not update the shared effective scale."
                     :warning)
                    (yunge-reader-pdf--placeholder page width)))
               (yunge-reader-pdf--placeholder page width)))
-           (inhibit-read-only t))
-      (put-text-property position (1+ position) 'display display))))
+            (inhibit-read-only t))
+      (add-text-properties
+       position (1+ position)
+       (list 'display display
+             'yunge-reader-pdf-display-width width)))))
 
-(defun yunge-reader-pdf--paint-pages (pages)
-  "Paint exactly PAGES as live images and virtualize all former pages."
+(defun yunge-reader-pdf--paint-pages (pages &optional window)
+  "Paint PAGES for WINDOW and virtualize all former live images."
   (let ((former yunge-reader-pdf--displayed-pages))
     (setq yunge-reader-pdf--displayed-pages pages)
     (dolist (page (cl-remove-duplicates (append former pages)))
-      (yunge-reader-pdf--paint-page page))))
+      (yunge-reader-pdf--paint-page
+       page
+       (and window (yunge-reader-pdf--page-width page window))))))
 
 (defun yunge-reader-pdf--build-roll ()
   "Build one stable buffer slot for every PDF page."
@@ -1615,7 +1649,9 @@ When SUPPRESS-SCALE is non-nil, do not update the shared effective scale."
   (or (null yunge-reader-pdf--working-pages)
       (and (memq page yunge-reader-pdf--working-pages)
            (yunge-reader-pdf--page-info page)
-           (= width (yunge-reader-pdf--page-width page)))))
+           (= width
+              (or (yunge-reader-pdf--display-width page)
+                  (yunge-reader-pdf--page-width page))))))
 
 (defun yunge-reader-pdf--prune-cache (table retain)
   "Remove entries from hash TABLE unless RETAIN accepts their key."
@@ -1724,8 +1760,8 @@ When SUPPRESS-SCALE is non-nil, do not update the shared effective scale."
           (setq yunge-reader-pdf--prefetch-queue nil)
         (yunge-reader-pdf--run-prefetch)))))
 
-(defun yunge-reader-pdf--prefetch-tasks (pages)
-  "Return image-first background tasks for PDF PAGES."
+(defun yunge-reader-pdf--prefetch-tasks (pages &optional window)
+  "Return image-first background tasks for PDF PAGES in WINDOW."
   (let ((document yunge-reader-document)
         (generation yunge-reader-pdf--generation))
     (append
@@ -1735,7 +1771,7 @@ When SUPPRESS-SCALE is non-nil, do not update the shared effective scale."
          :document document
          :kind 'render
          :page page
-         :width (yunge-reader-pdf--page-width page)
+         :width (yunge-reader-pdf--page-width page window)
          :generation generation))
       pages)
      (mapcar
@@ -1794,7 +1830,7 @@ When SUPPRESS-SCALE is non-nil, do not update the shared effective scale."
               (when (and yunge-reader-pdf-view-mode
                          (yunge-reader-pdf--retain-render-p page width)
                          (memq page yunge-reader-pdf--displayed-pages))
-                (yunge-reader-pdf--paint-page page)
+                (yunge-reader-pdf--paint-page page width)
                 (when (yunge-reader-pdf--search-page-p page)
                   (yunge-reader-pdf--scroll-to-search-result)))))
         (yunge-reader-pdf--finish-prefetch
@@ -1961,10 +1997,10 @@ When SUPPRESS-SCALE is non-nil, do not update the shared effective scale."
              (signal (car error-data) (cdr error-data))))
           'started)))))
 
-(defun yunge-reader-pdf--queue-pages (pages)
-  "Replace low-priority PDF work with image-first tasks for PAGES."
+(defun yunge-reader-pdf--queue-pages (pages &optional window)
+  "Replace low-priority PDF work for PAGES viewed in WINDOW."
   (let* ((pages (cl-remove-duplicates (copy-sequence pages)))
-         (tasks (yunge-reader-pdf--prefetch-tasks pages)))
+         (tasks (yunge-reader-pdf--prefetch-tasks pages window)))
     (setq yunge-reader-pdf--working-pages pages)
     (yunge-reader-pdf--prune-working-set pages tasks)
     (setq yunge-reader-pdf--prefetch-queue
@@ -2003,15 +2039,20 @@ When SUPPRESS-SCALE is non-nil, do not update the shared effective scale."
        (yunge-reader-pdf--page-info yunge-reader-pdf-page)
        window)
       (let ((visible (yunge-reader-pdf--visible-pages)))
-        (yunge-reader-pdf--paint-pages visible)
+        (yunge-reader-pdf--paint-pages visible window)
         (yunge-reader-pdf--queue-pages
-         (yunge-reader-pdf--prefetch-range visible)))
+         (yunge-reader-pdf--prefetch-range visible) window))
       (yunge-reader-pdf--update-header)
       (yunge-reader-record-place window))))
 
-(defun yunge-reader-pdf--refresh ()
-  "Refresh the continuous PDF roll at the current zoom."
+(defun yunge-reader-pdf--refresh (&optional window location)
+  "Refresh the PDF roll in WINDOW, then restore stable LOCATION."
   (when (and yunge-reader-pdf-view-mode yunge-reader-document)
+    (setq window
+          (or (and (window-live-p window)
+                   (eq (window-buffer window) (current-buffer))
+                   window)
+              (get-buffer-window (current-buffer) t)))
     (cl-incf yunge-reader-pdf--generation)
     (unless yunge-reader-pdf--page-infos
       (yunge-reader-pdf--load-page-infos))
@@ -2019,10 +2060,16 @@ When SUPPRESS-SCALE is non-nil, do not update the shared effective scale."
         (yunge-reader--display-status "This PDF contains no pages")
       (unless yunge-reader-pdf--page-positions
         (yunge-reader-pdf--build-roll))
+      (when (and (yunge-reader-position-p location)
+                 (not yunge-reader-pdf--pending-location))
+        (setq yunge-reader-pdf--pending-location
+              (copy-yunge-reader-position location)))
       (setq yunge-reader-pdf--displayed-pages nil)
       (dotimes (page (yunge-reader-pdf--page-count))
-        (yunge-reader-pdf--paint-page page))
-      (yunge-reader-pdf--update-visible-pages)
+        (yunge-reader-pdf--paint-page
+         page
+         (and window (yunge-reader-pdf--page-width page window))))
+      (yunge-reader-pdf--update-visible-pages window)
       (yunge-reader-pdf--scroll-to-search-result))))
 
 (defun yunge-reader-pdf--pixel-to-page-point
@@ -2487,11 +2534,58 @@ When SINGLE is non-nil, use the event start for both points."
   (interactive "e")
   (yunge-reader-pdf--select-mouse-event event nil))
 
-(defun yunge-reader-pdf--window-size-change (_window)
-  "Refresh fit-mode PDF rendering after the view window changes size."
+(defun yunge-reader-pdf--cancel-resize ()
+  "Cancel a pending PDF viewport resize for the current buffer."
+  (when (timerp yunge-reader-pdf--resize-timer)
+    (cancel-timer yunge-reader-pdf--resize-timer))
+  (setq yunge-reader-pdf--resize-timer nil
+        yunge-reader-pdf--pending-resize nil))
+
+(defun yunge-reader-pdf--finish-resize (buffer)
+  "Refresh BUFFER after its latest PDF viewport resize settles."
+  (when (buffer-live-p buffer)
+    (with-current-buffer buffer
+      (let* ((state yunge-reader-pdf--pending-resize)
+             (document (plist-get state :document))
+             (window (plist-get state :window))
+             (location (plist-get state :location)))
+        (setq yunge-reader-pdf--resize-timer nil
+              yunge-reader-pdf--pending-resize nil)
+        (when (and yunge-reader-pdf-view-mode
+                   (eq document yunge-reader-document)
+                   (window-live-p window)
+                   (eq (window-buffer window) buffer))
+          (if (memq yunge-reader-zoom-mode '(fit-width fit-page))
+              (yunge-reader-pdf--refresh window location)
+            (yunge-reader-pdf--update-visible-pages window)))))))
+
+(defun yunge-reader-pdf--window-size-change (window)
+  "Schedule viewport work after WINDOW changes its body size."
   (when (and yunge-reader-document
-             (memq yunge-reader-zoom-mode '(fit-width fit-page)))
-    (yunge-reader-refresh)))
+             (window-live-p window)
+             (eq (window-buffer window) (current-buffer)))
+    (let* ((former yunge-reader-pdf--pending-resize)
+           (same-view
+            (and (eq (plist-get former :document)
+                     yunge-reader-document)
+                 (eq (plist-get former :window) window)))
+           (location
+            (or (and same-view (plist-get former :location))
+                (and (not yunge-reader-pdf--pending-location)
+                     (ignore-errors
+                       (yunge-reader-pdf--location
+                        yunge-reader-document window))))))
+      (setq yunge-reader-pdf--pending-resize
+            (list :document yunge-reader-document
+                  :window window
+                  :width (window-body-width window t)
+                  :height (window-body-height window t)
+                  :location location))
+      (unless (timerp yunge-reader-pdf--resize-timer)
+        (setq yunge-reader-pdf--resize-timer
+              (run-with-idle-timer
+               0 nil #'yunge-reader-pdf--finish-resize
+               (current-buffer)))))))
 
 (defun yunge-reader-pdf--window-scrolled (window _start)
   "Update PDF virtualization after WINDOW scrolls."

@@ -236,6 +236,14 @@ returns to the equal-size placeholder while its immutable cache path remains
 available for reuse.  Navigation moves to an existing slot rather than
 rebuilding the buffer, so logical positions and window anchors remain stable.
 
+Window body-size changes schedule one idle viewport update independently of
+=window-end=.  Repeated resize notifications replace the pending dimensions
+without submitting duplicate work.  In fit modes, the adapter captures the
+top-left canonical PDF position from the width actually painted in the page
+slot, rerenders for the resized window, and restores that position at the new
+scale.  Manual zoom keeps its scale and only recomputes visible-page work.
+Closing the view or replacing its window makes a pending resize harmless.
+
 The Rust helper processes requests serially, so each PDF has at most one
 background prefetch request in flight.  A viewport change replaces every
 unsent task with the new visible and neighboring pages.  Rendering runs before
@@ -391,7 +399,8 @@ Further tests cover stale render widths, text caching, cross-page hit testing,
 cooperatively batched copying, stale-copy rejection, partial-copy failure,
 nonadvancing cursor rejection, rotated polygon painting, rectangle fallback,
 bounded search continuation, stale search rejection, independent match
-painting, precise match scrolling, canonical viewport capture, cross-scale
+painting, precise match scrolling, canonical viewport capture, painted-width
+resize anchoring, coalesced resize work, manual viewport growth, cross-scale
 place restoration, page clamping, deferred window restoration, failed-open
 place protection, rejected restores, immutable Reader jump capture, failed
 live-jump rollback, asynchronous reopen, late-window protection, semantic page

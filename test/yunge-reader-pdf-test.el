@@ -1208,6 +1208,200 @@
           (should (= (yunge-reader-position-x location) 20.0))
           (should (= (yunge-reader-position-y location) 150.0)))))))
 
+(ert-deftest yunge-reader-pdf-captures-location-at-painted-width ()
+  (with-temp-buffer
+    (insert " \n ")
+    (let ((buffer (current-buffer)))
+      (setq yunge-reader-document
+            (yunge-reader-pdf-test--document
+             '((width . 100.0) (height . 200.0))
+             '((width . 100.0) (height . 200.0)))
+            yunge-reader-pdf--page-infos
+            [((width . 100.0) (height . 200.0))
+             ((width . 100.0) (height . 200.0))]
+            yunge-reader-pdf--page-positions [1 3])
+      (put-text-property
+       3 4 'yunge-reader-pdf-display-width 500)
+      (cl-letf (((symbol-function 'window-live-p)
+                 (lambda (_window) t))
+                ((symbol-function 'window-buffer)
+                 (lambda (_window) buffer))
+                ((symbol-function 'window-start)
+                 (lambda (_window) 3))
+                ((symbol-function 'window-vscroll)
+                 (lambda (_window &optional _pixels) 500))
+                ((symbol-function 'window-hscroll)
+                 (lambda (_window) 20))
+                ((symbol-function 'window-frame)
+                 (lambda (_window) 'frame))
+                ((symbol-function 'frame-char-width)
+                 (lambda (_frame) 10))
+                ((symbol-function 'yunge-reader-pdf--page-at-position)
+                 (lambda (_position) 1))
+                ((symbol-function 'yunge-reader-pdf--page-width)
+                 (lambda (_page &optional _window) 1000)))
+        (let ((location
+               (yunge-reader-pdf--location nil 'window)))
+          (should (= (yunge-reader-position-x location) 40.0))
+          (should (= (yunge-reader-position-y location) 100.0)))))))
+
+(ert-deftest yunge-reader-pdf-coalesces-window-resizes ()
+  (with-temp-buffer
+    (yunge-reader-mode)
+    (yunge-reader-pdf-view-mode 1)
+    (let* ((buffer (current-buffer))
+           (document (yunge-reader-pdf-test--document))
+           (anchor (make-yunge-reader-position :unit 2 :y 60.0))
+           (width 800)
+           (height 600)
+           (timer 'resize-timer)
+           callback
+           (scheduled 0)
+           (locations 0)
+           refresh)
+      (setq yunge-reader-document document
+            yunge-reader-zoom-mode 'fit-width)
+      (cl-letf (((symbol-function 'window-live-p)
+                 (lambda (_window) t))
+                ((symbol-function 'window-buffer)
+                 (lambda (_window) buffer))
+                ((symbol-function 'window-body-width)
+                 (lambda (_window pixelwise)
+                   (and pixelwise width)))
+                ((symbol-function 'window-body-height)
+                 (lambda (_window pixelwise)
+                   (and pixelwise height)))
+                ((symbol-function 'window-end)
+                 (lambda (&rest _arguments)
+                   (ert-fail "Resize must not depend on window-end")))
+                ((symbol-function 'timerp)
+                 (lambda (value) (eq value timer)))
+                ((symbol-function 'run-with-idle-timer)
+                 (lambda (seconds repeat function &rest arguments)
+                   (should (zerop seconds))
+                   (should-not repeat)
+                   (cl-incf scheduled)
+                   (setq callback (cons function arguments))
+                   timer))
+                ((symbol-function 'yunge-reader-pdf--location)
+                 (lambda (_document _window)
+                   (cl-incf locations)
+                   anchor))
+                ((symbol-function 'yunge-reader-pdf--refresh)
+                 (lambda (&optional window location)
+                   (setq refresh (list window location)))))
+        (yunge-reader-pdf--window-size-change 'window)
+        (setq width 700
+              height 500)
+        (yunge-reader-pdf--window-size-change 'window)
+        (should (= scheduled 1))
+        (should (= locations 1))
+        (should (= (plist-get yunge-reader-pdf--pending-resize
+                              :width)
+                   700))
+        (should (= (plist-get yunge-reader-pdf--pending-resize
+                              :height)
+                   500))
+        (apply (car callback) (cdr callback))
+        (should (equal refresh (list 'window anchor)))
+        (should-not yunge-reader-pdf--resize-timer)
+        (should-not yunge-reader-pdf--pending-resize)))))
+
+(ert-deftest yunge-reader-pdf-refresh-targets-the-resized-window ()
+  (with-temp-buffer
+    (yunge-reader-mode)
+    (yunge-reader-pdf-view-mode 1)
+    (let* ((buffer (current-buffer))
+           (anchor
+            (make-yunge-reader-position :unit 0 :x 12.0 :y 80.0))
+           painted
+           updated)
+      (setq yunge-reader-document
+            (yunge-reader-pdf-test--document
+             '((width . 100.0) (height . 200.0))))
+      (cl-letf (((symbol-function 'window-live-p)
+                 (lambda (_window) t))
+                ((symbol-function 'window-buffer)
+                 (lambda (_window) buffer))
+                ((symbol-function 'yunge-reader-pdf--page-width)
+                 (lambda (_page &optional window)
+                   (should (eq window 'window))
+                   700))
+                ((symbol-function 'yunge-reader-pdf--paint-page)
+                 (lambda (page &optional width)
+                   (setq painted (list page width))))
+                ((symbol-function
+                  'yunge-reader-pdf--update-visible-pages)
+                 (lambda (&optional window)
+                   (setq updated window))))
+        (yunge-reader-pdf--refresh 'window anchor)
+        (should (equal painted '(0 700)))
+        (should (eq updated 'window))
+        (should (equal yunge-reader-pdf--pending-location anchor))
+        (should-not (eq yunge-reader-pdf--pending-location anchor))))))
+
+(ert-deftest yunge-reader-pdf-resize-updates-a-manual-viewport ()
+  (with-temp-buffer
+    (yunge-reader-mode)
+    (yunge-reader-pdf-view-mode 1)
+    (let ((buffer (current-buffer))
+          (document (yunge-reader-pdf-test--document))
+          updated)
+      (setq yunge-reader-document document
+            yunge-reader-zoom-mode 'manual
+            yunge-reader-pdf--pending-resize
+            (list :document document :window 'window))
+      (cl-letf (((symbol-function 'window-live-p)
+                 (lambda (_window) t))
+                ((symbol-function 'window-buffer)
+                 (lambda (_window) buffer))
+                ((symbol-function
+                  'yunge-reader-pdf--update-visible-pages)
+                 (lambda (&optional window)
+                   (setq updated window))))
+        (yunge-reader-pdf--finish-resize buffer)
+        (should (eq updated 'window))))))
+
+(ert-deftest yunge-reader-pdf-ignores-a-stale-resize-window ()
+  (with-temp-buffer
+    (yunge-reader-mode)
+    (yunge-reader-pdf-view-mode 1)
+    (let ((buffer (current-buffer))
+          (document (yunge-reader-pdf-test--document))
+          refreshed)
+      (setq yunge-reader-document document
+            yunge-reader-zoom-mode 'fit-page
+            yunge-reader-pdf--pending-resize
+            (list :document document :window 'dead-window))
+      (cl-letf (((symbol-function 'window-live-p)
+                 (lambda (_window) nil))
+                ((symbol-function 'yunge-reader-pdf--refresh)
+                 (lambda (&rest _arguments)
+                   (setq refreshed t))))
+        (yunge-reader-pdf--finish-resize buffer)
+        (should-not refreshed)
+        (should-not yunge-reader-pdf--pending-resize)))))
+
+(ert-deftest yunge-reader-pdf-cancels-resize-when-view-stops ()
+  (with-temp-buffer
+    (yunge-reader-mode)
+    (yunge-reader-pdf-view-mode 1)
+    (let ((timer 'resize-timer)
+          cancelled)
+      (setq yunge-reader-pdf--resize-timer timer
+            yunge-reader-pdf--pending-resize 'pending)
+      (cl-letf (((symbol-function 'timerp)
+                 (lambda (value) (eq value timer)))
+                ((symbol-function 'cancel-timer)
+                 (lambda (value) (setq cancelled value))))
+        (yunge-reader-pdf-view-mode -1))
+      (should (eq cancelled timer))
+      (should-not yunge-reader-pdf--resize-timer)
+      (should-not yunge-reader-pdf--pending-resize)
+      (should-not
+       (memq #'yunge-reader-pdf--window-size-change
+             window-size-change-functions)))))
+
 (ert-deftest yunge-reader-pdf-defers-and-rescales-restored-location ()
   (with-temp-buffer
     (let ((buffer (current-buffer))
