@@ -114,10 +114,6 @@ const CAPABILITIES: [&str; 17] = [
 const MAX_VIEW_EXTENT: u32 = 32_768;
 const MESSAGE_PUMP_INTERVAL: Duration = Duration::from_millis(8);
 const ESCAPE_VIRTUAL_KEY: u32 = 0x1b;
-const CLEAR_SELECTION_SCRIPT: &str = r#"
-const selection = window.getSelection();
-if (selection) selection.removeAllRanges();
-"#;
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -155,6 +151,8 @@ struct ViewEvent {
     location: Option<EpubLocator>,
     #[serde(skip_serializing_if = "Option::is_none")]
     outline: Option<EpubOutline>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    selection: Option<Option<EpubSelection>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     key: Option<String>,
 }
@@ -264,6 +262,14 @@ struct EpubOutline {
     truncated: bool,
 }
 
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+struct EpubSelection {
+    href: String,
+    start: String,
+    end: String,
+}
+
 #[derive(Clone, Copy, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "kebab-case")]
 enum NavigationCommand {
@@ -292,6 +298,8 @@ struct RendererMessage {
     location: Option<EpubLocator>,
     #[serde(default)]
     outline: Option<EpubOutline>,
+    #[serde(default, deserialize_with = "deserialize_present_option")]
+    selection: Option<Option<EpubSelection>>,
     #[serde(default)]
     key: Option<String>,
 }
@@ -304,7 +312,18 @@ enum RendererEvent {
     NavigationError,
     PublicationError,
     PublicationReady,
+    Selection,
     StyleError,
+}
+
+fn deserialize_present_option<'de, D, T>(
+    deserializer: D,
+) -> Result<Option<Option<T>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: Deserialize<'de>,
+{
+    Option::<T>::deserialize(deserializer).map(Some)
 }
 
 #[derive(Debug, Deserialize)]
@@ -672,6 +691,34 @@ impl EpubOutline {
     }
 }
 
+impl EpubSelection {
+    fn validate(self) -> Result<Self, ServiceError> {
+        let start = EpubLocator {
+            cfi: self.start,
+            href: self.href,
+            fraction: None,
+        }
+        .validate()?;
+        let end = EpubLocator {
+            cfi: self.end,
+            href: start.href.clone(),
+            fraction: None,
+        }
+        .validate()?;
+        if start.cfi == end.cfi {
+            return Err(ServiceError::new(
+                "invalid-epub-selection",
+                "EPUB selection endpoints must differ",
+            ));
+        }
+        Ok(Self {
+            href: start.href,
+            start: start.cfi,
+            end: end.cfi,
+        })
+    }
+}
+
 fn valid_epub_href(value: &str, allow_fragment: bool) -> bool {
     let path = if let Some((path, fragment)) = value.split_once('#') {
         if !allow_fragment || fragment.contains('#') {
@@ -949,9 +996,10 @@ impl Service {
         params: Value,
     ) -> Result<Value, ServiceError> {
         let params: ViewParams = Self::parse(params)?;
+        let script = publication_clear_selection_script(params.view);
         self.view(params.view)?
             .webview
-            .evaluate_script(CLEAR_SELECTION_SCRIPT)
+            .evaluate_script(&script)
             .map_err(|error| {
                 ServiceError::new("view-update-failed", error.to_string())
             })?;
@@ -1573,6 +1621,7 @@ fn install_accelerator_handler(
                         message: None,
                         location: None,
                         outline: None,
+                        selection: None,
                         key,
                     });
                 }
@@ -1660,41 +1709,48 @@ fn renderer_event(
     {
         return None;
     }
-    let (event, detail, location, outline, key) = match message.event {
+    let (event, detail, location, outline, selection, key) = match message.event
+    {
         RendererEvent::Accelerator => {
             if message.message.is_some()
                 || message.location.is_some()
                 || message.outline.is_some()
+                || message.selection.is_some()
             {
                 return None;
             }
             let key = message.key.filter(|key| {
                 matches!(key.as_str(), "J" | "K" | "+" | "-" | "=")
             })?;
-            ("accelerator", None, None, None, Some(key))
+            ("accelerator", None, None, None, None, Some(key))
         }
         RendererEvent::Location => {
             if message.message.is_some()
                 || message.outline.is_some()
+                || message.selection.is_some()
                 || message.key.is_some()
             {
                 return None;
             }
             let location = message.location?.validate().ok()?;
-            ("location", None, Some(location), None, None)
+            ("location", None, Some(location), None, None, None)
         }
         RendererEvent::NavigationError => {
             if message.location.is_some()
                 || message.outline.is_some()
+                || message.selection.is_some()
                 || message.key.is_some()
             {
                 return None;
             }
             let detail = message.message.filter(|value| !value.is_empty())?;
-            ("navigation-error", Some(detail), None, None, None)
+            ("navigation-error", Some(detail), None, None, None, None)
         }
         RendererEvent::PublicationReady => {
-            if message.message.is_some() || message.key.is_some() {
+            if message.message.is_some()
+                || message.selection.is_some()
+                || message.key.is_some()
+            {
                 return None;
             }
             let location = message.location?.validate().ok()?;
@@ -1705,27 +1761,45 @@ fn renderer_event(
                 Some(location),
                 Some(outline),
                 None,
+                None,
             )
         }
         RendererEvent::PublicationError => {
             if message.location.is_some()
                 || message.outline.is_some()
+                || message.selection.is_some()
                 || message.key.is_some()
             {
                 return None;
             }
             let detail = message.message.filter(|value| !value.is_empty())?;
-            ("publication-error", Some(detail), None, None, None)
+            ("publication-error", Some(detail), None, None, None, None)
         }
-        RendererEvent::StyleError => {
-            if message.location.is_some()
+        RendererEvent::Selection => {
+            if message.message.is_some()
+                || message.location.is_some()
                 || message.outline.is_some()
                 || message.key.is_some()
             {
                 return None;
             }
+            let selection = message
+                .selection?
+                .map(EpubSelection::validate)
+                .transpose()
+                .ok()?;
+            ("selection", None, None, None, Some(selection), None)
+        }
+        RendererEvent::StyleError => {
+            if message.location.is_some()
+                || message.outline.is_some()
+                || message.selection.is_some()
+                || message.key.is_some()
+            {
+                return None;
+            }
             let detail = message.message.filter(|value| !value.is_empty())?;
-            ("style-error", Some(detail), None, None, None)
+            ("style-error", Some(detail), None, None, None, None)
         }
     };
     Some(ViewEvent {
@@ -1735,6 +1809,7 @@ fn renderer_event(
         message: detail,
         location,
         outline,
+        selection,
         key,
     })
 }
@@ -1776,6 +1851,12 @@ fn publication_style_script(view: u64, style: &EpubStyle) -> String {
     }))
     .expect("publication style payload is serializable");
     format!("void globalThis.yungeReader.setStyle({payload});")
+}
+
+fn publication_clear_selection_script(view: u64) -> String {
+    let payload = serde_json::to_string(&json!({ "view": view }))
+        .expect("selection payload is serializable");
+    format!("void globalThis.yungeReader.clearSelection({payload});")
 }
 
 fn write_message(
@@ -2004,9 +2085,8 @@ mod tests {
         assert!(adapter.contains("pendingStyle"));
         assert!(adapter.contains("requestAnimationFrame("));
         assert!(adapter.contains("post('style-error'"));
-        assert!(
-            adapter.contains("Object.freeze({ navigate, open, setStyle })")
-        );
+        assert!(adapter.contains("installSelectionTracking"));
+        assert!(adapter.contains("clearSelection, navigate, open, setStyle"));
         for path in ["foliate-js/paginator.js", "foliate-js/fixed-layout.js"] {
             let source =
                 std::str::from_utf8(app_asset(path).unwrap().1).unwrap();
@@ -2209,6 +2289,7 @@ mod tests {
         assert_eq!(event.event, "publication-ready");
         assert_eq!(event.view, 7);
         assert!(event.message.is_none());
+        assert!(event.selection.is_none());
         assert!(event.key.is_none());
         assert_eq!(
             event.outline,
@@ -2245,6 +2326,39 @@ mod tests {
         assert_eq!(event.event, "location");
         assert_eq!(event.location.unwrap().fraction, None);
         assert!(event.outline.is_none());
+        assert!(event.selection.is_none());
+
+        let selection = HttpRequest::builder()
+            .uri(APP_URL)
+            .body(
+                concat!(
+                    r#"{"protocol":1,"event":"selection","selection":{"#,
+                    r#""href":"OPS/chapter.xhtml","#,
+                    r#""start":"epubcfi(/6/4!/4/2/1:0)","#,
+                    r#""end":"epubcfi(/6/4!/4/2/1:7)"}}"#,
+                )
+                .into(),
+            )
+            .unwrap();
+        let event = renderer_event(7, &selection).unwrap();
+        assert_eq!(event.event, "selection");
+        assert_eq!(
+            event.selection,
+            Some(Some(EpubSelection {
+                href: "OPS/chapter.xhtml".into(),
+                start: "epubcfi(/6/4!/4/2/1:0)".into(),
+                end: "epubcfi(/6/4!/4/2/1:7)".into(),
+            }))
+        );
+
+        let selection_clear = HttpRequest::builder()
+            .uri(APP_URL)
+            .body(
+                r#"{"protocol":1,"event":"selection","selection":null}"#.into(),
+            )
+            .unwrap();
+        let event = renderer_event(7, &selection_clear).unwrap();
+        assert_eq!(event.selection, Some(None));
 
         let error = HttpRequest::builder()
             .uri(APP_URL)
@@ -2259,6 +2373,7 @@ mod tests {
         assert_eq!(event.message.as_deref(), Some("bad EPUB"));
         assert!(event.location.is_none());
         assert!(event.outline.is_none());
+        assert!(event.selection.is_none());
         assert!(event.key.is_none());
 
         let style_error = HttpRequest::builder()
@@ -2274,6 +2389,7 @@ mod tests {
         assert_eq!(event.message.as_deref(), Some("bad style"));
         assert!(event.location.is_none());
         assert!(event.outline.is_none());
+        assert!(event.selection.is_none());
         assert!(event.key.is_none());
 
         for key in ["J", "K", "+", "-", "="] {
@@ -2292,6 +2408,7 @@ mod tests {
             assert_eq!(event.key.as_deref(), Some(key));
             assert!(event.location.is_none());
             assert!(event.outline.is_none());
+            assert!(event.selection.is_none());
             assert!(event.message.is_none());
         }
 
@@ -2331,6 +2448,34 @@ mod tests {
                     concat!(
                         r#"{"protocol":1,"event":"location","location":{"#,
                         r#""cfi":"bad","href":"../chapter.xhtml"}}"#,
+                    )
+                    .into(),
+                )
+                .unwrap(),
+            HttpRequest::builder()
+                .uri(APP_URL)
+                .body(r#"{"protocol":1,"event":"selection"}"#.into())
+                .unwrap(),
+            HttpRequest::builder()
+                .uri(APP_URL)
+                .body(
+                    concat!(
+                        r#"{"protocol":1,"event":"selection","#,
+                        r#""selection":{"href":"OPS/chapter.xhtml","#,
+                        r#""start":"epubcfi(/6/4)","#,
+                        r#""end":"epubcfi(/6/4)"}}"#,
+                    )
+                    .into(),
+                )
+                .unwrap(),
+            HttpRequest::builder()
+                .uri(APP_URL)
+                .body(
+                    concat!(
+                        r#"{"protocol":1,"event":"location","#,
+                        r#""selection":null,"location":{"#,
+                        r#""cfi":"epubcfi(/6/6)","#,
+                        r#""href":"OPS/next.xhtml"}}"#,
                     )
                     .into(),
                 )
@@ -2386,6 +2531,13 @@ mod tests {
         );
         assert!(navigation.contains(r#""command":"go-to"#));
         assert!(!navigation.contains("eval"));
+
+        let clear = publication_clear_selection_script(4);
+        assert!(
+            clear.starts_with("void globalThis.yungeReader.clearSelection(")
+        );
+        assert!(clear.contains(r#""view":4"#));
+        assert!(!clear.contains("eval"));
     }
 
     #[test]
@@ -2424,6 +2576,45 @@ mod tests {
                 "invalid-epub-location"
             );
         }
+    }
+
+    #[test]
+    fn epub_selections_are_same_spine_distinct_ranges() {
+        let valid = EpubSelection {
+            href: "OPS/chapter.xhtml".into(),
+            start: "epubcfi(/6/4!/4/2/1:0)".into(),
+            end: "epubcfi(/6/4!/4/2/1:7)".into(),
+        };
+        assert_eq!(valid.clone().validate().unwrap(), valid);
+
+        for invalid in [
+            EpubSelection {
+                href: "OPS/chapter.xhtml#part".into(),
+                start: "epubcfi(/6/4!/4/2/1:0)".into(),
+                end: "epubcfi(/6/4!/4/2/1:7)".into(),
+            },
+            EpubSelection {
+                href: "OPS/chapter.xhtml".into(),
+                start: "bad".into(),
+                end: "epubcfi(/6/4!/4/2/1:7)".into(),
+            },
+            EpubSelection {
+                href: "OPS/chapter.xhtml".into(),
+                start: "epubcfi(/6/4!/4/2/1:0)".into(),
+                end: "epubcfi(/6/4!/4/2/1:0)".into(),
+            },
+        ] {
+            assert!(invalid.validate().is_err());
+        }
+        assert!(
+            EpubSelection {
+                href: "OPS/chapter.xhtml".into(),
+                start: "epubcfi(/6/4!/4/2/1:0)".into(),
+                end: format!("epubcfi({})", "x".repeat(3_072)),
+            }
+            .validate()
+            .is_err()
+        );
     }
 
     #[test]
@@ -2657,6 +2848,5 @@ mod tests {
             ),
             None
         );
-        assert!(CLEAR_SELECTION_SCRIPT.contains("removeAllRanges"));
     }
 }

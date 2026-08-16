@@ -95,6 +95,7 @@
   outline-ready
   outline-error
   outline-waiters
+  selection
   path
   open-deadline
   open-timer
@@ -302,6 +303,36 @@
     (error "Invalid EPUB navigation target: %S" target))
   target)
 
+(defun yunge-reader-webview--valid-selection-p (selection)
+  "Return non-nil when SELECTION is one bounded EPUB spine range."
+  (and
+   (listp selection)
+   (= (length selection) 3)
+   (cl-every
+    (lambda (entry)
+      (memq (car-safe entry) '(href start end)))
+    selection)
+   (cl-every (lambda (key) (assq key selection))
+             '(href start end))
+   (let ((href (alist-get 'href selection))
+         (start (alist-get 'start selection))
+         (end (alist-get 'end selection)))
+     (and
+      (yunge-reader-webview--valid-target-href-p href)
+      (not (string-match-p "#" href))
+      (cl-every
+       (lambda (cfi)
+         (and
+          (stringp cfi)
+          (not (string-empty-p cfi))
+          (<= (string-bytes cfi)
+              yunge-reader-webview--max-location-text-bytes)
+          (not (string-match-p "[[:cntrl:]]" cfi))
+          (string-prefix-p "epubcfi(" cfi)
+          (string-suffix-p ")" cfi)))
+       (list start end))
+      (not (equal start end))))))
+
 (defun yunge-reader-webview--valid-style-p (style)
   "Return non-nil when STYLE is a bounded EPUB reading style."
   (and
@@ -489,6 +520,16 @@ Unless QUIET is non-nil, notify the logical view's owner."
       (error "Malformed EPUB outline event: %S" message))
     (copy-tree outline)))
 
+(defun yunge-reader-webview--event-selection (message)
+  "Return the validated EPUB selection carried by event MESSAGE."
+  (unless (assq 'selection message)
+    (error "EPUB selection event has no selection field: %S" message))
+  (let ((selection (alist-get 'selection message)))
+    (unless (or (null selection)
+                (yunge-reader-webview--valid-selection-p selection))
+      (error "Malformed EPUB selection event: %S" message))
+    (and selection (copy-tree selection))))
+
 (defun yunge-reader-webview--finish-outline-waiters
     (view outline error-data)
   "Complete VIEW's outline waiters with OUTLINE or ERROR-DATA."
@@ -577,7 +618,8 @@ Unless QUIET is non-nil, notify the logical view's owner."
       ("publication-ready"
        (when-let* ((view (gethash id yunge-reader-webview--views)))
          (yunge-reader-webview--store-view-location view message t)
-         (setf (yunge-reader-webview--view-publication-ready view) t)
+         (setf (yunge-reader-webview--view-publication-ready view) t
+               (yunge-reader-webview--view-selection view) nil)
          (yunge-reader-webview--sync-view-style view)
          (yunge-reader-webview--store-view-outline view message)
          (yunge-reader-webview--dispatch-pending-target view)
@@ -589,6 +631,10 @@ Unless QUIET is non-nil, notify the logical view's owner."
       ("location"
        (when-let* ((view (gethash id yunge-reader-webview--views)))
          (yunge-reader-webview--store-view-location view message)))
+      ("selection"
+       (when-let* ((view (gethash id yunge-reader-webview--views)))
+         (setf (yunge-reader-webview--view-selection view)
+               (yunge-reader-webview--event-selection message))))
       ("navigation-error"
        (let ((detail (alist-get 'message message)))
          (unless (stringp detail)
@@ -608,6 +654,7 @@ Unless QUIET is non-nil, notify the logical view's owner."
          (when-let* ((view (gethash id yunge-reader-webview--views)))
            (setf (yunge-reader-webview--view-publication-ready view) nil
                  (yunge-reader-webview--view-surface-style view) nil
+                 (yunge-reader-webview--view-selection view) nil
                  (yunge-reader-webview--view-pending-target view) nil
                  (yunge-reader-webview--view-outline-error view)
                  (list 'error detail))
@@ -981,6 +1028,7 @@ Without FORCE, request graceful shutdown and enforce a deadline."
           (yunge-reader-webview--view-created view) nil
           (yunge-reader-webview--view-publication-ready view) nil
           (yunge-reader-webview--view-surface-style view) nil
+          (yunge-reader-webview--view-selection view) nil
           (yunge-reader-webview--view-bounds view) nil
           (yunge-reader-webview--view-requested-bounds view) nil
           (yunge-reader-webview--view-bounds-pending view) nil)
@@ -1067,6 +1115,7 @@ Without FORCE, request graceful shutdown and enforce a deadline."
             (yunge-reader-webview--view-destroyed view) t
             (yunge-reader-webview--view-publication-ready view) nil
             (yunge-reader-webview--view-surface-style view) nil
+            (yunge-reader-webview--view-selection view) nil
             (yunge-reader-webview--view-pending-destroys view) nil)
       (yunge-reader-webview--finish-view-destroy view)))
   (clrhash yunge-reader-webview--views)
@@ -1283,6 +1332,7 @@ focused native child forwards one.  STYLE is copied into the logical view."
             (yunge-reader-webview--view-created view) nil
             (yunge-reader-webview--view-publication-ready view) nil
             (yunge-reader-webview--view-surface-style view) nil
+            (yunge-reader-webview--view-selection view) nil
             (yunge-reader-webview--view-outline-error view) nil
             (yunge-reader-webview--view-requested-bounds view)
             (yunge-reader-webview--window-bounds window))

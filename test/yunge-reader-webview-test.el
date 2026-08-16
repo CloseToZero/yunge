@@ -91,6 +91,13 @@
           (href . "OPS/chapter.xhtml#start"))))
      (truncated))))
 
+(defun yunge-reader-webview-test--selection ()
+  "Return one valid bounded EPUB test selection."
+  (copy-tree
+   '((href . "OPS/chapter.xhtml")
+     (start . "epubcfi(/6/4!/4/2/1:0)")
+     (end . "epubcfi(/6/4!/4/2/1:7)"))))
+
 (defun yunge-reader-webview-test--style ()
   "Return one valid semantic EPUB reading style."
   (copy-tree
@@ -170,6 +177,34 @@
              ((href . "OPS/chapter.xhtml?query"))
              ((href . "OPS/chapter.xhtml#one#two"))))
     (should-not (yunge-reader-webview--valid-target-p target))))
+
+(ert-deftest yunge-reader-webview-validates-bounded-epub-selections ()
+  (should
+   (yunge-reader-webview--valid-selection-p
+    (yunge-reader-webview-test--selection)))
+  (dolist
+      (selection
+       '(nil
+         ((href . "OPS/chapter.xhtml")
+          (start . "bad")
+          (end . "epubcfi(/6/4!/4/2/1:7)"))
+         ((href . "../chapter.xhtml")
+          (start . "epubcfi(/6/4!/4/2/1:0)")
+          (end . "epubcfi(/6/4!/4/2/1:7)"))
+         ((href . "OPS/chapter.xhtml")
+          (start . "epubcfi(/6/4!/4/2/1:0)")
+          (end . "epubcfi(/6/4!/4/2/1:0)"))
+         ((href . "OPS/chapter.xhtml")
+          (start . "epubcfi(/6/4!/4/2/1:0)")
+          (end . "epubcfi(/6/4!/4/2/1:7)")
+          (text . "chapter"))))
+    (should-not
+     (yunge-reader-webview--valid-selection-p selection)))
+  (should-not
+   (yunge-reader-webview--valid-selection-p
+    `((href . "OPS/chapter.xhtml")
+      (start . "epubcfi(/6/4!/4/2/1:0)")
+      (end . ,(format "epubcfi(%s)" (make-string 3072 ?x)))))))
 
 (ert-deftest yunge-reader-webview-validates-bounded-epub-styles ()
   (let ((style (yunge-reader-webview-test--style)))
@@ -630,6 +665,40 @@
                 (yunge-reader-webview--view-location second))
                0.8))))
 
+(ert-deftest yunge-reader-webview-keeps-selections-per-view ()
+  (let* ((first (yunge-reader-webview--make-view :id 31))
+         (second (yunge-reader-webview--make-view :id 32))
+         (selection (yunge-reader-webview-test--selection))
+         (yunge-reader-webview--process 'fake-webview-process)
+         (yunge-reader-webview--views
+          (make-hash-table :test #'eql)))
+    (puthash 31 first yunge-reader-webview--views)
+    (puthash 32 second yunge-reader-webview--views)
+    (yunge-reader-webview--handle-event
+     'fake-webview-process
+     `((kind . "event")
+       (event . "selection")
+       (view . 31)
+       (selection . ,selection)))
+    (should
+     (equal (yunge-reader-webview--view-selection first)
+            selection))
+    (should-not (yunge-reader-webview--view-selection second))
+    (yunge-reader-webview--handle-event
+     'fake-webview-process
+     '((kind . "event")
+       (event . "selection")
+       (view . 31)
+       (selection)))
+    (should-not (yunge-reader-webview--view-selection first))
+    (should-error
+     (yunge-reader-webview--handle-event
+      'fake-webview-process
+      '((kind . "event")
+        (event . "selection")
+        (view . 32)))
+     :type 'error)))
+
 (ert-deftest yunge-reader-webview-parses-decimal-and-hex-frame-handles ()
   (cl-letf (((symbol-function 'frame-parameter)
              (lambda (_frame _parameter) "12345")))
@@ -740,6 +809,7 @@
            :publication 6
            :style style
            :surface-style (copy-tree style)
+           :selection (yunge-reader-webview-test--selection)
            :location location))
          (yunge-reader-webview--process 'fake-webview-process)
          (yunge-reader-webview--views
@@ -769,6 +839,8 @@
                          location))
           (should-not
            (yunge-reader-webview--view-surface-style view))
+          (should-not
+           (yunge-reader-webview--view-selection view))
           (should (equal (caar requests) "view-destroy"))
           (should-not
            (cl-find-if

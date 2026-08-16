@@ -196,10 +196,30 @@ current spike loads only its built-in local HTML page.
 
 =view-bounds= moves or resizes one child, =view-visible= changes its
 visibility, =view-focus= gives it native focus, and =view-focus-parent= gives
-focus back to its parent.  =view-clear-selection= removes the DOM selection,
-and =view-destroy= removes the child.  =view-status= reports whether the
-built-in page finished loading, together with the last accepted bounds and
-visibility.
+focus back to its parent.  =view-clear-selection= asks the trusted renderer to
+remove the active publication DOM selection, and =view-destroy= removes the
+child.  =view-status= reports whether the built-in page finished loading,
+together with the last accepted bounds and visibility.
+
+Chromium paints EPUB text selection directly inside the current Foliate spine;
+Yunge does not build a second highlight layer.  Once pointer or keyboard
+selection settles, the renderer emits its canonical spine href and two
+collapsed EPUB CFI endpoints.  A collapsed selection is an explicit null:
+
+#+begin_src json
+{"kind":"event","event":"selection","view":1,
+ "selection":{"href":"OPS/chapter.xhtml",
+              "start":"epubcfi(/6/4!/4/2/1:0)",
+              "end":"epubcfi(/6/4!/4/2/1:7)"}}
+{"kind":"event","event":"selection","view":1,"selection":null}
+#+end_src
+
+The href and each CFI are limited to 3,072 UTF-8 bytes and independently
+validated by the renderer, Rust, and Emacs.  Endpoints must differ, hrefs may
+not contain fragments, and selection state belongs to one logical view.  A
+surface replacement clears it.  The current scrolled paginator owns one
+iframe, so this contract deliberately describes one-spine ranges; it does not
+silently approximate cross-spine selection.
 
 =view-navigate= accepts =previous-screen=, =next-screen=, or =go-to=.  A
 =go-to= target may be a complete stable locator or a bounded href-only outline

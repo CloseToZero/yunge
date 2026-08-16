@@ -43,11 +43,14 @@ const DEFAULT_STYLE = Object.freeze({
 let generation = 0
 let current = null
 
-const post = (event, { message, location, outline, key } = {}) => {
+const post = (event, {
+    message, location, outline, selection, key,
+} = {}) => {
     const payload = { protocol: 1, event }
     if (message) payload.message = String(message).slice(0, 4096)
     if (location) payload.location = location
     if (outline) payload.outline = outline
+    if (selection !== undefined) payload.selection = selection
     if (key) payload.key = key
     window.ipc.postMessage(JSON.stringify(payload))
 }
@@ -229,6 +232,31 @@ const checkedLocator = value => {
     return Object.freeze(result)
 }
 
+const checkedSelection = value => {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) {
+        throw new Error('Invalid EPUB selection')
+    }
+    const keys = Object.keys(value).sort()
+    if (keys.join() !== 'end,href,start') {
+        throw new Error('Invalid EPUB selection field')
+    }
+    const href = checkedLocatorText(value.href, 'href')
+    const start = checkedLocatorText(value.start, 'selection start')
+    const end = checkedLocatorText(value.end, 'selection end')
+    for (const cfi of [start, end]) {
+        if (!/^epubcfi\(.+\)$/u.test(cfi)) {
+            throw new Error('Invalid EPUB selection CFI')
+        }
+    }
+    if (href.startsWith('/') || /[\\:?#]/u.test(href)
+        || href.split('/').some(part => !part
+            || ['.', '..'].includes(part))
+        || start === end) {
+        throw new Error('Invalid EPUB selection range')
+    }
+    return Object.freeze({ href, start, end })
+}
+
 const checkedNavigationTarget = value => {
     if (!value || typeof value !== 'object' || Array.isArray(value)) {
         throw new Error('Invalid EPUB navigation target')
@@ -321,6 +349,9 @@ const closeCurrent = () => {
     if (current.locationTimer) clearTimeout(current.locationTimer)
     if (current.styleFrame !== null) {
         cancelAnimationFrame(current.styleFrame)
+    }
+    if (current.selectionFrame !== null) {
+        cancelAnimationFrame(current.selectionFrame)
     }
     current.view.close()
     current.book.destroy()
@@ -568,6 +599,84 @@ const queueLocation = (session, relocation) => {
     }
 }
 
+const sameSelection = (left, right) => left === right
+    || left && right
+        && left.href === right.href
+        && left.start === right.start
+        && left.end === right.end
+
+const emitSelection = (session, selection) => {
+    if (current !== session || sameSelection(session.selection, selection)) {
+        return
+    }
+    session.selection = selection
+    post('selection', { selection })
+}
+
+const selectionFromDocument = (session, doc) => {
+    const content = session.view.renderer.getContents()
+        .find(item => item.doc === doc)
+    const selection = doc.getSelection()
+    if (!content || !selection || selection.rangeCount !== 1
+        || selection.isCollapsed) return null
+    const range = selection.getRangeAt(0)
+    if (range.startContainer.ownerDocument !== doc
+        || range.endContainer.ownerDocument !== doc) return null
+    const startRange = range.cloneRange()
+    const endRange = range.cloneRange()
+    startRange.collapse(true)
+    endRange.collapse(false)
+    return checkedSelection({
+        href: session.book.sections[content.index]?.id,
+        start: session.view.getCFI(content.index, startRange),
+        end: session.view.getCFI(content.index, endRange),
+    })
+}
+
+const queueSelection = (session, doc) => {
+    if (current !== session) return
+    session.selectionDocument = doc
+    session.selectionFrame ??= requestAnimationFrame(() => {
+        session.selectionFrame = null
+        const selectionDoc = session.selectionDocument
+        session.selectionDocument = null
+        if (current !== session || !selectionDoc) return
+        try {
+            emitSelection(
+                session,
+                selectionFromDocument(session, selectionDoc))
+        } catch (error) {
+            console.warn(error)
+            emitSelection(session, null)
+        }
+    })
+}
+
+const installSelectionTracking = (doc, session) => {
+    let pointerSelecting = false
+    doc.addEventListener('pointerdown', () => {
+        pointerSelecting = true
+    })
+    const finishPointerSelection = () => {
+        pointerSelecting = false
+        queueSelection(session, doc)
+    }
+    doc.addEventListener('pointerup', finishPointerSelection)
+    doc.addEventListener('pointercancel', finishPointerSelection)
+    doc.addEventListener('selectionchange', () => {
+        if (!pointerSelecting) queueSelection(session, doc)
+    })
+}
+
+const clearSelection = ({ view: viewID }) => {
+    viewID = checkedView(viewID)
+    if (!current || current.viewID !== viewID) {
+        throw new Error('EPUB view is not open')
+    }
+    current.view.deselect()
+    emitSelection(current, null)
+}
+
 const open = async ({ view: viewID, resourceRoot, location, style }) => {
     const mine = ++generation
     closeCurrent()
@@ -586,6 +695,8 @@ const open = async ({ view: viewID, resourceRoot, location, style }) => {
         view.addEventListener('load', event => {
             installReaderCharacterKeys(event.detail.doc)
             installLocationActivity(event.detail.doc, session)
+            installSelectionTracking(event.detail.doc, session)
+            if (session) emitSelection(session, null)
         })
         view.addEventListener('external-link', event => {
             event.preventDefault()
@@ -611,6 +722,9 @@ const open = async ({ view: viewID, resourceRoot, location, style }) => {
             view,
             location: null,
             locationTimer: null,
+            selection: null,
+            selectionDocument: null,
+            selectionFrame: null,
             style,
             pendingStyle: null,
             styleFrame: null,
@@ -702,4 +816,6 @@ const navigate = ({ view: viewID, command, location }) => {
     }
 }
 
-globalThis.yungeReader = Object.freeze({ navigate, open, setStyle })
+globalThis.yungeReader = Object.freeze({
+    clearSelection, navigate, open, setStyle,
+})
