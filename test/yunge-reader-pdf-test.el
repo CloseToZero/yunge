@@ -1716,6 +1716,7 @@
     (yunge-reader-mode)
     (yunge-reader-pdf-view-mode 1)
     (setq yunge-reader-pdf-page 0
+          yunge-reader-pdf--displayed-pages '(0 1)
           yunge-reader-pdf--page-infos
           [((width . 100.0) (height . 200.0))
            ((width . 100.0) (height . 200.0))])
@@ -1735,11 +1736,14 @@
             (bounds . ((left . 22.0) (bottom . 10.0)
                        (right . 32.0) (top . 20.0)))))))
      yunge-reader-pdf--text-cache)
-    (cl-letf (((symbol-function 'yunge-reader-pdf--paint-pages)
-               #'ignore))
-      (yunge-reader-pdf--select-points
-       '(:page 0 :point (15.0 . 15.0))
-       '(:page 1 :point (27.0 . 15.0))))
+    (let (repainted)
+      (cl-letf
+          (((symbol-function 'yunge-reader-pdf--repaint-selection)
+            (lambda (_window pages) (setq repainted pages))))
+        (yunge-reader-pdf--select-points
+         '(:page 0 :point (15.0 . 15.0))
+         '(:page 1 :point (27.0 . 15.0))))
+      (should (equal repainted '(0 1))))
     (should (= (yunge-reader-position-unit
                 (yunge-reader-selection-start
                  yunge-reader-selection))
@@ -1862,8 +1866,13 @@
                      ('release-position '(21 . 20)))))
                 ((symbol-function 'yunge-reader-pdf--select-points)
                  (lambda (&rest _arguments) (cl-incf selects)))
+                ((symbol-function
+                  'yunge-reader-pdf--selection-dirty-pages)
+                 (lambda (_old _new) '(0)))
                 ((symbol-function 'yunge-reader-pdf--repaint-selection)
-                 (lambda (_window) (cl-incf repaints))))
+                 (lambda (_window pages)
+                   (should (equal pages '(0)))
+                   (cl-incf repaints))))
         (yunge-reader-pdf--track-selection-events
          '(:page 0 :point start) 'start-position 'window))
       (should-not yunge-reader-selection)
@@ -1872,8 +1881,8 @@
 
 (ert-deftest yunge-reader-pdf-forces-selection-redisplay ()
   (let (painted forced redisplayed)
-    (cl-letf (((symbol-function 'yunge-reader-pdf--paint-pages)
-               (lambda (pages &optional _window) (setq painted pages)))
+    (cl-letf (((symbol-function 'yunge-reader-pdf--paint-page)
+               (lambda (page &optional _width) (push page painted)))
               ((symbol-function 'window-live-p)
                (lambda (window) (eq window 'window)))
               ((symbol-function 'force-window-update)
@@ -1881,9 +1890,8 @@
               ((symbol-function 'display-graphic-p) (lambda () t))
               ((symbol-function 'redisplay)
                (lambda (&optional force) (setq redisplayed force))))
-      (let ((yunge-reader-pdf--displayed-pages '(2 3)))
-        (yunge-reader-pdf--repaint-selection 'window)))
-    (should (equal painted '(2 3)))
+      (yunge-reader-pdf--repaint-selection 'window '(2 3)))
+    (should (equal (nreverse painted) '(2 3)))
     (should (eq forced 'window))
     (should redisplayed)))
 
@@ -2707,6 +2715,79 @@
                '(0 . 1)))
       (should-not
        (yunge-reader-pdf--selection-offsets 3 layer)))))
+
+(ert-deftest yunge-reader-pdf-repaints-only-changed-selection-pages ()
+  (with-temp-buffer
+    (setq yunge-reader-pdf--displayed-pages '(0 1 2 3)
+          yunge-reader-pdf--text-cache (make-hash-table :test #'eql))
+    (dotimes (page 4)
+      (puthash
+       page
+       '((characters
+          . (((index . 0)) ((index . 1)) ((index . 2)))))
+       yunge-reader-pdf--text-cache))
+    (let ((old
+           (make-yunge-reader-selection
+            :start (make-yunge-reader-position :unit 0 :offset 1)
+            :end (make-yunge-reader-position :unit 1 :offset 1)))
+          (new
+           (make-yunge-reader-selection
+            :start (make-yunge-reader-position :unit 0 :offset 1)
+            :end (make-yunge-reader-position :unit 2 :offset 1))))
+      (should
+       (equal
+        (yunge-reader-pdf--selection-dirty-pages old new)
+        '(1 2))))))
+
+(ert-deftest yunge-reader-pdf-compares-selection-ranges-logically ()
+  (let ((forward
+         (make-yunge-reader-selection
+          :start (make-yunge-reader-position :unit 0 :offset 4)
+          :end (make-yunge-reader-position :unit 1 :offset 7)))
+        (backward
+         (make-yunge-reader-selection
+          :start (make-yunge-reader-position :unit 1 :offset 7)
+          :end (make-yunge-reader-position :unit 0 :offset 4))))
+    (should
+     (yunge-reader-pdf--same-selection-p forward backward))))
+
+(ert-deftest yunge-reader-pdf-skips-unchanged-selection-endpoint ()
+  (with-temp-buffer
+    (yunge-reader-mode)
+    (yunge-reader-pdf-view-mode 1)
+    (setq yunge-reader-pdf--displayed-pages '(0)
+          yunge-reader-pdf--page-infos
+          [((width . 100.0) (height . 200.0))]
+          yunge-reader-selection
+          (make-yunge-reader-selection
+           :start
+           (make-yunge-reader-position
+            :unit 0 :offset 4 :x 15.0 :y 15.0)
+           :end
+           (make-yunge-reader-position
+            :unit 0 :offset 4 :x 15.0 :y 15.0)))
+    (puthash
+     0
+     '((characters
+        . (((index . 4)
+            (text . "A")
+            (bounds . ((left . 10.0) (bottom . 10.0)
+                       (right . 20.0) (top . 20.0)))))))
+     yunge-reader-pdf--text-cache)
+    (let ((selection yunge-reader-selection)
+          (generation yunge-reader--copy-generation)
+          (repaints 0))
+      (cl-letf
+          (((symbol-function 'yunge-reader-pdf--repaint-selection)
+            (lambda (&rest _arguments) (cl-incf repaints))))
+        (should
+         (yunge-reader-pdf--select-points
+          '(:page 0 :point (15.0 . 15.0))
+          '(:page 0 :point (18.0 . 15.0))
+          t)))
+      (should (eq yunge-reader-selection selection))
+      (should (= yunge-reader--copy-generation generation))
+      (should (= repaints 0)))))
 
 (ert-deftest yunge-reader-pdf-virtualizes-pages-outside-the-viewport ()
   (with-temp-buffer

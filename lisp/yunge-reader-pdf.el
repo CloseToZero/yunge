@@ -1225,13 +1225,6 @@ When SUPPRESS-SCALE is non-nil, do not update the shared effective scale."
         (and (= left-unit right-unit)
              (<= left-offset right-offset)))))
 
-(defun yunge-reader-pdf--ordered-selection ()
-  "Return the current selection endpoints in document order."
-  (when yunge-reader-selection
-    (yunge-reader-pdf--ordered-range
-     (yunge-reader-selection-start yunge-reader-selection)
-     (yunge-reader-selection-end yunge-reader-selection))))
-
 (defun yunge-reader-pdf--ordered-range (start end)
   "Return document positions START and END in document order."
   (if (yunge-reader-pdf--position-before-p start end)
@@ -1261,11 +1254,21 @@ When SUPPRESS-SCALE is non-nil, do not update the shared effective scale."
                    (alist-get 'index character))
                  characters)))))))
 
+(defun yunge-reader-pdf--selection-offsets-for
+    (selection page text-layer)
+  "Return SELECTION's inclusive offsets for PAGE and TEXT-LAYER."
+  (when selection
+    (pcase-let ((`(,start . ,end)
+                 (yunge-reader-pdf--ordered-range
+                  (yunge-reader-selection-start selection)
+                  (yunge-reader-selection-end selection))))
+      (yunge-reader-pdf--range-offsets
+       page text-layer start end))))
+
 (defun yunge-reader-pdf--selection-offsets (page text-layer)
   "Return selected inclusive offsets for PAGE and TEXT-LAYER."
-  (when-let* ((selection (yunge-reader-pdf--ordered-selection)))
-    (yunge-reader-pdf--range-offsets
-     page text-layer (car selection) (cdr selection))))
+  (yunge-reader-pdf--selection-offsets-for
+   yunge-reader-selection page text-layer))
 
 (defun yunge-reader-pdf--search-offsets (page text-layer)
   "Return current search match offsets for PAGE and TEXT-LAYER."
@@ -2549,10 +2552,50 @@ When NOERROR is non-nil, return nil for positions outside page images."
     (when (and updated (display-graphic-p))
       (redisplay t))))
 
-(defun yunge-reader-pdf--repaint-selection (window)
-  "Repaint the current selection and update live WINDOW immediately."
-  (yunge-reader-pdf--paint-pages yunge-reader-pdf--displayed-pages)
-  (yunge-reader-pdf--force-redisplay window))
+(defun yunge-reader-pdf--same-character-position-p (left right)
+  "Return non-nil when LEFT and RIGHT identify the same PDF character."
+  (and (equal (yunge-reader-position-unit left)
+              (yunge-reader-position-unit right))
+       (equal (yunge-reader-position-offset left)
+              (yunge-reader-position-offset right))))
+
+(defun yunge-reader-pdf--same-selection-p (left right)
+  "Return non-nil when LEFT and RIGHT select the same PDF characters."
+  (when (and left right)
+    (pcase-let ((`(,left-start . ,left-end)
+                 (yunge-reader-pdf--ordered-range
+                  (yunge-reader-selection-start left)
+                  (yunge-reader-selection-end left)))
+                (`(,right-start . ,right-end)
+                 (yunge-reader-pdf--ordered-range
+                  (yunge-reader-selection-start right)
+                  (yunge-reader-selection-end right))))
+      (and (yunge-reader-pdf--same-character-position-p
+            left-start right-start)
+           (yunge-reader-pdf--same-character-position-p
+            left-end right-end)))))
+
+(defun yunge-reader-pdf--selection-dirty-pages (old new)
+  "Return visible pages whose selection overlay differs in OLD and NEW."
+  (seq-filter
+   (lambda (page)
+     (when-let* ((text-layer
+                  (and yunge-reader-pdf--text-cache
+                       (gethash page yunge-reader-pdf--text-cache))))
+       (not
+        (equal
+         (yunge-reader-pdf--selection-offsets-for
+          old page text-layer)
+         (yunge-reader-pdf--selection-offsets-for
+          new page text-layer)))))
+   yunge-reader-pdf--displayed-pages))
+
+(defun yunge-reader-pdf--repaint-selection (window pages)
+  "Repaint selection overlays on PAGES and update live WINDOW."
+  (when pages
+    (dolist (page pages)
+      (yunge-reader-pdf--paint-page page))
+    (yunge-reader-pdf--force-redisplay window)))
 
 (defun yunge-reader-pdf--message-selection ()
   "Describe the current PDF selection in the echo area."
@@ -2596,25 +2639,41 @@ WINDOW is redisplayed immediately after a successful update."
            (yunge-reader-pdf--hit-character
             end-page end-point end-layer)))
       (if (and start-character end-character)
-          (progn
-            (yunge-reader-set-selection
-             (make-yunge-reader-position
-              :unit start-page
-              :offset (alist-get 'index start-character)
-              :x (car start-point)
-              :y (cdr start-point))
-             (make-yunge-reader-position
-              :unit end-page
-              :offset (alist-get 'index end-character)
-              :x (car end-point)
-              :y (cdr end-point)))
-            (yunge-reader-pdf--repaint-selection window)
+          (let* ((previous yunge-reader-selection)
+                 (selection
+                  (make-yunge-reader-selection
+                   :start
+                   (make-yunge-reader-position
+                    :unit start-page
+                    :offset (alist-get 'index start-character)
+                    :x (car start-point)
+                    :y (cdr start-point))
+                   :end
+                   (make-yunge-reader-position
+                    :unit end-page
+                    :offset (alist-get 'index end-character)
+                    :x (car end-point)
+                    :y (cdr end-point)))))
+            (unless (yunge-reader-pdf--same-selection-p
+                     previous selection)
+              (yunge-reader-set-selection
+               (yunge-reader-selection-start selection)
+               (yunge-reader-selection-end selection))
+              (yunge-reader-pdf--repaint-selection
+               window
+               (yunge-reader-pdf--selection-dirty-pages
+                previous yunge-reader-selection)))
             (unless quiet
               (yunge-reader-pdf--message-selection))
             t)
         (unless soft
-          (setq yunge-reader-selection nil)
-          (yunge-reader-pdf--repaint-selection window)
+          (let ((previous yunge-reader-selection))
+            (when previous
+              (yunge-reader-clear-selection t)
+              (yunge-reader-pdf--repaint-selection
+               window
+               (yunge-reader-pdf--selection-dirty-pages
+                previous nil))))
           (user-error "No selectable PDF text near the pointer"))))))
 
 (defun yunge-reader-pdf--selection-event-position (event)
@@ -2638,8 +2697,11 @@ WINDOW is redisplayed immediately after a successful update."
 (defun yunge-reader-pdf--clear-click-selection (window)
   "Clear the logical PDF selection after a click in WINDOW."
   (when yunge-reader-selection
-    (yunge-reader-clear-selection t)
-    (yunge-reader-pdf--repaint-selection window)))
+    (let ((previous yunge-reader-selection))
+      (yunge-reader-clear-selection t)
+      (yunge-reader-pdf--repaint-selection
+       window
+       (yunge-reader-pdf--selection-dirty-pages previous nil)))))
 
 (defun yunge-reader-pdf--track-selection-events
     (start-location start-position window)

@@ -41,10 +41,10 @@ refresh, =+/-= to zoom, === to reset zoom, and =W/P= to fit width or page.  PDF
 views use =J/K= for the next or previous page, =gg/G= for the first or last
 page, =gp= for a page prompt, =RET= for a visible link prompt, and Page Down
 or Page Up for screen scrolling.  =C-d/C-u= scroll by half a screen in
-pixels, while =j/k= scroll by one screen line.  Mouse-1 selects one
-character, dragging highlights text immediately, and Ctrl-Mouse-1 follows a
-link when hit.  Pointer motion outside a page image does not extend the
-selection until it returns to a page.  Reader handles the initial mouse-down
+pixels, while =j/k= scroll by one screen line.  Mouse-1 clears an existing
+text selection, dragging highlights text immediately, and Ctrl-Mouse-1
+follows a link when hit.  Pointer motion outside a page image does not extend
+the selection until it returns to a page.  Reader handles the initial mouse-down
 itself and deactivates any ordinary Emacs region, so buffer text before the
 page cannot acquire a second, unrelated region highlight.
 Evil starts Reader buffers in Normal state, leaves Visual =y= as =evil-yank=,
