@@ -61,6 +61,7 @@ const APP_CSP: &str = concat!(
 const MAX_RESOURCE_REQUESTS: usize = 8;
 const MAX_RESOURCE_CATALOG_BYTES: usize = 16 * 1_024 * 1_024;
 const MAX_RESOURCE_URI_PATH_BYTES: usize = 196_605;
+const MAX_EPUB_LOCATOR_TEXT_BYTES: usize = 3_072;
 const MAX_RENDERER_MESSAGE_BYTES: usize = 8 * 1_024;
 const MAX_RENDERER_ERROR_BYTES: usize = 4 * 1_024;
 const RESOURCE_CATALOG_PATH: &str = ".yunge/resources.json";
@@ -77,7 +78,7 @@ const RESOURCE_CSP: &str = concat!(
     "base-uri 'none'; ",
     "form-action 'none'"
 );
-const CAPABILITIES: [&str; 15] = [
+const CAPABILITIES: [&str; 16] = [
     "publication-close",
     "publication-info",
     "publication-open",
@@ -90,6 +91,7 @@ const CAPABILITIES: [&str; 15] = [
     "view-focus",
     "view-focus-parent",
     "view-info",
+    "view-navigate",
     "view-open-publication",
     "view-status",
     "view-visible",
@@ -134,6 +136,8 @@ struct ViewEvent {
     view: u64,
     #[serde(skip_serializing_if = "Option::is_none")]
     message: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    location: Option<EpubLocator>,
 }
 
 #[derive(Debug)]
@@ -184,6 +188,34 @@ struct PublicationParams {
 struct ViewPublicationParams {
     view: u64,
     publication: u64,
+    #[serde(default)]
+    location: Option<EpubLocator>,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+struct EpubLocator {
+    cfi: String,
+    href: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    fraction: Option<f64>,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "kebab-case")]
+enum NavigationCommand {
+    PreviousScreen,
+    NextScreen,
+    GoTo,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ViewNavigateParams {
+    view: u64,
+    command: NavigationCommand,
+    #[serde(default)]
+    location: Option<EpubLocator>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -193,11 +225,15 @@ struct RendererMessage {
     event: RendererEvent,
     #[serde(default)]
     message: Option<String>,
+    #[serde(default)]
+    location: Option<EpubLocator>,
 }
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 enum RendererEvent {
+    Location,
+    NavigationError,
     PublicationError,
     PublicationReady,
 }
@@ -420,6 +456,49 @@ impl Bounds {
             position: PhysicalPosition::new(self.x, self.y).into(),
             size: PhysicalSize::new(self.width, self.height).into(),
         }
+    }
+}
+
+impl EpubLocator {
+    fn validate(self) -> Result<Self, ServiceError> {
+        for (name, value) in [("CFI", &self.cfi), ("href", &self.href)] {
+            if value.is_empty()
+                || value.len() > MAX_EPUB_LOCATOR_TEXT_BYTES
+                || value.chars().any(char::is_control)
+            {
+                return Err(ServiceError::new(
+                    "invalid-epub-location",
+                    format!("EPUB locator {name} is invalid"),
+                ));
+            }
+        }
+        if !self.cfi.starts_with("epubcfi(") || !self.cfi.ends_with(')') {
+            return Err(ServiceError::new(
+                "invalid-epub-location",
+                "EPUB locator CFI is invalid",
+            ));
+        }
+        if self.href.starts_with('/')
+            || self.href.contains(['\\', ':', '?', '#'])
+            || self
+                .href
+                .split('/')
+                .any(|part| part.is_empty() || matches!(part, "." | ".."))
+        {
+            return Err(ServiceError::new(
+                "invalid-epub-location",
+                "EPUB locator href is not a canonical relative path",
+            ));
+        }
+        if self.fraction.is_some_and(|value| {
+            !value.is_finite() || !(0.0..=1.0).contains(&value)
+        }) {
+            return Err(ServiceError::new(
+                "invalid-epub-location",
+                "EPUB locator fraction must be between zero and one",
+            ));
+        }
+        Ok(self)
     }
 }
 
@@ -696,6 +775,8 @@ impl Service {
         params: Value,
     ) -> Result<Value, ServiceError> {
         let params: ViewPublicationParams = Self::parse(params)?;
+        let location =
+            params.location.map(EpubLocator::validate).transpose()?;
         let view = self.view(params.view)?;
         if !view.loaded.load(Ordering::Acquire) {
             return Err(ServiceError::new(
@@ -711,7 +792,11 @@ impl Service {
                 .ok_or_else(|| unknown_publication(params.publication))?;
             format!("{BOOK_BROWSER_ROOT}{}/", publication.token)
         };
-        let script = publication_open_script(params.view, &resource_root);
+        let script = publication_open_script(
+            params.view,
+            &resource_root,
+            location.as_ref(),
+        );
         self.view(params.view)?
             .webview
             .evaluate_script(&script)
@@ -726,6 +811,48 @@ impl Service {
             "view": params.view,
             "publication": params.publication,
             "opening": true,
+        }))
+    }
+
+    fn navigate_view(&mut self, params: Value) -> Result<Value, ServiceError> {
+        let params: ViewNavigateParams = Self::parse(params)?;
+        let location =
+            params.location.map(EpubLocator::validate).transpose()?;
+        match (params.command, location.as_ref()) {
+            (NavigationCommand::GoTo, None) => {
+                return Err(ServiceError::new(
+                    "invalid-params",
+                    "go-to navigation requires an EPUB location",
+                ));
+            }
+            (NavigationCommand::GoTo, Some(_)) => {}
+            (_, Some(_)) => {
+                return Err(ServiceError::new(
+                    "invalid-params",
+                    "screen navigation does not accept an EPUB location",
+                ));
+            }
+            (_, None) => {}
+        }
+        let view = self.view(params.view)?;
+        if view.publication.is_none() {
+            return Err(ServiceError::new(
+                "view-has-no-publication",
+                format!("view {} has no attached publication", params.view),
+            ));
+        }
+        let script = publication_navigation_script(
+            params.view,
+            params.command,
+            location.as_ref(),
+        );
+        view.webview.evaluate_script(&script).map_err(|error| {
+            ServiceError::new("view-update-failed", error.to_string())
+        })?;
+        Ok(json!({
+            "view": params.view,
+            "command": params.command,
+            "navigating": true,
         }))
     }
 
@@ -780,6 +907,7 @@ impl Service {
             "view-create" => self.create_view(request.params),
             "view-bounds" => self.set_bounds(request.params),
             "view-clear-selection" => self.clear_selection(request.params),
+            "view-navigate" => self.navigate_view(request.params),
             "view-open-publication" => {
                 self.open_view_publication(request.params)
             }
@@ -1176,6 +1304,7 @@ fn install_accelerator_handler(
                         event: "escape",
                         view,
                         message: None,
+                        location: None,
                     });
                 }
             }
@@ -1262,28 +1391,71 @@ fn renderer_event(
     {
         return None;
     }
-    let (event, message) = match message.event {
-        RendererEvent::PublicationReady => ("publication-ready", None),
+    let (event, detail, location) = match message.event {
+        RendererEvent::Location => {
+            if message.message.is_some() {
+                return None;
+            }
+            let location = message.location?.validate().ok()?;
+            ("location", None, Some(location))
+        }
+        RendererEvent::NavigationError => {
+            if message.location.is_some() {
+                return None;
+            }
+            let detail = message.message.filter(|value| !value.is_empty())?;
+            ("navigation-error", Some(detail), None)
+        }
+        RendererEvent::PublicationReady => {
+            if message.message.is_some() {
+                return None;
+            }
+            let location = message.location?.validate().ok()?;
+            ("publication-ready", None, Some(location))
+        }
         RendererEvent::PublicationError => {
-            let message = message.message.filter(|value| !value.is_empty())?;
-            ("publication-error", Some(message))
+            if message.location.is_some() {
+                return None;
+            }
+            let detail = message.message.filter(|value| !value.is_empty())?;
+            ("publication-error", Some(detail), None)
         }
     };
     Some(ViewEvent {
         kind: "event",
         event,
         view,
-        message,
+        message: detail,
+        location,
     })
 }
 
-fn publication_open_script(view: u64, resource_root: &str) -> String {
+fn publication_open_script(
+    view: u64,
+    resource_root: &str,
+    location: Option<&EpubLocator>,
+) -> String {
     let payload = serde_json::to_string(&json!({
         "view": view,
         "resourceRoot": resource_root,
+        "location": location,
     }))
     .expect("publication open payload is serializable");
     format!("void globalThis.yungeReader.open({payload});")
+}
+
+fn publication_navigation_script(
+    view: u64,
+    command: NavigationCommand,
+    location: Option<&EpubLocator>,
+) -> String {
+    let payload = serde_json::to_string(&json!({
+        "view": view,
+        "command": command,
+        "location": location,
+    }))
+    .expect("publication navigation payload is serializable");
+    format!("void globalThis.yungeReader.navigate({payload});")
 }
 
 fn write_message(
@@ -1681,12 +1853,42 @@ mod tests {
     fn renderer_ipc_accepts_only_owned_bounded_messages() {
         let ready = HttpRequest::builder()
             .uri(APP_BROWSER_URL)
-            .body(r#"{"protocol":1,"event":"publication-ready"}"#.into())
+            .body(
+                concat!(
+                    r#"{"protocol":1,"event":"publication-ready","#,
+                    r#""location":{"cfi":"epubcfi(/6/4)","#,
+                    r#""href":"OPS/chapter.xhtml","fraction":0.25}}"#,
+                )
+                .into(),
+            )
             .unwrap();
         let event = renderer_event(7, &ready).unwrap();
         assert_eq!(event.event, "publication-ready");
         assert_eq!(event.view, 7);
         assert!(event.message.is_none());
+        assert_eq!(
+            event.location,
+            Some(EpubLocator {
+                cfi: "epubcfi(/6/4)".into(),
+                href: "OPS/chapter.xhtml".into(),
+                fraction: Some(0.25),
+            })
+        );
+
+        let location = HttpRequest::builder()
+            .uri(APP_URL)
+            .body(
+                concat!(
+                    r#"{"protocol":1,"event":"location","location":{"#,
+                    r#""cfi":"epubcfi(/6/6)","#,
+                    r#""href":"OPS/next.xhtml"}}"#,
+                )
+                .into(),
+            )
+            .unwrap();
+        let event = renderer_event(7, &location).unwrap();
+        assert_eq!(event.event, "location");
+        assert_eq!(event.location.unwrap().fraction, None);
 
         let error = HttpRequest::builder()
             .uri(APP_URL)
@@ -1699,6 +1901,7 @@ mod tests {
         let event = renderer_event(8, &error).unwrap();
         assert_eq!(event.event, "publication-error");
         assert_eq!(event.message.as_deref(), Some("bad EPUB"));
+        assert!(event.location.is_none());
 
         for request in [
             HttpRequest::builder()
@@ -1713,6 +1916,20 @@ mod tests {
                 .uri(APP_URL)
                 .body(r#"{"protocol":1,"event":"other"}"#.into())
                 .unwrap(),
+            HttpRequest::builder()
+                .uri(APP_URL)
+                .body(r#"{"protocol":1,"event":"publication-ready"}"#.into())
+                .unwrap(),
+            HttpRequest::builder()
+                .uri(APP_URL)
+                .body(
+                    concat!(
+                        r#"{"protocol":1,"event":"location","location":{"#,
+                        r#""cfi":"bad","href":"../chapter.xhtml"}}"#,
+                    )
+                    .into(),
+                )
+                .unwrap(),
         ] {
             assert!(renderer_event(9, &request).is_none());
         }
@@ -1720,14 +1937,70 @@ mod tests {
 
     #[test]
     fn publication_script_serializes_renderer_inputs() {
+        let location = EpubLocator {
+            cfi: "epubcfi(/6/4!/4/2)".into(),
+            href: "OPS/chapter.xhtml".into(),
+            fraction: Some(0.25),
+        };
         let script = publication_open_script(
             4,
             "https://yunge-reader-book.localhost/token/",
+            Some(&location),
         );
         assert!(script.starts_with("void globalThis.yungeReader.open("));
         assert!(script.contains(r#""view":4"#));
         assert!(script.contains(r#""resourceRoot":"https://"#));
+        assert!(script.contains(r#""cfi":"epubcfi(/6/4!/4/2)"#));
         assert!(!script.contains("eval"));
+
+        let navigation = publication_navigation_script(
+            4,
+            NavigationCommand::GoTo,
+            Some(&location),
+        );
+        assert!(
+            navigation.starts_with("void globalThis.yungeReader.navigate(")
+        );
+        assert!(navigation.contains(r#""command":"go-to"#));
+        assert!(!navigation.contains("eval"));
+    }
+
+    #[test]
+    fn epub_locations_are_bounded_and_canonical() {
+        let valid = EpubLocator {
+            cfi: "epubcfi(/6/4!/4/2)".into(),
+            href: "OPS/chapter.xhtml".into(),
+            fraction: Some(1.0),
+        };
+        assert_eq!(valid.clone().validate().unwrap(), valid);
+
+        for invalid in [
+            EpubLocator {
+                cfi: "bad".into(),
+                href: "OPS/chapter.xhtml".into(),
+                fraction: None,
+            },
+            EpubLocator {
+                cfi: "epubcfi(/6/4)".into(),
+                href: "../chapter.xhtml".into(),
+                fraction: None,
+            },
+            EpubLocator {
+                cfi: "epubcfi(/6/4)".into(),
+                href: "https:chapter.xhtml".into(),
+                fraction: None,
+            },
+            EpubLocator {
+                cfi: "epubcfi(/6/4)".into(),
+                href: "OPS/chapter.xhtml".into(),
+                fraction: Some(1.1),
+            },
+        ] {
+            assert_eq!(
+                invalid.validate().unwrap_err().code,
+                "invalid-epub-location"
+            );
+        }
     }
 
     #[test]

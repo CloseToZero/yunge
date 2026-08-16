@@ -460,17 +460,29 @@ local EPUB, opens it through that shell, and displays a visible text start in
 continuous flow.  A body/text landmark wins, followed by the first table of
 contents target and a bounded linear-spine fallback.  A section whose only
 media failed to decode is not reported as ready.  This remains a manual spike:
-it does not register =.epub=, expose Reader navigation, or write a durable
+it does not register =.epub=, bind Reader navigation, or write a durable
 reading position.
 
 The renderer embeds a minimal set of modules from Foliate JS revision
 =78914aef4466eb960965702401634c2cb348e9b1= under its MIT license.  A
 Yunge-owned adapter is the only interface visible to Rust and Emacs; Foliate
-objects and locators do not cross the native protocol boundary.
+objects and DOM ranges do not cross the native protocol boundary.
 
 EPUB 2 NCX navigation documents are exposed alongside EPUB 3 navigation
 documents.  The continuous renderer and its inner frame fill the native child
 surface rather than inheriting the browser's default element dimensions.
+
+The adapter reduces each Foliate relocation to a Yunge-owned EPUB locator: a
+standard EPUB CFI, the canonical spine href, and an optional finite whole-book
+fraction.  Both text fields are bounded to 3,072 UTF-8 bytes.  Emacs stores the
+latest locator on its owning view rather than in publication-global state.
+Destroying the native surface does not replace that locator.
+
+Attaching a publication may supply an initial locator.  The renderer tries its
+CFI, then href, then fraction; when none resolves to visible content it opens
+the normal visible text start.  =M-x yunge-reader-webview-previous-screen= and
+=M-x yunge-reader-webview-next-screen= exercise bounded semantic navigation.
+They deliberately have no bindings while the code remains a spike.
 
 The child surface is the preferred reflowable path.  It retains browser-native
 text selection, copying, links, accessibility, and CSS layout, and can reflow
@@ -570,12 +582,14 @@ byte-to-PDFium-index mapping, search and selection cursors and limits, regular
 and singular-angle quadrilateral recovery, cross-page inclusive ranges,
 protocol errors, shutdown ordering, EOF, WebView bounds validation, omitted
 empty parameters, native Escape filtering, embedded renderer assets, strict
-renderer IPC, and bounded EPUB resource catalogs.  WebView ERT tests cover the
-separate handshake, strict capability validation, asynchronous renderer event
-routing, owning-window focus recovery, frame handle parsing, coalesced resize
-requests, view destruction after buffer replacement, and ordered publication
-release.  An isolated graphical Emacs smoke test opens a real EPUB through
-WebView2 and waits for its first section to report ready.
+renderer IPC, bounded EPUB locators, and bounded EPUB resource catalogs.
+WebView ERT tests cover the separate handshake, strict capability validation,
+asynchronous renderer event routing, per-view EPUB locations, owning-window
+focus recovery, frame handle parsing, coalesced resize requests, view
+destruction after buffer replacement, and ordered publication release.
+Isolated graphical Emacs smoke tests open real EPUBs through WebView2, move one
+screen, destroy and recreate the native view, restore the exact CFI, and check
+the href and fraction fallback order.
 
 The integration path installs the pinned Windows library through the public
 setup command, runs its =pdfium-info= smoke test, opens a five-page A4 fixture,

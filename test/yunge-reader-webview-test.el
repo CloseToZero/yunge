@@ -69,7 +69,15 @@
          "view-clear-selection" "view-create"
          "view-destroy" "view-events" "view-focus"
          "view-focus-parent" "view-info"
-         "view-open-publication" "view-status" "view-visible")))))
+         "view-navigate" "view-open-publication"
+         "view-status" "view-visible")))))
+
+(defun yunge-reader-webview-test--location (&optional fraction)
+  "Return one valid EPUB test locator with optional FRACTION."
+  (append
+   '((cfi . "epubcfi(/6/4!/4/2)"))
+   '((href . "OPS/chapter.xhtml"))
+   (when fraction `((fraction . ,fraction)))))
 
 (ert-deftest yunge-reader-webview-queues-until-ready ()
   (yunge-reader-webview-test--with-fake-process
@@ -112,6 +120,58 @@
            (message . "EPUB is too large")))))
     '(yunge-reader-webview-native-error
       "epub-limit-exceeded" "EPUB is too large"))))
+
+(ert-deftest yunge-reader-webview-validates-bounded-epub-locations ()
+  (let ((location (yunge-reader-webview-test--location 0.25)))
+    (should (yunge-reader-webview--valid-location-p location))
+    (should (eq (yunge-reader-webview--check-location location)
+                location)))
+  (dolist
+      (location
+       '(nil
+         ((cfi . "bad") (href . "OPS/chapter.xhtml"))
+         ((cfi . "epubcfi(/6/4)"))
+         ((cfi . "epubcfi(/6/4)") (href . "../chapter.xhtml"))
+         ((cfi . "epubcfi(/6/4)") (href . "https:chapter.xhtml"))
+         ((cfi . "epubcfi(/6/4)")
+          (href . "OPS/chapter.xhtml") (fraction . 2))))
+    (should-not (yunge-reader-webview--valid-location-p location))))
+
+(ert-deftest yunge-reader-webview-serializes-location-navigation ()
+  (yunge-reader-webview-test--with-fake-process
+    (yunge-reader-webview-start)
+    (yunge-reader-webview--handle-message
+     'fake-webview-process
+     (yunge-reader-webview-test--ready-message))
+    (let ((view (yunge-reader-webview--make-view :id 4))
+          (location (yunge-reader-webview-test--location 0.25)))
+      (yunge-reader-webview--open-view-publication
+       view 7 #'ignore location)
+      (yunge-reader-webview--navigate-view
+       view "next-screen" #'ignore)
+      (yunge-reader-webview--navigate-view
+       view "go-to" #'ignore location)
+      (let* ((requests
+              (mapcar
+               (lambda (line)
+                 (json-parse-string line :object-type 'alist))
+               (nreverse sent)))
+             (open (nth 0 requests))
+             (next (nth 1 requests))
+             (go-to (nth 2 requests)))
+        (should
+         (equal
+          (mapcar (lambda (request) (alist-get 'op request)) requests)
+          '("view-open-publication" "view-navigate" "view-navigate")))
+        (should
+         (equal (alist-get 'location (alist-get 'params open))
+                location))
+        (should
+         (equal (alist-get 'command (alist-get 'params next))
+                "next-screen"))
+        (should
+         (equal (alist-get 'location (alist-get 'params go-to))
+                location))))))
 
 (ert-deftest yunge-reader-webview-wraps-publication-operations ()
   (yunge-reader-webview-test--with-fake-process
@@ -212,9 +272,16 @@
            'fake-webview-process
            '((kind . "event")
              (event . "publication-ready")
-             (view . 6)))
+             (view . 6)
+             (location
+              . ((cfi . "epubcfi(/6/4!/4/2)")
+                 (href . "OPS/chapter.xhtml")
+                 (fraction . 0.25)))))
           (should
            (yunge-reader-webview--view-publication-ready view))
+          (should
+           (equal (yunge-reader-webview--view-location view)
+                  (yunge-reader-webview-test--location 0.25)))
           (cl-letf (((symbol-function 'display-warning)
                      (lambda (&rest value) (setq warning value))))
             (yunge-reader-webview--handle-event
@@ -230,6 +297,41 @@
             (should (equal (string-trim (buffer-string))
                            "bad chapter"))))
       (kill-buffer buffer))))
+
+(ert-deftest yunge-reader-webview-keeps-locations-per-view ()
+  (let* ((first (yunge-reader-webview--make-view :id 11))
+         (second (yunge-reader-webview--make-view :id 12))
+         (yunge-reader-webview--process 'fake-webview-process)
+         (yunge-reader-webview--views
+          (make-hash-table :test #'eql)))
+    (puthash 11 first yunge-reader-webview--views)
+    (puthash 12 second yunge-reader-webview--views)
+    (yunge-reader-webview--handle-event
+     'fake-webview-process
+     '((kind . "event")
+       (event . "location")
+       (view . 11)
+       (location
+        . ((cfi . "epubcfi(/6/4)")
+           (href . "OPS/first.xhtml")
+           (fraction . 0.2)))))
+    (yunge-reader-webview--handle-event
+     'fake-webview-process
+     '((kind . "event")
+       (event . "location")
+       (view . 12)
+       (location
+        . ((cfi . "epubcfi(/6/8)")
+           (href . "OPS/second.xhtml")
+           (fraction . 0.8)))))
+    (should (= (alist-get
+                'fraction
+                (yunge-reader-webview--view-location first))
+               0.2))
+    (should (= (alist-get
+                'fraction
+                (yunge-reader-webview--view-location second))
+               0.8))))
 
 (ert-deftest yunge-reader-webview-parses-decimal-and-hex-frame-handles ()
   (cl-letf (((symbol-function 'frame-parameter)
@@ -296,9 +398,10 @@
       (kill-buffer other))))
 
 (ert-deftest yunge-reader-webview-closes-publication-after-destroy ()
-  (let* ((view
+  (let* ((location (yunge-reader-webview-test--location 0.6))
+         (view
           (yunge-reader-webview--make-view
-           :id 10 :created t :publication 3))
+           :id 10 :created t :publication 3 :location location))
          (yunge-reader-webview--process 'fake-webview-process)
          (yunge-reader-webview--views
           (make-hash-table :test #'eql))
@@ -309,6 +412,8 @@
                (lambda (operation parameters complete)
                  (push (list operation parameters complete) requests))))
       (yunge-reader-webview--destroy-view view)
+      (should (equal (yunge-reader-webview--view-location view)
+                     location))
       (should (equal (caar requests) "view-destroy"))
       (funcall (nth 2 (car requests)) nil nil)
       (should

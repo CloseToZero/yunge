@@ -24,6 +24,9 @@
 (defconst yunge-reader-webview-protocol-version 1
   "WebView protocol version understood by this client.")
 
+(defconst yunge-reader-webview--max-location-text-bytes 3072
+  "Maximum byte length of one EPUB locator text field.")
+
 (defconst yunge-reader-webview--log-buffer-name
   "*Yunge Reader WebView log*"
   "Name of the WebView helper diagnostic buffer.")
@@ -65,6 +68,7 @@
   bounds-pending
   publication
   publication-ready
+  location
   path
   open-deadline
   open-timer)
@@ -108,7 +112,8 @@
             "view-clear-selection" "view-create"
             "view-destroy" "view-events" "view-focus"
             "view-focus-parent" "view-info"
-            "view-open-publication" "view-status" "view-visible")))
+            "view-navigate" "view-open-publication"
+            "view-status" "view-visible")))
       (error
        "Incompatible Yunge Reader WebView helper: %S"
        message))))
@@ -155,13 +160,74 @@
   (yunge-reader-webview--request
    "publication-close" `((publication . ,publication)) callback))
 
+(defun yunge-reader-webview--valid-location-p (location)
+  "Return non-nil when LOCATION is a bounded EPUB locator."
+  (and
+   (listp location)
+   (let ((cfi (alist-get 'cfi location))
+         (href (alist-get 'href location))
+         (fraction (alist-get 'fraction location)))
+     (and
+      (cl-every
+       (lambda (entry)
+         (memq (car-safe entry) '(cfi href fraction)))
+       location)
+      (cl-every
+       (lambda (value)
+         (and (stringp value)
+              (not (string-empty-p value))
+              (<= (string-bytes value)
+                  yunge-reader-webview--max-location-text-bytes)
+              (not (string-match-p "[[:cntrl:]]" value))))
+       (list cfi href))
+      (string-prefix-p "epubcfi(" cfi)
+      (string-suffix-p ")" cfi)
+      (not (string-prefix-p "/" href))
+      (not (string-match-p "[\\\\:?#]" href))
+      (cl-every
+       (lambda (part)
+         (not (member part '("" "." ".."))))
+       (split-string href "/"))
+      (or (null fraction)
+          (and (numberp fraction)
+               (= fraction fraction)
+               (<= 0 fraction 1)))))))
+
+(defun yunge-reader-webview--check-location (location)
+  "Return LOCATION or signal when it is not a valid EPUB locator."
+  (unless (yunge-reader-webview--valid-location-p location)
+    (error "Invalid EPUB location: %S" location))
+  location)
+
 (defun yunge-reader-webview--open-view-publication
-    (view publication callback)
-  "Open PUBLICATION in native VIEW, then invoke CALLBACK."
+    (view publication callback &optional location)
+  "Open PUBLICATION in native VIEW at LOCATION, then invoke CALLBACK."
   (yunge-reader-webview--request
    "view-open-publication"
-   `((view . ,(yunge-reader-webview--view-id view))
-     (publication . ,publication))
+   (append
+    `((view . ,(yunge-reader-webview--view-id view))
+      (publication . ,publication))
+    (when location
+      `((location . ,(yunge-reader-webview--check-location location)))))
+   callback))
+
+(defun yunge-reader-webview--navigate-view
+    (view command callback &optional location)
+  "Ask native VIEW to run semantic COMMAND and invoke CALLBACK.
+LOCATION is required only for the go-to command."
+  (unless (member command '("previous-screen" "next-screen" "go-to"))
+    (error "Unsupported EPUB navigation command: %S" command))
+  (when (and (equal command "go-to") (null location))
+    (error "EPUB go-to navigation requires a location"))
+  (when (and location (not (equal command "go-to")))
+    (error "EPUB screen navigation does not accept a location"))
+  (yunge-reader-webview--request
+   "view-navigate"
+   (append
+    `((view . ,(yunge-reader-webview--view-id view))
+      (command . ,command))
+    (when location
+      `((location . ,(yunge-reader-webview--check-location location)))))
    callback))
 
 (defun yunge-reader-webview--set-buffer-message (view message)
@@ -173,6 +239,13 @@
           (erase-buffer)
           (insert message "\n")
           (set-buffer-modified-p nil))))))
+
+(defun yunge-reader-webview--event-location (message)
+  "Return the validated EPUB locator carried by event MESSAGE."
+  (let ((location (alist-get 'location message)))
+    (unless (yunge-reader-webview--valid-location-p location)
+      (error "Malformed EPUB location event: %S" message))
+    (copy-tree location)))
 
 (defun yunge-reader-webview--handle-event (process message)
   "Handle one asynchronous WebView MESSAGE from PROCESS."
@@ -199,12 +272,23 @@
          (select-frame-set-input-focus (window-frame window))))
       ("publication-ready"
        (when-let* ((view (gethash id yunge-reader-webview--views)))
+         (setf (yunge-reader-webview--view-location view)
+               (yunge-reader-webview--event-location message))
          (setf (yunge-reader-webview--view-publication-ready view) t)
          (yunge-reader-webview--set-buffer-message
           view
           (format "EPUB renderer ready: %s"
                   (or (yunge-reader-webview--view-path view)
                       "publication")))))
+      ("location"
+       (when-let* ((view (gethash id yunge-reader-webview--views)))
+         (setf (yunge-reader-webview--view-location view)
+               (yunge-reader-webview--event-location message))))
+      ("navigation-error"
+       (let ((detail (alist-get 'message message)))
+         (unless (stringp detail)
+           (error "Malformed EPUB navigation error: %S" message))
+         (display-warning 'yunge-reader detail :warning)))
       ("publication-error"
        (let ((detail (alist-get 'message message)))
          (unless (stringp detail)
@@ -575,7 +659,41 @@ Without FORCE, request graceful shutdown and enforce a deadline."
     (yunge-reader-webview--open-view-publication
      view
      (yunge-reader-webview--view-publication view)
-     (apply-partially #'yunge-reader-webview--open-complete view))))
+     (apply-partially #'yunge-reader-webview--open-complete view)
+     (yunge-reader-webview--view-location view))))
+
+(defun yunge-reader-webview--current-ready-view ()
+  "Return the current buffer's ready EPUB WebView."
+  (let ((view yunge-reader-webview--buffer-view))
+    (unless (and view
+                 (not (yunge-reader-webview--view-destroyed view))
+                 (yunge-reader-webview--view-publication-ready view))
+      (user-error "The current buffer has no ready EPUB view"))
+    view))
+
+(defun yunge-reader-webview--navigation-complete (_result error-data)
+  "Report an asynchronous EPUB navigation ERROR-DATA."
+  (when error-data
+    (display-warning
+     'yunge-reader (error-message-string error-data) :warning)))
+
+;;;###autoload
+(defun yunge-reader-webview-previous-screen ()
+  "Move the current EPUB spike view backward by one screen."
+  (interactive)
+  (yunge-reader-webview--navigate-view
+   (yunge-reader-webview--current-ready-view)
+   "previous-screen"
+   #'yunge-reader-webview--navigation-complete))
+
+;;;###autoload
+(defun yunge-reader-webview-next-screen ()
+  "Move the current EPUB spike view forward by one screen."
+  (interactive)
+  (yunge-reader-webview--navigate-view
+   (yunge-reader-webview--current-ready-view)
+   "next-screen"
+   #'yunge-reader-webview--navigation-complete))
 
 (defun yunge-reader-webview--create-complete
     (view _result error-data)
@@ -666,8 +784,9 @@ This command is an architecture spike, not an EPUB reader yet."
     buffer))
 
 ;;;###autoload
-(defun yunge-reader-webview-epub-spike (file &optional window)
-  "Open local EPUB FILE in a native child WebView in WINDOW.
+(defun yunge-reader-webview-epub-spike
+    (file &optional window location)
+  "Open local EPUB FILE at LOCATION in a native child WebView in WINDOW.
 This manual architecture spike does not register EPUB file associations or
 save a durable reading position."
   (interactive "fEPUB file: ")
@@ -680,6 +799,8 @@ save a durable reading position."
     (user-error "The EPUB WebView spike accepts local files only"))
   (unless (and (file-regular-p file) (file-readable-p file))
     (user-error "EPUB file is not readable: %s" file))
+  (when location
+    (yunge-reader-webview--check-location location))
   (let* ((window (or window (selected-window)))
          (id (cl-incf yunge-reader-webview--next-view-id))
          (buffer
@@ -691,6 +812,7 @@ save a durable reading position."
            :id id
            :window window
            :buffer buffer
+           :location (and location (copy-tree location))
            :path file
            :requested-bounds bounds)))
     (with-current-buffer buffer
