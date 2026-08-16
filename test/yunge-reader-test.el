@@ -221,7 +221,9 @@
     (should (eq (cdr (nth 2 candidates)) colliding))))
 
 (ert-deftest yunge-reader-caches-a-late-outline-without-opening-it ()
-  (let ((yunge-reader-drivers nil)
+  (let ((yunge-reader--document-registry
+         (make-hash-table :test #'equal))
+        (yunge-reader-drivers nil)
         (requests 0)
         completion
         (shown 0)
@@ -236,7 +238,11 @@
           (let ((driver
                  (yunge-reader-register-driver
                   'test
-                  :match #'ignore :open #'ignore :close #'ignore
+                  :match (lambda (_file) t)
+                  :open
+                  (lambda (_file complete)
+                    (funcall complete 'handle '(:layout fixed) nil))
+                  :close #'ignore
                   :request
                   (lambda (_document operation arguments complete)
                     (should (eq operation 'outline))
@@ -247,14 +253,14 @@
                   (lambda (_document _window)
                     (make-yunge-reader-position :unit 0))
                   :restore (lambda (&rest _arguments) t))))
-            (setq yunge-reader-document
-                  (make-yunge-reader-document
-                   :file "outline.pdf" :driver driver :layout 'fixed)))
+            (yunge-reader--begin-open reader driver "outline.pdf"))
           (cl-letf
               (((symbol-function 'yunge-reader--select-outline-item)
                 (lambda (_outline) (cl-incf shown))))
             (yunge-reader-outline)
-            (should yunge-reader--outline-pending)
+            (should
+             (yunge-reader--document-entry-outline-pending
+              yunge-reader--document-entry))
             (switch-to-buffer other)
             (funcall
              completion
@@ -266,8 +272,12 @@
              nil)
             (should (zerop shown))
             (with-current-buffer reader
-              (should yunge-reader--outline-loaded)
-              (should-not yunge-reader--outline-pending))
+              (should
+               (yunge-reader--document-entry-outline-loaded
+                yunge-reader--document-entry))
+              (should-not
+               (yunge-reader--document-entry-outline-pending
+                yunge-reader--document-entry)))
             (switch-to-buffer reader)
             (yunge-reader-outline)
             (should (= shown 1))
@@ -276,6 +286,98 @@
         (kill-buffer reader))
       (when (buffer-live-p other)
         (kill-buffer other)))))
+
+(ert-deftest yunge-reader-shares-one-outline-request-between-views ()
+  (let ((yunge-reader--document-registry
+         (make-hash-table :test #'equal))
+        (yunge-reader-drivers nil)
+        (requests 0)
+        completion
+        shown
+        first
+        second)
+    (unwind-protect
+        (save-window-excursion
+          (let ((driver
+                 (yunge-reader-register-driver
+                  'test
+                  :match (lambda (_file) t)
+                  :open
+                  (lambda (_file complete)
+                    (funcall complete 'handle '(:layout fixed) nil))
+                  :close #'ignore
+                  :attach #'ignore
+                  :detach #'ignore
+                  :request
+                  (lambda (_document operation _arguments complete)
+                    (should (eq operation 'outline))
+                    (cl-incf requests)
+                    (setq completion complete))
+                  :location
+                  (lambda (_document _window)
+                    (make-yunge-reader-position :unit 0))
+                  :restore (lambda (&rest _arguments) t))))
+            (setq first
+                  (yunge-reader-test--buffer
+                   " *reader-outline-primary*")
+                  second
+                  (yunge-reader-test--buffer
+                   " *reader-outline-additional*"))
+            (yunge-reader--begin-open first driver "shared-outline.pdf")
+            (yunge-reader--begin-open second driver "shared-outline.pdf"))
+          (switch-to-buffer first)
+          (let ((first-window (selected-window))
+                (second-window (split-window-right))
+                (outline
+                 (make-yunge-reader-outline-data
+                  :items
+                  (list
+                   (make-yunge-reader-outline-item
+                    :title "Chapter" :depth 0)))))
+            (set-window-buffer second-window second)
+            (cl-letf
+                (((symbol-function 'yunge-reader--select-outline-item)
+                  (lambda (_outline)
+                    (push (current-buffer) shown))))
+              (with-selected-window first-window
+                (with-current-buffer first
+                  (yunge-reader-outline)))
+              (with-selected-window second-window
+                (with-current-buffer second
+                  (yunge-reader-outline)))
+              (let ((entry
+                     (buffer-local-value
+                      'yunge-reader--document-entry first)))
+                (should
+                 (eq entry
+                     (buffer-local-value
+                      'yunge-reader--document-entry second)))
+                (should (= requests 1))
+                (should
+                 (yunge-reader--document-entry-outline-pending entry))
+                (should
+                 (= (length
+                     (yunge-reader--document-entry-outline-waiters entry))
+                    2))
+                (with-selected-window second-window
+                  (funcall completion outline nil))
+                (should
+                 (eq (yunge-reader--document-entry-outline entry)
+                     outline))
+                (should
+                 (yunge-reader--document-entry-outline-loaded entry))
+                (should-not
+                 (yunge-reader--document-entry-outline-waiters entry))
+                (should (equal shown (list second)))
+                (with-selected-window first-window
+                  (with-current-buffer first
+                    (yunge-reader-outline)))
+                (should (equal shown (list first second)))
+                (should (= requests 1))))))
+      (when (buffer-live-p second)
+        (kill-buffer second))
+      (when (buffer-live-p first)
+        (kill-buffer first)))))
 
 (ert-deftest yunge-reader-outline-jumps-restore-and-record-places ()
   (let* ((file (expand-file-name "outline-jump.pdf"))

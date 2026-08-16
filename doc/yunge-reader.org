@@ -169,6 +169,11 @@ optional zoom hints; no Lisp object contains a PDFium bookmark or destination
 handle.  This lets PDF, EPUB, and later formats share the selection UI and
 jump machinery without pretending their source outline formats are identical.
 
+Outline data and loading state belong to the shared document entry.  Concurrent
+Reader views coalesce one driver request and reuse the same immutable result.
+Each requesting view keeps only its own guarded presentation intent; closing
+that view removes its waiter without cancelling another view's request.
+
 =o= requests the outline once per open document and presents actionable
 entries through ordinary completion.  Duplicate labels receive stable
 numeric suffixes.  A successful choice uses the same guarded live-place

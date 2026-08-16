@@ -121,7 +121,11 @@ and window and returns non-nil after accepting the location."
   requests
   views
   primary-view
-  active-view)
+  active-view
+  outline
+  outline-loaded
+  outline-pending
+  outline-waiters)
 
 (cl-defstruct (yunge-reader--view-request
                (:constructor yunge-reader--make-view-request))
@@ -130,6 +134,14 @@ and window and returns non-nil after accepting the location."
   generation
   complete
   completed)
+
+(cl-defstruct (yunge-reader--outline-waiter
+               (:constructor yunge-reader--make-outline-waiter))
+  "One Reader view waiting for a shared document outline."
+  buffer
+  generation
+  window
+  state)
 
 (cl-defstruct yunge-reader-position
   "A stable position in a document.
@@ -271,15 +283,6 @@ Each entry maps a canonical file name to versioned, printable place data.")
 
 (defvar-local yunge-reader--search-generation 0
   "Generation used to reject late reader search completions.")
-
-(defvar-local yunge-reader--outline nil
-  "Cached `yunge-reader-outline-data' for the current document.")
-
-(defvar-local yunge-reader--outline-loaded nil
-  "Whether the current document outline has finished loading.")
-
-(defvar-local yunge-reader--outline-pending nil
-  "Non-nil while one document outline request is outstanding.")
 
 (defvar-local yunge-reader--outline-generation 0
   "Generation used to reject late document outline completions.")
@@ -1265,9 +1268,6 @@ non-nil only after opening and restoration succeed."
             (or (and place (copy-tree place t))
                 (yunge-reader--saved-place file driver))
             yunge-reader--place-recording-enabled nil
-            yunge-reader--outline nil
-            yunge-reader--outline-loaded nil
-            yunge-reader--outline-pending nil
             yunge-reader--document-entry entry)
       (cl-incf yunge-reader--open-generation)
       (cl-incf yunge-reader--outline-generation)
@@ -1406,11 +1406,9 @@ Capture and save this view's stable place before changing the primary view."
     (cl-incf yunge-reader--search-generation)
     (cl-incf yunge-reader--outline-generation)
     (cl-incf yunge-reader--copy-generation)
-    (setq yunge-reader--outline nil
-          yunge-reader--outline-loaded nil
-          yunge-reader--outline-pending nil
-          yunge-reader--copy-pending nil)
+    (setq yunge-reader--copy-pending nil)
     (when entry
+      (yunge-reader--remove-outline-waiters entry (current-buffer))
       (dolist (request
                (copy-sequence
                 (yunge-reader--document-entry-requests entry)))
@@ -1651,68 +1649,118 @@ COMPLETE is called exactly once by the driver with a value and error value."
         (when item
           (yunge-reader--follow-outline-item item))))))
 
+(defun yunge-reader--remove-outline-waiters (entry buffer)
+  "Remove outline waiters owned by BUFFER from ENTRY."
+  (setf
+   (yunge-reader--document-entry-outline-waiters entry)
+   (seq-remove
+    (lambda (waiter)
+      (eq buffer (yunge-reader--outline-waiter-buffer waiter)))
+    (yunge-reader--document-entry-outline-waiters entry))))
+
+(defun yunge-reader--add-outline-waiter (entry)
+  "Add the current Reader view as an outline waiter for ENTRY."
+  (let ((window (yunge-reader--place-window)))
+    (unless window
+      (user-error "The Reader buffer is not displayed in a live window"))
+    (yunge-reader--remove-outline-waiters entry (current-buffer))
+    (setf
+     (yunge-reader--document-entry-outline-waiters entry)
+     (append
+      (yunge-reader--document-entry-outline-waiters entry)
+      (list
+       (yunge-reader--make-outline-waiter
+        :buffer (current-buffer)
+        :generation yunge-reader--outline-generation
+        :window window
+        :state (yunge-reader--window-state window)))))))
+
+(defun yunge-reader--outline-waiter-current-p
+    (entry document waiter)
+  "Return whether WAITER still belongs to ENTRY and DOCUMENT."
+  (let ((buffer (yunge-reader--outline-waiter-buffer waiter)))
+    (and (buffer-live-p buffer)
+         (with-current-buffer buffer
+           (and (= (yunge-reader--outline-waiter-generation waiter)
+                   yunge-reader--outline-generation)
+                (eq entry yunge-reader--document-entry)
+                (eq document yunge-reader-document))))))
+
+(defun yunge-reader--finish-outline-waiter
+    (entry document waiter outline)
+  "Offer OUTLINE to a current WAITER for ENTRY and DOCUMENT."
+  (when (yunge-reader--outline-waiter-current-p
+         entry document waiter)
+    (let ((buffer (yunge-reader--outline-waiter-buffer waiter))
+          (window (yunge-reader--outline-waiter-window waiter))
+          (state (yunge-reader--outline-waiter-state waiter)))
+      (with-current-buffer buffer
+        (if (and (eq (selected-window) window)
+                 (not (active-minibuffer-window))
+                 (yunge-reader--window-state-current-p window state))
+            (condition-case error-data
+                (yunge-reader--select-outline-item outline)
+              (quit nil)
+              (error
+               (display-warning
+                'yunge-reader
+                (format "Could not follow document outline: %s"
+                        (error-message-string error-data))
+                :warning)))
+          (message "Document outline loaded; press o to open it"))))))
+
 (defun yunge-reader--complete-outline
-    (buffer document generation window state value error-data)
-  "Complete an outline request made from BUFFER and WINDOW."
-  (when (buffer-live-p buffer)
-    (with-current-buffer buffer
-      (when (and (= generation yunge-reader--outline-generation)
-                 (eq document yunge-reader-document))
-        (setq yunge-reader--outline-pending nil)
-        (cond
-         (error-data
-          (display-warning
-           'yunge-reader
-           (format "Could not load document outline: %s"
-                   (error-message-string error-data))
-           :warning))
-         ((not (yunge-reader--outline-valid-p value))
-          (display-warning
-           'yunge-reader
-           "Reader driver returned an invalid document outline"
-           :warning))
-         (t
-          (setq yunge-reader--outline value
-                yunge-reader--outline-loaded t)
-          (if (and (eq (selected-window) window)
-                   (not (active-minibuffer-window))
-                   (yunge-reader--window-state-current-p window state))
-              (condition-case error-data
-                  (yunge-reader--select-outline-item value)
-                (quit nil)
-                (error
-                 (display-warning
-                  'yunge-reader
-                  (format "Could not follow document outline: %s"
-                          (error-message-string error-data))
-                  :warning)))
-            (message "Document outline loaded; press o to open it"))))))))
+    (entry document value error-data)
+  "Complete the shared outline request for ENTRY and DOCUMENT."
+  (when (and (yunge-reader--entry-current-p entry)
+             (eq (yunge-reader--document-entry-state entry) 'ready)
+             (eq document
+                 (yunge-reader--document-entry-document entry)))
+    (let ((waiters
+           (yunge-reader--document-entry-outline-waiters entry)))
+      (setf (yunge-reader--document-entry-outline-pending entry) nil
+            (yunge-reader--document-entry-outline-waiters entry) nil)
+      (cond
+       (error-data
+        (display-warning
+         'yunge-reader
+         (format "Could not load document outline: %s"
+                 (error-message-string error-data))
+         :warning))
+       ((not (yunge-reader--outline-valid-p value))
+        (display-warning
+         'yunge-reader
+         "Reader driver returned an invalid document outline"
+         :warning))
+       (t
+        (setf (yunge-reader--document-entry-outline entry) value
+              (yunge-reader--document-entry-outline-loaded entry) t)
+        (dolist (waiter waiters)
+          (yunge-reader--finish-outline-waiter
+           entry document waiter value)))))))
 
 (defun yunge-reader-outline ()
   "Choose a destination from the current document outline."
   (interactive)
-  (unless yunge-reader-document
+  (unless (yunge-reader--ready-view-entry)
     (user-error "This reader buffer has no open document"))
-  (cond
-   (yunge-reader--outline-loaded
-    (yunge-reader--select-outline-item yunge-reader--outline))
-   (yunge-reader--outline-pending
-    (message "Document outline is still loading"))
-   (t
-    (let* ((buffer (current-buffer))
-           (document yunge-reader-document)
-           (generation yunge-reader--outline-generation)
-           (window (yunge-reader--place-window)))
-      (unless window
-        (user-error "The Reader buffer is not displayed in a live window"))
-      (let ((state (yunge-reader--window-state window)))
-        (setq yunge-reader--outline-pending t)
+  (let ((entry yunge-reader--document-entry))
+    (cond
+     ((yunge-reader--document-entry-outline-loaded entry)
+      (yunge-reader--select-outline-item
+       (yunge-reader--document-entry-outline entry)))
+     ((yunge-reader--document-entry-outline-pending entry)
+      (yunge-reader--add-outline-waiter entry)
+      (message "Document outline is still loading"))
+     (t
+      (let ((document yunge-reader-document))
+        (yunge-reader--add-outline-waiter entry)
+        (setf (yunge-reader--document-entry-outline-pending entry) t)
         (yunge-reader-request
          'outline nil
          (lambda (value error-data)
            (yunge-reader--complete-outline
-            buffer document generation window state
-            value error-data))))))))
+            entry document value error-data))))))))
 
 (defun yunge-reader--search-smart-case-p (query)
   "Return non-nil when QUERY contains an uppercase character."
