@@ -337,7 +337,8 @@ Shared reader bindings are:
   match.
 - ~+/-~ zoom in or out, ~=~ resets zoom, and ~W/P~ fit the document width or
   page to the window.
-- ~o~ opens the document outline when the active format provides one.
+- ~o~ toggles the document outline side window when the active format
+  provides one.
 - ~gr~ refreshes the rendered view and ~q~ quits its window.
 
 Reader view administration remains under the mode-local leader:
@@ -360,9 +361,16 @@ Mouse-1 selects one character and dragging selects a text range.
 Ctrl-Mouse-1 follows a link at the pointer.  ~RET~ remains the portable primary
 link action and does not require a GUI modifier.
 
+Outline trees use ~j/k~ and ~gg/G~ for movement, ~TAB~ for folding, and ~q~
+to close the side window.  ~RET~ follows an entry and selects its Reader
+window.  ~gf~ follows the entry while preserving outline focus, matching
+the existing Xref, Grep, and Occur preview convention.  Do not use ~C-RET~
+or ~M-RET~ for this distinction: they carry unrelated structural meanings
+and are less portable to terminals.
+
 Choosing an outline destination is a semantic jump and participates in
-~C-o/C-i~.  Loading an outline never opens a late minibuffer after the user
-has changed the originating Reader window.
+~C-o/C-i~.  Loading an outline may update its hidden buffer, but never opens
+a late window or changes focus after the user has moved elsewhere.
 
 * Cross-platform rules
 

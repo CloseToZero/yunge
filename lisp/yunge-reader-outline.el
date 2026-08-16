@@ -6,6 +6,16 @@
 (require 'yunge-reader)
 
 (declare-function evil-set-initial-state "evil-core" (mode state))
+(declare-function yunge-reader--remove-outline-waiters
+                  "yunge-reader" (entry buffer))
+
+(defcustom yunge-reader-outline-window-width 0.28
+  "Width of a Reader outline side window.
+A floating-point value is interpreted as a fraction of the frame width."
+  :type '(choice
+          (integer :tag "Columns")
+          (float :tag "Frame fraction"))
+  :group 'yunge-reader)
 
 (defconst yunge-reader-outline-normal-bindings
   '(("G" yunge-reader-outline-last-item "last item")
@@ -74,7 +84,9 @@
   (setq-local header-line-format
               '(:eval (yunge-reader-outline--header)))
   (setq-local yunge-reader-outline--collapsed
-              (make-hash-table :test #'eql)))
+              (make-hash-table :test #'eql))
+  (add-hook 'kill-buffer-hook
+            #'yunge-reader-outline--detach nil t))
 
 (with-eval-after-load 'evil
   (evil-set-initial-state 'yunge-reader-outline-mode 'normal)
@@ -161,14 +173,37 @@
         (vconcat (yunge-reader-outline-data-items outline)))
   (yunge-reader-outline--render))
 
+(defun yunge-reader-outline-set-status (status)
+  "Display STATUS instead of outline entries in the current outline view."
+  (let ((inhibit-read-only t))
+    (setq yunge-reader-outline--data nil
+          yunge-reader-outline--items [])
+    (erase-buffer)
+    (insert status "\n")
+    (set-buffer-modified-p nil)
+    (goto-char (point-min))))
+
 (defun yunge-reader-outline--buffer-name (reader)
   "Return an outline buffer name for READER."
   (format "*Reader Outline: %s*" (buffer-name reader)))
 
+(defun yunge-reader-outline-set-target
+    (reader window entry document)
+  "Make this outline control READER in WINDOW.
+ENTRY and DOCUMENT identify the shared resource."
+  (unless (and (buffer-live-p reader)
+               (window-live-p window)
+               (eq (window-buffer window) reader))
+    (error "Cannot target an outline at a dead Reader window"))
+  (setq yunge-reader-outline--reader-buffer reader
+        yunge-reader-outline--reader-window window
+        yunge-reader-outline--entry entry
+        yunge-reader-outline--document document))
+
 (defun yunge-reader-outline-create-buffer
-    (reader window entry document outline)
+    (reader window entry document &optional outline)
   "Create an outline buffer for READER and WINDOW.
-ENTRY and DOCUMENT identify the shared resource.  Render OUTLINE."
+ENTRY and DOCUMENT identify the shared resource.  Render optional OUTLINE."
   (unless (and (buffer-live-p reader)
                (window-live-p window)
                (eq (window-buffer window) reader))
@@ -178,12 +213,62 @@ ENTRY and DOCUMENT identify the shared resource.  Render OUTLINE."
           (yunge-reader-outline--buffer-name reader))))
     (with-current-buffer buffer
       (yunge-reader-outline-mode)
-      (setq yunge-reader-outline--reader-buffer reader
-            yunge-reader-outline--reader-window window
-            yunge-reader-outline--entry entry
-            yunge-reader-outline--document document)
-      (yunge-reader-outline-set-data outline))
+      (yunge-reader-outline-set-target
+       reader window entry document)
+      (if outline
+          (yunge-reader-outline-set-data outline)
+        (yunge-reader-outline-set-status
+         "Loading document outline...")))
     buffer))
+
+(defun yunge-reader-outline--detach ()
+  "Detach the current outline buffer from its Reader view."
+  (let ((outline (current-buffer))
+        (reader yunge-reader-outline--reader-buffer)
+        (entry yunge-reader-outline--entry))
+    (when (buffer-live-p reader)
+      (with-current-buffer reader
+        (when (eq yunge-reader--outline-buffer outline)
+          (setq yunge-reader--outline-buffer nil)
+          (when (and entry
+                     (eq entry yunge-reader--document-entry))
+            (yunge-reader--remove-outline-waiters
+             entry reader)))))))
+
+(defun yunge-reader-outline-display-buffer (buffer)
+  "Display BUFFER as a selected left side window."
+  (let ((reader
+         (buffer-local-value
+          'yunge-reader-outline--reader-buffer buffer))
+        (entry
+         (buffer-local-value
+          'yunge-reader-outline--entry buffer))
+        (document
+         (buffer-local-value
+          'yunge-reader-outline--document buffer))
+        (reader-window
+         (buffer-local-value
+          'yunge-reader-outline--reader-window buffer)))
+    (unless (window-live-p reader-window)
+      (user-error "The Reader window for this outline is no longer live"))
+    (let ((outline-window
+           (with-selected-window reader-window
+             (display-buffer-in-side-window
+              buffer
+              `((side . left)
+                (slot . 0)
+                (window-width
+                 . ,yunge-reader-outline-window-width))))))
+      (setq reader-window
+            (get-buffer-window reader
+                               (window-frame outline-window)))
+      (unless reader-window
+        (user-error "The Reader buffer lost its display window"))
+      (with-current-buffer buffer
+        (yunge-reader-outline-set-target
+         reader reader-window entry document))
+      (select-window outline-window)
+      outline-window)))
 
 (defun yunge-reader-outline--target ()
   "Return the Reader buffer and window controlled by this outline view."

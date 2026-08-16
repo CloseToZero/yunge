@@ -35,9 +35,10 @@ The current PDF adapter provides:
 - graceful, forced, idle, EOF, and Emacs-exit service shutdown paths.
 
 The reader uses one key vocabulary with or without Evil.  Shared keys are
-=y= to copy the logical selection, =o= to open the outline, =/= to start a
-search, =n/N= to visit the next or previous match, =gr= to refresh, =+/-= to
-zoom, === to reset zoom, =W/P= to fit width or page, and =q= to quit.  PDF
+=y= to copy the logical selection, =o= to toggle the outline side window,
+=/= to start a search, =n/N= to visit the next or previous match, =gr= to
+refresh, =+/-= to zoom, === to reset zoom, =W/P= to fit width or page, and
+=q= to quit.  PDF
 views use =J/K= for the next or previous page, =gg/G= for the first or last
 page, =gp= for a page prompt, =RET= for a visible link prompt, and Page Down
 or Page Up for screen scrolling.  =C-d/C-u= scroll by half a screen in
@@ -171,20 +172,24 @@ jump machinery without pretending their source outline formats are identical.
 
 Outline data and loading state belong to the shared document entry.  Concurrent
 Reader views coalesce one driver request and reuse the same immutable result.
-Each requesting view keeps only its own guarded presentation intent; closing
-that view removes its waiter without cancelling another view's request.
+Each Reader view owns an auxiliary outline buffer with independent point and
+fold state.  Closing that view removes its waiter and outline buffer without
+cancelling another view's request.
 
-=o= requests the outline once per open document and presents actionable
-entries through ordinary completion.  Duplicate labels receive stable
-numeric suffixes.  A successful choice uses the same guarded live-place
-restore as jump history, so a rejected target rolls back view and zoom state
-and cannot replace the saved place.  PDF XYZ, fit-page, and fit-width hints
-map to Reader zoom modes; unsupported fit variants retain the current zoom.
+=o= selects a left side window whose fractional width defaults to
+=yunge-reader-outline-window-width=.  The tree uses =j/k= and =gg/G= for
+movement, =TAB= to fold or expand children, and =q= to close the side window.
+=RET= follows a destination and selects its exact Reader window; =gf= follows
+the same destination while retaining outline focus.  A structural heading
+without a destination folds or expands instead.  A rejected target rolls
+back view and zoom state and cannot replace the saved place.  PDF XYZ,
+fit-page, and fit-width hints map to Reader zoom modes; unsupported fit
+variants retain the current zoom.
 
-Outline loading may complete asynchronously.  The completion opens a prompt
-only while the original Reader window, buffer, point, scroll state, selected
-window, and minibuffer state are unchanged.  Otherwise it caches the result
-and waits for the next =o=, avoiding a late prompt in unrelated work.
+Outline loading may complete asynchronously.  The side buffer initially
+shows a loading status.  Completion updates that buffer even if it is hidden,
+but never displays it or changes the selected window.  Reopening it binds the
+outline to the Reader view's current live window before a jump.
 
 PDF page links carry format-independent tagged actions, but their source
 rectangles remain disposable PDF adapter state.  Local destinations reuse the
@@ -452,8 +457,9 @@ resize anchoring, coalesced resize work, manual viewport growth, cross-scale
 place restoration, page clamping, deferred window restoration, failed-open
 place protection, rejected restores, immutable Reader jump capture, failed
 live-jump rollback, asynchronous reopen, late-window protection, semantic page
-tracking, outline caching, unique outline completion labels, outline-place
-restoration, keyed render completions, bounded link mapping and hit testing,
+tracking, shared outline caching, independent outline trees, hidden outline
+updates, outline-place restoration, keyed render completions, bounded link
+mapping and hit testing,
 tagged URI validation, allowlisted explicit activation, link request
 coalescing, late link caching, password retry, cancellation, attempt bounds,
 late-prompt rejection, cache replacement, lease balance, cache limits,
