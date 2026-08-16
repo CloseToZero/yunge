@@ -877,8 +877,11 @@
               (should (eq (current-buffer) second))
               (should (= opens 1))
               (should (equal (reverse attached) (list first second)))
+              (with-current-buffer first
+                (should (eq (yunge-reader-view-role) 'primary)))
               (with-current-buffer second
                 (should (eq yunge-reader-document document))
+                (should (eq (yunge-reader-view-role) 'additional))
                 (should (eq yunge-reader-zoom-mode 'manual))
                 (should (= yunge-reader-scale 1.75))
                 (should (= (gethash second positions) 23))
@@ -953,6 +956,7 @@
         (file (expand-file-name "make-primary.pdf"))
         (positions (make-hash-table :test #'eq))
         (opens 0)
+        role-changes
         first
         second)
     (unwind-protect
@@ -989,6 +993,16 @@
             (puthash second 29 positions)
             (setq yunge-reader-zoom-mode 'manual
                   yunge-reader-scale 2.0)
+            (dolist (buffer (list first second))
+              (with-current-buffer buffer
+                (add-hook
+                 'yunge-reader-view-role-change-hook
+                 (lambda ()
+                   (push
+                    (cons (current-buffer)
+                          (yunge-reader-view-role))
+                    role-changes))
+                 nil t)))
             (should (eq (yunge-reader-make-primary) second))
             (let* ((entry yunge-reader--document-entry)
                    (key (yunge-reader--place-file-key file))
@@ -1005,7 +1019,12 @@
               (should (eq (plist-get place :zoom-mode) 'manual))
               (should (= (plist-get place :scale) 2.0))
               (should (eq (yunge-reader-open file) second))
-              (should (= opens 1)))))
+              (should (= opens 1))
+              (should
+               (equal
+                (nreverse role-changes)
+                (list (cons first 'additional)
+                      (cons second 'primary)))))))
       (when (buffer-live-p second)
         (kill-buffer second))
       (when (buffer-live-p first)
@@ -1071,6 +1090,8 @@
         (yunge-reader-drivers nil)
         (file (expand-file-name "primary.pdf"))
         (positions (make-hash-table :test #'eq))
+        promoted-roles
+        warnings
         first
         second)
     (unwind-protect
@@ -1098,6 +1119,17 @@
             (switch-to-buffer first)
             (yunge-reader--begin-open first driver file)
             (yunge-reader--begin-open second driver file)
+            (with-current-buffer second
+              (add-hook
+               'yunge-reader-view-role-change-hook
+               (lambda ()
+                 (push (yunge-reader-view-role) promoted-roles))
+               nil t))
+            (with-current-buffer second
+              (add-hook
+               'yunge-reader-view-role-change-hook
+               (lambda () (error "header update failed"))
+               t t))
             (let* ((key (yunge-reader--place-file-key file))
                    (entry
                     (buffer-local-value
@@ -1114,11 +1146,16 @@
               (switch-to-buffer second)
               (with-current-buffer second
                 (yunge-reader--note-view-activity))
-              (kill-buffer first)
+              (cl-letf (((symbol-function 'display-warning)
+                         (lambda (&rest arguments)
+                           (push arguments warnings))))
+                (kill-buffer first))
               (setq first nil)
               (should
                (eq (yunge-reader--document-entry-primary-view entry)
                    second))
+              (should (equal promoted-roles '(primary)))
+              (should (= (length warnings) 1))
               (should (eq (yunge-reader--existing-buffer file) second))
               (should
                (= (plist-get

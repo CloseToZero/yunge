@@ -29,6 +29,7 @@ The current PDF adapter provides:
 - immutable render keys, stale-response rejection, and bounded disk cache
   eviction;
 - bounded in-memory render, text, and link caches for working pages;
+- shared document resources with independent primary and additional views;
 - session-bound native handles that cannot alias after a helper restart; and
 - graceful, forced, idle, EOF, and Emacs-exit service shutdown paths.
 
@@ -43,6 +44,14 @@ selects text, and Ctrl-Mouse-1 follows a link when hit.
 Evil starts Reader buffers in Normal state and leaves Visual =y= as
 =evil-yank=.
 =M-x yunge-reader-clear-search= removes the active match highlight.
+
+=M-x yunge-reader-new-view= creates an independent buffer at the current
+stable location and zoom while sharing the open document resource.  It refuses
+to create a view before the current location is stable, so an incomplete view
+cannot silently fall back to page zero or an older saved place.  The existing
+primary view is unchanged.  Run =M-x yunge-reader-make-primary= to transfer
+durable place ownership after saving the current view's stable location.
+PDF headers identify each buffer as =Primary= or =Additional=.
 
 * Library boundary
 
@@ -394,16 +403,10 @@ The native protocol remains an engine boundary.  A pure-Rust engine can become
 another backend after it meets the same rendering, encryption, text geometry,
 selection, and annotation conformance tests.
 
-* Next PDF slices
+* Next Reader slices
 
-The next implementation slice can expose the internal multiple-view model.
-=yunge-reader-new-view= should clone the current stable place and zoom into a
-new Reader buffer while sharing its document resource.  A separate promotion
-command should make the current buffer primary explicitly.  Ordinary
-=yunge-reader-open= should continue returning to the primary view.
-
-A later slice should add a second format driver to exercise the reflow
-contract.
+The next substantial implementation slice should add a second format driver
+to exercise the reflow contract.
 
 Annotation anchors and independent decoration layers remain a planned
 extension of the stable position contract, after the reading path is hardened.
@@ -411,9 +414,11 @@ extension of the stable position contract, after the reading path is hardened.
 * Testing
 
 ERT tests cover driver precedence, canonical open coalescing, shared resource
-release, primary-place ownership, pending-view loss, document/view lifecycle
-order, partial view cleanup, asynchronous cleanup, zoom, logical selection,
-native lifecycle, strict setup validation, PDF request mapping,
+release, public view cloning, explicit and automatic primary promotion,
+role-change notification, primary-place ownership, pending-view loss,
+document/view lifecycle order, partial view cleanup, asynchronous cleanup,
+zoom, logical selection, native lifecycle, strict setup validation, PDF request
+mapping,
 lease balance, fit calculations, stable roll slots, visible-page
 virtualization, prefetch bounds, one-at-a-time render-first scheduling, rapid
 viewport replacement, interactive request priority, explicit-stop queue

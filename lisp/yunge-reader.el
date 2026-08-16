@@ -285,6 +285,12 @@ Each entry maps a canonical file name to versioned, printable place data.")
 Drivers or view adapters use this buffer-local hook to request visible
 artifacts.  Functions run in the reader buffer without arguments.")
 
+(defvar-local yunge-reader-view-role-change-hook nil
+  "Hook run after the current Reader view changes role.
+Functions run in the affected Reader buffer without arguments.  A view
+adapter should update role-dependent presentation without rebuilding its
+document contents.")
+
 (defconst yunge-reader-normal-bindings
   '(("+" yunge-reader-zoom-in "zoom in")
     ("-" yunge-reader-zoom-out "zoom out")
@@ -417,9 +423,27 @@ new definition highest precedence."
               (eq yunge-reader-document
                   (yunge-reader--document-entry-document entry))))))
 
+(defun yunge-reader--notify-view-role-change (buffers)
+  "Run role-change hooks safely in live BUFFERS."
+  (dolist (buffer
+           (delete-dups (delq nil (copy-sequence buffers))))
+    (when (buffer-live-p buffer)
+      (condition-case error-data
+          (with-current-buffer buffer
+            (run-hooks 'yunge-reader-view-role-change-hook))
+        (error
+         (display-warning
+          'yunge-reader
+          (format "Could not update Reader role in %s: %s"
+                  (buffer-name buffer)
+                  (error-message-string error-data))
+          :warning))))))
+
 (defun yunge-reader--entry-live-views (entry)
   "Return and retain only live Reader views attached to ENTRY."
-  (let ((views
+  (let ((previous-primary
+         (yunge-reader--document-entry-primary-view entry))
+        (views
          (seq-filter
           (lambda (buffer)
             (yunge-reader--view-owns-entry-p buffer entry))
@@ -437,6 +461,10 @@ new definition highest precedence."
                   views)
       (setf (yunge-reader--document-entry-active-view entry)
             (yunge-reader--document-entry-primary-view entry)))
+    (unless (eq previous-primary
+                (yunge-reader--document-entry-primary-view entry))
+      (yunge-reader--notify-view-role-change
+       (list (yunge-reader--document-entry-primary-view entry))))
     views))
 
 (defun yunge-reader--entry-view (entry &optional preferred)
@@ -492,6 +520,15 @@ new definition highest precedence."
                (memq (current-buffer)
                      (yunge-reader--entry-live-views entry)))
       entry)))
+
+(defun yunge-reader-view-role ()
+  "Return the current Reader view role, or nil outside a ready view.
+The possible roles are `primary' and `additional'."
+  (when-let* ((entry (yunge-reader--ready-view-entry)))
+    (if (eq (current-buffer)
+            (yunge-reader--document-entry-primary-view entry))
+        'primary
+      'additional)))
 
 (defun yunge-reader--note-view-activity ()
   "Remember the current buffer as its document's active view."
@@ -967,7 +1004,9 @@ Do nothing until document opening and any prior place restoration commit."
 
 (defun yunge-reader--remove-entry-view (entry buffer)
   "Remove BUFFER ownership from document ENTRY and promote a survivor."
-  (let ((views
+  (let ((previous-primary
+         (yunge-reader--document-entry-primary-view entry))
+        (views
          (seq-filter
           (lambda (candidate)
             (and (not (eq candidate buffer))
@@ -985,7 +1024,11 @@ Do nothing until document opening and any prior place restoration commit."
     (unless (memq (yunge-reader--document-entry-active-view entry)
                   views)
       (setf (yunge-reader--document-entry-active-view entry)
-            (yunge-reader--document-entry-primary-view entry)))))
+            (yunge-reader--document-entry-primary-view entry)))
+    (unless (eq previous-primary
+                (yunge-reader--document-entry-primary-view entry))
+      (yunge-reader--notify-view-role-change
+       (list (yunge-reader--document-entry-primary-view entry))))))
 
 (defun yunge-reader--release-entry-if-unused (entry)
   "Close ready ENTRY when no attached or pending views remain."
@@ -1220,7 +1263,7 @@ asynchronously."
   "Display another Reader view of the current document.
 The new buffer starts from the current stable location and zoom state.  It
 shares the driver-owned document resource while keeping its view state
-independent.  The current view remains primary."
+independent.  The document's existing primary view is unchanged."
   (interactive)
   (let ((entry (yunge-reader--ready-view-entry)))
     (unless entry
@@ -1257,7 +1300,9 @@ Capture and save this view's stable place before changing the primary view."
       (user-error "This Reader view has no ready document"))
     (unless (eq (current-buffer)
                 (yunge-reader--document-entry-primary-view entry))
-      (let ((place (yunge-reader--stable-place)))
+      (let ((place (yunge-reader--stable-place))
+            (previous-primary
+             (yunge-reader--document-entry-primary-view entry)))
         (unless place
           (user-error "This Reader view has no stable location yet"))
         (yunge-reader--store-place
@@ -1266,6 +1311,8 @@ Capture and save this view's stable place before changing the primary view."
               (current-buffer)
               (yunge-reader--document-entry-active-view entry)
               (current-buffer))
+        (yunge-reader--notify-view-role-change
+         (list previous-primary (current-buffer)))
         (message "Current Reader view is now primary")))
     (current-buffer)))
 

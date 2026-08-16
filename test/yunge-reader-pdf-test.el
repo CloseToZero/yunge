@@ -131,11 +131,37 @@
       (should
        (memq #'yunge-reader-pdf--refresh
              yunge-reader-refresh-hook))
+      (should
+       (memq #'yunge-reader-pdf--update-header
+             yunge-reader-view-role-change-hook))
       (yunge-reader-pdf--detach document)
       (should-not yunge-reader-pdf-view-mode)
       (should-not
        (memq #'yunge-reader-pdf--refresh
-             yunge-reader-refresh-hook)))))
+             yunge-reader-refresh-hook))
+      (should-not
+       (memq #'yunge-reader-pdf--update-header
+             yunge-reader-view-role-change-hook)))))
+
+(ert-deftest yunge-reader-pdf-header-shows-the-view-role ()
+  (with-temp-buffer
+    (yunge-reader-mode)
+    (setq yunge-reader-pdf-page 1
+          yunge-reader-document
+          (yunge-reader-pdf-test--document nil nil nil)
+          yunge-reader-effective-scale 1.5)
+    (dolist (spec '((primary . "Primary")
+                    (additional . "Additional")
+                    (nil . "Reader")))
+      (cl-letf (((symbol-function 'yunge-reader-view-role)
+                 (lambda () (car spec))))
+        (yunge-reader-pdf--update-header)
+        (should
+         (equal
+          header-line-format
+          (format " %s  Page 2/3  150%%  Continuous "
+                  (cdr spec))))))
+    (setq yunge-reader-document nil)))
 
 (ert-deftest yunge-reader-pdf-open-and-close-balance-native-lease ()
   (with-temp-buffer

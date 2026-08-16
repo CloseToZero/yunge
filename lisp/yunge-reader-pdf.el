@@ -205,6 +205,8 @@
         (setq-local yunge-reader-pdf--pending-resize nil)
         (add-hook 'yunge-reader-refresh-hook
                   #'yunge-reader-pdf--refresh nil t)
+        (add-hook 'yunge-reader-view-role-change-hook
+                  #'yunge-reader-pdf--update-header nil t)
         (add-hook 'yunge-reader-search-result-hook
                   #'yunge-reader-pdf--search-result-changed nil t)
         (add-hook 'window-size-change-functions
@@ -216,6 +218,8 @@
     (yunge-reader-pdf--cancel-resize)
     (remove-hook 'yunge-reader-refresh-hook
                  #'yunge-reader-pdf--refresh t)
+    (remove-hook 'yunge-reader-view-role-change-hook
+                 #'yunge-reader-pdf--update-header t)
     (remove-hook 'yunge-reader-search-result-hook
                  #'yunge-reader-pdf--search-result-changed t)
     (remove-hook 'window-size-change-functions
@@ -1792,11 +1796,17 @@ When SUPPRESS-SCALE is non-nil, do not update the shared effective scale."
 
 (defun yunge-reader-pdf--update-header ()
   "Update the continuous PDF roll header."
-  (setq header-line-format
-        (format " Page %d/%d  %.0f%%  Continuous "
-                (1+ yunge-reader-pdf-page)
-                (yunge-reader-pdf--page-count)
-                (* 100 yunge-reader-effective-scale))))
+  (let ((role
+         (pcase (yunge-reader-view-role)
+           ('primary "Primary")
+           ('additional "Additional")
+           (_ "Reader"))))
+    (setq header-line-format
+          (format " %s  Page %d/%d  %.0f%%  Continuous "
+                  role
+                  (1+ yunge-reader-pdf-page)
+                  (yunge-reader-pdf--page-count)
+                  (* 100 yunge-reader-effective-scale)))))
 
 (defun yunge-reader-pdf--render-complete
     (buffer document generation page width result error-data)
