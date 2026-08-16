@@ -1784,16 +1784,18 @@
          (yunge-reader-pdf--event-page-point 'position)
          :type 'user-error)))))
 
-(ert-deftest yunge-reader-pdf-tracks-selection-before-mouse-release ()
+(ert-deftest yunge-reader-pdf-coalesces-motion-before-mouse-release ()
   (with-temp-buffer
-    (let ((events '(motion release))
+    (let ((events '(motion-one motion-two release))
           calls
-          (messages 0))
+          (messages 0)
+          (resolutions 0))
       (setq mark-active t)
       (cl-letf (((symbol-function 'event-start)
                  (lambda (event)
                    (pcase event
-                     ('motion 'motion-position)
+                     ('motion-one 'motion-one-position)
+                     ('motion-two 'motion-two-position)
                      ('release 'start-position))))
                 ((symbol-function 'event-end)
                  (lambda (event)
@@ -1802,7 +1804,8 @@
                  (lambda (event)
                    (if (eq event 'release) 'mouse-1 event)))
                 ((symbol-function 'mouse-movement-p)
-                 (lambda (event) (eq event 'motion)))
+                 (lambda (event)
+                   (memq event '(motion-one motion-two))))
                 ((symbol-function 'read-event)
                  (lambda (&rest _arguments) (pop events)))
                 ((symbol-function 'posn-window)
@@ -1811,11 +1814,17 @@
                  (lambda (position)
                    (pcase position
                      ('start-position '(0 . 0))
-                     ('motion-position '(8 . 0))
+                     ('motion-one-position '(8 . 0))
+                     ('motion-two-position '(10 . 0))
                      ('release-position '(12 . 0)))))
                 ((symbol-function 'yunge-reader-pdf--event-page-point)
                  (lambda (position &optional _noerror)
                    (list :page 0 :point position)))
+                ((symbol-function
+                  'yunge-reader-pdf--selection-position-at-location)
+                 (lambda (_location)
+                   (cl-incf resolutions)
+                   'fixed-start))
                 ((symbol-function 'yunge-reader-pdf--select-points)
                  (lambda (start end &rest arguments)
                    (push (list start end arguments) calls)
@@ -1829,9 +1838,12 @@
        (equal
         (nreverse calls)
         '(((:page 0 :point start-position)
-           (:page 0 :point motion-position) (t t window))
+           (:page 0 :point motion-two-position)
+           (t t window fixed-start))
           ((:page 0 :point start-position)
-           (:page 0 :point release-position) (t t window)))))
+           (:page 0 :point release-position)
+           (t t window fixed-start)))))
+      (should (= resolutions 1))
       (should (= messages 1)))))
 
 (ert-deftest yunge-reader-pdf-click-clears-selection-without-selecting ()
@@ -1971,7 +1983,10 @@
         (yunge-reader-pdf--request-text 0))
       (should (= requests 1))
       (should (eq (gethash 0 yunge-reader-pdf--text-cache)
-                  result)))))
+                  result))
+      (should
+       (yunge-reader-pdf--hit-index-p
+        (gethash 0 yunge-reader-pdf--text-hit-cache))))))
 
 (ert-deftest yunge-reader-pdf-redisplays-an-asynchronous-search-overlay ()
   (with-temp-buffer
@@ -2288,6 +2303,7 @@
        yunge-reader-pdf--render-results)
       (puthash
        page '((characters . ())) yunge-reader-pdf--text-cache)
+      (puthash page t yunge-reader-pdf--text-hit-cache)
       (puthash
        page
        (make-yunge-reader-pdf-link-data :page page :links nil)
@@ -2307,6 +2323,7 @@
                 yunge-reader-pdf--render-results)
                2))
     (should (= (hash-table-count yunge-reader-pdf--text-cache) 2))
+    (should (= (hash-table-count yunge-reader-pdf--text-hit-cache) 2))
     (should (= (hash-table-count yunge-reader-pdf--link-cache) 2))
     (should (gethash '(500 . 900)
                      yunge-reader-pdf--render-results))
@@ -2689,6 +2706,39 @@
            (yunge-reader-pdf--hit-character
             0 '(15.0 . 15.0) layer))
           9)))))
+
+(ert-deftest yunge-reader-pdf-hit-index-checks-only-nearby-characters ()
+  (with-temp-buffer
+    (setq yunge-reader-pdf--page-infos
+          [((width . 600.0) (height . 800.0))]
+          yunge-reader-pdf--text-hit-cache
+          (make-hash-table :test #'eql))
+    (let* ((near
+            '((index . 1) (text . "N")
+              (bounds . ((left . 10.0) (bottom . 10.0)
+                         (right . 20.0) (top . 20.0)))))
+           (far
+            '((index . 2) (text . "F")
+              (bounds . ((left . 500.0) (bottom . 500.0)
+                         (right . 510.0) (top . 510.0)))))
+           (layer `((characters . (,near ,far))))
+           (original
+            (symbol-function
+             'yunge-reader-pdf--character-distance))
+           checked)
+      (cl-letf
+          (((symbol-function 'yunge-reader-pdf--character-distance)
+            (lambda (x y character)
+              (push (alist-get 'index character) checked)
+              (funcall original x y character))))
+        (should
+         (eq (yunge-reader-pdf--hit-character
+              0 '(15.0 . 15.0) layer)
+             near)))
+      (should (equal checked '(1)))
+      (should (= (hash-table-count
+                  yunge-reader-pdf--text-hit-cache)
+                 1)))))
 
 (ert-deftest yunge-reader-pdf-builds-one-stable-slot-per-page ()
   (with-temp-buffer

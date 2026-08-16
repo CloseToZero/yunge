@@ -46,7 +46,10 @@ text selection, dragging highlights text immediately, and Ctrl-Mouse-1
 follows a link when hit.  Pointer motion outside a page image does not extend
 the selection until it returns to a page.  Reader handles the initial mouse-down
 itself and deactivates any ordinary Emacs region, so buffer text before the
-page cannot acquire a second, unrelated region highlight.
+page cannot acquire a second, unrelated region highlight.  Queued pointer
+motion is coalesced to its latest position while mouse release retains its
+exact endpoint.  Page text is spatially indexed when it arrives, so pointer
+hit testing inspects only nearby characters rather than scanning a whole page.
 Evil starts Reader buffers in Normal state, leaves Visual =y= as =evil-yank=,
 and retains =q= for macro recording.  Main Reader buffers do not bind =q= to
 window dismissal because a document view is persistent rather than temporary.

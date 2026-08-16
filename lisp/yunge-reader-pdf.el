@@ -98,6 +98,13 @@
   width
   generation)
 
+(cl-defstruct yunge-reader-pdf--hit-index
+  "One page-local spatial index for PDF character hit testing."
+  source
+  tolerance
+  cell-size
+  cells)
+
 (defvar-local yunge-reader-pdf-page 0
   "Zero-based page currently displayed in the PDF adapter.")
 
@@ -133,6 +140,9 @@
 
 (defvar-local yunge-reader-pdf--text-cache nil
   "Page-indexed cache of canonical PDF text geometry.")
+
+(defvar-local yunge-reader-pdf--text-hit-cache nil
+  "Page-indexed cache of spatial PDF character indexes.")
 
 (defvar-local yunge-reader-pdf--text-pending nil
   "Page-indexed set of outstanding PDF text requests.")
@@ -208,6 +218,8 @@
                     (make-hash-table :test #'equal))
         (setq-local yunge-reader-pdf--text-cache
                     (make-hash-table :test #'eql))
+        (setq-local yunge-reader-pdf--text-hit-cache
+                    (make-hash-table :test #'eql))
         (setq-local yunge-reader-pdf--text-pending
                     (make-hash-table :test #'eql))
         (setq-local yunge-reader-pdf--link-cache
@@ -257,6 +269,7 @@
           yunge-reader-pdf--resize-timer nil
           yunge-reader-pdf--pending-resize nil
           yunge-reader-pdf--text-cache nil
+          yunge-reader-pdf--text-hit-cache nil
           yunge-reader-pdf--text-pending nil
           yunge-reader-pdf--link-cache nil
           yunge-reader-pdf--link-pending nil
@@ -1898,6 +1911,9 @@ Use the nearest cached render ENTRY while an exact render is unavailable."
      yunge-reader-pdf--text-cache
      (lambda (page) (memq page pages)))
     (yunge-reader-pdf--prune-cache
+     yunge-reader-pdf--text-hit-cache
+     (lambda (page) (memq page pages)))
+    (yunge-reader-pdf--prune-cache
      yunge-reader-pdf--link-cache
      (lambda (page) (memq page pages)))))
 
@@ -2120,8 +2136,13 @@ Use the nearest cached render ENTRY while an exact render is unavailable."
                            (error-message-string error-data))
                    :warning))
               (when (and (hash-table-p yunge-reader-pdf--text-cache)
-                         (yunge-reader-pdf--retain-page-p page))
-                (puthash page result yunge-reader-pdf--text-cache))
+                          (yunge-reader-pdf--retain-page-p page))
+                (puthash page result yunge-reader-pdf--text-cache)
+                (when (hash-table-p yunge-reader-pdf--text-hit-cache)
+                  (puthash
+                   page
+                   (yunge-reader-pdf--make-hit-index page result)
+                   yunge-reader-pdf--text-hit-cache)))
               (let ((repainted
                      (when (and
                             (memq page
@@ -2407,28 +2428,118 @@ Use the nearest cached render ENTRY while an exact render is unavailable."
     (when-let* ((bounds (alist-get 'bounds character)))
       (yunge-reader-pdf--bounds-distance x y bounds))))
 
+(defun yunge-reader-pdf--hit-tolerance (page)
+  "Return canonical character hit tolerance for PAGE."
+  (let* ((page-info (yunge-reader-pdf--page-info page))
+         (page-width (alist-get 'width page-info))
+         (page-height (alist-get 'height page-info)))
+    (if (and (numberp page-width) (numberp page-height))
+        (max 12.0 (* 0.03 (min page-width page-height)))
+      12.0)))
+
+(defun yunge-reader-pdf--selectable-character-p (character)
+  "Return non-nil when CHARACTER can be selected."
+  (and (not (alist-get 'generated character))
+       (not
+        (string-empty-p
+         (or (alist-get 'text character) "")))))
+
+(defun yunge-reader-pdf--character-index-bounds (character)
+  "Return axis-aligned indexing bounds for CHARACTER, or nil."
+  (if-let* ((quad (yunge-reader-pdf--quad-points character)))
+      (let ((xs (mapcar (lambda (point) (alist-get 'x point)) quad))
+            (ys (mapcar (lambda (point) (alist-get 'y point)) quad)))
+        (list (apply #'min xs)
+              (apply #'min ys)
+              (apply #'max xs)
+              (apply #'max ys)))
+    (when-let* ((bounds (alist-get 'bounds character))
+                (left (alist-get 'left bounds))
+                (bottom (alist-get 'bottom bounds))
+                (right (alist-get 'right bounds))
+                (top (alist-get 'top bounds))
+                ((cl-every #'numberp (list left bottom right top)))
+                ((<= left right))
+                ((<= bottom top)))
+      (list left bottom right top))))
+
+(defun yunge-reader-pdf--make-hit-index (page text-layer)
+  "Build a spatial character hit index for PAGE's TEXT-LAYER."
+  (let* ((tolerance (yunge-reader-pdf--hit-tolerance page))
+         (cell-size (* 2.0 tolerance))
+         (cells (make-hash-table :test #'equal)))
+    (dolist (character (alist-get 'characters text-layer))
+      (when (yunge-reader-pdf--selectable-character-p character)
+        (when-let* ((bounds
+                     (yunge-reader-pdf--character-index-bounds
+                      character)))
+          (let ((left
+                 (floor (/ (- (nth 0 bounds) tolerance)
+                           cell-size)))
+                (bottom
+                 (floor (/ (- (nth 1 bounds) tolerance)
+                           cell-size)))
+                (right
+                 (floor (/ (+ (nth 2 bounds) tolerance)
+                           cell-size)))
+                (top
+                 (floor (/ (+ (nth 3 bounds) tolerance)
+                           cell-size))))
+            (cl-loop for row from bottom to top do
+                     (cl-loop for column from left to right do
+                              (push character
+                                    (gethash (cons column row)
+                                             cells))))))))
+    (maphash
+     (lambda (key characters)
+       (puthash key (nreverse characters) cells))
+     cells)
+    (make-yunge-reader-pdf--hit-index
+     :source text-layer
+     :tolerance tolerance
+     :cell-size cell-size
+     :cells cells)))
+
+(defun yunge-reader-pdf--page-hit-index (page text-layer)
+  "Return a cached spatial hit index for PAGE's TEXT-LAYER."
+  (unless (hash-table-p yunge-reader-pdf--text-hit-cache)
+    (setq yunge-reader-pdf--text-hit-cache
+          (make-hash-table :test #'eql)))
+  (let ((cached (gethash page yunge-reader-pdf--text-hit-cache)))
+    (if (and cached
+             (eq text-layer
+                 (yunge-reader-pdf--hit-index-source cached)))
+        cached
+      (let ((index
+             (yunge-reader-pdf--make-hit-index page text-layer)))
+        (puthash page index yunge-reader-pdf--text-hit-cache)
+        index))))
+
 (defun yunge-reader-pdf--hit-character (page point text-layer)
   "Return PAGE's TEXT-LAYER character nearest canonical POINT."
   (let* ((x (car point))
          (y (cdr point))
-         (page-info (yunge-reader-pdf--page-info page))
-         (page-width (alist-get 'width page-info))
-         (page-height (alist-get 'height page-info))
+         (index
+          (yunge-reader-pdf--page-hit-index page text-layer))
          (tolerance
-          (max 12.0 (* 0.03 (min page-width page-height))))
+          (yunge-reader-pdf--hit-index-tolerance index))
+         (cell-size
+          (yunge-reader-pdf--hit-index-cell-size index))
+         (characters
+          (gethash
+           (cons (floor (/ x cell-size))
+                 (floor (/ y cell-size)))
+           (yunge-reader-pdf--hit-index-cells index)))
          best
          best-distance)
-    (dolist (character (alist-get 'characters text-layer))
-      (unless (or (alist-get 'generated character)
-                  (string-empty-p
-                   (or (alist-get 'text character) "")))
-        (let ((distance
-               (yunge-reader-pdf--character-distance x y character)))
-          (when (and distance
-                     (or (null best-distance)
-                         (< distance best-distance)))
-            (setq best character
-                  best-distance distance)))))
+    (dolist (character characters)
+      (let ((distance
+             (yunge-reader-pdf--character-distance x y character)))
+        (when (and distance
+                   (or (null best-distance)
+                       (< distance best-distance)))
+          (setq best character
+                best-distance distance))))
     (when (and best-distance
                (<= best-distance (* tolerance tolerance)))
       best)))
@@ -2722,46 +2833,44 @@ When NOERROR is non-nil, return nil for positions outside page images."
         (message "Selected PDF text across %d pages"
                  (1+ (abs (- start-page end-page))))))))
 
+(defun yunge-reader-pdf--selection-position-at-location (location)
+  "Return the PDF character position nearest canonical LOCATION."
+  (let* ((page (plist-get location :page))
+         (point (plist-get location :point))
+         (text-layer
+          (and yunge-reader-pdf--text-cache
+               (gethash page yunge-reader-pdf--text-cache))))
+    (unless text-layer
+      (user-error "PDF text geometry is still loading"))
+    (when-let* ((character
+                 (yunge-reader-pdf--hit-character
+                  page point text-layer)))
+      (make-yunge-reader-position
+       :unit page
+       :offset (alist-get 'index character)
+       :x (car point)
+       :y (cdr point)))))
+
 (defun yunge-reader-pdf--select-points
-    (start-location end-location &optional quiet soft window)
+    (start-location end-location &optional quiet soft window fixed-start)
   "Select PDF characters at START-LOCATION and END-LOCATION.
 Suppress the echo message when QUIET is non-nil.  When SOFT is non-nil,
 keep the previous selection if either pointer is not near selectable text.
-WINDOW is redisplayed immediately after a successful update."
-  (let* ((start-page (plist-get start-location :page))
-         (end-page (plist-get end-location :page))
-         (start-point (plist-get start-location :point))
-         (end-point (plist-get end-location :point))
-         (start-layer
-          (and yunge-reader-pdf--text-cache
-               (gethash start-page yunge-reader-pdf--text-cache)))
-         (end-layer
-          (and yunge-reader-pdf--text-cache
-               (gethash end-page yunge-reader-pdf--text-cache))))
-    (unless (and start-layer end-layer)
-      (user-error "PDF text geometry is still loading"))
-    (let ((start-character
-           (yunge-reader-pdf--hit-character
-            start-page start-point start-layer))
-          (end-character
-           (yunge-reader-pdf--hit-character
-            end-page end-point end-layer)))
-      (if (and start-character end-character)
+WINDOW is redisplayed immediately after a successful update.  FIXED-START,
+when non-nil, is a previously resolved start character position."
+  (let ((start
+         (or fixed-start
+             (yunge-reader-pdf--selection-position-at-location
+              start-location)))
+        (end
+         (yunge-reader-pdf--selection-position-at-location
+          end-location)))
+      (if (and start end)
           (let* ((previous yunge-reader-selection)
                  (selection
                   (make-yunge-reader-selection
-                   :start
-                   (make-yunge-reader-position
-                    :unit start-page
-                    :offset (alist-get 'index start-character)
-                    :x (car start-point)
-                    :y (cdr start-point))
-                   :end
-                   (make-yunge-reader-position
-                    :unit end-page
-                    :offset (alist-get 'index end-character)
-                    :x (car end-point)
-                    :y (cdr end-point)))))
+                   :start start
+                   :end end)))
             (unless (yunge-reader-pdf--same-selection-p
                      previous selection)
               (yunge-reader-set-selection
@@ -2782,7 +2891,7 @@ WINDOW is redisplayed immediately after a successful update."
                window
                (yunge-reader-pdf--selection-dirty-pages
                 previous nil))))
-          (user-error "No selectable PDF text near the pointer"))))))
+          (user-error "No selectable PDF text near the pointer")))))
 
 (defun yunge-reader-pdf--selection-event-position (event)
   "Return the final position represented by mouse EVENT."
@@ -2802,6 +2911,21 @@ WINDOW is redisplayed immediately after a successful update."
              (> (abs (- (cdr current) (cdr start)))
                 yunge-reader-pdf-selection-drag-threshold)))))
 
+(defun yunge-reader-pdf--coalesce-motion-events (event)
+  "Return latest queued motion EVENT and the first following event."
+  (let (pending done)
+    (while (not done)
+      (let ((next (read-event nil nil 0)))
+        (cond
+         ((null next)
+          (setq done t))
+         ((mouse-movement-p next)
+          (setq event next))
+         (t
+          (setq pending next
+                done t)))))
+    (cons event pending)))
+
 (defun yunge-reader-pdf--clear-click-selection (window)
   "Clear the logical PDF selection after a click in WINDOW."
   (when yunge-reader-selection
@@ -2814,44 +2938,60 @@ WINDOW is redisplayed immediately after a successful update."
 (defun yunge-reader-pdf--track-selection-events
     (start-location start-position window)
   "Track selection from START-LOCATION and START-POSITION in WINDOW."
-  (let (dragging done)
-    (setq mark-active nil)
-    (while (not done)
-      (let ((next (read-event)))
-        (cond
-         ((null next)
-          (setq done t))
-         ((mouse-movement-p next)
-          (let ((position (event-start next)))
-            (when (eq window (posn-window position))
-              (when (or dragging
+  (let (dragging done pending fixed-start start-resolved)
+    (cl-labels
+        ((select-at
+          (location)
+          (unless start-resolved
+            (setq fixed-start
+                  (yunge-reader-pdf--selection-position-at-location
+                   start-location)
+                  start-resolved t))
+          (when fixed-start
+            (yunge-reader-pdf--select-points
+             start-location location t t window fixed-start))))
+      (setq mark-active nil)
+      (while (not done)
+        (let ((next (or pending (read-event))))
+          (setq pending nil)
+          (when (and next (mouse-movement-p next))
+            (pcase-let
+                ((`(,latest . ,following)
+                  (yunge-reader-pdf--coalesce-motion-events next)))
+              (setq next latest
+                    pending following)))
+          (cond
+           ((null next)
+            (setq done t))
+           ((mouse-movement-p next)
+            (let ((position (event-start next)))
+              (when (eq window (posn-window position))
+                (when (or dragging
+                          (yunge-reader-pdf--selection-drag-p
+                           start-position position))
+                  (setq dragging t)
+                  (when-let* ((location
+                               (yunge-reader-pdf--event-page-point
+                                position t)))
+                    (select-at location))))))
+           ((memq (event-basic-type next) '(mouse-1 drag-mouse-1))
+            (let ((position
+                   (yunge-reader-pdf--selection-event-position next)))
+              (when (eq window (posn-window position))
+                (if (or dragging
                         (yunge-reader-pdf--selection-drag-p
                          start-position position))
-                (setq dragging t)
-                (when-let* ((location
-                             (yunge-reader-pdf--event-page-point
-                              position t)))
-                  (yunge-reader-pdf--select-points
-                   start-location location t t window))))))
-         ((memq (event-basic-type next) '(mouse-1 drag-mouse-1))
-          (let ((position
-                 (yunge-reader-pdf--selection-event-position next)))
-            (when (eq window (posn-window position))
-              (if (or dragging
-                      (yunge-reader-pdf--selection-drag-p
-                       start-position position))
-                  (progn
-                    (setq dragging t)
-                    (when-let* ((location
-                                 (yunge-reader-pdf--event-page-point
-                                  position t)))
-                      (yunge-reader-pdf--select-points
-                       start-location location t t window)))
-                (yunge-reader-pdf--clear-click-selection window)))
-            (setq done t)))
-         (t
-          (push next unread-command-events)
-          (setq done t)))))
+                    (progn
+                      (setq dragging t)
+                      (when-let* ((location
+                                   (yunge-reader-pdf--event-page-point
+                                    position t)))
+                        (select-at location)))
+                  (yunge-reader-pdf--clear-click-selection window)))
+              (setq done t)))
+           (t
+            (push next unread-command-events)
+            (setq done t))))))
     (when dragging
       (yunge-reader-pdf--message-selection))))
 
