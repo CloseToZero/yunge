@@ -63,8 +63,10 @@
     (available . t)
     (version . "test-version")
     (capabilities
-     . ("view-bounds" "view-create" "view-destroy" "view-focus"
-        "view-info" "view-status" "view-visible"))))
+     . ("view-bounds" "view-clear-selection" "view-create"
+        "view-destroy" "view-events" "view-focus"
+        "view-focus-parent" "view-info" "view-status"
+        "view-visible"))))
 
 (ert-deftest yunge-reader-webview-queues-until-ready ()
   (yunge-reader-webview-test--with-fake-process
@@ -97,6 +99,59 @@
       (should-error
        (yunge-reader-webview--validate-ready message)
        :type 'error))))
+
+(ert-deftest yunge-reader-webview-routes-escape-to-its-owning-window ()
+  (let* ((window (selected-window))
+         (buffer (window-buffer window))
+         (view
+          (yunge-reader-webview--make-view
+           :id 8 :window window :buffer buffer))
+         (yunge-reader-webview--process 'fake-webview-process)
+         (yunge-reader-webview--views
+          (make-hash-table :test #'eql))
+         requests
+         selected
+         focused)
+    (puthash 8 view yunge-reader-webview--views)
+    (cl-letf
+        (((symbol-function 'yunge-reader-webview--request)
+          (lambda (operation parameters _complete)
+            (push (list operation parameters) requests)))
+         ((symbol-function 'select-window)
+          (lambda (value &optional _norecord)
+            (setq selected value)))
+         ((symbol-function 'select-frame-set-input-focus)
+          (lambda (frame &optional _norecord)
+            (setq focused frame))))
+      (yunge-reader-webview--handle-event
+       'fake-webview-process
+       '((kind . "event") (event . "escape") (view . 8))))
+    (should (eq selected window))
+    (should (eq focused (window-frame window)))
+    (should
+     (equal (nreverse requests)
+            '(("view-clear-selection" ((view . 8)))
+              ("view-focus-parent" ((view . 8))))))))
+
+(ert-deftest yunge-reader-webview-events-do-not-consume-callbacks ()
+  (yunge-reader-webview-test--with-fake-process
+    (yunge-reader-webview-start)
+    (process-put 'fake-webview-process 'yunge-reader-webview-ready t)
+    (let (handled)
+      (cl-letf (((symbol-function 'yunge-reader-webview--handle-event)
+                 (lambda (process message)
+                   (setq handled (list process message)))))
+        (yunge-reader-webview--handle-message
+         'fake-webview-process
+         '((kind . "event") (event . "escape") (view . 3))))
+      (should (equal handled
+                     '(fake-webview-process
+                       ((kind . "event")
+                        (event . "escape")
+                        (view . 3)))))
+      (should (zerop
+               (hash-table-count
+                yunge-reader-webview--callbacks))))))
 
 (ert-deftest yunge-reader-webview-parses-decimal-and-hex-frame-handles ()
   (cl-letf (((symbol-function 'frame-parameter)

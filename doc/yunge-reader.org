@@ -456,6 +456,13 @@ The spike page has a restrictive content security policy, denies WebView
 permissions, and rejects navigation.  These are baseline constraints for
 opening untrusted EPUB contents, not a complete EPUB sandbox.
 
+WebView2 captures Escape through its native accelerator event rather than a
+second JavaScript key map.  Rust emits only the semantic =escape= event.
+Emacs uses the owning view ID to clear the DOM selection, return native focus
+to the parent, select the corresponding Emacs window, and focus its frame.
+Reader navigation remains in the existing Emacs key maps; the embedded page
+does not duplicate =j=, =k=, or other Reader bindings.
+
 =M-x yunge-reader-webview-stop= requests graceful shutdown and then enforces a
 deadline; a prefix argument terminates it immediately.  Emacs exit also ends
 the process.  The ordinary PDF helper and the WebView helper are separate
@@ -465,15 +472,15 @@ No platform dependency is installed automatically.  Windows reports the
 detected WebView2 Runtime version or tells the user to install the runtime.
 Future macOS and Linux implementations must likewise detect WKWebView or
 WebKitGTK and report a missing environment.  The current embedding command is
-deliberately Windows-only while focus routing and cross-platform parent-view
-ownership remain under evaluation.
+deliberately Windows-only while cross-platform parent-view ownership remains
+under evaluation.
 
 * Next Reader slices
 
-The next substantial implementation slice should harden child focus and key
-routing, then compare Readium Web and foliate-js behind the existing native
-view boundary.  Only after that comparison should the EPUB driver commit to a
-renderer and stable locator format.
+The next substantial implementation slice should compare Readium Web and
+foliate-js behind the existing native view boundary.  Only after that
+comparison should the EPUB driver commit to a renderer and stable locator
+format.
 
 Annotation anchors and independent decoration layers remain a planned
 extension of the stable position contract, after the reading path is hardened.
@@ -520,9 +527,11 @@ destination view mapping, safe cache eviction, Unicode literal matching,
 byte-to-PDFium-index mapping, search and selection cursors and limits, regular
 and singular-angle quadrilateral recovery, cross-page inclusive ranges,
 protocol errors, shutdown ordering, EOF, WebView bounds validation, omitted
-empty parameters, and the self-contained spike page.  WebView ERT tests cover
-the separate handshake, strict capability validation, frame handle parsing,
-coalesced resize requests, and view destruction after buffer replacement.
+empty parameters, native Escape filtering, and the self-contained spike page.
+WebView ERT tests cover the separate handshake, strict capability validation,
+asynchronous event routing, owning-window focus recovery, frame handle
+parsing, coalesced resize requests, and view destruction after buffer
+replacement.
 
 The integration path installs the pinned Windows library through the public
 setup command, runs its =pdfium-info= smoke test, opens a five-page A4 fixture,

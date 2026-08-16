@@ -90,8 +90,9 @@
          (cl-every
           (lambda (capability)
             (member capability (alist-get 'capabilities message)))
-          '("view-bounds" "view-create" "view-destroy"
-            "view-focus" "view-info" "view-status"
+          '("view-bounds" "view-clear-selection" "view-create"
+            "view-destroy" "view-events" "view-focus"
+            "view-focus-parent" "view-info" "view-status"
             "view-visible")))
       (error
        "Incompatible Yunge Reader WebView helper: %S"
@@ -115,19 +116,48 @@
      (or (alist-get 'message object)
          "The Yunge Reader WebView helper failed"))))
 
+(defun yunge-reader-webview--handle-event (process message)
+  "Handle one asynchronous WebView MESSAGE from PROCESS."
+  (unless (eq process yunge-reader-webview--process)
+    (error "WebView event belongs to an obsolete process"))
+  (let ((event (alist-get 'event message))
+        (id (alist-get 'view message)))
+    (unless (and (stringp event) (integerp id))
+      (error "Malformed Yunge Reader WebView event: %S" message))
+    (pcase event
+      ("escape"
+       (when-let* ((view (gethash id yunge-reader-webview--views))
+                   (window (yunge-reader-webview--view-window view))
+                   ((window-live-p window))
+                   ((buffer-live-p
+                     (yunge-reader-webview--view-buffer view))))
+         (yunge-reader-webview--request
+          "view-clear-selection" `((view . ,id))
+          (lambda (_result _error-data)))
+         (yunge-reader-webview--request
+          "view-focus-parent" `((view . ,id))
+          (lambda (_result _error-data)))
+         (select-window window)
+         (select-frame-set-input-focus (window-frame window))))
+      (_
+       (error "Unsupported Yunge Reader WebView event: %s" event)))))
+
 (defun yunge-reader-webview--handle-message (process message)
   "Handle one parsed WebView MESSAGE from PROCESS."
-  (if (not (process-get process 'yunge-reader-webview-ready))
-      (progn
-        (yunge-reader-webview--validate-ready message)
-        (process-put process 'yunge-reader-webview-ready t)
-        (process-put process 'yunge-reader-webview-available
-                     (alist-get 'available message))
-        (process-put process 'yunge-reader-webview-version
-                     (alist-get 'version message))
-        (process-put process 'yunge-reader-webview-message
-                     (alist-get 'message message))
-        (yunge-reader-webview--flush-outbound process))
+  (cond
+   ((not (process-get process 'yunge-reader-webview-ready))
+    (yunge-reader-webview--validate-ready message)
+    (process-put process 'yunge-reader-webview-ready t)
+    (process-put process 'yunge-reader-webview-available
+                 (alist-get 'available message))
+    (process-put process 'yunge-reader-webview-version
+                 (alist-get 'version message))
+    (process-put process 'yunge-reader-webview-message
+                 (alist-get 'message message))
+    (yunge-reader-webview--flush-outbound process))
+   ((equal (alist-get 'kind message) "event")
+    (yunge-reader-webview--handle-event process message))
+   (t
     (let* ((id (alist-get 'id message))
            (callback
             (and (integerp id)
@@ -138,7 +168,7 @@
       (if (alist-get 'ok message)
           (funcall callback (alist-get 'result message) nil)
         (funcall callback nil
-                 (yunge-reader-webview--response-error message))))))
+                 (yunge-reader-webview--response-error message)))))))
 
 (defun yunge-reader-webview--filter (process output)
   "Collect and handle complete NDJSON messages in PROCESS OUTPUT."

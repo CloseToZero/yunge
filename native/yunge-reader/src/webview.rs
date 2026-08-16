@@ -9,9 +9,14 @@ use std::num::NonZeroIsize;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::mpsc::{self, RecvTimeoutError};
+use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
 use std::thread;
 use std::time::Duration;
+use webview2_com::AcceleratorKeyPressedEventHandler;
+use webview2_com::Microsoft::Web::WebView2::Win32::{
+    COREWEBVIEW2_KEY_EVENT_KIND, COREWEBVIEW2_KEY_EVENT_KIND_KEY_DOWN,
+    COREWEBVIEW2_KEY_EVENT_KIND_SYSTEM_KEY_DOWN,
+};
 use windows::Win32::Foundation::HWND;
 use windows::Win32::UI::WindowsAndMessaging::{
     DispatchMessageW, IsWindow, MSG, PM_REMOVE, PeekMessageW, TranslateMessage,
@@ -21,22 +26,33 @@ use wry::raw_window_handle::{
     HandleError, HasWindowHandle, RawWindowHandle, Win32WindowHandle,
     WindowHandle,
 };
-use wry::{PageLoadEvent, PermissionResponse, Rect, WebView, WebViewBuilder};
+use wry::{
+    PageLoadEvent, PermissionResponse, Rect, WebView, WebViewBuilder,
+    WebViewExtWindows,
+};
 
 use super::{BUILD_ID, Error};
 
 const PROTOCOL_VERSION: u32 = 1;
-const CAPABILITIES: [&str; 7] = [
+const CAPABILITIES: [&str; 10] = [
     "view-bounds",
+    "view-clear-selection",
     "view-create",
     "view-destroy",
+    "view-events",
     "view-focus",
+    "view-focus-parent",
     "view-info",
     "view-status",
     "view-visible",
 ];
 const MAX_VIEW_EXTENT: u32 = 32_768;
 const MESSAGE_PUMP_INTERVAL: Duration = Duration::from_millis(8);
+const ESCAPE_VIRTUAL_KEY: u32 = 0x1b;
+const CLEAR_SELECTION_SCRIPT: &str = r#"
+const selection = window.getSelection();
+if (selection) selection.removeAllRanges();
+"#;
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -61,6 +77,13 @@ struct Response {
     result: Option<Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
     error: Option<ProtocolError>,
+}
+
+#[derive(Debug, Serialize)]
+struct ViewEvent {
+    kind: &'static str,
+    event: &'static str,
+    view: u64,
 }
 
 #[derive(Debug)]
@@ -127,9 +150,23 @@ struct ParentWindow(NonZeroIsize);
 
 struct NativeView {
     webview: WebView,
+    accelerator_token: i64,
     loaded: Arc<AtomicBool>,
     bounds: Bounds,
     visible: bool,
+}
+
+impl Drop for NativeView {
+    fn drop(&mut self) {
+        // SAFETY: The token was registered on this controller, and all
+        // WebView operations run on the service's single UI thread.
+        unsafe {
+            let _ = self
+                .webview
+                .controller()
+                .remove_AcceleratorKeyPressed(self.accelerator_token);
+        }
+    }
 }
 
 impl HasWindowHandle for ParentWindow {
@@ -146,6 +183,7 @@ impl HasWindowHandle for ParentWindow {
 struct Service {
     views: HashMap<u64, NativeView>,
     version: Result<String, String>,
+    event_sender: Sender<ViewEvent>,
 }
 
 impl ServiceError {
@@ -218,10 +256,11 @@ impl Bounds {
 }
 
 impl Service {
-    fn new() -> Self {
+    fn new(event_sender: Sender<ViewEvent>) -> Self {
         Self {
             views: HashMap::new(),
             version: wry::webview_version().map_err(|error| error.to_string()),
+            event_sender,
         }
     }
 
@@ -303,10 +342,16 @@ impl Service {
             .map_err(|error| {
                 ServiceError::new("view-create-failed", error.to_string())
             })?;
+        let accelerator_token = install_accelerator_handler(
+            &view,
+            params.view,
+            self.event_sender.clone(),
+        )?;
         self.views.insert(
             params.view,
             NativeView {
                 webview: view,
+                accelerator_token,
                 loaded,
                 bounds,
                 visible: params.visible,
@@ -346,6 +391,31 @@ impl Service {
             ServiceError::new("view-focus-failed", error.to_string())
         })?;
         Ok(json!({ "view": params.view, "focused": true }))
+    }
+
+    fn focus_parent(&mut self, params: Value) -> Result<Value, ServiceError> {
+        let params: ViewParams = Self::parse(params)?;
+        self.view(params.view)?
+            .webview
+            .focus_parent()
+            .map_err(|error| {
+                ServiceError::new("view-focus-failed", error.to_string())
+            })?;
+        Ok(json!({ "view": params.view, "focused": false }))
+    }
+
+    fn clear_selection(
+        &mut self,
+        params: Value,
+    ) -> Result<Value, ServiceError> {
+        let params: ViewParams = Self::parse(params)?;
+        self.view(params.view)?
+            .webview
+            .evaluate_script(CLEAR_SELECTION_SCRIPT)
+            .map_err(|error| {
+                ServiceError::new("view-update-failed", error.to_string())
+            })?;
+        Ok(json!({ "view": params.view, "selection": false }))
     }
 
     fn destroy(&mut self, params: Value) -> Result<Value, ServiceError> {
@@ -392,8 +462,10 @@ impl Service {
             "view-info" => self.info(request.params),
             "view-create" => self.create_view(request.params),
             "view-bounds" => self.set_bounds(request.params),
+            "view-clear-selection" => self.clear_selection(request.params),
             "view-visible" => self.set_visible(request.params),
             "view-focus" => self.focus(request.params),
+            "view-focus-parent" => self.focus_parent(request.params),
             "view-status" => self.status(request.params),
             "view-destroy" => self.destroy(request.params),
             _ => Err(ServiceError::new(
@@ -411,6 +483,55 @@ fn default_visible() -> bool {
 
 fn unknown_view(id: u64) -> ServiceError {
     ServiceError::new("unknown-view", format!("view {id} does not exist"))
+}
+
+fn is_escape_key(kind: COREWEBVIEW2_KEY_EVENT_KIND, key: u32) -> bool {
+    key == ESCAPE_VIRTUAL_KEY
+        && (kind == COREWEBVIEW2_KEY_EVENT_KIND_KEY_DOWN
+            || kind == COREWEBVIEW2_KEY_EVENT_KIND_SYSTEM_KEY_DOWN)
+}
+
+fn install_accelerator_handler(
+    webview: &WebView,
+    view: u64,
+    event_sender: Sender<ViewEvent>,
+) -> Result<i64, ServiceError> {
+    let handler = AcceleratorKeyPressedEventHandler::create(Box::new(
+        move |_controller, args| {
+            let Some(args) = args else {
+                return Ok(());
+            };
+            let mut kind = COREWEBVIEW2_KEY_EVENT_KIND::default();
+            let mut key = 0;
+            // SAFETY: WebView2 owns the callback arguments for the duration
+            // of this callback and initializes both out parameters.
+            unsafe {
+                args.KeyEventKind(&mut kind)?;
+                args.VirtualKey(&mut key)?;
+                if is_escape_key(kind, key) {
+                    args.SetHandled(true)?;
+                    let _ = event_sender.send(ViewEvent {
+                        kind: "event",
+                        event: "escape",
+                        view,
+                    });
+                }
+            }
+            Ok(())
+        },
+    ));
+    let mut token = 0;
+    // SAFETY: The callback remains owned by the controller until its token
+    // is removed when `NativeView' is dropped.
+    unsafe {
+        webview
+            .controller()
+            .add_AcceleratorKeyPressed(&handler, &mut token)
+            .map_err(|error| {
+                ServiceError::new("view-create-failed", error.to_string())
+            })?;
+    }
+    Ok(token)
 }
 
 fn response(id: u64, result: Result<Value, ServiceError>) -> Response {
@@ -479,7 +600,8 @@ code {{ font-family: ui-monospace, monospace; }}
 <main>
 <h1>Yunge Reader WebView spike</h1>
 <p>This is native reflowable text in view <code>{view}</code>.</p>
-<p>Resize or split the Emacs window, then select and copy this text.</p>
+<p>Resize or split the Emacs window, then select and copy this text.
+Press Escape to clear the selection and return focus to Emacs.</p>
 </main>
 </body>
 </html>"#
@@ -507,8 +629,19 @@ fn pump_messages() {
     }
 }
 
+fn write_events(
+    receiver: &Receiver<ViewEvent>,
+    output: &mut impl Write,
+) -> Result<(), Error> {
+    while let Ok(event) = receiver.try_recv() {
+        write_message(&mut *output, &event)?;
+    }
+    Ok(())
+}
+
 pub(super) fn serve() -> Result<(), Error> {
     let (sender, receiver) = mpsc::channel();
+    let (event_sender, event_receiver) = mpsc::channel();
     thread::spawn(move || {
         for line in io::stdin().lock().lines() {
             let incoming = match line {
@@ -525,12 +658,13 @@ pub(super) fn serve() -> Result<(), Error> {
         }
     });
 
-    let mut service = Service::new();
+    let mut service = Service::new(event_sender);
     let stdout = io::stdout();
     let mut output = stdout.lock();
     write_message(&mut output, &ready_message(&service.version))?;
     loop {
         pump_messages();
+        write_events(&event_receiver, &mut output)?;
         let incoming = match receiver.recv_timeout(MESSAGE_PUMP_INTERVAL) {
             Ok(incoming) => incoming,
             Err(RecvTimeoutError::Timeout) => continue,
@@ -544,6 +678,7 @@ pub(super) fn serve() -> Result<(), Error> {
             ),
         };
         write_message(&mut output, &response)?;
+        write_events(&event_receiver, &mut output)?;
         if control == Control::Shutdown {
             break;
         }
@@ -556,6 +691,7 @@ pub(super) fn serve() -> Result<(), Error> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use webview2_com::Microsoft::Web::WebView2::Win32 as WebView2;
 
     #[test]
     fn bounds_reject_empty_negative_and_extreme_rectangles() {
@@ -595,5 +731,26 @@ mod tests {
     #[test]
     fn omitted_empty_parameters_are_accepted() {
         Service::parse::<EmptyParams>(Value::Null).unwrap();
+    }
+
+    #[test]
+    fn escape_is_the_only_routed_accelerator() {
+        assert!(is_escape_key(
+            COREWEBVIEW2_KEY_EVENT_KIND_KEY_DOWN,
+            ESCAPE_VIRTUAL_KEY,
+        ));
+        assert!(is_escape_key(
+            COREWEBVIEW2_KEY_EVENT_KIND_SYSTEM_KEY_DOWN,
+            ESCAPE_VIRTUAL_KEY,
+        ));
+        assert!(!is_escape_key(
+            WebView2::COREWEBVIEW2_KEY_EVENT_KIND_KEY_UP,
+            ESCAPE_VIRTUAL_KEY,
+        ));
+        assert!(!is_escape_key(
+            COREWEBVIEW2_KEY_EVENT_KIND_KEY_DOWN,
+            u32::from(b'J'),
+        ));
+        assert!(CLEAR_SELECTION_SCRIPT.contains("removeAllRanges"));
     }
 }

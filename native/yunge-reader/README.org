@@ -86,8 +86,10 @@ installing or downloading it:
 
 #+begin_src json
 {"available":true,"build-id":"HASH",
- "capabilities":["view-bounds","view-create","view-destroy",
-                 "view-focus","view-info","view-status","view-visible"],
+ "capabilities":["view-bounds","view-clear-selection","view-create",
+                 "view-destroy","view-events","view-focus",
+                 "view-focus-parent","view-info","view-status",
+                 "view-visible"],
  "engine":"webview2","kind":"webview-ready","platform":"windows",
  "protocol":1,"version":"151.0.4129.86"}
 #+end_src
@@ -108,9 +110,22 @@ current spike loads only its built-in local HTML page.
 #+end_src
 
 =view-bounds= moves or resizes one child, =view-visible= changes its
-visibility, =view-focus= gives it native focus, and =view-destroy= removes it.
-=view-status= reports whether the built-in page finished loading, together
-with the last accepted bounds and visibility.
+visibility, =view-focus= gives it native focus, and =view-focus-parent= gives
+focus back to its parent.  =view-clear-selection= removes the DOM selection,
+and =view-destroy= removes the child.  =view-status= reports whether the
+built-in page finished loading, together with the last accepted bounds and
+visibility.
+
+Escape is captured by the native WebView2 accelerator event.  The helper
+writes an unsolicited semantic event without allocating a request ID:
+
+#+begin_src json
+{"kind":"event","event":"escape","view":1}
+#+end_src
+
+Only Escape is routed in this spike.  Navigation bindings remain owned by
+Emacs instead of being duplicated in the embedded page.
+
 View IDs are independent, so multiple Reader views do not share layout or
 scroll state.  Positions must be nonnegative; dimensions must be positive and
 at most 32,768 physical pixels.  Duplicate views, unknown views, invalid HWNDs,
