@@ -117,6 +117,8 @@ latest requested screen instead of a long queue of stale repeat events.  A
 new direction or an explicit outline target replaces older pending movement.
 Screen movement within a loaded spine item uses Foliate's bounded 300 ms
 ease-out animation; crossing into another item may pause while it loads.
+Moving backward at the beginning or forward at the end is a no-op and leaves
+the view ready for later navigation.
 
 Each logical EPUB view owns a semantic reading style.  The initial style uses
 a 1.0 font scale, 1.6 line height, 720 CSS-pixel maximum content width, and 7%

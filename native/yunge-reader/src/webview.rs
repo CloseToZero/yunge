@@ -2482,6 +2482,19 @@ mod tests {
                 std::str::from_utf8(app_asset(path).unwrap().1).unwrap();
             assert!(!source.contains("allow-same-origin allow-scripts"));
         }
+        let paginator = std::str::from_utf8(
+            app_asset("foliate-js/paginator.js").unwrap().1,
+        )
+        .unwrap();
+        assert!(paginator.contains(
+            "const index = shouldGo ? this.#adjacentIndex(dir) : null"
+        ));
+        assert!(paginator.contains(
+            "if (index != null) await this.#goTo({"
+        ));
+        assert!(paginator.contains(
+            "finally {\n            this.#locked = false"
+        ));
     }
 
     #[test]

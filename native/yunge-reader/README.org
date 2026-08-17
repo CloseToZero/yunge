@@ -283,7 +283,8 @@ pending intent.  Repeated keys can therefore continue moving through the book
 without building an unbounded queue.  A newer direction or =go-to= target
 replaces older pending movement.  Screen movement within a loaded spine item
 uses Foliate's bounded 300 ms ease-out animation.  Cross-spine movement may
-pause while the next item loads.
+pause while the next item loads.  Moving beyond either end is a no-op, and an
+unsuccessful movement releases the renderer lock for later navigation.
 
 =<escape>=, =C-g=, Control reader keys, and non-character reader keys are
 captured by the native WebView2 accelerator event.  Uppercase character reader
