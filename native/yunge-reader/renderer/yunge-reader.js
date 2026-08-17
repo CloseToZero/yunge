@@ -862,6 +862,7 @@ const open = async ({
         })
         await view.open(book)
         view.renderer.setAttribute('flow', 'scrolled')
+        view.renderer.setAttribute('animated', '')
         applyReadingStyle(view, style)
         applyScrollBars(view, scrollBars)
         Object.assign(view.renderer.style, {

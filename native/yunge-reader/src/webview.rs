@@ -2455,6 +2455,9 @@ mod tests {
         assert!(adapter.contains("if (view.isFixedLayout) return"));
         assert!(adapter.contains("collapseCFI(relocation.cfi)"));
         assert!(adapter.contains("session.commandNavigation"));
+        assert!(adapter.contains(
+            "view.renderer.setAttribute('animated', '')"
+        ));
         assert!(adapter.contains("pendingNavigation"));
         assert!(adapter.contains("navigationRunning"));
         assert!(
