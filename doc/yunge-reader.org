@@ -650,7 +650,10 @@ Each logical Reader view receives its own numeric native view and WebView
 instance.  Emacs sends the frame window ID plus the body pixel rectangle.
 Window size, state, and buffer changes resynchronize that rectangle.  Only one
 bounds request per view may be outstanding; intermediate resize rectangles are
-coalesced into the newest value.  A formal Reader view survives window
+coalesced into the newest value.  Surface creation retains the rectangle
+actually sent to the helper, so a body-size change before creation completes
+is reconciled instead of being mistaken for an applied native resize.  A
+formal Reader view survives window
 replacement: it destroys the obsolete child surface, retains the locator, and
 creates a fresh surface when its buffer becomes visible.  Killing the buffer
 destroys the logical view.  A manual spike remains temporary and is destroyed

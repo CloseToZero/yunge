@@ -1578,7 +1578,7 @@ SCROLL-BAR-FUNCTION resolves its mode for the owning Emacs window."
     (yunge-reader-webview--finish-surface-destroy view id)))
 
 (defun yunge-reader-webview--create-complete
-    (view id _result error-data)
+    (view id created-bounds _result error-data)
   "Complete native surface ID creation for logical VIEW."
   (cond
    ((not (yunge-reader-webview--surface-current-p view id))
@@ -1602,7 +1602,7 @@ SCROLL-BAR-FUNCTION resolves its mode for the owning Emacs window."
    (t
     (setf (yunge-reader-webview--view-created view) t
           (yunge-reader-webview--view-bounds view)
-          (yunge-reader-webview--view-requested-bounds view))
+          created-bounds)
     (yunge-reader-webview--sync-view view)
     (when (and (yunge-reader-webview--surface-current-p view id)
                (yunge-reader-webview--view-publication view))
@@ -1614,15 +1614,18 @@ SCROLL-BAR-FUNCTION resolves its mode for the owning Emacs window."
   "Ask the helper to create native VIEW."
   (let* ((id (yunge-reader-webview--view-id view))
          (window (yunge-reader-webview--view-window view))
-         (frame (window-frame window)))
+         (frame (window-frame window))
+         (bounds
+          (copy-tree
+           (yunge-reader-webview--view-requested-bounds view))))
     (yunge-reader-webview--request
      "view-create"
      `((view . ,id)
        (parent . ,(yunge-reader-webview--frame-handle frame))
-       (bounds . ,(yunge-reader-webview--view-requested-bounds view))
+       (bounds . ,bounds)
        (visible . t))
      (apply-partially
-      #'yunge-reader-webview--create-complete view id))))
+      #'yunge-reader-webview--create-complete view id bounds))))
 
 (defun yunge-reader-webview--start-surface (view window)
   "Create VIEW's native surface in live WINDOW."

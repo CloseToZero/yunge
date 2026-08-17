@@ -982,6 +982,42 @@
           (alist-get 'bounds (caar requests)))
           300)))))
 
+(ert-deftest yunge-reader-webview-reconciles-resize-during-creation ()
+  (let* ((created-bounds
+          '((x . 0) (y . 20) (width . 800) (height . 700)))
+         (latest-bounds
+          '((x . 0) (y . 40) (width . 800) (height . 680)))
+         (view
+          (yunge-reader-webview--make-view
+           :id 8
+           :window 'window
+           :requested-bounds latest-bounds))
+         (yunge-reader-webview--views
+          (make-hash-table :test #'eql))
+         request)
+    (puthash 8 view yunge-reader-webview--views)
+    (cl-letf
+        (((symbol-function 'yunge-reader-webview--visible-window)
+          (lambda (_view) 'window))
+         ((symbol-function 'yunge-reader-webview--update-scroll-bar-mode)
+          #'ignore)
+         ((symbol-function 'yunge-reader-webview--window-bounds)
+          (lambda (_window) latest-bounds))
+         ((symbol-function 'yunge-reader-webview--request)
+          (lambda (operation parameters complete)
+            (setq request (list operation parameters complete)))))
+      (yunge-reader-webview--create-complete
+       view 8 created-bounds nil nil)
+      (should (yunge-reader-webview--view-created view))
+      (should (equal (yunge-reader-webview--view-bounds view)
+                     created-bounds))
+      (should (equal (car request) "view-bounds"))
+      (should (equal (alist-get 'bounds (cadr request))
+                     latest-bounds))
+      (funcall (caddr request) nil nil)
+      (should (equal (yunge-reader-webview--view-bounds view)
+                     latest-bounds)))))
+
 (ert-deftest yunge-reader-webview-ignores-obsolete-surface-bounds ()
   (let* ((view
           (yunge-reader-webview--make-view
