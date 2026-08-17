@@ -33,6 +33,24 @@
 (defconst yunge-reader-webview--max-selection-character-limit 65536
   "Maximum characters requested in one EPUB selection batch.")
 
+(defconst yunge-reader-webview--max-search-query-characters 256
+  "Maximum characters accepted in one EPUB search query.")
+
+(defconst yunge-reader-webview--max-search-match-limit 200
+  "Maximum matches accepted in one EPUB search batch.")
+
+(defconst yunge-reader-webview--max-search-section-limit 64
+  "Maximum spine items searched in one EPUB search batch.")
+
+(defconst yunge-reader-webview--max-search-cursor-offset 1048576
+  "Maximum transient match ordinal in one EPUB spine item.")
+
+(defconst yunge-reader-webview--max-search-match-text-bytes 16384
+  "Maximum byte length of one EPUB search match text.")
+
+(defconst yunge-reader-webview--max-search-context-bytes 4096
+  "Maximum byte length of one EPUB search context field.")
+
 (defconst yunge-reader-webview--max-outline-depth 256
   "Maximum nesting depth accepted from one EPUB outline.")
 
@@ -160,6 +178,7 @@
             "view-destroy" "view-events" "view-focus"
             "view-focus-parent" "view-info"
             "view-navigate" "view-open-publication"
+            "view-search"
             "view-selection-text"
             "view-scroll-bars" "view-status" "view-style"
             "view-visible")))
@@ -432,6 +451,133 @@ returned batch, and COMPLETE receives the validated native result."
    (apply-partially
     #'yunge-reader-webview--selection-text-complete
     offset character-limit complete)))
+
+(defun yunge-reader-webview--valid-search-cursor-p (cursor)
+  "Return non-nil when CURSOR is a bounded transient EPUB search cursor."
+  (and
+   (listp cursor)
+   (= (length cursor) 2)
+   (cl-every (lambda (entry) (memq (car-safe entry) '(href offset)))
+             cursor)
+   (assq 'href cursor)
+   (assq 'offset cursor)
+   (let ((href (alist-get 'href cursor))
+         (offset (alist-get 'offset cursor)))
+     (and
+      (yunge-reader-webview--valid-target-href-p href)
+      (not (string-match-p "#" href))
+      (natnump offset)
+      (<= offset yunge-reader-webview--max-search-cursor-offset)))))
+
+(defun yunge-reader-webview--valid-search-match-p (match)
+  "Return non-nil when MATCH is one bounded native EPUB search match."
+  (and
+   (listp match)
+   (= (length match) 6)
+   (cl-every
+    (lambda (entry)
+      (memq (car-safe entry) '(href start end text before after)))
+    match)
+   (cl-every (lambda (key) (assq key match))
+             '(href start end text before after))
+   (yunge-reader-webview--valid-selection-p
+    `((href . ,(alist-get 'href match))
+      (start . ,(alist-get 'start match))
+      (end . ,(alist-get 'end match))))
+   (let ((text (alist-get 'text match))
+         (before (alist-get 'before match))
+         (after (alist-get 'after match)))
+     (and
+      (stringp text)
+      (not (string-empty-p text))
+      (<= (string-bytes text)
+          yunge-reader-webview--max-search-match-text-bytes)
+      (stringp before)
+      (<= (string-bytes before)
+          yunge-reader-webview--max-search-context-bytes)
+      (stringp after)
+      (<= (string-bytes after)
+          yunge-reader-webview--max-search-context-bytes)))))
+
+(defun yunge-reader-webview--valid-search-result-p (result match-limit)
+  "Return non-nil when RESULT is a bounded EPUB batch for MATCH-LIMIT."
+  (and
+   (listp result)
+   (cl-every
+    (lambda (entry)
+      (memq (car-safe entry) '(matches cursor done)))
+    result)
+   (assq 'matches result)
+   (assq 'done result)
+   (= (length result) (if (assq 'cursor result) 3 2))
+   (let ((matches (alist-get 'matches result))
+         (cursor-entry (assq 'cursor result))
+         (done (alist-get 'done result)))
+     (and
+      (proper-list-p matches)
+      (<= (length matches) match-limit)
+      (cl-every #'yunge-reader-webview--valid-search-match-p matches)
+      (memq done '(nil t))
+      (if done
+          (null cursor-entry)
+        (and
+         cursor-entry
+         (yunge-reader-webview--valid-search-cursor-p
+          (cdr cursor-entry))))))))
+
+(defun yunge-reader-webview--search-complete
+    (match-limit complete result error-data)
+  "Validate one native search RESULT before invoking COMPLETE."
+  (cond
+   (error-data
+    (funcall complete nil error-data))
+   ((yunge-reader-webview--valid-search-result-p result match-limit)
+    (funcall complete result nil))
+   (t
+    (funcall
+     complete nil
+     (list 'error
+           (format "Malformed EPUB search result: %S" result))))))
+
+(defun yunge-reader-webview--request-search
+    (view query case-sensitive cursor match-limit section-limit complete)
+  "Request one bounded native EPUB search batch from VIEW."
+  (unless
+      (and
+       (stringp query)
+       (<= 1 (length query)
+           yunge-reader-webview--max-search-query-characters)
+       (not (string-match-p "[[:cntrl:]]" query)))
+    (error "Invalid EPUB search query: %S" query))
+  (unless (memq case-sensitive '(nil t))
+    (error "Invalid EPUB search case flag: %S" case-sensitive))
+  (unless (or (null cursor)
+              (yunge-reader-webview--valid-search-cursor-p cursor))
+    (error "Invalid EPUB search cursor: %S" cursor))
+  (unless
+      (and
+       (integerp match-limit)
+       (<= 1 match-limit
+           yunge-reader-webview--max-search-match-limit))
+    (error "Invalid EPUB search match limit: %S" match-limit))
+  (unless
+      (and
+       (integerp section-limit)
+       (<= 1 section-limit
+           yunge-reader-webview--max-search-section-limit))
+    (error "Invalid EPUB search section limit: %S" section-limit))
+  (unless (functionp complete)
+    (error "Invalid EPUB search completion: %S" complete))
+  (yunge-reader-webview--request
+   "view-search"
+   `((view . ,(yunge-reader-webview--view-id view))
+     (query . ,query)
+     (case-sensitive . ,case-sensitive)
+     (cursor . ,(copy-tree cursor))
+     (match-limit . ,match-limit)
+     (section-limit . ,section-limit))
+   (apply-partially
+    #'yunge-reader-webview--search-complete match-limit complete)))
 
 (defun yunge-reader-webview--valid-style-p (style)
   "Return non-nil when STYLE is a bounded EPUB reading style."

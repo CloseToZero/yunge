@@ -552,6 +552,88 @@ scrolling behavior."
      (null (yunge-reader-position-y cursor))
      (yunge-reader-position-offset cursor))))
 
+(defun yunge-reader-epub--search-cursor (cursor)
+  "Return CURSOR as a native EPUB search cursor, or nil."
+  (when cursor
+    (and
+     (yunge-reader-position-p cursor)
+     (null (yunge-reader-position-x cursor))
+     (null (yunge-reader-position-y cursor))
+     (let ((native
+            `((href . ,(yunge-reader-position-unit cursor))
+              (offset . ,(yunge-reader-position-offset cursor)))))
+       (and
+        (yunge-reader-webview--valid-search-cursor-p native)
+        native)))))
+
+(defun yunge-reader-epub--native-search-match (match)
+  "Return the generic Reader search result represented by MATCH."
+  (when (yunge-reader-webview--valid-search-match-p match)
+    (let ((href (alist-get 'href match)))
+      (make-yunge-reader-search-result
+       :start
+       (yunge-reader-epub--selection-position
+        href (alist-get 'start match))
+       :end
+       (yunge-reader-epub--selection-position
+        href (alist-get 'end match))
+       :text (alist-get 'text match)
+       :before (alist-get 'before match)
+       :after (alist-get 'after match)))))
+
+(defun yunge-reader-epub--search-complete (complete result error-data)
+  "Map native EPUB search RESULT through COMPLETE."
+  (if error-data
+      (funcall complete nil error-data)
+    (let* ((done (eq (alist-get 'done result) t))
+           (cursor (alist-get 'cursor result))
+           (matches
+            (mapcar #'yunge-reader-epub--native-search-match
+                    (alist-get 'matches result))))
+      (if (memq nil matches)
+          (funcall
+           complete nil
+           (yunge-reader-epub--native-error
+            "The EPUB renderer returned an invalid search match"))
+        (funcall
+         complete
+         (make-yunge-reader-search-batch
+          :results matches
+          :cursor
+          (unless done
+            (make-yunge-reader-position
+             :unit (alist-get 'href cursor)
+             :offset (alist-get 'offset cursor)))
+          :done done)
+         nil)))))
+
+(defun yunge-reader-epub--request-search
+    (document arguments complete)
+  "Request one generic search batch for EPUB DOCUMENT."
+  (let* ((query (plist-get arguments :query))
+         (case-sensitive (plist-get arguments :case-sensitive))
+         (cursor-value (plist-get arguments :cursor))
+         (cursor (yunge-reader-epub--search-cursor cursor-value))
+         (match-limit (plist-get arguments :match-limit))
+         (section-limit (plist-get arguments :page-limit))
+         (view (yunge-reader-epub--document-view document)))
+    (cond
+     ((and cursor-value (null cursor))
+      (funcall
+       complete nil
+       (yunge-reader-epub--native-error
+        "EPUB search cursor must identify a spine and match ordinal")))
+     ((not view)
+      (funcall
+       complete nil
+       (yunge-reader-epub--native-error
+        "The current EPUB view cannot search its publication")))
+     (t
+      (yunge-reader-webview--request-search
+       view query case-sensitive cursor match-limit section-limit
+       (apply-partially
+        #'yunge-reader-epub--search-complete complete))))))
+
 (defun yunge-reader-epub--selection-text-complete
     (href complete result error-data)
   "Map native selection text RESULT for HREF through COMPLETE."
@@ -644,6 +726,9 @@ scrolling behavior."
            "The current EPUB view cannot provide its outline")))))
     ('selection-text
      (yunge-reader-epub--request-selection-text
+      document arguments complete))
+    ('search
+     (yunge-reader-epub--request-search
       document arguments complete))
     (_
      (funcall

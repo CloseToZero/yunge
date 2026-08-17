@@ -1,6 +1,8 @@
 import './foliate-js/view.js'
 import { EPUB } from './foliate-js/epub.js'
 import { collapse as collapseCFI } from './foliate-js/epubcfi.js'
+import { searchMatcher } from './foliate-js/search.js'
+import { textWalker } from './foliate-js/text-walker.js'
 
 const BOOK_ROOT = 'https://yunge-reader-book.localhost/'
 const CATALOG_PATH = '.yunge/resources.json'
@@ -26,6 +28,11 @@ const MAX_INITIAL_TARGETS = 8
 const MAX_LOCATOR_TEXT_BYTES = 3072
 const MAX_SELECTION_CHARACTERS = 1024 * 1024
 const MAX_SELECTION_CHARACTER_LIMIT = 65536
+const MAX_SEARCH_QUERY_CHARACTERS = 256
+const MAX_SEARCH_MATCH_LIMIT = 200
+const MAX_SEARCH_SECTION_LIMIT = 64
+const MAX_SEARCH_CURSOR_OFFSET = 1024 * 1024
+const MAX_SEARCH_RESULT_BYTES = 384 * 1024
 const MAX_MEDIA_CANDIDATES = 256
 const MAX_TEXT_NODES = 4096
 const MAX_TEXT_SAMPLE = 4096
@@ -46,6 +53,11 @@ const SELECTION_TEXT_ERROR_MESSAGES = Object.freeze({
     'selection-unavailable':
         'EPUB selection range is unavailable',
 })
+const SEARCH_ERROR_MESSAGES = Object.freeze({
+    'invalid-search-cursor': 'EPUB search cursor is invalid',
+    'search-result-too-large': 'EPUB search result exceeds its byte limit',
+    'search-unavailable': 'EPUB search is unavailable',
+})
 const DEFAULT_STYLE = Object.freeze({
     'font-scale': 1.0,
     'line-height': 1.6,
@@ -65,6 +77,15 @@ const post = (event, {
     if (selection !== undefined) payload.selection = selection
     if (key) payload.key = key
     window.ipc.postMessage(JSON.stringify(payload))
+}
+
+const postSearchResult = (request, response) => {
+    window.ipc.postMessage(JSON.stringify({
+        protocol: 1,
+        event: 'search-result',
+        request,
+        response,
+    }))
 }
 
 const readerCharacterKey = event => {
@@ -302,6 +323,12 @@ const selectionTextError = (code, message) => {
     throw error
 }
 
+const searchError = (code, message) => {
+    const error = new Error(message)
+    error.code = code
+    throw error
+}
+
 const checkedSelectionTextRequest = value => {
     if (!value || typeof value !== 'object' || Array.isArray(value)
         || Object.keys(value).sort().join()
@@ -324,6 +351,57 @@ const checkedSelectionTextRequest = value => {
             'EPUB selection text request is invalid')
     }
     return { viewID, selection, offset, characterLimit }
+}
+
+const checkedSearchCursor = value => {
+    if (value === null) return null
+    if (!value || typeof value !== 'object' || Array.isArray(value)
+        || Object.keys(value).sort().join() !== 'href,offset') {
+        searchError(
+            'invalid-search-cursor',
+            'EPUB search cursor is invalid')
+    }
+    const href = checkedLocatorText(value.href, 'search href')
+    const offset = value.offset
+    if (!checkedOutlineHref(href) || href.includes('#')
+        || !Number.isSafeInteger(offset) || offset < 0
+        || offset > MAX_SEARCH_CURSOR_OFFSET) {
+        searchError(
+            'invalid-search-cursor',
+            'EPUB search cursor is invalid')
+    }
+    return Object.freeze({ href, offset })
+}
+
+const checkedSearchRequest = value => {
+    if (!value || typeof value !== 'object' || Array.isArray(value)
+        || Object.keys(value).sort().join()
+            !== 'case-sensitive,cursor,match-limit,query,request,'
+                + 'section-limit,view') {
+        searchError('search-unavailable', 'EPUB search request is invalid')
+    }
+    const viewID = checkedView(value.view)
+    const request = value.request
+    const query = value.query
+    const caseSensitive = value['case-sensitive']
+    const cursor = checkedSearchCursor(value.cursor)
+    const matchLimit = value['match-limit']
+    const sectionLimit = value['section-limit']
+    if (!Number.isSafeInteger(request) || request < 1
+        || typeof query !== 'string' || !Array.from(query).length
+        || Array.from(query).length > MAX_SEARCH_QUERY_CHARACTERS
+        || /[\p{Control}]/u.test(query)
+        || typeof caseSensitive !== 'boolean'
+        || !Number.isSafeInteger(matchLimit) || matchLimit < 1
+        || matchLimit > MAX_SEARCH_MATCH_LIMIT
+        || !Number.isSafeInteger(sectionLimit) || sectionLimit < 1
+        || sectionLimit > MAX_SEARCH_SECTION_LIMIT) {
+        searchError('search-unavailable', 'EPUB search request is invalid')
+    }
+    return {
+        request, viewID, query, caseSensitive, cursor, matchLimit,
+        sectionLimit,
+    }
 }
 
 const checkedNavigationTarget = value => {
@@ -833,6 +911,155 @@ const selectionText = request => {
     }
 }
 
+const nextSearchSection = (sections, start) => {
+    for (let index = start; index < sections.length; index++) {
+        const section = sections[index]
+        if (typeof section?.id === 'string'
+            && typeof section.createDocument === 'function') {
+            return { index, section }
+        }
+    }
+    return null
+}
+
+const searchBatch = (matches, cursor, done) => {
+    const result = { matches, cursor, done }
+    if (done) delete result.cursor
+    return result
+}
+
+const searchBatchFits = result => encoder.encode(JSON.stringify({
+    ok: true, result,
+})).length <= MAX_SEARCH_RESULT_BYTES
+
+const searchRequest = async request => {
+    try {
+        const {
+            viewID, query, caseSensitive, cursor, matchLimit, sectionLimit,
+        } = checkedSearchRequest(request)
+        if (!current || current.viewID !== viewID) {
+            searchError('search-unavailable', 'EPUB view is not open')
+        }
+        const session = current
+        const sections = session.book.sections
+        let entry
+        let offset
+        if (cursor) {
+            const index = sections.findIndex(section =>
+                section?.id === cursor.href
+                && typeof section.createDocument === 'function')
+            if (index < 0) {
+                searchError(
+                    'invalid-search-cursor',
+                    'EPUB search cursor is invalid')
+            }
+            entry = { index, section: sections[index] }
+            offset = cursor.offset
+        } else {
+            entry = nextSearchSection(sections, 0)
+            offset = 0
+        }
+        const matcher = searchMatcher(textWalker, {
+            defaultLocale: session.book.metadata?.language,
+            matchCase: caseSensitive,
+            matchDiacritics: true,
+            matchWholeWords: false,
+        })
+        const matches = []
+        let sectionsSearched = 0
+        while (entry && sectionsSearched < sectionLimit) {
+            const { index, section } = entry
+            const doc = await section.createDocument()
+            if (current !== session) {
+                searchError(
+                    'search-unavailable',
+                    'EPUB search was superseded')
+            }
+            let ordinal = 0
+            for (const { range, excerpt } of matcher(doc, query)) {
+                if (ordinal++ < offset) continue
+                const rangeCFI = session.view.getCFI(index, range)
+                const selection = checkedSelection({
+                    href: section.id,
+                    start: collapseCFI(rangeCFI),
+                    end: collapseCFI(rangeCFI, true),
+                })
+                const result = {
+                    ...selection,
+                    text: range.toString(),
+                    before: excerpt.pre,
+                    after: excerpt.post,
+                }
+                const nextCursor = {
+                    href: section.id,
+                    offset: ordinal,
+                }
+                if (ordinal > MAX_SEARCH_CURSOR_OFFSET) {
+                    searchError(
+                        'search-unavailable',
+                        'EPUB search cursor exceeds its limit')
+                }
+                const candidate = searchBatch(
+                    [...matches, result], nextCursor, false)
+                if (!searchBatchFits(candidate)) {
+                    if (!matches.length) {
+                        searchError(
+                            'search-result-too-large',
+                            'EPUB search result exceeds its byte limit')
+                    }
+                    return {
+                        ok: true,
+                        result: searchBatch(
+                            matches,
+                            { href: section.id, offset: ordinal - 1 },
+                            false),
+                    }
+                }
+                matches.push(result)
+                if (matches.length === matchLimit) {
+                    return {
+                        ok: true,
+                        result: searchBatch(
+                            matches, nextCursor, false),
+                    }
+                }
+            }
+            if (offset > ordinal) {
+                searchError(
+                    'invalid-search-cursor',
+                    'EPUB search cursor is invalid')
+            }
+            offset = 0
+            sectionsSearched++
+            entry = nextSearchSection(sections, index + 1)
+        }
+        return {
+            ok: true,
+            result: searchBatch(
+                matches,
+                entry ? { href: entry.section.id, offset: 0 } : null,
+                !entry),
+        }
+    } catch (error) {
+        const code = Object.hasOwn(SEARCH_ERROR_MESSAGES, error?.code)
+            ? error.code : 'search-unavailable'
+        if (code === 'search-unavailable') console.warn(error)
+        return {
+            ok: false,
+            error: { code, message: SEARCH_ERROR_MESSAGES[code] },
+        }
+    }
+}
+
+const search = request => {
+    const requestID = request?.request
+    void searchRequest(request).then(response => {
+        if (Number.isSafeInteger(requestID) && requestID > 0) {
+            postSearchResult(requestID, response)
+        }
+    })
+}
+
 const open = async ({
     view: viewID, resourceRoot, location, style, scrollBars,
 }) => {
@@ -994,5 +1221,6 @@ const navigate = ({ view: viewID, command, location }) => {
 }
 
 globalThis.yungeReader = Object.freeze({
-    clearSelection, navigate, open, selectionText, setScrollBars, setStyle,
+    clearSelection, navigate, open, search, selectionText, setScrollBars,
+    setStyle,
 })

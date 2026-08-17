@@ -75,6 +75,13 @@ const MAX_EPUB_OUTLINE_TEXT_BYTES: usize = 384 * 1_024;
 const MAX_EPUB_SELECTION_CHARACTERS: u32 = 1_048_576;
 const MAX_EPUB_SELECTION_CHARACTER_LIMIT: u32 = 65_536;
 const MAX_EPUB_SELECTION_RESULT_BYTES: usize = 512 * 1_024;
+const MAX_EPUB_SEARCH_QUERY_CHARACTERS: usize = 256;
+const MAX_EPUB_SEARCH_MATCH_LIMIT: u32 = 200;
+const MAX_EPUB_SEARCH_SECTION_LIMIT: u32 = 64;
+const MAX_EPUB_SEARCH_CURSOR_OFFSET: u32 = 1_048_576;
+const MAX_EPUB_SEARCH_RESULT_BYTES: usize = 512 * 1_024;
+const MAX_EPUB_SEARCH_MATCH_TEXT_BYTES: usize = 16 * 1_024;
+const MAX_EPUB_SEARCH_CONTEXT_BYTES: usize = 4 * 1_024;
 const MIN_EPUB_FONT_SCALE: f64 = 0.5;
 const MAX_EPUB_FONT_SCALE: f64 = 3.0;
 const MIN_EPUB_LINE_HEIGHT: f64 = 1.0;
@@ -98,7 +105,7 @@ const RESOURCE_CSP: &str = concat!(
     "base-uri 'none'; ",
     "form-action 'none'"
 );
-const CAPABILITIES: [&str; 19] = [
+const CAPABILITIES: [&str; 20] = [
     "publication-close",
     "publication-info",
     "publication-open",
@@ -113,6 +120,7 @@ const CAPABILITIES: [&str; 19] = [
     "view-info",
     "view-navigate",
     "view-open-publication",
+    "view-search",
     "view-selection-text",
     "view-scroll-bars",
     "view-status",
@@ -251,6 +259,25 @@ struct ViewSelectionTextParams {
     character_limit: u32,
 }
 
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields, rename_all = "kebab-case")]
+struct ViewSearchParams {
+    view: u64,
+    query: String,
+    case_sensitive: bool,
+    #[serde(default)]
+    cursor: Option<EpubSearchCursor>,
+    match_limit: u32,
+    section_limit: u32,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+struct EpubSearchCursor {
+    href: String,
+    offset: u32,
+}
+
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Serialize)]
 #[serde(deny_unknown_fields, rename_all = "kebab-case")]
 struct EpubStyle {
@@ -328,6 +355,45 @@ struct RendererSelectionTextResult {
 struct RendererSelectionTextError {
     code: String,
     message: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RendererSearchMessage {
+    protocol: u32,
+    event: String,
+    request: u64,
+    response: Value,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RendererSearchEnvelope {
+    ok: bool,
+    #[serde(default)]
+    result: Option<RendererSearchResult>,
+    #[serde(default)]
+    error: Option<RendererSelectionTextError>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct RendererSearchResult {
+    matches: Vec<EpubSearchMatch>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    cursor: Option<EpubSearchCursor>,
+    done: bool,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct EpubSearchMatch {
+    href: String,
+    start: String,
+    end: String,
+    text: String,
+    before: String,
+    after: String,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Serialize)]
@@ -414,6 +480,13 @@ enum Control {
 enum Incoming {
     Request(Request),
     Invalid(String),
+    RendererSearch(RendererSearchCallback),
+}
+
+struct RendererSearchCallback {
+    view: u64,
+    request: u64,
+    response: Value,
 }
 
 struct ParentWindow(NonZeroIsize);
@@ -540,6 +613,8 @@ struct Service {
     next_publication: u64,
     version: Result<String, String>,
     outgoing_sender: Sender<Outgoing>,
+    incoming_sender: Sender<Incoming>,
+    pending_searches: HashMap<u64, ViewSearchParams>,
 }
 
 impl ServiceError {
@@ -813,6 +888,93 @@ impl ViewSelectionTextParams {
     }
 }
 
+impl EpubSearchCursor {
+    fn validate(self) -> Result<Self, ServiceError> {
+        if !valid_epub_href(&self.href, false)
+            || self.href.len() > MAX_EPUB_LOCATOR_TEXT_BYTES
+            || self.href.chars().any(char::is_control)
+            || self.offset > MAX_EPUB_SEARCH_CURSOR_OFFSET
+        {
+            return Err(ServiceError::new(
+                "invalid-search-cursor",
+                "EPUB search cursor is invalid",
+            ));
+        }
+        Ok(self)
+    }
+}
+
+impl ViewSearchParams {
+    fn validate(mut self) -> Result<Self, ServiceError> {
+        let query_characters = self.query.chars().count();
+        if query_characters == 0
+            || query_characters > MAX_EPUB_SEARCH_QUERY_CHARACTERS
+            || self.query.chars().any(char::is_control)
+        {
+            return Err(ServiceError::new(
+                "invalid-search-query",
+                format!(
+                    "EPUB search query must contain 1 to {} characters",
+                    MAX_EPUB_SEARCH_QUERY_CHARACTERS
+                ),
+            ));
+        }
+        if !(1..=MAX_EPUB_SEARCH_MATCH_LIMIT).contains(&self.match_limit) {
+            return Err(ServiceError::new(
+                "invalid-search-limit",
+                format!(
+                    "EPUB search match limit must be between 1 and {}",
+                    MAX_EPUB_SEARCH_MATCH_LIMIT
+                ),
+            ));
+        }
+        if !(1..=MAX_EPUB_SEARCH_SECTION_LIMIT).contains(&self.section_limit) {
+            return Err(ServiceError::new(
+                "invalid-search-limit",
+                format!(
+                    "EPUB search section limit must be between 1 and {}",
+                    MAX_EPUB_SEARCH_SECTION_LIMIT
+                ),
+            ));
+        }
+        self.cursor =
+            self.cursor.map(EpubSearchCursor::validate).transpose()?;
+        Ok(self)
+    }
+}
+
+impl EpubSearchMatch {
+    fn validate(self) -> Result<Self, ServiceError> {
+        let selection = EpubSelection {
+            href: self.href,
+            start: self.start,
+            end: self.end,
+        }
+        .validate()?;
+        if self.text.is_empty()
+            || self.text.len() > MAX_EPUB_SEARCH_MATCH_TEXT_BYTES
+            || self.before.len() > MAX_EPUB_SEARCH_CONTEXT_BYTES
+            || self.after.len() > MAX_EPUB_SEARCH_CONTEXT_BYTES
+            || self.text.contains('\0')
+            || self.before.contains('\0')
+            || self.after.contains('\0')
+        {
+            return Err(ServiceError::new(
+                "invalid-search-result",
+                "EPUB search match text is invalid",
+            ));
+        }
+        Ok(Self {
+            href: selection.href,
+            start: selection.start,
+            end: selection.end,
+            text: self.text,
+            before: self.before,
+            after: self.after,
+        })
+    }
+}
+
 fn valid_epub_href(value: &str, allow_fragment: bool) -> bool {
     let path = if let Some((path, fragment)) = value.split_once('#') {
         if !allow_fragment || fragment.contains('#') {
@@ -832,7 +994,10 @@ fn valid_epub_href(value: &str, allow_fragment: bool) -> bool {
 }
 
 impl Service {
-    fn new(outgoing_sender: Sender<Outgoing>) -> Self {
+    fn new(
+        outgoing_sender: Sender<Outgoing>,
+        incoming_sender: Sender<Incoming>,
+    ) -> Self {
         Self {
             views: HashMap::new(),
             publications: Arc::new(Mutex::new(PublicationStore::default())),
@@ -840,6 +1005,8 @@ impl Service {
             next_publication: 1,
             version: wry::webview_version().map_err(|error| error.to_string()),
             outgoing_sender,
+            incoming_sender,
+            pending_searches: HashMap::new(),
         }
     }
 
@@ -963,6 +1130,7 @@ impl Service {
         let publications = Arc::clone(&self.publications);
         let resource_requests = Arc::clone(&self.resource_requests);
         let renderer_events = self.outgoing_sender.clone();
+        let renderer_callbacks = self.incoming_sender.clone();
         let view_id = params.view;
         let build = || {
             WebViewBuilder::new()
@@ -1003,7 +1171,14 @@ impl Service {
                     }
                 })
                 .with_ipc_handler(move |request| {
-                    if let Some(event) = renderer_event(view_id, &request) {
+                    if let Some(callback) =
+                        renderer_search_callback(view_id, &request)
+                    {
+                        let _ = renderer_callbacks
+                            .send(Incoming::RendererSearch(callback));
+                    } else if let Some(event) =
+                        renderer_event(view_id, &request)
+                    {
                         let _ = renderer_events.send(Outgoing::Event(event));
                     }
                 })
@@ -1139,6 +1314,45 @@ impl Service {
                 ServiceError::new("selection-text-failed", error.to_string())
             })?;
         Ok(())
+    }
+
+    fn search(&mut self, id: u64, params: Value) -> Result<(), ServiceError> {
+        let params = Self::parse::<ViewSearchParams>(params)?.validate()?;
+        let view = self.view(params.view)?;
+        if view.publication.is_none() {
+            return Err(ServiceError::new(
+                "view-has-no-publication",
+                format!("view {} has no attached publication", params.view),
+            ));
+        }
+        if self.pending_searches.contains_key(&id) {
+            return Err(ServiceError::new(
+                "duplicate-request",
+                format!("search request {id} is already pending"),
+            ));
+        }
+        let view_id = params.view;
+        let script = publication_search_script(id, &params);
+        self.pending_searches.insert(id, params);
+        if let Err(error) = self.view(view_id)?.webview.evaluate_script(&script)
+        {
+            self.pending_searches.remove(&id);
+            return Err(ServiceError::new("search-failed", error.to_string()));
+        }
+        Ok(())
+    }
+
+    fn complete_search(
+        &mut self,
+        callback: RendererSearchCallback,
+    ) -> Option<Response> {
+        let params = self.pending_searches.get(&callback.request)?;
+        if params.view != callback.view {
+            return None;
+        }
+        let params = self.pending_searches.remove(&callback.request)?;
+        let value = serde_json::to_string(&callback.response).ok()?;
+        Some(renderer_search_response(callback.request, &params, &value))
     }
 
     fn open_view_publication(
@@ -1280,6 +1494,23 @@ impl Service {
         if self.views.remove(&params.view).is_none() {
             return Err(unknown_view(params.view));
         }
+        let pending = self
+            .pending_searches
+            .iter()
+            .filter_map(|(id, search)| {
+                (search.view == params.view).then_some(*id)
+            })
+            .collect::<Vec<_>>();
+        for id in pending {
+            self.pending_searches.remove(&id);
+            let _ = self.outgoing_sender.send(Outgoing::Response(
+                Response::failure(
+                    Some(id),
+                    "search-unavailable",
+                    "EPUB view was destroyed during search",
+                ),
+            ));
+        }
         Ok(json!({ "view": params.view, "destroyed": true }))
     }
 
@@ -1318,8 +1549,13 @@ impl Service {
             };
             return (Some(response(request.id, result)), control);
         }
-        if request.op == "view-selection-text" {
-            let result = self.selection_text(request.id, request.params);
+        if matches!(request.op.as_str(), "view-search" | "view-selection-text")
+        {
+            let result = if request.op == "view-search" {
+                self.search(request.id, request.params)
+            } else {
+                self.selection_text(request.id, request.params)
+            };
             let response = result.err().map(|error| {
                 Response::failure(Some(request.id), error.code, error.message)
             });
@@ -1426,6 +1662,10 @@ fn app_asset(path: &str) -> Option<(&'static str, &'static [u8])> {
         "foliate-js/progress.js" => Some((
             "text/javascript; charset=utf-8",
             include_bytes!("../renderer/foliate-js/progress.js"),
+        )),
+        "foliate-js/search.js" => Some((
+            "text/javascript; charset=utf-8",
+            include_bytes!("../renderer/foliate-js/search.js"),
         )),
         "foliate-js/text-walker.js" => Some((
             "text/javascript; charset=utf-8",
@@ -1976,6 +2216,121 @@ fn renderer_selection_text_response(
     Response::failure(Some(id), code, error.message)
 }
 
+fn invalid_renderer_search_result(
+    id: u64,
+    detail: impl Into<String>,
+) -> Response {
+    Response::failure(Some(id), "invalid-renderer-result", detail)
+}
+
+fn renderer_search_response(
+    id: u64,
+    params: &ViewSearchParams,
+    value: &str,
+) -> Response {
+    if value.len() > MAX_EPUB_SEARCH_RESULT_BYTES {
+        return invalid_renderer_search_result(
+            id,
+            "EPUB search result exceeds its byte limit",
+        );
+    }
+    let envelope: RendererSearchEnvelope = match serde_json::from_str(value) {
+        Ok(envelope) => envelope,
+        Err(error) => {
+            return invalid_renderer_search_result(
+                id,
+                format!("invalid EPUB search result: {error}"),
+            );
+        }
+    };
+    if envelope.ok {
+        let Some(mut result) = envelope.result else {
+            return invalid_renderer_search_result(
+                id,
+                "successful EPUB search result has no payload",
+            );
+        };
+        if envelope.error.is_some()
+            || result.matches.len() > params.match_limit as usize
+        {
+            return invalid_renderer_search_result(
+                id,
+                "successful EPUB search result is inconsistent",
+            );
+        }
+        result.cursor =
+            match result.cursor.map(EpubSearchCursor::validate).transpose() {
+                Ok(cursor) => cursor,
+                Err(error) => {
+                    return invalid_renderer_search_result(id, error.message);
+                }
+            };
+        let cursor_is_valid = if result.done {
+            result.cursor.is_none()
+        } else if let Some(cursor) = result.cursor.as_ref() {
+            params.cursor.as_ref().is_none_or(|old| {
+                cursor.href != old.href || cursor.offset > old.offset
+            })
+        } else {
+            false
+        };
+        if !cursor_is_valid {
+            return invalid_renderer_search_result(
+                id,
+                "EPUB search cursor did not advance",
+            );
+        }
+        let matches = result
+            .matches
+            .into_iter()
+            .map(EpubSearchMatch::validate)
+            .collect::<Result<Vec<_>, _>>();
+        result.matches = match matches {
+            Ok(matches) => matches,
+            Err(error) => {
+                return invalid_renderer_search_result(id, error.message);
+            }
+        };
+        return Response::success(
+            id,
+            serde_json::to_value(result)
+                .expect("validated search result is serializable"),
+        );
+    }
+    if envelope.result.is_some() {
+        return invalid_renderer_search_result(
+            id,
+            "failed EPUB search result contains a payload",
+        );
+    }
+    let Some(error) = envelope.error else {
+        return invalid_renderer_search_result(
+            id,
+            "failed EPUB search result has no error",
+        );
+    };
+    if error.message.is_empty()
+        || error.message.len() > MAX_RENDERER_ERROR_BYTES
+    {
+        return invalid_renderer_search_result(
+            id,
+            "EPUB search error message is invalid",
+        );
+    }
+    let code = match error.code.as_str() {
+        "invalid-search-cursor" => "invalid-search-cursor",
+        "search-result-too-large" => "search-result-too-large",
+        "search-unavailable" => "search-unavailable",
+        _ => {
+            return invalid_renderer_search_result(
+                id,
+                "EPUB search error code is invalid",
+            );
+        }
+    };
+    Response::failure(Some(id), code, error.message)
+}
+
 fn dependency_message(detail: &str) -> String {
     format!(
         concat!(
@@ -2015,6 +2370,30 @@ fn ready_message(version: &Result<String, String>) -> Value {
 
 fn app_navigation_allowed(url: String) -> bool {
     matches!(url.as_str(), APP_URL | APP_BROWSER_URL)
+}
+
+fn renderer_search_callback(
+    view: u64,
+    request: &HttpRequest<String>,
+) -> Option<RendererSearchCallback> {
+    if !app_navigation_allowed(request.uri().to_string())
+        || request.body().len() > MAX_RENDERER_MESSAGE_BYTES
+    {
+        return None;
+    }
+    let message: RendererSearchMessage =
+        serde_json::from_str(request.body()).ok()?;
+    if message.protocol != PROTOCOL_VERSION
+        || message.event != "search-result"
+        || message.request == 0
+    {
+        return None;
+    }
+    Some(RendererSearchCallback {
+        view,
+        request: message.request,
+        response: message.response,
+    })
 }
 
 fn renderer_event(
@@ -2218,6 +2597,18 @@ fn publication_selection_text_script(
     format!("globalThis.yungeReader.selectionText({payload});")
 }
 
+fn publication_search_script(id: u64, params: &ViewSearchParams) -> String {
+    let mut payload =
+        serde_json::to_value(params).expect("search payload is serializable");
+    payload
+        .as_object_mut()
+        .expect("search payload is an object")
+        .insert("request".into(), json!(id));
+    let payload = serde_json::to_string(&payload)
+        .expect("search payload remains serializable");
+    format!("globalThis.yungeReader.search({payload});")
+}
+
 fn write_message(
     mut output: impl Write,
     message: &impl Serialize,
@@ -2252,6 +2643,7 @@ fn write_outgoing(
 pub(super) fn serve() -> Result<(), Error> {
     let (sender, receiver) = mpsc::channel();
     let (outgoing_sender, outgoing_receiver) = mpsc::channel();
+    let service_sender = sender.clone();
     thread::spawn(move || {
         for line in io::stdin().lock().lines() {
             let incoming = match line {
@@ -2268,7 +2660,7 @@ pub(super) fn serve() -> Result<(), Error> {
         }
     });
 
-    let mut service = Service::new(outgoing_sender);
+    let mut service = Service::new(outgoing_sender, service_sender);
     let stdout = io::stdout();
     let mut output = stdout.lock();
     write_message(&mut output, &ready_message(&service.version))?;
@@ -2286,6 +2678,9 @@ pub(super) fn serve() -> Result<(), Error> {
                 Some(Response::failure(None, "invalid-request", message)),
                 Control::Continue,
             ),
+            Incoming::RendererSearch(callback) => {
+                (service.complete_search(callback), Control::Continue)
+            }
         };
         if let Some(response) = response {
             write_message(&mut output, &response)?;
@@ -2438,6 +2833,7 @@ mod tests {
         assert!(csp.contains("font-src blob: data:"));
         assert!(csp.contains("media-src blob: data:"));
         assert!(!csp.contains("script-src 'self' blob:"));
+        assert!(app_asset("foliate-js/search.js").is_some());
         assert!(app_asset("foliate-js/view.js").is_some());
         assert!(app_asset("foliate-js/vendor/zip.js").is_none());
         let adapter =
@@ -2472,11 +2868,19 @@ mod tests {
         assert!(adapter.contains("post('style-error'"));
         assert!(adapter.contains("installSelectionTracking"));
         assert!(adapter.contains(
-            "clearSelection, navigate, open, selectionText, setScrollBars, \
-             setStyle"
+            "clearSelection, navigate, open, search, selectionText, \
+             setScrollBars"
         ));
         assert!(adapter.contains("selectedRange"));
         assert!(adapter.contains("Array.from(text)"));
+        assert!(adapter.contains("searchMatcher(textWalker"));
+        assert!(adapter.contains("search, selectionText"));
+        let search =
+            std::str::from_utf8(app_asset("foliate-js/search.js").unwrap().1)
+                .unwrap();
+        assert!(search.contains("startIndex === endIndex"));
+        assert!(search.contains("strs.slice(startIndex + 1, endIndex)"));
+        assert!(search.contains("while (sum < end)"));
         for path in ["foliate-js/paginator.js", "foliate-js/fixed-layout.js"] {
             let source =
                 std::str::from_utf8(app_asset(path).unwrap().1).unwrap();
@@ -2506,7 +2910,8 @@ mod tests {
     fn publication_operations_own_query_and_release_one_epub() {
         let epub = test_epub();
         let (sender, _receiver) = mpsc::channel();
-        let mut service = Service::new(sender);
+        let (incoming, _incoming_receiver) = mpsc::channel();
+        let mut service = Service::new(sender, incoming);
         let path = epub.0.to_string_lossy().into_owned();
         let (opened, control) = handle_immediate(
             &mut service,
@@ -2625,7 +3030,8 @@ mod tests {
     #[test]
     fn publication_open_requires_an_absolute_strict_path() {
         let (sender, _receiver) = mpsc::channel();
-        let mut service = Service::new(sender);
+        let (incoming, _incoming_receiver) = mpsc::channel();
+        let mut service = Service::new(sender, incoming);
         let (relative, _) = handle_immediate(
             &mut service,
             Request {
@@ -2678,7 +3084,8 @@ mod tests {
         }
 
         let (sender, _receiver) = mpsc::channel();
-        let service = Service::new(sender);
+        let (incoming, _incoming_receiver) = mpsc::channel();
+        let service = Service::new(sender, incoming);
         let response = resource_response(
             &service.publications,
             HttpRequest::builder()
@@ -2923,6 +3330,67 @@ mod tests {
     }
 
     #[test]
+    fn renderer_search_callbacks_keep_request_identity() {
+        let body = json!({
+            "protocol": 1,
+            "event": "search-result",
+            "request": 27,
+            "response": {
+                "ok": true,
+                "result": { "matches": [], "done": true },
+            },
+        })
+        .to_string();
+        let request = HttpRequest::builder().uri(APP_URL).body(body).unwrap();
+        let callback = renderer_search_callback(4, &request).unwrap();
+        assert_eq!(callback.view, 4);
+        assert_eq!(callback.request, 27);
+        assert_eq!(callback.response["ok"], true);
+        assert!(renderer_event(4, &request).is_none());
+    }
+
+    #[test]
+    fn service_completes_only_matching_search_callbacks() {
+        let (outgoing, _outgoing_receiver) = mpsc::channel();
+        let (incoming, _incoming_receiver) = mpsc::channel();
+        let mut service = Service::new(outgoing, incoming);
+        service.pending_searches.insert(
+            27,
+            ViewSearchParams {
+                view: 4,
+                query: "Chapter".into(),
+                case_sensitive: false,
+                cursor: None,
+                match_limit: 2,
+                section_limit: 1,
+            },
+        );
+        let response = json!({
+            "ok": true,
+            "result": { "matches": [], "done": true },
+        });
+        assert!(
+            service
+                .complete_search(RendererSearchCallback {
+                    view: 5,
+                    request: 27,
+                    response: response.clone(),
+                })
+                .is_none()
+        );
+        assert!(service.pending_searches.contains_key(&27));
+        let completed = service
+            .complete_search(RendererSearchCallback {
+                view: 4,
+                request: 27,
+                response,
+            })
+            .unwrap();
+        assert!(completed.ok);
+        assert!(!service.pending_searches.contains_key(&27));
+    }
+
+    #[test]
     fn publication_script_serializes_renderer_inputs() {
         let location = EpubLocator {
             cfi: "epubcfi(/6/4!/4/2)".into(),
@@ -3004,6 +3472,29 @@ mod tests {
         assert!(selection_text.contains(r#""character-limit":16384"#));
         assert!(selection_text.contains(r#""offset":0"#));
         assert!(!selection_text.contains("eval"));
+
+        let search = publication_search_script(
+            27,
+            &ViewSearchParams {
+                view: 4,
+                query: "Chapter".into(),
+                case_sensitive: true,
+                cursor: Some(EpubSearchCursor {
+                    href: "OPS/chapter.xhtml".into(),
+                    offset: 2,
+                }),
+                match_limit: 32,
+                section_limit: 8,
+            },
+        );
+        assert!(search.starts_with("globalThis.yungeReader.search("));
+        assert!(search.contains(r#""query":"Chapter""#));
+        assert!(search.contains(r#""request":27"#));
+        assert!(search.contains(r#""case-sensitive":true"#));
+        assert!(search.contains(r#""match-limit":32"#));
+        assert!(search.contains(r#""section-limit":8"#));
+        assert!(search.contains(r#""offset":2"#));
+        assert!(!search.contains("eval"));
     }
 
     #[test]
@@ -3185,6 +3676,155 @@ mod tests {
             ),
         );
         assert_eq!(stale.error.unwrap().code, "selection-no-longer-current");
+    }
+
+    #[test]
+    fn epub_search_requests_are_strictly_bounded() {
+        let valid = ViewSearchParams {
+            view: 4,
+            query: "Chapter".into(),
+            case_sensitive: false,
+            cursor: Some(EpubSearchCursor {
+                href: "OPS/chapter.xhtml".into(),
+                offset: MAX_EPUB_SEARCH_CURSOR_OFFSET,
+            }),
+            match_limit: MAX_EPUB_SEARCH_MATCH_LIMIT,
+            section_limit: MAX_EPUB_SEARCH_SECTION_LIMIT,
+        };
+        assert_eq!(valid.validate().unwrap().view, 4);
+
+        for invalid in [
+            ViewSearchParams {
+                view: 4,
+                query: String::new(),
+                case_sensitive: false,
+                cursor: None,
+                match_limit: 1,
+                section_limit: 1,
+            },
+            ViewSearchParams {
+                view: 4,
+                query: "Chapter".into(),
+                case_sensitive: false,
+                cursor: None,
+                match_limit: 0,
+                section_limit: 1,
+            },
+            ViewSearchParams {
+                view: 4,
+                query: "Chapter".into(),
+                case_sensitive: false,
+                cursor: None,
+                match_limit: 1,
+                section_limit: 0,
+            },
+        ] {
+            assert!(invalid.validate().is_err());
+        }
+        assert!(
+            EpubSearchCursor {
+                href: "../chapter.xhtml".into(),
+                offset: 0,
+            }
+            .validate()
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn renderer_search_batches_are_independently_validated() {
+        let params = ViewSearchParams {
+            view: 4,
+            query: "Chapter".into(),
+            case_sensitive: false,
+            cursor: None,
+            match_limit: 2,
+            section_limit: 1,
+        };
+        let value = json!({
+            "ok": true,
+            "result": {
+                "matches": [{
+                    "href": "OPS/chapter.xhtml",
+                    "start": "epubcfi(/6/4!/4/2/1:0)",
+                    "end": "epubcfi(/6/4!/4/2/1:7)",
+                    "text": "Chapter",
+                    "before": "A ",
+                    "after": " title",
+                }],
+                "cursor": {
+                    "href": "OPS/chapter.xhtml",
+                    "offset": 1,
+                },
+                "done": false,
+            },
+        })
+        .to_string();
+        let response = renderer_search_response(11, &params, &value);
+        assert!(
+            response.ok,
+            "{}",
+            response
+                .error
+                .as_ref()
+                .map_or("missing error", |error| error.message.as_str())
+        );
+        let result = response.result.unwrap();
+        assert_eq!(result["matches"][0]["text"], "Chapter");
+        assert_eq!(result["cursor"]["offset"], 1);
+
+        let invalid = [
+            "null".into(),
+            json!({
+                "ok": true,
+                "result": { "matches": [], "done": false },
+            })
+            .to_string(),
+            json!({
+                "ok": true,
+                "result": {
+                    "matches": [],
+                    "cursor": {
+                        "href": "../chapter.xhtml",
+                        "offset": 0,
+                    },
+                    "done": false,
+                },
+            })
+            .to_string(),
+            json!({
+                "ok": true,
+                "result": {
+                    "matches": [{
+                        "href": "OPS/chapter.xhtml",
+                        "start": "epubcfi(/6/4)",
+                        "end": "epubcfi(/6/4)",
+                        "text": "Chapter",
+                        "before": "",
+                        "after": "",
+                    }],
+                    "done": true,
+                },
+            })
+            .to_string(),
+        ];
+        for invalid in &invalid {
+            let response = renderer_search_response(12, &params, invalid);
+            assert!(!response.ok);
+            assert_eq!(response.error.unwrap().code, "invalid-renderer-result");
+        }
+
+        let unavailable_value = json!({
+            "ok": false,
+            "error": {
+                "code": "search-unavailable",
+                "message": "unavailable",
+            },
+        })
+        .to_string();
+        let unavailable =
+            renderer_search_response(13, &params, &unavailable_value);
+        assert_eq!(unavailable.error.unwrap().code, "search-unavailable");
     }
 
     #[test]

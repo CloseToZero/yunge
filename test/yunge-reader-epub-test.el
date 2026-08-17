@@ -515,6 +515,90 @@
       (make-yunge-reader-position
        :unit "OPS/chapter.xhtml" :offset 8)))))
 
+(ert-deftest yunge-reader-epub-maps-bounded-search-batches ()
+  (let* ((document (yunge-reader-epub-test--document))
+         (cursor
+          (make-yunge-reader-position
+           :unit "OPS/chapter.xhtml" :offset 2))
+         (view
+          (yunge-reader-webview--make-view
+           :id 9 :publication 7))
+         request
+         result
+         error-data)
+    (with-temp-buffer
+      (setq yunge-reader-webview--buffer-view view)
+      (cl-letf
+          (((symbol-function 'yunge-reader-webview--request-search)
+            (lambda (requested-view query case-sensitive native-cursor
+                                    match-limit section-limit complete)
+              (setq request
+                    (list requested-view query case-sensitive native-cursor
+                          match-limit section-limit))
+              (funcall
+               complete
+               '((matches
+                  . (((href . "OPS/chapter.xhtml")
+                      (start . "epubcfi(/6/4!/4/2/1:0)")
+                      (end . "epubcfi(/6/4!/4/2/1:7)")
+                      (text . "Chapter")
+                      (before . "A ")
+                      (after . " title"))))
+                 (cursor
+                  . ((href . "OPS/chapter.xhtml") (offset . 3)))
+                 (done))
+               nil))))
+        (yunge-reader-epub--request
+         document 'search
+         (list :query "Chapter" :case-sensitive t :cursor cursor
+               :match-limit 32 :page-limit 8)
+         (lambda (value error)
+           (setq result value
+                 error-data error)))))
+    (should-not error-data)
+    (should
+     (equal
+      request
+      (list view "Chapter" t
+            '((href . "OPS/chapter.xhtml") (offset . 2))
+            32 8)))
+    (let ((match (car (yunge-reader-search-batch-results result))))
+      (should (equal (yunge-reader-search-result-text match) "Chapter"))
+      (should
+       (equal
+        (yunge-reader-search-result-start match)
+        (make-yunge-reader-position
+         :unit "OPS/chapter.xhtml"
+         :offset "epubcfi(/6/4!/4/2/1:0)"))))
+    (should-not (yunge-reader-search-batch-done result))
+    (should
+     (equal
+      (yunge-reader-search-batch-cursor result)
+      (make-yunge-reader-position
+       :unit "OPS/chapter.xhtml" :offset 3)))))
+
+(ert-deftest yunge-reader-epub-rejects-invalid-search-cursors ()
+  (let ((document (yunge-reader-epub-test--document))
+        (cursor
+         (make-yunge-reader-position
+          :unit "../chapter.xhtml" :offset 0))
+        requested
+        error-data)
+    (with-temp-buffer
+      (setq yunge-reader-webview--buffer-view
+            (yunge-reader-webview--make-view
+             :id 9 :publication 7))
+      (cl-letf
+          (((symbol-function 'yunge-reader-webview--request-search)
+            (lambda (&rest _arguments) (setq requested t))))
+        (yunge-reader-epub--request
+         document 'search
+         (list :query "Chapter" :case-sensitive nil :cursor cursor
+               :match-limit 32 :page-limit 8)
+         (lambda (_value error) (setq error-data error)))))
+    (should error-data)
+    (should-not requested)))
+
 (ert-deftest yunge-reader-epub-rejects-stale-selection-copy ()
   (let* ((document (yunge-reader-epub-test--document))
          (selection (yunge-reader-epub-test--selection))

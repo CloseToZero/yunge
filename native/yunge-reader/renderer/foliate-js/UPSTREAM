@@ -9,8 +9,13 @@ Included modules:
 - overlayer.js
 - paginator.js
 - progress.js
+- search.js
 - text-walker.js
 - view.js
 
-Yunge Reader removes allow-scripts from the renderer iframe sandbox.  The
-upstream files otherwise remain source modules rather than a generated bundle.
+Local adjustments remain source-level and reviewable:
+
+- renderer iframe sandboxes omit allow-scripts;
+- paginators release navigation locks and avoid absent boundary sections; and
+- search.js follows the local width style and corrects upstream cross-node and
+  terminal-boundary index arithmetic.

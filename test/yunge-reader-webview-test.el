@@ -72,6 +72,7 @@
          "view-destroy" "view-events" "view-focus"
          "view-focus-parent" "view-info"
          "view-navigate" "view-open-publication"
+         "view-search"
          "view-selection-text"
          "view-scroll-bars" "view-status" "view-style"
          "view-visible")))))
@@ -257,6 +258,71 @@
        (setq result value
              error-data error))
      '((text . "abc") (total . 3) (done . t))
+     nil)
+    (should-not result)
+    (should (eq (car error-data) 'error))))
+
+(ert-deftest yunge-reader-webview-validates-epub-search-batches ()
+  (let ((match
+         '((href . "OPS/chapter.xhtml")
+           (start . "epubcfi(/6/4!/4/2/1:0)")
+           (end . "epubcfi(/6/4!/4/2/1:7)")
+           (text . "Chapter")
+           (before . "A ")
+           (after . " title"))))
+    (should
+     (yunge-reader-webview--valid-search-result-p
+      `((matches . (,match))
+        (cursor . ((href . "OPS/chapter.xhtml") (offset . 1)))
+        (done))
+      2))
+    (should
+     (yunge-reader-webview--valid-search-result-p
+      `((matches . (,match)) (done . t))
+      2))
+    (dolist
+        (result
+         `(((matches) (done))
+           ((matches . (,match)) (cursor) (done))
+           ((matches . (,match))
+            (cursor . ((href . "../chapter.xhtml") (offset . 1)))
+            (done))
+           ((matches . (,match)) (cursor . nil) (done . t))))
+      (should-not
+       (yunge-reader-webview--valid-search-result-p result 2)))))
+
+(ert-deftest yunge-reader-webview-requests-bounded-epub-search ()
+  (yunge-reader-webview-test--with-fake-process
+    (yunge-reader-webview-start)
+    (yunge-reader-webview--handle-message
+     'fake-webview-process
+     (yunge-reader-webview-test--ready-message))
+    (let ((view (yunge-reader-webview--make-view :id 9)))
+      (yunge-reader-webview--request-search
+       view "Chapter" t
+       '((href . "OPS/chapter.xhtml") (offset . 3))
+       32 8 #'ignore)
+      (let* ((request
+              (json-parse-string (car sent) :object-type 'alist))
+             (params (alist-get 'params request)))
+        (should (equal (alist-get 'op request) "view-search"))
+        (should (= (alist-get 'view params) 9))
+        (should (equal (alist-get 'query params) "Chapter"))
+        (should (eq (alist-get 'case-sensitive params) t))
+        (should (= (alist-get 'match-limit params) 32))
+        (should (= (alist-get 'section-limit params) 8))
+        (should (= (alist-get 'offset
+                              (alist-get 'cursor params))
+                   3))))))
+
+(ert-deftest yunge-reader-webview-rejects-malformed-search-results ()
+  (let (result error-data)
+    (yunge-reader-webview--search-complete
+     2
+     (lambda (value error)
+       (setq result value
+             error-data error))
+     '((matches) (cursor) (done))
      nil)
     (should-not result)
     (should (eq (car error-data) 'error))))

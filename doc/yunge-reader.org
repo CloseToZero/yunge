@@ -185,8 +185,13 @@ Evil maps, dismiss the same Reader transient highlights as their ordinary
 buffer bindings, clear the DOM selection through the selection-change hook,
 and return focus to that view's Emacs window.
 
-Reader search and interactive width and line-height controls remain later
-work.
+EPUB literal search discovery now follows Reader's bounded batch contract.
+Each native request scans at most a configured number of spine items and
+returns stable href and CFI ranges with compact context.  Its cursor is a
+transient match ordinal within one spine; it is never saved as a reading
+place.  Discovery does not create Foliate annotations, so result navigation,
+visible search paint, and their dismissal lifecycle remain the next slice.
+Interactive width and line-height controls also remain later work.
 
 * Library boundary
 

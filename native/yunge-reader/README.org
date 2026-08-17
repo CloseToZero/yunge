@@ -91,7 +91,8 @@ installing or downloading it:
                  "view-clear-selection","view-create",
                  "view-destroy","view-events","view-focus",
                  "view-focus-parent","view-info","view-navigate",
-                 "view-open-publication","view-selection-text",
+                 "view-open-publication","view-search",
+                 "view-selection-text",
                  "view-scroll-bars","view-status","view-style",
                  "view-visible"],
  "engine":"webview2","kind":"webview-ready","platform":"windows",
@@ -265,6 +266,34 @@ returned character count, cursor progression, completion flag, total, field
 set, error code, and byte size.  Changed or cleared selections fail instead
 of copying text from a stale range; oversized selections fail rather than
 being truncated.
+
+=view-search= performs bounded literal discovery without creating renderer
+annotations.  It returns stable same-spine CFI endpoints and compact context
+for each match.  The asynchronous response keeps the original request ID.
+
+#+begin_src json
+{"id":5,"op":"view-search",
+ "params":{"view":1,"query":"Chapter","case-sensitive":false,
+           "cursor":null,"match-limit":64,"section-limit":8}}
+{"id":5,"ok":true,
+ "result":{"matches":[
+   {"href":"OPS/chapter.xhtml",
+    "start":"epubcfi(/6/4!/4/2/1:0)",
+    "end":"epubcfi(/6/4!/4/2/1:7)",
+    "text":"Chapter","before":"A ","after":" title"}],
+   "cursor":{"href":"OPS/chapter.xhtml","offset":1},
+   "done":false}}
+#+end_src
+
+One request returns at most 200 matches and searches at most 64 searchable
+spine items.  Queries contain 1--256 Unicode characters.  The cursor href is
+canonical and its numeric offset is a transient match ordinal within that
+spine, not a durable EPUB position.  A completed batch omits =cursor=.
+The renderer caps its response at 384 KiB, while the native IPC boundary
+accepts at most 512 KiB.  Rust independently validates every field, CFI range,
+result count, cursor advance, error code, and byte bound.
+This operation only discovers results.  Navigation and visible search paint
+remain separate view behavior.
 
 Emacs maps the same href and CFI endpoints into Reader's logical selection.
 Focused =y= is a normalized renderer key event that reaches the owning
