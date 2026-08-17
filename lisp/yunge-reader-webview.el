@@ -643,6 +643,31 @@ Unless QUIET is non-nil, notify the logical view's owner."
           :warning)))))
   (yunge-reader-webview--view-selection view))
 
+(defun yunge-reader-webview--clear-view-selection (view)
+  "Ask live native VIEW to clear its publication selection."
+  (when (and (integerp (yunge-reader-webview--view-id view))
+             (yunge-reader-webview--view-created view)
+             (yunge-reader-webview--view-publication-ready view)
+             (not (yunge-reader-webview--view-destroyed view))
+             (process-live-p yunge-reader-webview--process))
+    (yunge-reader-webview--request
+     "view-clear-selection"
+     `((view . ,(yunge-reader-webview--view-id view)))
+     (lambda (_result _error-data)))
+    t))
+
+(defun yunge-reader-webview--focus-owning-window (view)
+  "Return native focus from VIEW to its owning live Emacs window."
+  (when-let* ((id (yunge-reader-webview--view-id view))
+              ((integerp id)))
+    (yunge-reader-webview--request
+     "view-focus-parent" `((view . ,id))
+     (lambda (_result _error-data))))
+  (when-let* ((window (yunge-reader-webview--view-window view))
+              ((window-live-p window)))
+    (select-window window)
+    (select-frame-set-input-focus (window-frame window))))
+
 (defun yunge-reader-webview--finish-outline-waiters
     (view outline error-data)
   "Complete VIEW's outline waiters with OUTLINE or ERROR-DATA."
@@ -697,7 +722,7 @@ Unless QUIET is non-nil, notify the logical view's owner."
        (let ((key (alist-get 'key message)))
          (unless (member key
                           '("J" "K" "+" "-" "=" "y" "C-d" "C-u"
-                            "<next>" "<prior>"))
+                            "C-g" "<escape>" "<next>" "<prior>"))
            (error "Malformed WebView accelerator event: %S" message))
          (when-let* ((view (gethash id yunge-reader-webview--views))
                      (function
@@ -708,26 +733,15 @@ Unless QUIET is non-nil, notify the logical view's owner."
            (with-current-buffer buffer
              (condition-case error-data
                  (funcall function view key)
+               (quit nil)
                (error
                 (display-warning
                  'yunge-reader
                  (format "Could not run EPUB key %s: %s"
                          key (error-message-string error-data))
-                 :warning)))))))
-      ("escape"
-       (when-let* ((view (gethash id yunge-reader-webview--views))
-                   (window (yunge-reader-webview--view-window view))
-                   ((window-live-p window))
-                   ((buffer-live-p
-                     (yunge-reader-webview--view-buffer view))))
-         (yunge-reader-webview--request
-          "view-clear-selection" `((view . ,id))
-          (lambda (_result _error-data)))
-         (yunge-reader-webview--request
-          "view-focus-parent" `((view . ,id))
-          (lambda (_result _error-data)))
-         (select-window window)
-         (select-frame-set-input-focus (window-frame window))))
+                 :warning))))
+           (when (member key '("C-g" "<escape>"))
+             (yunge-reader-webview--focus-owning-window view)))))
       ("publication-ready"
        (when-let* ((view (gethash id yunge-reader-webview--views)))
          (yunge-reader-webview--store-view-location view message t)

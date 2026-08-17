@@ -150,9 +150,15 @@ Reader's normal kill-ring path only after every batch succeeds.  A stale,
 cleared, malformed, or oversized range fails instead of copying unrelated or
 truncated text.  Native =C-c= remains available to WebView2.
 
-Reader search, ordinary-click selection clearing, aligned =ESC= and =C-g=
-dismissal while native focus remains in the child, and interactive width and
-line-height controls remain later work.
+An ordinary click lets Chromium collapse the DOM range and clears only the
+logical text selection; it does not hide a Reader search highlight.  Focused
+=ESC= and =C-g= instead resolve through the owning buffer's active Emacs or
+Evil maps, dismiss the same Reader transient highlights as their ordinary
+buffer bindings, clear the DOM selection through the selection-change hook,
+and return focus to that view's Emacs window.
+
+Reader search and interactive width and line-height controls remain later
+work.
 
 * Library boundary
 
@@ -365,6 +371,11 @@ Changing or clearing the selection invalidates its copy generation.  A late
 batch can neither cache obsolete text nor replace the kill ring, and no later
 batches are requested.  Repeating =y= for the same pending selection reuses
 the active copy instead of starting a duplicate request.
+
+A buffer-local selection-change hook lets a view adapter synchronize disposable
+presentation state after the logical selection changes.  EPUB uses it only to
+clear Chromium's DOM selection when Reader state is cleared; a guard prevents
+native null-selection events from echoing a second clear request.
 
 A search result uses the same stable endpoints, but its transient highlight is
 independent of the copy selection.  Search preview can therefore move and
@@ -637,14 +648,14 @@ scripts.  The outer WebView denies permissions, downloads, new windows, and
 external navigation.  Renderer IPC accepts only bounded, versioned messages
 from the renderer application origin.
 
-WebView2 forwards Escape, =C-d/C-u=, and Page Down or Page Up through its
-native accelerator event.  A bounded renderer listener forwards =J/K=,
+WebView2 forwards =ESC=, =C-g=, =C-d/C-u=, and Page Down or Page Up through
+its native accelerator event.  A bounded renderer listener forwards =J/K=,
 =+=, =-=, ===, and =y= because WebView2 does not classify character keys as
 accelerators.  Both paths emit only normalized key events; they never choose
 or execute commands.  Emacs resolves each key through the owning EPUB buffer's
 active maps, preserving Reader, Evil, and user bindings while native focus
-remains in the child.  Escape still clears the DOM selection, returns native
-focus to the parent, selects the owning Emacs window, and focuses its frame.
+remains in the child.  =ESC= and =C-g= then return native focus to the parent,
+select the owning Emacs window, and focus its frame.
 
 =M-x yunge-reader-webview-stop= requests graceful shutdown and then enforces a
 deadline; a prefix argument terminates it immediately.  Emacs exit also ends

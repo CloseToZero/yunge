@@ -334,13 +334,17 @@
       (let ((command
              (lambda ()
                (interactive)
-               (setq called (list 'remapped (current-buffer))))))
+               (setq called
+                     (list 'remapped this-command
+                           (current-buffer))))))
         (cl-letf (((symbol-function 'key-binding)
                    (lambda (key &rest _arguments)
                      (should (equal key (kbd "+")))
                      command)))
-          (yunge-reader-epub--accelerator view "+")))
-      (should (equal called (list 'remapped (current-buffer))))
+          (yunge-reader-epub--accelerator view "+"))
+        (should (eq (car called) 'remapped))
+        (should (eq (cadr called) command))
+        (should (eq (caddr called) (current-buffer))))
       (cl-letf
           (((symbol-function 'yunge-reader-copy-selection)
             (lambda ()
@@ -363,6 +367,7 @@
           (setq yunge-reader-webview--buffer-view view)
           (yunge-reader-webview--set-view-selection
            view (yunge-reader-epub-test--selection))
+          (setq yunge-reader-search-highlight-visible t)
           (should
            (equal
             (yunge-reader-selection-start yunge-reader-selection)
@@ -375,9 +380,61 @@
             (make-yunge-reader-position
              :unit "OPS/chapter.xhtml"
              :offset "epubcfi(/6/4!/4/2/1:8)")))
-          (yunge-reader-webview--set-view-selection view nil)
-          (should-not yunge-reader-selection))
+          (let (echoed-clear)
+            (cl-letf
+                (((symbol-function
+                   'yunge-reader-webview--clear-view-selection)
+                  (lambda (_view) (setq echoed-clear t))))
+              (yunge-reader-webview--set-view-selection view nil))
+            (should-not echoed-clear))
+          (should-not yunge-reader-selection)
+          (should yunge-reader-search-highlight-visible))
       (kill-buffer buffer))))
+
+(ert-deftest yunge-reader-epub-clears-native-selection-from-reader ()
+  (let ((view (yunge-reader-webview--make-view))
+        cleared)
+    (with-temp-buffer
+      (yunge-reader-mode)
+      (yunge-reader-epub-view-mode 1)
+      (setq yunge-reader-webview--buffer-view view
+            yunge-reader-selection
+            (make-yunge-reader-selection
+             :start (make-yunge-reader-position :unit "chapter" :offset 1)
+             :end (make-yunge-reader-position :unit "chapter" :offset 2)))
+      (cl-letf
+          (((symbol-function
+             'yunge-reader-webview--clear-view-selection)
+            (lambda (value) (setq cleared value))))
+        (yunge-reader-clear-selection t))
+      (should (eq cleared view)))))
+
+(ert-deftest yunge-reader-epub-dismiss-keys-use-active-evil-maps ()
+  (yunge-test-enable-evil)
+  (let ((view (yunge-reader-webview--make-view))
+        (clears 0))
+    (with-temp-buffer
+      (yunge-reader-mode)
+      (yunge-reader-epub-view-mode 1)
+      (setq yunge-reader-webview--buffer-view view)
+      (should (eq (key-binding (kbd "<escape>"))
+                  'evil-force-normal-state))
+      (dolist (key '("<escape>" "C-g"))
+        (setq yunge-reader-selection
+              (make-yunge-reader-selection
+               :start
+               (make-yunge-reader-position :unit "chapter" :offset 1)
+               :end
+               (make-yunge-reader-position :unit "chapter" :offset 2))
+              yunge-reader-search-highlight-visible t)
+        (cl-letf
+            (((symbol-function
+               'yunge-reader-webview--clear-view-selection)
+              (lambda (_view) (cl-incf clears))))
+          (yunge-reader-epub--accelerator view key))
+        (should-not yunge-reader-selection)
+        (should-not yunge-reader-search-highlight-visible))
+      (should (= clears 2)))))
 
 (ert-deftest yunge-reader-epub-maps-reader-selection-text-batches ()
   (let* ((document (yunge-reader-epub-test--document))

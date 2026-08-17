@@ -42,6 +42,9 @@
 (defconst yunge-reader-epub-maximum-font-scale 3.0
   "Largest font scale accepted by the EPUB renderer.")
 
+(defvar-local yunge-reader-epub--native-selection-sync nil
+  "Whether native selection state is being mapped into Reader state.")
+
 (defconst yunge-reader-epub-normal-bindings
   '(("C-d" yunge-reader-epub-next-screen "next screen")
     ("C-u" yunge-reader-epub-previous-screen "previous screen")
@@ -66,10 +69,14 @@
       (progn
         (add-hook 'yunge-reader-refresh-hook
                   #'yunge-reader-epub--refresh nil t)
+        (add-hook 'yunge-reader-selection-change-hook
+                  #'yunge-reader-epub--selection-state-changed nil t)
         (add-hook 'yunge-reader-view-role-change-hook
                   #'yunge-reader-epub--update-header nil t))
     (remove-hook 'yunge-reader-refresh-hook
                  #'yunge-reader-epub--refresh t)
+    (remove-hook 'yunge-reader-selection-change-hook
+                 #'yunge-reader-epub--selection-state-changed t)
     (remove-hook 'yunge-reader-view-role-change-hook
                  #'yunge-reader-epub--update-header t)
     (kill-local-variable 'yunge-reader-default-scale)
@@ -227,16 +234,26 @@
     (with-current-buffer buffer
       (when (and yunge-reader-epub-view-mode
                  (eq view yunge-reader-webview--buffer-view))
-        (if-let* ((selection
-                   (yunge-reader-webview--view-selection view)))
-            (let ((href (alist-get 'href selection)))
-              (yunge-reader-set-selection
-               (yunge-reader-epub--selection-position
-                href (alist-get 'start selection))
-               (yunge-reader-epub--selection-position
-                href (alist-get 'end selection))))
-          (when yunge-reader-selection
-            (yunge-reader-clear-selection t)))))))
+        (let ((yunge-reader-epub--native-selection-sync t))
+          (if-let* ((selection
+                     (yunge-reader-webview--view-selection view)))
+              (let ((href (alist-get 'href selection)))
+                (yunge-reader-set-selection
+                 (yunge-reader-epub--selection-position
+                  href (alist-get 'start selection))
+                 (yunge-reader-epub--selection-position
+                  href (alist-get 'end selection))))
+            (when yunge-reader-selection
+              (yunge-reader-clear-selection t))))))))
+
+(defun yunge-reader-epub--selection-state-changed ()
+  "Synchronize a cleared Reader selection with the native EPUB view."
+  (when (and yunge-reader-epub-view-mode
+             (not yunge-reader-epub--native-selection-sync)
+             (null yunge-reader-selection)
+             yunge-reader-webview--buffer-view)
+    (yunge-reader-webview--clear-view-selection
+     yunge-reader-webview--buffer-view)))
 
 (defun yunge-reader-epub--font-scale (scale)
   "Return EPUB font SCALE restricted to renderer bounds."
@@ -614,7 +631,9 @@
              yunge-reader-epub-view-mode)
     (when-let* ((command (key-binding (kbd key) t))
                 ((commandp command)))
-      (call-interactively command))))
+      (let ((this-command command)
+            (real-this-command command))
+        (call-interactively command)))))
 
 (defun yunge-reader-epub-next-screen (&optional count)
   "Move forward COUNT EPUB screens."

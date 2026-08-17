@@ -161,6 +161,27 @@
       (should quit)
       (should (= refreshes 1)))))
 
+(ert-deftest yunge-reader-notifies-logical-selection-changes ()
+  (with-temp-buffer
+    (yunge-reader-mode)
+    (let ((start (make-yunge-reader-position :unit 0 :offset 1))
+          (end (make-yunge-reader-position :unit 0 :offset 2))
+          changes)
+      (add-hook 'yunge-reader-selection-change-hook
+                (lambda ()
+                  (push yunge-reader-selection changes))
+                nil t)
+      (yunge-reader-set-selection start end)
+      (yunge-reader-set-selection start end)
+      (yunge-reader-clear-selection t)
+      (yunge-reader-clear-selection t)
+      (should (= (length changes) 2))
+      (should-not (car changes))
+      (should
+       (equal
+        (cadr changes)
+        (make-yunge-reader-selection :start start :end end))))))
+
 (ert-deftest yunge-reader-search-starts-empty-and-uses-history ()
   (with-temp-buffer
     (yunge-reader-mode)

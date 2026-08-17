@@ -283,6 +283,9 @@ Each entry maps a canonical file name to versioned, printable place data.")
 (defvar-local yunge-reader-search-result-hook nil
   "Hook run after the search result or its visibility changes.")
 
+(defvar-local yunge-reader-selection-change-hook nil
+  "Hook run after the logical document selection changes.")
+
 (defvar-local yunge-reader--search-case-sensitive nil
   "Whether the active reader search distinguishes case.")
 
@@ -2067,19 +2070,25 @@ driver that already resolved the selected glyphs."
   (unless (and (yunge-reader-position-p start)
                (yunge-reader-position-p end))
     (error "Reader selection endpoints must be reader positions"))
-  (cl-incf yunge-reader--copy-generation)
-  (setq yunge-reader--copy-pending nil)
-  (setq yunge-reader-selection
-        (make-yunge-reader-selection
-         :start start :end end :text text)))
+  (let ((selection
+         (make-yunge-reader-selection
+          :start start :end end :text text)))
+    (cl-incf yunge-reader--copy-generation)
+    (setq yunge-reader--copy-pending nil)
+    (unless (equal selection yunge-reader-selection)
+      (setq yunge-reader-selection selection)
+      (run-hooks 'yunge-reader-selection-change-hook))))
 
 (defun yunge-reader-clear-selection (&optional defer-refresh)
   "Clear the logical selection in the current reader buffer.
 When DEFER-REFRESH is non-nil, leave repainting to the caller."
   (interactive)
-  (cl-incf yunge-reader--copy-generation)
-  (setq yunge-reader-selection nil
-        yunge-reader--copy-pending nil)
+  (let ((changed yunge-reader-selection))
+    (cl-incf yunge-reader--copy-generation)
+    (setq yunge-reader-selection nil
+          yunge-reader--copy-pending nil)
+    (when changed
+      (run-hooks 'yunge-reader-selection-change-hook)))
   (unless defer-refresh
     (yunge-reader-refresh)))
 

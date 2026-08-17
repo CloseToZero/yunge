@@ -259,25 +259,26 @@ target.  Href-only targets are transient: the helper and Emacs do not promote
 them to a saved location.  A later =location= event supplies the complete CFI,
 canonical spine href, and fraction that the owning view may persist.
 
-Escape, Control reader keys, and non-character reader keys are captured by the
-native WebView2 accelerator event.  Uppercase character reader keys, the
-three zoom keys, and lowercase =y= are relayed by the trusted renderer because
-WebView2 does not classify them as accelerators.  Both paths write unsolicited
-events without request IDs:
+=<escape>=, =C-g=, Control reader keys, and non-character reader keys are
+captured by the native WebView2 accelerator event.  Uppercase character reader
+keys, the three zoom keys, and lowercase =y= are relayed by the trusted
+renderer because WebView2 does not classify them as accelerators.  Both paths
+write unsolicited events without request IDs:
 
 #+begin_src json
-{"kind":"event","event":"escape","view":1}
+{"kind":"event","event":"accelerator","key":"<escape>","view":1}
+{"kind":"event","event":"accelerator","key":"C-g","view":1}
 {"kind":"event","event":"accelerator","key":"C-d","view":1}
 {"kind":"event","event":"accelerator","key":"J","view":1}
 {"kind":"event","event":"accelerator","key":"+","view":1}
 {"kind":"event","event":"accelerator","key":"y","view":1}
 #+end_src
 
-The helper accepts only =J=, =K=, =+=, =-=, ===, =y=, =C-d=, =C-u=,
-=<next>=, and =<prior>=.  It never interprets them as commands.  Emacs resolves
-each normalized key through the owning EPUB buffer's active maps, so Reader,
-Evil, and user bindings remain authoritative while focus stays in the child
-WebView.
+The helper accepts only =J=, =K=, =+=, =-=, ===, =y=, =C-d=, =C-u=, =C-g=,
+=<escape>=, =<next>=, and =<prior>=.  It never interprets them as commands.
+Emacs resolves each normalized key through the owning EPUB buffer's active
+maps, so Reader, Evil, and user bindings remain authoritative.  After
+=<escape>= or =C-g=, the child returns focus to its owning Emacs window.
 
 View IDs are independent, so multiple Reader views do not share layout or
 scroll state.  Positions must be nonnegative; dimensions must be positive and

@@ -1653,43 +1653,30 @@ impl From<EpubError> for ServiceError {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum RoutedKey {
-    Escape,
-    Accelerator(&'static str),
-}
-
 fn routed_key(
     kind: COREWEBVIEW2_KEY_EVENT_KIND,
     key: u32,
     control: bool,
     alt: bool,
     shift: bool,
-) -> Option<RoutedKey> {
+) -> Option<&'static str> {
     if kind != COREWEBVIEW2_KEY_EVENT_KIND_KEY_DOWN
         && kind != COREWEBVIEW2_KEY_EVENT_KIND_SYSTEM_KEY_DOWN
     {
         return None;
     }
     if key == ESCAPE_VIRTUAL_KEY {
-        return Some(RoutedKey::Escape);
+        return Some("<escape>");
     }
     if alt || shift {
         return None;
     }
     match (key, control) {
-        (key, true) if key == u32::from(b'D') => {
-            Some(RoutedKey::Accelerator("C-d"))
-        }
-        (key, true) if key == u32::from(b'U') => {
-            Some(RoutedKey::Accelerator("C-u"))
-        }
-        (key, false) if key == u32::from(VK_NEXT.0) => {
-            Some(RoutedKey::Accelerator("<next>"))
-        }
-        (key, false) if key == u32::from(VK_PRIOR.0) => {
-            Some(RoutedKey::Accelerator("<prior>"))
-        }
+        (key, true) if key == u32::from(b'G') => Some("C-g"),
+        (key, true) if key == u32::from(b'D') => Some("C-d"),
+        (key, true) if key == u32::from(b'U') => Some("C-u"),
+        (key, false) if key == u32::from(VK_NEXT.0) => Some("<next>"),
+        (key, false) if key == u32::from(VK_PRIOR.0) => Some("<prior>"),
         _ => None,
     }
 }
@@ -1724,23 +1711,17 @@ fn install_accelerator_handler(
                     key_state(VK_MENU),
                     key_state(VK_SHIFT),
                 );
-                if let Some(routed) = routed {
+                if let Some(key) = routed {
                     args.SetHandled(true)?;
-                    let (event, key) = match routed {
-                        RoutedKey::Escape => ("escape", None),
-                        RoutedKey::Accelerator(key) => {
-                            ("accelerator", Some(key.to_owned()))
-                        }
-                    };
                     let _ = outgoing_sender.send(Outgoing::Event(ViewEvent {
                         kind: "event",
-                        event,
+                        event: "accelerator",
                         view,
                         message: None,
                         location: None,
                         outline: None,
                         selection: None,
-                        key,
+                        key: Some(key.to_owned()),
                     }));
                 }
             }
@@ -3030,17 +3011,19 @@ mod tests {
 
         let event = serde_json::to_value(Outgoing::Event(ViewEvent {
             kind: "event",
-            event: "escape",
+            event: "accelerator",
             view: 4,
             message: None,
             location: None,
             outline: None,
             selection: None,
-            key: None,
+            key: Some("<escape>".into()),
         }))
         .unwrap();
         assert_eq!(event["kind"], "event");
+        assert_eq!(event["event"], "accelerator");
         assert_eq!(event["view"], 4);
+        assert_eq!(event["key"], "<escape>");
         assert!(event.get("id").is_none());
     }
 
@@ -3203,7 +3186,17 @@ mod tests {
                 false,
                 false,
             ),
-            Some(RoutedKey::Escape)
+            Some("<escape>")
+        );
+        assert_eq!(
+            routed_key(
+                COREWEBVIEW2_KEY_EVENT_KIND_KEY_DOWN,
+                u32::from(b'G'),
+                true,
+                false,
+                false,
+            ),
+            Some("C-g")
         );
         assert_eq!(
             routed_key(
@@ -3213,7 +3206,7 @@ mod tests {
                 false,
                 false,
             ),
-            Some(RoutedKey::Accelerator("C-d"))
+            Some("C-d")
         );
         assert_eq!(
             routed_key(
@@ -3223,7 +3216,7 @@ mod tests {
                 false,
                 false,
             ),
-            Some(RoutedKey::Accelerator("C-u"))
+            Some("C-u")
         );
         assert_eq!(
             routed_key(
@@ -3233,7 +3226,7 @@ mod tests {
                 false,
                 false,
             ),
-            Some(RoutedKey::Accelerator("<next>"))
+            Some("<next>")
         );
         assert_eq!(
             routed_key(
@@ -3243,7 +3236,7 @@ mod tests {
                 false,
                 false,
             ),
-            Some(RoutedKey::Accelerator("<prior>"))
+            Some("<prior>")
         );
         assert_eq!(
             routed_key(
