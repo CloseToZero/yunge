@@ -109,6 +109,7 @@
   destroy-waiters
   destroy-finished
   location-changed-function
+  selection-changed-function
   accelerator-function)
 
 (define-derived-mode yunge-reader-webview-spike-mode special-mode
@@ -620,6 +621,28 @@ Unless QUIET is non-nil, notify the logical view's owner."
       (error "Malformed EPUB selection event: %S" message))
     (and selection (copy-tree selection))))
 
+(defun yunge-reader-webview--set-view-selection (view selection)
+  "Set VIEW's validated SELECTION and notify its logical owner."
+  (unless (or (null selection)
+              (yunge-reader-webview--valid-selection-p selection))
+    (error "Invalid EPUB view selection: %S" selection))
+  (unless (equal selection
+                 (yunge-reader-webview--view-selection view))
+    (setf (yunge-reader-webview--view-selection view)
+          (and selection (copy-tree selection)))
+    (when-let* ((function
+                 (yunge-reader-webview--view-selection-changed-function
+                  view)))
+      (condition-case error-data
+          (funcall function view)
+        (error
+         (display-warning
+          'yunge-reader
+          (format "Could not record EPUB selection: %s"
+                  (error-message-string error-data))
+          :warning)))))
+  (yunge-reader-webview--view-selection view))
+
 (defun yunge-reader-webview--finish-outline-waiters
     (view outline error-data)
   "Complete VIEW's outline waiters with OUTLINE or ERROR-DATA."
@@ -673,7 +696,7 @@ Unless QUIET is non-nil, notify the logical view's owner."
       ("accelerator"
        (let ((key (alist-get 'key message)))
          (unless (member key
-                          '("J" "K" "+" "-" "=" "C-d" "C-u"
+                          '("J" "K" "+" "-" "=" "y" "C-d" "C-u"
                             "<next>" "<prior>"))
            (error "Malformed WebView accelerator event: %S" message))
          (when-let* ((view (gethash id yunge-reader-webview--views))
@@ -708,8 +731,8 @@ Unless QUIET is non-nil, notify the logical view's owner."
       ("publication-ready"
        (when-let* ((view (gethash id yunge-reader-webview--views)))
          (yunge-reader-webview--store-view-location view message t)
-         (setf (yunge-reader-webview--view-publication-ready view) t
-               (yunge-reader-webview--view-selection view) nil)
+         (setf (yunge-reader-webview--view-publication-ready view) t)
+         (yunge-reader-webview--set-view-selection view nil)
          (yunge-reader-webview--sync-view-style view)
          (yunge-reader-webview--store-view-outline view message)
          (yunge-reader-webview--dispatch-pending-target view)
@@ -723,8 +746,8 @@ Unless QUIET is non-nil, notify the logical view's owner."
          (yunge-reader-webview--store-view-location view message)))
       ("selection"
        (when-let* ((view (gethash id yunge-reader-webview--views)))
-         (setf (yunge-reader-webview--view-selection view)
-               (yunge-reader-webview--event-selection message))))
+         (yunge-reader-webview--set-view-selection
+          view (yunge-reader-webview--event-selection message))))
       ("navigation-error"
        (let ((detail (alist-get 'message message)))
          (unless (stringp detail)
@@ -744,10 +767,10 @@ Unless QUIET is non-nil, notify the logical view's owner."
          (when-let* ((view (gethash id yunge-reader-webview--views)))
            (setf (yunge-reader-webview--view-publication-ready view) nil
                  (yunge-reader-webview--view-surface-style view) nil
-                 (yunge-reader-webview--view-selection view) nil
                  (yunge-reader-webview--view-pending-target view) nil
                  (yunge-reader-webview--view-outline-error view)
                  (list 'error detail))
+           (yunge-reader-webview--set-view-selection view nil)
            (yunge-reader-webview--finish-outline-waiters
             view nil (list 'error detail))
            (yunge-reader-webview--set-buffer-message view detail))
@@ -1118,10 +1141,10 @@ Without FORCE, request graceful shutdown and enforce a deadline."
           (yunge-reader-webview--view-created view) nil
           (yunge-reader-webview--view-publication-ready view) nil
           (yunge-reader-webview--view-surface-style view) nil
-          (yunge-reader-webview--view-selection view) nil
           (yunge-reader-webview--view-bounds view) nil
           (yunge-reader-webview--view-requested-bounds view) nil
           (yunge-reader-webview--view-bounds-pending view) nil)
+    (yunge-reader-webview--set-view-selection view nil)
     (cond
      ((not id)
       (when complete
@@ -1205,8 +1228,8 @@ Without FORCE, request graceful shutdown and enforce a deadline."
             (yunge-reader-webview--view-destroyed view) t
             (yunge-reader-webview--view-publication-ready view) nil
             (yunge-reader-webview--view-surface-style view) nil
-            (yunge-reader-webview--view-selection view) nil
             (yunge-reader-webview--view-pending-destroys view) nil)
+      (yunge-reader-webview--set-view-selection view nil)
       (yunge-reader-webview--finish-view-destroy view)))
   (clrhash yunge-reader-webview--views)
   (clrhash yunge-reader-webview--logical-views)
@@ -1280,10 +1303,11 @@ Without FORCE, request graceful shutdown and enforce a deadline."
 
 (defun yunge-reader-webview--attach-shared-publication
     (publication &optional location location-changed-function
-                 accelerator-function style)
+                 selection-changed-function accelerator-function style)
   "Attach shared PUBLICATION to the current Reader buffer.
 Restore bounded LOCATION when supplied.  Invoke LOCATION-CHANGED-FUNCTION
 with the logical view whenever its renderer reports a stable location.
+Invoke SELECTION-CHANGED-FUNCTION whenever its logical selection changes.
 Invoke ACCELERATOR-FUNCTION with the view and a normalized key when the
 focused native child forwards one.  STYLE is copied into the logical view."
   (unless (and (integerp publication) (> publication 0))
@@ -1296,6 +1320,10 @@ focused native child forwards one.  STYLE is copied into the logical view."
              (not (functionp location-changed-function)))
     (error "Invalid EPUB location callback: %S"
            location-changed-function))
+  (when (and selection-changed-function
+             (not (functionp selection-changed-function)))
+    (error "Invalid EPUB selection callback: %S"
+           selection-changed-function))
   (when (and accelerator-function
              (not (functionp accelerator-function)))
     (error "Invalid EPUB accelerator callback: %S"
@@ -1312,6 +1340,7 @@ focused native child forwards one.  STYLE is copied into the logical view."
           :style (and style (copy-tree style))
           :location (and location (copy-tree location))
           :location-changed-function location-changed-function
+          :selection-changed-function selection-changed-function
           :accelerator-function accelerator-function)))
     (setq yunge-reader-webview--buffer-view view)
     (yunge-reader-webview--register-view view)
@@ -1417,12 +1446,12 @@ focused native child forwards one.  STYLE is copied into the logical view."
     (error "EPUB view already owns a native surface"))
   (unless (yunge-reader-webview--view-destroyed view)
     (let ((id (cl-incf yunge-reader-webview--next-view-id)))
+      (yunge-reader-webview--set-view-selection view nil)
       (setf (yunge-reader-webview--view-id view) id
             (yunge-reader-webview--view-window view) window
             (yunge-reader-webview--view-created view) nil
             (yunge-reader-webview--view-publication-ready view) nil
             (yunge-reader-webview--view-surface-style view) nil
-            (yunge-reader-webview--view-selection view) nil
             (yunge-reader-webview--view-outline-error view) nil
             (yunge-reader-webview--view-requested-bounds view)
             (yunge-reader-webview--window-bounds window))

@@ -247,6 +247,12 @@ set, error code, and byte size.  Changed or cleared selections fail instead
 of copying text from a stale range; oversized selections fail rather than
 being truncated.
 
+Emacs maps the same href and CFI endpoints into Reader's logical selection.
+Focused =y= is a normalized renderer key event that reaches the owning
+buffer's active keymaps; Reader then drives these bounded batches and updates
+the kill ring only after the complete selection succeeds.  Native =C-c= is
+not intercepted and remains available to WebView2.
+
 =view-navigate= accepts =previous-screen=, =next-screen=, or =go-to=.  A
 =go-to= target may be a complete stable locator or a bounded href-only outline
 target.  Href-only targets are transient: the helper and Emacs do not promote
@@ -254,22 +260,24 @@ them to a saved location.  A later =location= event supplies the complete CFI,
 canonical spine href, and fraction that the owning view may persist.
 
 Escape, Control reader keys, and non-character reader keys are captured by the
-native WebView2 accelerator event.  Uppercase character reader keys and the
-three zoom keys are relayed by the trusted renderer because WebView2 does not
-classify them as accelerators.  Both paths write unsolicited events without
-request IDs:
+native WebView2 accelerator event.  Uppercase character reader keys, the
+three zoom keys, and lowercase =y= are relayed by the trusted renderer because
+WebView2 does not classify them as accelerators.  Both paths write unsolicited
+events without request IDs:
 
 #+begin_src json
 {"kind":"event","event":"escape","view":1}
 {"kind":"event","event":"accelerator","key":"C-d","view":1}
 {"kind":"event","event":"accelerator","key":"J","view":1}
 {"kind":"event","event":"accelerator","key":"+","view":1}
+{"kind":"event","event":"accelerator","key":"y","view":1}
 #+end_src
 
-The helper accepts only =J=, =K=, =+=, =-=, ===, =C-d=, =C-u=, =<next>=,
-and =<prior>=.  It never interprets them as commands.  Emacs resolves each
-normalized key through the owning EPUB buffer's active maps, so Reader, Evil,
-and user bindings remain authoritative while focus stays in the child WebView.
+The helper accepts only =J=, =K=, =+=, =-=, ===, =y=, =C-d=, =C-u=,
+=<next>=, and =<prior>=.  It never interprets them as commands.  Emacs resolves
+each normalized key through the owning EPUB buffer's active maps, so Reader,
+Evil, and user bindings remain authoritative while focus stays in the child
+WebView.
 
 View IDs are independent, so multiple Reader views do not share layout or
 scroll state.  Positions must be nonnegative; dimensions must be positive and

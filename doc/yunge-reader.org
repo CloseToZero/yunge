@@ -100,7 +100,7 @@ inputs.
 =J= and =C-d= move to the next reflowed screen; =K= and =C-u= move to the
 previous screen.  Page Down and Page Up provide the same portable commands,
 including after a mouse click gives the child WebView native focus.  The same
-focused path forwards =+=, =-=, and === through the active Emacs keymaps.
+focused path forwards =+=, =-=, ===, and =y= through the active Emacs keymaps.
 =o= displays the bounded EPUB 3 navigation or EPUB 2 NCX outline through the
 same persistent per-view outline UI used by fixed-layout documents.
 
@@ -142,9 +142,17 @@ normal place-recording rules.  Layout-anchor and text-selection relocations do
 not masquerade as reading movement.  Explicit view closure still records its
 current stable location.
 
-The current slice retains browser-native text selection, ordinary copying,
-links, CSS layout, and width reflow.  Reader search, =y= selection-copy
-integration, and interactive width and line-height controls remain later work.
+Chromium remains the only visual EPUB selection layer.  A settled same-spine
+range maps its canonical href and collapsed CFI endpoints into Reader's
+logical selection.  =y= asks the trusted renderer for the exact current
+=Range.toString()= text in bounded Unicode batches, then publishes it through
+Reader's normal kill-ring path only after every batch succeeds.  A stale,
+cleared, malformed, or oversized range fails instead of copying unrelated or
+truncated text.  Native =C-c= remains available to WebView2.
+
+Reader search, ordinary-click selection clearing, aligned =ESC= and =C-g=
+dismissal while native focus remains in the child, and interactive width and
+line-height controls remain later work.
 
 * Library boundary
 
@@ -630,8 +638,8 @@ external navigation.  Renderer IPC accepts only bounded, versioned messages
 from the renderer application origin.
 
 WebView2 forwards Escape, =C-d/C-u=, and Page Down or Page Up through its
-native accelerator event.  A bounded renderer listener forwards =J/K= and
-=+=, =-=, or === because WebView2 does not classify character keys as
+native accelerator event.  A bounded renderer listener forwards =J/K=,
+=+=, =-=, ===, and =y= because WebView2 does not classify character keys as
 accelerators.  Both paths emit only normalized key events; they never choose
 or execute commands.  Emacs resolves each key through the owning EPUB buffer's
 active maps, preserving Reader, Evil, and user bindings while native focus

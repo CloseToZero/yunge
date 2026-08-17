@@ -216,6 +216,28 @@
         (yunge-reader-record-place
          (yunge-reader-webview--view-window view))))))
 
+(defun yunge-reader-epub--selection-position (href cfi)
+  "Return a Reader position for EPUB HREF and collapsed CFI."
+  (make-yunge-reader-position :unit href :offset cfi))
+
+(defun yunge-reader-epub--selection-changed (view)
+  "Synchronize EPUB VIEW's native selection with its Reader buffer."
+  (when-let* ((buffer (yunge-reader-webview--view-buffer view))
+              ((buffer-live-p buffer)))
+    (with-current-buffer buffer
+      (when (and yunge-reader-epub-view-mode
+                 (eq view yunge-reader-webview--buffer-view))
+        (if-let* ((selection
+                   (yunge-reader-webview--view-selection view)))
+            (let ((href (alist-get 'href selection)))
+              (yunge-reader-set-selection
+               (yunge-reader-epub--selection-position
+                href (alist-get 'start selection))
+               (yunge-reader-epub--selection-position
+                href (alist-get 'end selection))))
+          (when yunge-reader-selection
+            (yunge-reader-clear-selection t)))))))
+
 (defun yunge-reader-epub--font-scale (scale)
   "Return EPUB font SCALE restricted to renderer bounds."
   (unless (and (numberp scale) (= scale scale))
@@ -275,6 +297,7 @@
       (yunge-reader-webview--attach-shared-publication
        (yunge-reader-epub-handle-publication handle)
        nil #'yunge-reader-epub--location-changed
+       #'yunge-reader-epub--selection-changed
        #'yunge-reader-epub--accelerator
        (yunge-reader-epub--default-style font-scale)))))
 
@@ -438,18 +461,130 @@
          (yunge-reader-epub--native-error
           "The EPUB renderer returned an invalid outline"))))))
 
+(defun yunge-reader-epub--document-view (document)
+  "Return DOCUMENT's current compatible EPUB view, or nil."
+  (let ((handle (yunge-reader-document-handle document))
+        (view yunge-reader-webview--buffer-view))
+    (and
+     (yunge-reader-epub-handle-p handle)
+     view
+     (not (yunge-reader-webview--view-destroyed view))
+     (eql (yunge-reader-epub-handle-publication handle)
+          (yunge-reader-webview--view-publication view))
+     view)))
+
+(defun yunge-reader-epub--selection-range (start end)
+  "Return a native same-spine selection for Reader START and END."
+  (when (and (yunge-reader-position-p start)
+             (yunge-reader-position-p end)
+             (null (yunge-reader-position-x start))
+             (null (yunge-reader-position-y start))
+             (null (yunge-reader-position-x end))
+             (null (yunge-reader-position-y end)))
+    (let ((selection
+           `((href . ,(yunge-reader-position-unit start))
+             (start . ,(yunge-reader-position-offset start))
+             (end . ,(yunge-reader-position-offset end)))))
+      (and
+       (equal (yunge-reader-position-unit start)
+              (yunge-reader-position-unit end))
+       (yunge-reader-webview--valid-selection-p selection)
+       selection))))
+
+(defun yunge-reader-epub--selection-cursor-offset (cursor href)
+  "Return CURSOR's transient Unicode offset for HREF, or nil."
+  (if (null cursor)
+      0
+    (and
+     (yunge-reader-position-p cursor)
+     (equal (yunge-reader-position-unit cursor) href)
+     (natnump (yunge-reader-position-offset cursor))
+     (null (yunge-reader-position-x cursor))
+     (null (yunge-reader-position-y cursor))
+     (yunge-reader-position-offset cursor))))
+
+(defun yunge-reader-epub--selection-text-complete
+    (href complete result error-data)
+  "Map native selection text RESULT for HREF through COMPLETE."
+  (if error-data
+      (funcall complete nil error-data)
+    (let ((done (eq (alist-get 'done result) t)))
+      (funcall
+       complete
+       (make-yunge-reader-selection-batch
+        :text (alist-get 'text result)
+        :cursor
+        (unless done
+          (make-yunge-reader-position
+           :unit href
+           :offset (alist-get 'next-offset result)))
+        :done done)
+       nil))))
+
+(defun yunge-reader-epub--request-selection-text
+    (document arguments complete)
+  "Request one generic selection text batch for DOCUMENT."
+  (let* ((start (plist-get arguments :start))
+         (end (plist-get arguments :end))
+         (cursor (plist-get arguments :cursor))
+         (unit-limit (plist-get arguments :unit-limit))
+         (character-limit (plist-get arguments :character-limit))
+         (selection (yunge-reader-epub--selection-range start end))
+         (href (and selection (alist-get 'href selection)))
+         (offset
+          (and selection
+               (yunge-reader-epub--selection-cursor-offset
+                cursor href)))
+         (view (yunge-reader-epub--document-view document)))
+    (cond
+     ((not selection)
+      (funcall
+       complete nil
+       (yunge-reader-epub--native-error
+        "EPUB selection endpoints must share one valid spine")))
+     ((not (and (integerp unit-limit) (<= 1 unit-limit 64)))
+      (funcall
+       complete nil
+       (yunge-reader-epub--native-error
+        "EPUB selection unit limit must be between 1 and 64")))
+     ((null offset)
+      (funcall
+       complete nil
+       (yunge-reader-epub--native-error
+        "EPUB selection cursor must be an offset in the selected spine")))
+     ((not view)
+      (funcall
+       complete nil
+       (yunge-reader-epub--native-error
+        "The current EPUB view cannot provide selection text")))
+     ((not
+       (let ((current
+              (yunge-reader-webview--view-selection view)))
+         (and current
+              (equal (alist-get 'href selection)
+                     (alist-get 'href current))
+              (equal (alist-get 'start selection)
+                     (alist-get 'start current))
+              (equal (alist-get 'end selection)
+                     (alist-get 'end current)))))
+      (funcall
+       complete nil
+       (yunge-reader-epub--native-error
+        "The EPUB selection changed before it could be copied")))
+     (t
+      (yunge-reader-webview--request-selection-text
+       view selection offset character-limit
+       (apply-partially
+        #'yunge-reader-epub--selection-text-complete
+        href complete))))))
+
 (defun yunge-reader-epub--request
-    (document operation _arguments complete)
+    (document operation arguments complete)
   "Dispatch one EPUB DOCUMENT OPERATION through COMPLETE."
   (pcase operation
     ('outline
-     (let* ((handle (yunge-reader-document-handle document))
-            (view yunge-reader-webview--buffer-view))
-       (if (and (yunge-reader-epub-handle-p handle)
-                view
-                (not (yunge-reader-webview--view-destroyed view))
-                (= (yunge-reader-epub-handle-publication handle)
-                   (yunge-reader-webview--view-publication view)))
+     (let ((view (yunge-reader-epub--document-view document)))
+       (if view
            (yunge-reader-webview--request-view-outline
             view
             (apply-partially
@@ -458,6 +593,9 @@
           complete nil
           (yunge-reader-epub--native-error
            "The current EPUB view cannot provide its outline")))))
+    ('selection-text
+     (yunge-reader-epub--request-selection-text
+      document arguments complete))
     (_
      (funcall
       complete nil

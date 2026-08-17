@@ -27,6 +27,12 @@
    :layout 'reflow
    :metadata '(:title "Test Book")))
 
+(defun yunge-reader-epub-test--selection ()
+  "Return one stable same-spine EPUB selection."
+  '((href . "OPS/chapter.xhtml")
+    (start . "epubcfi(/6/4!/4/2/1:0)")
+    (end . "epubcfi(/6/4!/4/2/1:8)")))
+
 (ert-deftest yunge-reader-epub-uses-reflowable-screen-bindings ()
   (yunge-test-keymap-keys
    yunge-reader-epub-view-mode-map
@@ -169,7 +175,7 @@
           (((symbol-function
              'yunge-reader-webview--attach-shared-publication)
             (lambda (_publication _location _location-function
-                     _accelerator-function style)
+                     _selection-function _accelerator-function style)
               (setq attached-style style))))
         (yunge-reader-epub--attach document))
       (should yunge-reader-epub-view-mode)
@@ -253,6 +259,7 @@
           (((symbol-function
              'yunge-reader-webview--attach-shared-publication)
             (lambda (publication _location location-function
+                                 selection-function
                                  accelerator-function style)
               (setq yunge-reader-webview--buffer-view
                     (yunge-reader-webview--make-view
@@ -261,6 +268,7 @@
                      :persistent t
                      :style (copy-tree style)
                      :location-changed-function location-function
+                     :selection-changed-function selection-function
                      :accelerator-function accelerator-function))))
            ((symbol-function
              'yunge-reader-webview--detach-shared-publication)
@@ -279,6 +287,10 @@
         (should (= (yunge-reader-webview--view-publication
                     yunge-reader-webview--buffer-view)
                    11))
+        (should
+         (eq (yunge-reader-webview--view-selection-changed-function
+              yunge-reader-webview--buffer-view)
+             #'yunge-reader-epub--selection-changed))
         (should
          (eq (yunge-reader-webview--view-accelerator-function
               yunge-reader-webview--buffer-view)
@@ -328,7 +340,128 @@
                      (should (equal key (kbd "+")))
                      command)))
           (yunge-reader-epub--accelerator view "+")))
-      (should (equal called (list 'remapped (current-buffer)))))))
+      (should (equal called (list 'remapped (current-buffer))))
+      (cl-letf
+          (((symbol-function 'yunge-reader-copy-selection)
+            (lambda ()
+              (interactive)
+              (setq called (list 'copied (current-buffer))))))
+        (yunge-reader-epub--accelerator view "y"))
+      (should (equal called (list 'copied (current-buffer)))))))
+
+(ert-deftest yunge-reader-epub-maps-native-selection-to-reader-state ()
+  (let* ((buffer (generate-new-buffer " *EPUB selection owner*"))
+         (view
+          (yunge-reader-webview--make-view
+           :buffer buffer
+           :selection-changed-function
+           #'yunge-reader-epub--selection-changed)))
+    (unwind-protect
+        (with-current-buffer buffer
+          (yunge-reader-mode)
+          (yunge-reader-epub-view-mode 1)
+          (setq yunge-reader-webview--buffer-view view)
+          (yunge-reader-webview--set-view-selection
+           view (yunge-reader-epub-test--selection))
+          (should
+           (equal
+            (yunge-reader-selection-start yunge-reader-selection)
+            (make-yunge-reader-position
+             :unit "OPS/chapter.xhtml"
+             :offset "epubcfi(/6/4!/4/2/1:0)")))
+          (should
+           (equal
+            (yunge-reader-selection-end yunge-reader-selection)
+            (make-yunge-reader-position
+             :unit "OPS/chapter.xhtml"
+             :offset "epubcfi(/6/4!/4/2/1:8)")))
+          (yunge-reader-webview--set-view-selection view nil)
+          (should-not yunge-reader-selection))
+      (kill-buffer buffer))))
+
+(ert-deftest yunge-reader-epub-maps-reader-selection-text-batches ()
+  (let* ((document (yunge-reader-epub-test--document))
+         (selection (yunge-reader-epub-test--selection))
+         (start
+          (make-yunge-reader-position
+           :unit (alist-get 'href selection)
+           :offset (alist-get 'start selection)))
+         (end
+          (make-yunge-reader-position
+           :unit (alist-get 'href selection)
+           :offset (alist-get 'end selection)))
+         (cursor
+          (make-yunge-reader-position
+           :unit (alist-get 'href selection) :offset 4))
+         (view
+          (yunge-reader-webview--make-view
+           :id 9
+           :publication 7
+           :selection (copy-tree selection)))
+         request
+         result
+         error-data)
+    (with-temp-buffer
+      (setq yunge-reader-webview--buffer-view view)
+      (cl-letf
+          (((symbol-function
+             'yunge-reader-webview--request-selection-text)
+            (lambda (requested-view requested-selection offset limit
+                                    complete)
+              (setq request
+                    (list requested-view requested-selection offset limit))
+              (funcall
+               complete
+               '((text . "text")
+                 (total . 12)
+                 (next-offset . 8)
+                 (done))
+               nil))))
+        (yunge-reader-epub--request
+         document 'selection-text
+         (list :start start :end end :cursor cursor
+               :unit-limit 1 :character-limit 16)
+         (lambda (value error)
+           (setq result value
+                 error-data error)))))
+    (should-not error-data)
+    (should (equal request (list view selection 4 16)))
+    (should (equal (yunge-reader-selection-batch-text result) "text"))
+    (should-not (yunge-reader-selection-batch-done result))
+    (should
+     (equal
+      (yunge-reader-selection-batch-cursor result)
+      (make-yunge-reader-position
+       :unit "OPS/chapter.xhtml" :offset 8)))))
+
+(ert-deftest yunge-reader-epub-rejects-stale-selection-copy ()
+  (let* ((document (yunge-reader-epub-test--document))
+         (selection (yunge-reader-epub-test--selection))
+         (start
+          (make-yunge-reader-position
+           :unit (alist-get 'href selection)
+           :offset (alist-get 'start selection)))
+         (end
+          (make-yunge-reader-position
+           :unit (alist-get 'href selection)
+           :offset (alist-get 'end selection)))
+         error-data
+         requested)
+    (with-temp-buffer
+      (setq yunge-reader-webview--buffer-view
+            (yunge-reader-webview--make-view
+             :id 9 :publication 7 :selection nil))
+      (cl-letf
+          (((symbol-function
+             'yunge-reader-webview--request-selection-text)
+            (lambda (&rest _arguments) (setq requested t))))
+        (yunge-reader-epub--request
+         document 'selection-text
+         (list :start start :end end :cursor nil
+               :unit-limit 1 :character-limit 16)
+         (lambda (_value error) (setq error-data error)))))
+    (should error-data)
+    (should-not requested)))
 
 (ert-deftest yunge-reader-epub-does-not-hide-close-failures ()
   (let ((handle (yunge-reader-epub-test--handle))

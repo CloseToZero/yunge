@@ -508,8 +508,8 @@
            '((kind . "event")
              (event . "accelerator")
              (view . 9)
-             (key . "+")))
-          (should (equal routed (list view "+" buffer))))
+             (key . "y")))
+          (should (equal routed (list view "y" buffer))))
       (kill-buffer buffer))))
 
 (ert-deftest yunge-reader-webview-rejects-unknown-forwarded-keys ()
@@ -720,7 +720,16 @@
                0.8))))
 
 (ert-deftest yunge-reader-webview-keeps-selections-per-view ()
-  (let* ((first (yunge-reader-webview--make-view :id 31))
+  (let* (changes
+         (first
+          (yunge-reader-webview--make-view
+           :id 31
+           :selection-changed-function
+           (lambda (view)
+             (push
+              (copy-tree
+               (yunge-reader-webview--view-selection view))
+              changes))))
          (second (yunge-reader-webview--make-view :id 32))
          (selection (yunge-reader-webview-test--selection))
          (yunge-reader-webview--process 'fake-webview-process)
@@ -737,6 +746,7 @@
     (should
      (equal (yunge-reader-webview--view-selection first)
             selection))
+    (should (equal changes (list selection)))
     (should-not (yunge-reader-webview--view-selection second))
     (yunge-reader-webview--handle-event
      'fake-webview-process
@@ -745,6 +755,7 @@
        (view . 31)
        (selection)))
     (should-not (yunge-reader-webview--view-selection first))
+    (should (equal changes (list nil selection)))
     (should-error
      (yunge-reader-webview--handle-event
       'fake-webview-process
@@ -968,7 +979,7 @@
     (with-temp-buffer
       (let ((view
              (yunge-reader-webview--attach-shared-publication
-              8 nil nil nil style)))
+              8 nil nil nil nil style)))
         (should
          (equal (yunge-reader-webview--view-style view) style))
         (should-not (eq (yunge-reader-webview--view-style view) style))

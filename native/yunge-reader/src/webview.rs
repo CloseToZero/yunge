@@ -1955,7 +1955,7 @@ fn renderer_event(
                 return None;
             }
             let key = message.key.filter(|key| {
-                matches!(key.as_str(), "J" | "K" | "+" | "-" | "=")
+                matches!(key.as_str(), "J" | "K" | "+" | "-" | "=" | "y")
             })?;
             ("accelerator", None, None, None, None, Some(key))
         }
@@ -2329,7 +2329,8 @@ mod tests {
                 .unwrap();
         assert!(adapter.contains("post('accelerator', { key })"));
         assert!(
-            adapter.contains("['J', 'K', '+', '-', '='].includes(event.key)")
+            adapter
+                .contains("['J', 'K', '+', '-', '=', 'y'].includes(event.key)")
         );
         assert!(!adapter.contains("['j', 'k'].includes(event.key)"));
         assert!(adapter.contains("applyReadingStyle(view, style)"));
@@ -2670,7 +2671,7 @@ mod tests {
         assert!(event.selection.is_none());
         assert!(event.key.is_none());
 
-        for key in ["J", "K", "+", "-", "="] {
+        for key in ["J", "K", "+", "-", "=", "y"] {
             let payload = json!({
                 "protocol": 1,
                 "event": "accelerator",
