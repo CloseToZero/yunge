@@ -24,6 +24,8 @@ const decoder = new TextDecoder()
 const encoder = new TextEncoder()
 const MAX_INITIAL_TARGETS = 8
 const MAX_LOCATOR_TEXT_BYTES = 3072
+const MAX_SELECTION_CHARACTERS = 1024 * 1024
+const MAX_SELECTION_CHARACTER_LIMIT = 65536
 const MAX_MEDIA_CANDIDATES = 256
 const MAX_TEXT_NODES = 4096
 const MAX_TEXT_SAMPLE = 4096
@@ -34,6 +36,16 @@ const MAX_TOC_TITLE_BYTES = 1024
 const MAX_TOC_TOTAL_TEXT_BYTES = 384 * 1024
 const LOCATION_DELAY_MS = 75
 const USER_MOVEMENT_WINDOW_MS = 1000
+const SELECTION_TEXT_ERROR_MESSAGES = Object.freeze({
+    'invalid-selection-offset':
+        'EPUB selection offset lies outside the selection',
+    'selection-no-longer-current':
+        'EPUB selection is no longer current',
+    'selection-too-large':
+        'EPUB selection exceeds its character limit',
+    'selection-unavailable':
+        'EPUB selection range is unavailable',
+})
 const DEFAULT_STYLE = Object.freeze({
     'font-scale': 1.0,
     'line-height': 1.6,
@@ -255,6 +267,36 @@ const checkedSelection = value => {
         throw new Error('Invalid EPUB selection range')
     }
     return Object.freeze({ href, start, end })
+}
+
+const selectionTextError = (code, message) => {
+    const error = new Error(message)
+    error.code = code
+    throw error
+}
+
+const checkedSelectionTextRequest = value => {
+    if (!value || typeof value !== 'object' || Array.isArray(value)
+        || Object.keys(value).sort().join()
+            !== 'character-limit,offset,selection,view') {
+        selectionTextError(
+            'selection-unavailable',
+            'EPUB selection text request is invalid')
+    }
+    const viewID = checkedView(value.view)
+    const selection = checkedSelection(value.selection)
+    const offset = value.offset
+    const characterLimit = value['character-limit']
+    if (!Number.isSafeInteger(offset) || offset < 0
+        || offset > MAX_SELECTION_CHARACTERS
+        || !Number.isSafeInteger(characterLimit)
+        || characterLimit < 1
+        || characterLimit > MAX_SELECTION_CHARACTER_LIMIT) {
+        selectionTextError(
+            'selection-unavailable',
+            'EPUB selection text request is invalid')
+    }
+    return { viewID, selection, offset, characterLimit }
 }
 
 const checkedNavigationTarget = value => {
@@ -677,6 +719,92 @@ const clearSelection = ({ view: viewID }) => {
     emitSelection(current, null)
 }
 
+const selectedRange = (session, selection) => {
+    const start = session.view.resolveCFI(selection.start)
+    const end = session.view.resolveCFI(selection.end)
+    if (!Number.isInteger(start?.index) || start.index !== end?.index
+        || session.book.sections[start.index]?.id !== selection.href) {
+        selectionTextError(
+            'selection-unavailable',
+            'EPUB selection range is unavailable')
+    }
+    const content = session.view.renderer.getContents()
+        .find(item => item.index === start.index)
+    if (!content?.doc || typeof start.anchor !== 'function'
+        || typeof end.anchor !== 'function') {
+        selectionTextError(
+            'selection-unavailable',
+            'EPUB selection range is unavailable')
+    }
+    const startRange = start.anchor(content.doc)
+    const endRange = end.anchor(content.doc)
+    if (!startRange?.collapsed || !endRange?.collapsed
+        || startRange.startContainer?.ownerDocument !== content.doc
+        || endRange.startContainer?.ownerDocument !== content.doc) {
+        selectionTextError(
+            'selection-unavailable',
+            'EPUB selection range is unavailable')
+    }
+    const range = content.doc.createRange()
+    range.setStart(startRange.startContainer, startRange.startOffset)
+    range.setEnd(endRange.startContainer, endRange.startOffset)
+    if (range.collapsed) {
+        selectionTextError(
+            'selection-unavailable',
+            'EPUB selection range is unavailable')
+    }
+    return range
+}
+
+const selectionText = request => {
+    try {
+        const { viewID, selection, offset, characterLimit }
+            = checkedSelectionTextRequest(request)
+        if (!current || current.viewID !== viewID
+            || !sameSelection(current.selection, selection)) {
+            selectionTextError(
+                'selection-no-longer-current',
+                'EPUB selection is no longer current')
+        }
+        const text = selectedRange(current, selection).toString()
+        if (text.length > MAX_SELECTION_CHARACTERS * 2) {
+            selectionTextError(
+                'selection-too-large',
+                'EPUB selection exceeds its character limit')
+        }
+        const characters = Array.from(text)
+        if (characters.length > MAX_SELECTION_CHARACTERS) {
+            selectionTextError(
+                'selection-too-large',
+                'EPUB selection exceeds its character limit')
+        }
+        if (offset > characters.length) {
+            selectionTextError(
+                'invalid-selection-offset',
+                'EPUB selection offset lies outside the selection')
+        }
+        const nextOffset = Math.min(
+            characters.length, offset + characterLimit)
+        const done = nextOffset === characters.length
+        const result = {
+            text: characters.slice(offset, nextOffset).join(''),
+            total: characters.length,
+            done,
+        }
+        if (!done) result['next-offset'] = nextOffset
+        return { ok: true, result }
+    } catch (error) {
+        const code = Object.hasOwn(
+            SELECTION_TEXT_ERROR_MESSAGES, error?.code)
+            ? error.code : 'selection-unavailable'
+        if (code === 'selection-unavailable') console.warn(error)
+        return {
+            ok: false,
+            error: { code, message: SELECTION_TEXT_ERROR_MESSAGES[code] },
+        }
+    }
+}
+
 const open = async ({ view: viewID, resourceRoot, location, style }) => {
     const mine = ++generation
     closeCurrent()
@@ -817,5 +945,5 @@ const navigate = ({ view: viewID, command, location }) => {
 }
 
 globalThis.yungeReader = Object.freeze({
-    clearSelection, navigate, open, setStyle,
+    clearSelection, navigate, open, selectionText, setStyle,
 })

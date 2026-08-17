@@ -27,6 +27,12 @@
 (defconst yunge-reader-webview--max-location-text-bytes 3072
   "Maximum byte length of one EPUB locator text field.")
 
+(defconst yunge-reader-webview--max-selection-characters 1048576
+  "Maximum character length of one EPUB text selection.")
+
+(defconst yunge-reader-webview--max-selection-character-limit 65536
+  "Maximum characters requested in one EPUB selection batch.")
+
 (defconst yunge-reader-webview--max-outline-depth 256
   "Maximum nesting depth accepted from one EPUB outline.")
 
@@ -145,6 +151,7 @@
             "view-destroy" "view-events" "view-focus"
             "view-focus-parent" "view-info"
             "view-navigate" "view-open-publication"
+            "view-selection-text"
             "view-status" "view-style" "view-visible")))
       (error
        "Incompatible Yunge Reader WebView helper: %S"
@@ -332,6 +339,89 @@
           (string-suffix-p ")" cfi)))
        (list start end))
       (not (equal start end))))))
+
+(defun yunge-reader-webview--valid-selection-text-result-p
+    (result offset character-limit)
+  "Return non-nil when RESULT is a consistent EPUB text batch.
+OFFSET and CHARACTER-LIMIT describe the request that produced RESULT."
+  (and
+   (listp result)
+   (cl-every
+    (lambda (entry)
+      (memq (car-safe entry) '(text total next-offset done)))
+    result)
+   (assq 'text result)
+   (assq 'total result)
+   (assq 'done result)
+   (= (length result)
+      (if (assq 'next-offset result) 4 3))
+   (let* ((text (alist-get 'text result))
+          (total (alist-get 'total result))
+          (done (alist-get 'done result))
+          (next-entry (assq 'next-offset result))
+          (next (cdr-safe next-entry))
+          (expected (and (stringp text) (+ offset (length text)))))
+     (and
+      (stringp text)
+      (natnump total)
+      (<= total yunge-reader-webview--max-selection-characters)
+      (<= (length text) character-limit)
+      (<= offset total)
+      (memq done '(nil t))
+      (if done
+          (and (null next-entry) (= expected total))
+        (and
+         (consp next-entry)
+         (natnump next)
+         (> (length text) 0)
+         (= next expected)
+         (< next total)))))))
+
+(defun yunge-reader-webview--selection-text-complete
+    (offset character-limit complete result error-data)
+  "Validate one EPUB text RESULT before invoking COMPLETE.
+OFFSET and CHARACTER-LIMIT are the corresponding request bounds."
+  (cond
+   (error-data
+    (funcall complete nil error-data))
+   ((yunge-reader-webview--valid-selection-text-result-p
+     result offset character-limit)
+    (funcall complete result nil))
+   (t
+    (funcall
+     complete nil
+     (list 'error
+           (format "Malformed EPUB selection text result: %S" result))))))
+
+(defun yunge-reader-webview--request-selection-text
+    (view selection offset character-limit complete)
+  "Request one text batch for SELECTION in native VIEW.
+OFFSET is a transient Unicode character cursor.  CHARACTER-LIMIT bounds the
+returned batch, and COMPLETE receives the validated native result."
+  (unless (and (integerp offset)
+               (<= 0 offset
+                   yunge-reader-webview--max-selection-characters))
+    (error "Invalid EPUB selection offset: %S" offset))
+  (unless
+      (and
+       (integerp character-limit)
+       (<= 1 character-limit
+           yunge-reader-webview--max-selection-character-limit))
+    (error "Invalid EPUB selection character limit: %S" character-limit))
+  (unless (functionp complete)
+    (error "Invalid EPUB selection text completion: %S" complete))
+  (yunge-reader-webview--request
+   "view-selection-text"
+   `((view . ,(yunge-reader-webview--view-id view))
+     (selection . ,(copy-tree
+                    (if (yunge-reader-webview--valid-selection-p selection)
+                        selection
+                      (error "Invalid EPUB selection: %S" selection))))
+     (offset . ,offset)
+     (character-limit . ,character-limit))
+   (apply-partially
+    #'yunge-reader-webview--selection-text-complete
+    offset character-limit complete)))
 
 (defun yunge-reader-webview--valid-style-p (style)
   "Return non-nil when STYLE is a bounded EPUB reading style."

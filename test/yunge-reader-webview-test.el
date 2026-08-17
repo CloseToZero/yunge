@@ -72,6 +72,7 @@
          "view-destroy" "view-events" "view-focus"
          "view-focus-parent" "view-info"
          "view-navigate" "view-open-publication"
+         "view-selection-text"
          "view-status" "view-style" "view-visible")))))
 
 (defun yunge-reader-webview-test--location (&optional fraction)
@@ -205,6 +206,59 @@
     `((href . "OPS/chapter.xhtml")
       (start . "epubcfi(/6/4!/4/2/1:0)")
       (end . ,(format "epubcfi(%s)" (make-string 3072 ?x)))))))
+
+(ert-deftest yunge-reader-webview-validates-epub-selection-text-batches ()
+  (should
+   (yunge-reader-webview--valid-selection-text-result-p
+    '((text . "A😀") (total . 4) (next-offset . 2) (done))
+    0 2))
+  (should
+   (yunge-reader-webview--valid-selection-text-result-p
+    '((text . "bc") (total . 4) (done . t))
+    2 8))
+  (dolist
+      (result
+       '(((text . "abc") (total . 4) (next-offset . 2) (done))
+         ((text . "") (total . 4) (next-offset . 0) (done))
+         ((text . "a") (total . 1) (next-offset . 1) (done . t))
+         ((text . "a") (total . 1) (done . t) (extra . t))))
+    (should-not
+     (yunge-reader-webview--valid-selection-text-result-p
+      result 0 2))))
+
+(ert-deftest yunge-reader-webview-requests-bounded-selection-text ()
+  (yunge-reader-webview-test--with-fake-process
+    (yunge-reader-webview-start)
+    (yunge-reader-webview--handle-message
+     'fake-webview-process
+     (yunge-reader-webview-test--ready-message))
+    (let ((view (yunge-reader-webview--make-view :id 9)))
+      (yunge-reader-webview--request-selection-text
+       view (yunge-reader-webview-test--selection) 3 16
+       #'ignore)
+      (let* ((request
+              (json-parse-string (car sent) :object-type 'alist))
+             (params (alist-get 'params request)))
+        (should (equal (alist-get 'op request)
+                       "view-selection-text"))
+        (should (= (alist-get 'view params) 9))
+        (should (= (alist-get 'offset params) 3))
+        (should (= (alist-get 'character-limit params) 16))
+        (should
+         (equal (alist-get 'selection params)
+                (yunge-reader-webview-test--selection)))))))
+
+(ert-deftest yunge-reader-webview-rejects-malformed-selection-text-results ()
+  (let (result error-data)
+    (yunge-reader-webview--selection-text-complete
+     0 2
+     (lambda (value error)
+       (setq result value
+             error-data error))
+     '((text . "abc") (total . 3) (done . t))
+     nil)
+    (should-not result)
+    (should (eq (car error-data) 'error))))
 
 (ert-deftest yunge-reader-webview-validates-bounded-epub-styles ()
   (let ((style (yunge-reader-webview-test--style)))

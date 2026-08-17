@@ -69,6 +69,9 @@ const MAX_EPUB_OUTLINE_DEPTH: u32 = 256;
 const MAX_EPUB_OUTLINE_ITEMS: usize = 4_096;
 const MAX_EPUB_OUTLINE_TITLE_BYTES: usize = 1_024;
 const MAX_EPUB_OUTLINE_TEXT_BYTES: usize = 384 * 1_024;
+const MAX_EPUB_SELECTION_CHARACTERS: u32 = 1_048_576;
+const MAX_EPUB_SELECTION_CHARACTER_LIMIT: u32 = 65_536;
+const MAX_EPUB_SELECTION_RESULT_BYTES: usize = 512 * 1_024;
 const MIN_EPUB_FONT_SCALE: f64 = 0.5;
 const MAX_EPUB_FONT_SCALE: f64 = 3.0;
 const MIN_EPUB_LINE_HEIGHT: f64 = 1.0;
@@ -92,7 +95,7 @@ const RESOURCE_CSP: &str = concat!(
     "base-uri 'none'; ",
     "form-action 'none'"
 );
-const CAPABILITIES: [&str; 17] = [
+const CAPABILITIES: [&str; 18] = [
     "publication-close",
     "publication-info",
     "publication-open",
@@ -107,6 +110,7 @@ const CAPABILITIES: [&str; 17] = [
     "view-info",
     "view-navigate",
     "view-open-publication",
+    "view-selection-text",
     "view-status",
     "view-style",
     "view-visible",
@@ -138,6 +142,13 @@ struct Response {
     result: Option<Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
     error: Option<ProtocolError>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(untagged)]
+enum Outgoing {
+    Response(Response),
+    Event(ViewEvent),
 }
 
 #[derive(Debug, Serialize)]
@@ -218,6 +229,15 @@ struct ViewStyleParams {
     style: EpubStyle,
 }
 
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields, rename_all = "kebab-case")]
+struct ViewSelectionTextParams {
+    view: u64,
+    selection: EpubSelection,
+    offset: u32,
+    character_limit: u32,
+}
+
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Serialize)]
 #[serde(deny_unknown_fields, rename_all = "kebab-case")]
 struct EpubStyle {
@@ -268,6 +288,33 @@ struct EpubSelection {
     href: String,
     start: String,
     end: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RendererSelectionTextEnvelope {
+    ok: bool,
+    #[serde(default)]
+    result: Option<RendererSelectionTextResult>,
+    #[serde(default)]
+    error: Option<RendererSelectionTextError>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields, rename_all = "kebab-case")]
+struct RendererSelectionTextResult {
+    text: String,
+    total: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    next_offset: Option<u32>,
+    done: bool,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RendererSelectionTextError {
+    code: String,
+    message: String,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Serialize)]
@@ -475,7 +522,7 @@ struct Service {
     resource_requests: Arc<AtomicUsize>,
     next_publication: u64,
     version: Result<String, String>,
-    event_sender: Sender<ViewEvent>,
+    outgoing_sender: Sender<Outgoing>,
 }
 
 impl ServiceError {
@@ -719,6 +766,36 @@ impl EpubSelection {
     }
 }
 
+impl ViewSelectionTextParams {
+    fn validate(mut self) -> Result<Self, ServiceError> {
+        self.selection = self.selection.validate()?;
+        if !(1..=MAX_EPUB_SELECTION_CHARACTER_LIMIT)
+            .contains(&self.character_limit)
+        {
+            return Err(ServiceError::new(
+                "invalid-selection-limit",
+                format!(
+                    concat!(
+                        "EPUB selection character limit must be between ",
+                        "1 and {}"
+                    ),
+                    MAX_EPUB_SELECTION_CHARACTER_LIMIT
+                ),
+            ));
+        }
+        if self.offset > MAX_EPUB_SELECTION_CHARACTERS {
+            return Err(ServiceError::new(
+                "invalid-selection-offset",
+                format!(
+                    "EPUB selection offset must not exceed {}",
+                    MAX_EPUB_SELECTION_CHARACTERS
+                ),
+            ));
+        }
+        Ok(self)
+    }
+}
+
 fn valid_epub_href(value: &str, allow_fragment: bool) -> bool {
     let path = if let Some((path, fragment)) = value.split_once('#') {
         if !allow_fragment || fragment.contains('#') {
@@ -738,14 +815,14 @@ fn valid_epub_href(value: &str, allow_fragment: bool) -> bool {
 }
 
 impl Service {
-    fn new(event_sender: Sender<ViewEvent>) -> Self {
+    fn new(outgoing_sender: Sender<Outgoing>) -> Self {
         Self {
             views: HashMap::new(),
             publications: Arc::new(Mutex::new(PublicationStore::default())),
             resource_requests: Arc::new(AtomicUsize::new(0)),
             next_publication: 1,
             version: wry::webview_version().map_err(|error| error.to_string()),
-            event_sender,
+            outgoing_sender,
         }
     }
 
@@ -868,7 +945,7 @@ impl Service {
         let load_state = Arc::clone(&loaded);
         let publications = Arc::clone(&self.publications);
         let resource_requests = Arc::clone(&self.resource_requests);
-        let renderer_events = self.event_sender.clone();
+        let renderer_events = self.outgoing_sender.clone();
         let view_id = params.view;
         let build = || {
             WebViewBuilder::new()
@@ -910,7 +987,7 @@ impl Service {
                 })
                 .with_ipc_handler(move |request| {
                     if let Some(event) = renderer_event(view_id, &request) {
-                        let _ = renderer_events.send(event);
+                        let _ = renderer_events.send(Outgoing::Event(event));
                     }
                 })
                 .with_permission_handler(|_| PermissionResponse::Deny)
@@ -931,7 +1008,7 @@ impl Service {
         let accelerator_token = install_accelerator_handler(
             &view,
             params.view,
-            self.event_sender.clone(),
+            self.outgoing_sender.clone(),
         )?;
         self.views.insert(
             params.view,
@@ -1004,6 +1081,40 @@ impl Service {
                 ServiceError::new("view-update-failed", error.to_string())
             })?;
         Ok(json!({ "view": params.view, "selection": false }))
+    }
+
+    fn selection_text(
+        &self,
+        id: u64,
+        params: Value,
+    ) -> Result<(), ServiceError> {
+        let params =
+            Self::parse::<ViewSelectionTextParams>(params)?.validate()?;
+        let view = self.view(params.view)?;
+        if view.publication.is_none() {
+            return Err(ServiceError::new(
+                "view-has-no-publication",
+                format!("view {} has no attached publication", params.view),
+            ));
+        }
+        let offset = params.offset;
+        let character_limit = params.character_limit;
+        let script = publication_selection_text_script(&params);
+        let sender = self.outgoing_sender.clone();
+        view.webview
+            .evaluate_script_with_callback(&script, move |value| {
+                let response = renderer_selection_text_response(
+                    id,
+                    offset,
+                    character_limit,
+                    &value,
+                );
+                let _ = sender.send(Outgoing::Response(response));
+            })
+            .map_err(|error| {
+                ServiceError::new("selection-text-failed", error.to_string())
+            })?;
+        Ok(())
     }
 
     fn open_view_publication(
@@ -1144,7 +1255,7 @@ impl Service {
         self.views.get_mut(&id).ok_or_else(|| unknown_view(id))
     }
 
-    fn handle(&mut self, request: Request) -> (Response, Control) {
+    fn handle(&mut self, request: Request) -> (Option<Response>, Control) {
         if request.op == "shutdown" {
             let result =
                 Self::parse::<EmptyParams>(request.params).and_then(|_| {
@@ -1157,7 +1268,14 @@ impl Service {
             } else {
                 Control::Continue
             };
-            return (response(request.id, result), control);
+            return (Some(response(request.id, result)), control);
+        }
+        if request.op == "view-selection-text" {
+            let result = self.selection_text(request.id, request.params);
+            let response = result.err().map(|error| {
+                Response::failure(Some(request.id), error.code, error.message)
+            });
+            return (response, Control::Continue);
         }
         let result = match request.op.as_str() {
             "publication-open" => self.open_publication(request.params),
@@ -1182,7 +1300,7 @@ impl Service {
                 format!("unsupported operation: {}", request.op),
             )),
         };
-        (response(request.id, result), Control::Continue)
+        (Some(response(request.id, result)), Control::Continue)
     }
 }
 
@@ -1585,7 +1703,7 @@ fn key_state(key: VIRTUAL_KEY) -> bool {
 fn install_accelerator_handler(
     webview: &WebView,
     view: u64,
-    event_sender: Sender<ViewEvent>,
+    outgoing_sender: Sender<Outgoing>,
 ) -> Result<i64, ServiceError> {
     let handler = AcceleratorKeyPressedEventHandler::create(Box::new(
         move |_controller, args| {
@@ -1614,7 +1732,7 @@ fn install_accelerator_handler(
                             ("accelerator", Some(key.to_owned()))
                         }
                     };
-                    let _ = event_sender.send(ViewEvent {
+                    let _ = outgoing_sender.send(Outgoing::Event(ViewEvent {
                         kind: "event",
                         event,
                         view,
@@ -1623,7 +1741,7 @@ fn install_accelerator_handler(
                         outline: None,
                         selection: None,
                         key,
-                    });
+                    }));
                 }
             }
             Ok(())
@@ -1648,6 +1766,123 @@ fn response(id: u64, result: Result<Value, ServiceError>) -> Response {
         Ok(value) => Response::success(id, value),
         Err(error) => Response::failure(Some(id), error.code, error.message),
     }
+}
+
+fn invalid_renderer_selection_result(
+    id: u64,
+    detail: impl Into<String>,
+) -> Response {
+    Response::failure(Some(id), "invalid-renderer-result", detail)
+}
+
+fn renderer_selection_text_response(
+    id: u64,
+    offset: u32,
+    character_limit: u32,
+    value: &str,
+) -> Response {
+    if value.len() > MAX_EPUB_SELECTION_RESULT_BYTES {
+        return invalid_renderer_selection_result(
+            id,
+            "EPUB selection text result exceeds its byte limit",
+        );
+    }
+    let envelope: RendererSelectionTextEnvelope =
+        match serde_json::from_str(value) {
+            Ok(envelope) => envelope,
+            Err(error) => {
+                return invalid_renderer_selection_result(
+                    id,
+                    format!("invalid EPUB selection text result: {error}"),
+                );
+            }
+        };
+    if envelope.ok {
+        let Some(result) = envelope.result else {
+            return invalid_renderer_selection_result(
+                id,
+                "successful EPUB selection text result has no payload",
+            );
+        };
+        if envelope.error.is_some() {
+            return invalid_renderer_selection_result(
+                id,
+                "successful EPUB selection text result contains an error",
+            );
+        }
+        let characters = match u32::try_from(result.text.chars().count()) {
+            Ok(characters) => characters,
+            Err(_) => {
+                return invalid_renderer_selection_result(
+                    id,
+                    "EPUB selection text chunk is too large",
+                );
+            }
+        };
+        let next = match offset.checked_add(characters) {
+            Some(next) => next,
+            None => {
+                return invalid_renderer_selection_result(
+                    id,
+                    "EPUB selection text cursor overflowed",
+                );
+            }
+        };
+        let valid = result.total <= MAX_EPUB_SELECTION_CHARACTERS
+            && characters <= character_limit
+            && offset <= result.total
+            && if result.done {
+                result.next_offset.is_none() && next == result.total
+            } else {
+                characters > 0
+                    && next < result.total
+                    && result.next_offset == Some(next)
+            };
+        if !valid {
+            return invalid_renderer_selection_result(
+                id,
+                "EPUB selection text batch is inconsistent",
+            );
+        }
+        return Response::success(
+            id,
+            serde_json::to_value(result)
+                .expect("validated selection text result is serializable"),
+        );
+    }
+    if envelope.result.is_some() {
+        return invalid_renderer_selection_result(
+            id,
+            "failed EPUB selection text result contains a payload",
+        );
+    }
+    let Some(error) = envelope.error else {
+        return invalid_renderer_selection_result(
+            id,
+            "failed EPUB selection text result has no error",
+        );
+    };
+    if error.message.is_empty()
+        || error.message.len() > MAX_RENDERER_ERROR_BYTES
+    {
+        return invalid_renderer_selection_result(
+            id,
+            "EPUB selection text error message is invalid",
+        );
+    }
+    let code = match error.code.as_str() {
+        "invalid-selection-offset" => "invalid-selection-offset",
+        "selection-no-longer-current" => "selection-no-longer-current",
+        "selection-too-large" => "selection-too-large",
+        "selection-unavailable" => "selection-unavailable",
+        _ => {
+            return invalid_renderer_selection_result(
+                id,
+                "EPUB selection text error code is invalid",
+            );
+        }
+    };
+    Response::failure(Some(id), code, error.message)
 }
 
 fn dependency_message(detail: &str) -> String {
@@ -1859,6 +2094,14 @@ fn publication_clear_selection_script(view: u64) -> String {
     format!("void globalThis.yungeReader.clearSelection({payload});")
 }
 
+fn publication_selection_text_script(
+    params: &ViewSelectionTextParams,
+) -> String {
+    let payload = serde_json::to_string(params)
+        .expect("selection text payload is serializable");
+    format!("globalThis.yungeReader.selectionText({payload});")
+}
+
 fn write_message(
     mut output: impl Write,
     message: &impl Serialize,
@@ -1880,19 +2123,19 @@ fn pump_messages() {
     }
 }
 
-fn write_events(
-    receiver: &Receiver<ViewEvent>,
+fn write_outgoing(
+    receiver: &Receiver<Outgoing>,
     output: &mut impl Write,
 ) -> Result<(), Error> {
-    while let Ok(event) = receiver.try_recv() {
-        write_message(&mut *output, &event)?;
+    while let Ok(message) = receiver.try_recv() {
+        write_message(&mut *output, &message)?;
     }
     Ok(())
 }
 
 pub(super) fn serve() -> Result<(), Error> {
     let (sender, receiver) = mpsc::channel();
-    let (event_sender, event_receiver) = mpsc::channel();
+    let (outgoing_sender, outgoing_receiver) = mpsc::channel();
     thread::spawn(move || {
         for line in io::stdin().lock().lines() {
             let incoming = match line {
@@ -1909,13 +2152,13 @@ pub(super) fn serve() -> Result<(), Error> {
         }
     });
 
-    let mut service = Service::new(event_sender);
+    let mut service = Service::new(outgoing_sender);
     let stdout = io::stdout();
     let mut output = stdout.lock();
     write_message(&mut output, &ready_message(&service.version))?;
     loop {
         pump_messages();
-        write_events(&event_receiver, &mut output)?;
+        write_outgoing(&outgoing_receiver, &mut output)?;
         let incoming = match receiver.recv_timeout(MESSAGE_PUMP_INTERVAL) {
             Ok(incoming) => incoming,
             Err(RecvTimeoutError::Timeout) => continue,
@@ -1924,12 +2167,14 @@ pub(super) fn serve() -> Result<(), Error> {
         let (response, control) = match incoming {
             Incoming::Request(request) => service.handle(request),
             Incoming::Invalid(message) => (
-                Response::failure(None, "invalid-request", message),
+                Some(Response::failure(None, "invalid-request", message)),
                 Control::Continue,
             ),
         };
-        write_message(&mut output, &response)?;
-        write_events(&event_receiver, &mut output)?;
+        if let Some(response) = response {
+            write_message(&mut output, &response)?;
+        }
+        write_outgoing(&outgoing_receiver, &mut output)?;
         if control == Control::Shutdown {
             break;
         }
@@ -2016,6 +2261,17 @@ mod tests {
         TemporaryEpub(path)
     }
 
+    fn handle_immediate(
+        service: &mut Service,
+        request: Request,
+    ) -> (Response, Control) {
+        let (response, control) = service.handle(request);
+        (
+            response.expect("operation returns an immediate response"),
+            control,
+        )
+    }
+
     #[test]
     fn bounds_reject_empty_negative_and_extreme_rectangles() {
         for bounds in [
@@ -2086,7 +2342,11 @@ mod tests {
         assert!(adapter.contains("requestAnimationFrame("));
         assert!(adapter.contains("post('style-error'"));
         assert!(adapter.contains("installSelectionTracking"));
-        assert!(adapter.contains("clearSelection, navigate, open, setStyle"));
+        assert!(adapter.contains(
+            "clearSelection, navigate, open, selectionText, setStyle"
+        ));
+        assert!(adapter.contains("selectedRange"));
+        assert!(adapter.contains("Array.from(text)"));
         for path in ["foliate-js/paginator.js", "foliate-js/fixed-layout.js"] {
             let source =
                 std::str::from_utf8(app_asset(path).unwrap().1).unwrap();
@@ -2105,11 +2365,14 @@ mod tests {
         let (sender, _receiver) = mpsc::channel();
         let mut service = Service::new(sender);
         let path = epub.0.to_string_lossy().into_owned();
-        let (opened, control) = service.handle(Request {
-            id: 1,
-            op: "publication-open".into(),
-            params: json!({ "path": path }),
-        });
+        let (opened, control) = handle_immediate(
+            &mut service,
+            Request {
+                id: 1,
+                op: "publication-open".into(),
+                params: json!({ "path": path }),
+            },
+        );
 
         assert_eq!(control, Control::Continue);
         assert!(opened.ok);
@@ -2174,20 +2437,26 @@ mod tests {
         assert_eq!(head.headers()["Content-Length"], "33");
         assert!(head.body().is_empty());
 
-        let (info, _) = service.handle(Request {
-            id: 2,
-            op: "publication-info".into(),
-            params: json!({ "publication": 1 }),
-        });
+        let (info, _) = handle_immediate(
+            &mut service,
+            Request {
+                id: 2,
+                op: "publication-info".into(),
+                params: json!({ "publication": 1 }),
+            },
+        );
         let info = info.result.unwrap();
         assert_eq!(info["metadata"]["title"], "Protocol Book");
         assert_eq!(info["resource-root"], resource_root);
 
-        let (closed, _) = service.handle(Request {
-            id: 3,
-            op: "publication-close".into(),
-            params: json!({ "publication": 1 }),
-        });
+        let (closed, _) = handle_immediate(
+            &mut service,
+            Request {
+                id: 3,
+                op: "publication-close".into(),
+                params: json!({ "publication": 1 }),
+            },
+        );
         assert_eq!(closed.result.unwrap()["closed"], true);
 
         let released = resource_response(
@@ -2199,11 +2468,14 @@ mod tests {
         );
         assert_eq!(released.status(), 404);
 
-        let (missing, _) = service.handle(Request {
-            id: 4,
-            op: "publication-info".into(),
-            params: json!({ "publication": 1 }),
-        });
+        let (missing, _) = handle_immediate(
+            &mut service,
+            Request {
+                id: 4,
+                op: "publication-info".into(),
+                params: json!({ "publication": 1 }),
+            },
+        );
         assert_eq!(missing.error.unwrap().code, "unknown-publication");
     }
 
@@ -2211,18 +2483,24 @@ mod tests {
     fn publication_open_requires_an_absolute_strict_path() {
         let (sender, _receiver) = mpsc::channel();
         let mut service = Service::new(sender);
-        let (relative, _) = service.handle(Request {
-            id: 1,
-            op: "publication-open".into(),
-            params: json!({ "path": "book.epub" }),
-        });
+        let (relative, _) = handle_immediate(
+            &mut service,
+            Request {
+                id: 1,
+                op: "publication-open".into(),
+                params: json!({ "path": "book.epub" }),
+            },
+        );
         assert_eq!(relative.error.unwrap().code, "invalid-publication-path");
 
-        let (unknown, _) = service.handle(Request {
-            id: 2,
-            op: "publication-open".into(),
-            params: json!({ "path": "book.epub", "extra": true }),
-        });
+        let (unknown, _) = handle_immediate(
+            &mut service,
+            Request {
+                id: 2,
+                op: "publication-open".into(),
+                params: json!({ "path": "book.epub", "extra": true }),
+            },
+        );
         assert_eq!(unknown.error.unwrap().code, "invalid-params");
     }
 
@@ -2538,6 +2816,24 @@ mod tests {
         );
         assert!(clear.contains(r#""view":4"#));
         assert!(!clear.contains("eval"));
+
+        let selection_text =
+            publication_selection_text_script(&ViewSelectionTextParams {
+                view: 4,
+                selection: EpubSelection {
+                    href: "OPS/chapter.xhtml".into(),
+                    start: "epubcfi(/6/4!/4/2/1:0)".into(),
+                    end: "epubcfi(/6/4!/4/2/1:7)".into(),
+                },
+                offset: 0,
+                character_limit: 16_384,
+            });
+        assert!(
+            selection_text.starts_with("globalThis.yungeReader.selectionText(")
+        );
+        assert!(selection_text.contains(r#""character-limit":16384"#));
+        assert!(selection_text.contains(r#""offset":0"#));
+        assert!(!selection_text.contains("eval"));
     }
 
     #[test]
@@ -2615,6 +2911,136 @@ mod tests {
             .validate()
             .is_err()
         );
+    }
+
+    #[test]
+    fn epub_selection_text_requests_are_strictly_bounded() {
+        let selection = EpubSelection {
+            href: "OPS/chapter.xhtml".into(),
+            start: "epubcfi(/6/4!/4/2/1:0)".into(),
+            end: "epubcfi(/6/4!/4/2/1:7)".into(),
+        };
+        let valid = ViewSelectionTextParams {
+            view: 4,
+            selection: selection.clone(),
+            offset: MAX_EPUB_SELECTION_CHARACTERS,
+            character_limit: MAX_EPUB_SELECTION_CHARACTER_LIMIT,
+        };
+        assert_eq!(valid.validate().unwrap().view, 4);
+
+        let invalid_limit = ViewSelectionTextParams {
+            view: 4,
+            selection: selection.clone(),
+            offset: 0,
+            character_limit: 0,
+        };
+        assert_eq!(
+            invalid_limit.validate().unwrap_err().code,
+            "invalid-selection-limit"
+        );
+        let invalid_offset = ViewSelectionTextParams {
+            view: 4,
+            selection,
+            offset: MAX_EPUB_SELECTION_CHARACTERS + 1,
+            character_limit: 1,
+        };
+        assert_eq!(
+            invalid_offset.validate().unwrap_err().code,
+            "invalid-selection-offset"
+        );
+        assert!(
+            Service::parse::<ViewSelectionTextParams>(json!({
+                "view": 4,
+                "selection": {
+                    "href": "OPS/chapter.xhtml",
+                    "start": "epubcfi(/6/4!/4/2/1:0)",
+                    "end": "epubcfi(/6/4!/4/2/1:7)",
+                },
+                "offset": 0,
+                "character-limit": 16,
+                "extra": true,
+            }))
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn renderer_selection_text_batches_are_independently_validated() {
+        let response = renderer_selection_text_response(
+            7,
+            0,
+            2,
+            concat!(
+                r#"{"ok":true,"result":{"text":"A😀","total":4,"#,
+                r#""next-offset":2,"done":false}}"#,
+            ),
+        );
+        assert!(response.ok);
+        let result = response.result.unwrap();
+        assert_eq!(result["text"], "A😀");
+        assert_eq!(result["next-offset"], 2);
+        assert_eq!(result["total"], 4);
+
+        let done = renderer_selection_text_response(
+            8,
+            2,
+            8,
+            r#"{"ok":true,"result":{"text":"bc","total":4,
+                "done":true}}"#,
+        );
+        assert!(done.ok);
+        assert!(done.result.unwrap().get("next-offset").is_none());
+
+        for invalid in [
+            r#"null"#,
+            r#"{"ok":true,"result":{"text":"abc","total":4,
+                "next-offset":2,"done":false}}"#,
+            r#"{"ok":true,"result":{"text":"","total":4,
+                "next-offset":0,"done":false}}"#,
+            r#"{"ok":true,"result":{"text":"a","total":1,
+                "next-offset":1,"done":true}}"#,
+        ] {
+            let response = renderer_selection_text_response(9, 0, 2, invalid);
+            assert!(!response.ok);
+            assert_eq!(response.error.unwrap().code, "invalid-renderer-result");
+        }
+
+        let stale = renderer_selection_text_response(
+            10,
+            0,
+            2,
+            concat!(
+                r#"{"ok":false,"error":{"code":"#,
+                r#""selection-no-longer-current","message":"stale"}}"#,
+            ),
+        );
+        assert_eq!(stale.error.unwrap().code, "selection-no-longer-current");
+    }
+
+    #[test]
+    fn outgoing_messages_preserve_the_public_ndjson_shapes() {
+        let response = serde_json::to_value(Outgoing::Response(
+            Response::success(3, json!({ "scheduled": true })),
+        ))
+        .unwrap();
+        assert_eq!(response["id"], 3);
+        assert_eq!(response["ok"], true);
+        assert!(response.get("kind").is_none());
+
+        let event = serde_json::to_value(Outgoing::Event(ViewEvent {
+            kind: "event",
+            event: "escape",
+            view: 4,
+            message: None,
+            location: None,
+            outline: None,
+            selection: None,
+            key: None,
+        }))
+        .unwrap();
+        assert_eq!(event["kind"], "event");
+        assert_eq!(event["view"], 4);
+        assert!(event.get("id").is_none());
     }
 
     #[test]
