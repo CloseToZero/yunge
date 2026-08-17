@@ -95,7 +95,7 @@ const RESOURCE_CSP: &str = concat!(
     "base-uri 'none'; ",
     "form-action 'none'"
 );
-const CAPABILITIES: [&str; 18] = [
+const CAPABILITIES: [&str; 19] = [
     "publication-close",
     "publication-info",
     "publication-open",
@@ -111,6 +111,7 @@ const CAPABILITIES: [&str; 18] = [
     "view-navigate",
     "view-open-publication",
     "view-selection-text",
+    "view-scroll-bars",
     "view-status",
     "view-style",
     "view-visible",
@@ -220,6 +221,8 @@ struct ViewPublicationParams {
     location: Option<EpubLocator>,
     #[serde(default)]
     style: EpubStyle,
+    #[serde(rename = "scroll-bars")]
+    scroll_bars: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -227,6 +230,13 @@ struct ViewPublicationParams {
 struct ViewStyleParams {
     view: u64,
     style: EpubStyle,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ViewScrollBarsParams {
+    view: u64,
+    visible: bool,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -359,6 +369,7 @@ enum RendererEvent {
     NavigationError,
     PublicationError,
     PublicationReady,
+    ScrollBarsError,
     Selection,
     StyleError,
 }
@@ -1145,6 +1156,7 @@ impl Service {
             &resource_root,
             location.as_ref(),
             &style,
+            params.scroll_bars,
         );
         self.view(params.view)?
             .webview
@@ -1227,6 +1239,29 @@ impl Service {
         }))
     }
 
+    fn set_view_scroll_bars(
+        &mut self,
+        params: Value,
+    ) -> Result<Value, ServiceError> {
+        let params: ViewScrollBarsParams = Self::parse(params)?;
+        let view = self.view(params.view)?;
+        if view.publication.is_none() {
+            return Err(ServiceError::new(
+                "view-has-no-publication",
+                format!("view {} has no attached publication", params.view),
+            ));
+        }
+        let script =
+            publication_scroll_bars_script(params.view, params.visible);
+        view.webview.evaluate_script(&script).map_err(|error| {
+            ServiceError::new("view-update-failed", error.to_string())
+        })?;
+        Ok(json!({
+            "view": params.view,
+            "visible": params.visible,
+        }))
+    }
+
     fn destroy(&mut self, params: Value) -> Result<Value, ServiceError> {
         let params: ViewParams = Self::parse(params)?;
         if self.views.remove(&params.view).is_none() {
@@ -1290,6 +1325,7 @@ impl Service {
                 self.open_view_publication(request.params)
             }
             "view-style" => self.set_view_style(request.params),
+            "view-scroll-bars" => self.set_view_scroll_bars(request.params),
             "view-visible" => self.set_visible(request.params),
             "view-focus" => self.focus(request.params),
             "view-focus-parent" => self.focus_parent(request.params),
@@ -2006,6 +2042,17 @@ fn renderer_event(
                 .ok()?;
             ("selection", None, None, None, Some(selection), None)
         }
+        RendererEvent::ScrollBarsError => {
+            if message.location.is_some()
+                || message.outline.is_some()
+                || message.selection.is_some()
+                || message.key.is_some()
+            {
+                return None;
+            }
+            let detail = message.message.filter(|value| !value.is_empty())?;
+            ("scroll-bars-error", Some(detail), None, None, None, None)
+        }
         RendererEvent::StyleError => {
             if message.location.is_some()
                 || message.outline.is_some()
@@ -2035,12 +2082,14 @@ fn publication_open_script(
     resource_root: &str,
     location: Option<&EpubLocator>,
     style: &EpubStyle,
+    scroll_bars: bool,
 ) -> String {
     let payload = serde_json::to_string(&json!({
         "view": view,
         "resourceRoot": resource_root,
         "location": location,
         "style": style,
+        "scrollBars": scroll_bars,
     }))
     .expect("publication open payload is serializable");
     format!("void globalThis.yungeReader.open({payload});")
@@ -2067,6 +2116,15 @@ fn publication_style_script(view: u64, style: &EpubStyle) -> String {
     }))
     .expect("publication style payload is serializable");
     format!("void globalThis.yungeReader.setStyle({payload});")
+}
+
+fn publication_scroll_bars_script(view: u64, visible: bool) -> String {
+    let payload = serde_json::to_string(&json!({
+        "view": view,
+        "visible": visible,
+    }))
+    .expect("scroll bar payload is serializable");
+    format!("void globalThis.yungeReader.setScrollBars({payload});")
 }
 
 fn publication_clear_selection_script(view: u64) -> String {
@@ -2325,7 +2383,8 @@ mod tests {
         assert!(adapter.contains("post('style-error'"));
         assert!(adapter.contains("installSelectionTracking"));
         assert!(adapter.contains(
-            "clearSelection, navigate, open, selectionText, setStyle"
+            "clearSelection, navigate, open, selectionText, setScrollBars, \
+             setStyle"
         ));
         assert!(adapter.contains("selectedRange"));
         assert!(adapter.contains("Array.from(text)"));
@@ -2652,6 +2711,22 @@ mod tests {
         assert!(event.selection.is_none());
         assert!(event.key.is_none());
 
+        let scroll_bars_error = HttpRequest::builder()
+            .uri(APP_URL)
+            .body(
+                r#"{"protocol":1,"event":"scroll-bars-error",
+                    "message":"bad scroll bars"}"#
+                    .into(),
+            )
+            .unwrap();
+        let event = renderer_event(8, &scroll_bars_error).unwrap();
+        assert_eq!(event.event, "scroll-bars-error");
+        assert_eq!(event.message.as_deref(), Some("bad scroll bars"));
+        assert!(event.location.is_none());
+        assert!(event.outline.is_none());
+        assert!(event.selection.is_none());
+        assert!(event.key.is_none());
+
         for key in ["J", "K", "+", "-", "=", "y"] {
             let payload = json!({
                 "protocol": 1,
@@ -2757,6 +2832,7 @@ mod tests {
             "https://yunge-reader-book.localhost/token/",
             Some(&location),
             &EpubStyle::default(),
+            false,
         );
         assert!(script.starts_with("void globalThis.yungeReader.open("));
         assert!(script.contains(r#""view":4"#));
@@ -2766,6 +2842,7 @@ mod tests {
         assert!(script.contains(r#""line-height":1.6"#));
         assert!(script.contains(r#""content-width":720"#));
         assert!(script.contains(r#""side-padding":7.0"#));
+        assert!(script.contains(r#""scrollBars":false"#));
         assert!(!script.contains("eval"));
 
         let style_script = publication_style_script(4, &EpubStyle::default());
@@ -2775,6 +2852,15 @@ mod tests {
         assert!(style_script.contains(r#""view":4"#));
         assert!(style_script.contains(r#""font-scale":1.0"#));
         assert!(!style_script.contains("eval"));
+
+        let scroll_bars = publication_scroll_bars_script(4, true);
+        assert!(
+            scroll_bars
+                .starts_with("void globalThis.yungeReader.setScrollBars(")
+        );
+        assert!(scroll_bars.contains(r#""view":4"#));
+        assert!(scroll_bars.contains(r#""visible":true"#));
+        assert!(!scroll_bars.contains("eval"));
 
         let target = EpubNavigationTarget {
             cfi: Some(location.cfi.clone()),
@@ -3035,9 +3121,19 @@ mod tests {
         let parsed = Service::parse::<ViewPublicationParams>(json!({
             "view": 4,
             "publication": 7,
+            "scroll-bars": false,
         }))
         .unwrap();
         assert_eq!(parsed.style, default);
+        assert!(!parsed.scroll_bars);
+
+        assert!(
+            Service::parse::<ViewPublicationParams>(json!({
+                "view": 4,
+                "publication": 7,
+            }))
+            .is_err()
+        );
 
         let parsed = Service::parse::<ViewStyleParams>(json!({
             "view": 4,
@@ -3084,6 +3180,7 @@ mod tests {
             Service::parse::<ViewPublicationParams>(json!({
                 "view": 4,
                 "publication": 7,
+                "scroll-bars": true,
                 "style": {
                     "font-scale": 1.0,
                     "line-height": 1.6,

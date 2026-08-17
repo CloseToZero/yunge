@@ -163,6 +163,23 @@
     (setcdr (assq 'font-scale first) 2.0)
     (should (= (alist-get 'font-scale second) 1.0))))
 
+(ert-deftest yunge-reader-epub-resolves-scroll-bar-policy ()
+  (let ((window (selected-window)))
+    (dolist (entry '((hidden . hidden) (visible . visible)))
+      (let ((yunge-reader-epub-scroll-bar-mode (car entry)))
+        (should
+         (eq (yunge-reader-epub--scroll-bar-mode window)
+             (cdr entry)))))
+    (let ((yunge-reader-epub-scroll-bar-mode 'follow-emacs))
+      (cl-letf (((symbol-function 'frame-parameter)
+                 (lambda (_frame _parameter) 'right)))
+        (should
+         (eq (yunge-reader-epub--scroll-bar-mode window) 'visible)))
+      (cl-letf (((symbol-function 'frame-parameter)
+                 (lambda (_frame _parameter) nil)))
+        (should
+         (eq (yunge-reader-epub--scroll-bar-mode window) 'hidden))))))
+
 (ert-deftest yunge-reader-epub-opens-with-a-pending-manual-scale ()
   (let ((yunge-reader-epub-default-font-scale 1.25)
         (document (yunge-reader-epub-test--document))
@@ -175,7 +192,8 @@
           (((symbol-function
              'yunge-reader-webview--attach-shared-publication)
             (lambda (_publication _location _location-function
-                     _selection-function _accelerator-function style)
+                     _selection-function _accelerator-function style
+                     _scroll-bar-function)
               (setq attached-style style))))
         (yunge-reader-epub--attach document))
       (should yunge-reader-epub-view-mode)
@@ -260,7 +278,8 @@
              'yunge-reader-webview--attach-shared-publication)
             (lambda (publication _location location-function
                                  selection-function
-                                 accelerator-function style)
+                                 accelerator-function style
+                                 scroll-bar-function)
               (setq yunge-reader-webview--buffer-view
                     (yunge-reader-webview--make-view
                      :buffer (current-buffer)
@@ -269,7 +288,8 @@
                      :style (copy-tree style)
                      :location-changed-function location-function
                      :selection-changed-function selection-function
-                     :accelerator-function accelerator-function))))
+                     :accelerator-function accelerator-function
+                     :scroll-bar-function scroll-bar-function))))
            ((symbol-function
              'yunge-reader-webview--detach-shared-publication)
             (lambda (complete)
@@ -295,6 +315,10 @@
          (eq (yunge-reader-webview--view-accelerator-function
               yunge-reader-webview--buffer-view)
              #'yunge-reader-epub--accelerator))
+        (should
+         (eq (yunge-reader-webview--view-scroll-bar-function
+              yunge-reader-webview--buffer-view)
+             #'yunge-reader-epub--scroll-bar-mode))
         (should
          (equal
           (yunge-reader-webview--view-style

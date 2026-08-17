@@ -16,6 +16,24 @@
   closing
   closed)
 
+(defun yunge-reader-epub--set-scroll-bar-mode (symbol value)
+  "Set SYMBOL to VALUE and synchronize live EPUB views."
+  (set-default symbol value)
+  (when (boundp 'yunge-reader-webview--logical-views)
+    (yunge-reader-webview--sync-views)))
+
+(defcustom yunge-reader-epub-scroll-bar-mode 'follow-emacs
+  "How native EPUB views display their spine-item scroll bars.
+When set to `follow-emacs', use the owning frame's actual vertical scroll bar
+state.  `hidden' and `visible' override the frame state without changing
+scrolling behavior."
+  :type '(choice
+          (const :tag "Follow Emacs" follow-emacs)
+          (const :tag "Always hidden" hidden)
+          (const :tag "Always visible" visible))
+  :set #'yunge-reader-epub--set-scroll-bar-mode
+  :group 'yunge-reader)
+
 (defcustom yunge-reader-epub-default-font-scale 1.0
   "Default font scale for reflowable EPUB views."
   :type 'number
@@ -302,6 +320,19 @@
      (content-width . ,yunge-reader-epub-default-content-width)
      (side-padding . ,yunge-reader-epub-default-side-padding))))
 
+(defun yunge-reader-epub--scroll-bar-mode (window)
+  "Return the resolved EPUB scroll bar mode for WINDOW."
+  (pcase yunge-reader-epub-scroll-bar-mode
+    ('follow-emacs
+     (if (frame-parameter (window-frame window)
+                          'vertical-scroll-bars)
+         'visible
+       'hidden))
+    ((or 'hidden 'visible) yunge-reader-epub-scroll-bar-mode)
+    (_
+     (error "Invalid EPUB scroll bar mode: %S"
+            yunge-reader-epub-scroll-bar-mode))))
+
 (defun yunge-reader-epub--attach (document)
   "Attach a persistent EPUB WebView for DOCUMENT."
   (let ((handle (yunge-reader-document-handle document)))
@@ -316,7 +347,8 @@
        nil #'yunge-reader-epub--location-changed
        #'yunge-reader-epub--selection-changed
        #'yunge-reader-epub--accelerator
-       (yunge-reader-epub--default-style font-scale)))))
+       (yunge-reader-epub--default-style font-scale)
+       #'yunge-reader-epub--scroll-bar-mode))))
 
 (defun yunge-reader-epub--detach-complete (handle)
   "Finish one native view detach belonging to HANDLE."

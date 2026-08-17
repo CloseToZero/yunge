@@ -171,6 +171,18 @@ const applyReadingStyle = (view, style) => {
     `)
 }
 
+const checkedScrollBars = value => {
+    if (typeof value !== 'boolean') {
+        throw new Error('Invalid EPUB scroll bar visibility')
+    }
+    return value
+}
+
+const applyScrollBars = (view, visible) => {
+    view.renderer.setAttribute(
+        'scroll-bars', visible ? 'visible' : 'hidden')
+}
+
 const sameReadingStyle = (left, right) => left && right
     && left.fontScale === right.fontScale
     && left.lineHeight === right.lineHeight
@@ -204,6 +216,19 @@ const setStyle = ({ view: viewID, style }) => {
             () => applyPendingStyle(session))
     } catch (error) {
         post('style-error', { message: error?.message ?? error })
+    }
+}
+
+const setScrollBars = ({ view: viewID, visible }) => {
+    try {
+        viewID = checkedView(viewID)
+        visible = checkedScrollBars(visible)
+        if (!current || current.viewID !== viewID) {
+            throw new Error('EPUB view is not open')
+        }
+        applyScrollBars(current.view, visible)
+    } catch (error) {
+        post('scroll-bars-error', { message: error?.message ?? error })
     }
 }
 
@@ -805,7 +830,9 @@ const selectionText = request => {
     }
 }
 
-const open = async ({ view: viewID, resourceRoot, location, style }) => {
+const open = async ({
+    view: viewID, resourceRoot, location, style, scrollBars,
+}) => {
     const mine = ++generation
     closeCurrent()
     status.hidden = false
@@ -814,6 +841,7 @@ const open = async ({ view: viewID, resourceRoot, location, style }) => {
         viewID = checkedView(viewID)
         location = location ? checkedLocator(location) : null
         style = checkedStyle(style)
+        scrollBars = checkedScrollBars(scrollBars)
         const root = checkedRoot(resourceRoot)
         const loader = await makeLoader(root)
         const book = await new EPUB(loader).init()
@@ -832,6 +860,7 @@ const open = async ({ view: viewID, resourceRoot, location, style }) => {
         await view.open(book)
         view.renderer.setAttribute('flow', 'scrolled')
         applyReadingStyle(view, style)
+        applyScrollBars(view, scrollBars)
         Object.assign(view.renderer.style, {
             display: 'block',
             height: '100%',
@@ -945,5 +974,5 @@ const navigate = ({ view: viewID, command, location }) => {
 }
 
 globalThis.yungeReader = Object.freeze({
-    clearSelection, navigate, open, selectionText, setStyle,
+    clearSelection, navigate, open, selectionText, setScrollBars, setStyle,
 })

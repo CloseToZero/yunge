@@ -73,7 +73,8 @@
          "view-focus-parent" "view-info"
          "view-navigate" "view-open-publication"
          "view-selection-text"
-         "view-status" "view-style" "view-visible")))))
+         "view-scroll-bars" "view-status" "view-style"
+         "view-visible")))))
 
 (defun yunge-reader-webview-test--location (&optional fraction)
   "Return one valid EPUB test locator with optional FRACTION."
@@ -290,6 +291,16 @@
           (color . "red"))))
     (should-not (yunge-reader-webview--valid-style-p style))))
 
+(ert-deftest yunge-reader-webview-validates-resolved-scroll-bar-modes ()
+  (should
+   (eq (yunge-reader-webview--check-scroll-bar-mode 'hidden)
+       'hidden))
+  (should
+   (eq (yunge-reader-webview--check-scroll-bar-mode 'visible)
+       'visible))
+  (should-error
+   (yunge-reader-webview--check-scroll-bar-mode 'follow-emacs)))
+
 (ert-deftest yunge-reader-webview-defers-hidden-reading-style ()
   (let* ((style (yunge-reader-webview-test--style))
          (view (yunge-reader-webview--make-view :publication 8))
@@ -375,6 +386,26 @@
     (should-not (yunge-reader-webview--view-surface-style view))
     (should (equal (cadr warning) "style failed"))))
 
+(ert-deftest yunge-reader-webview-reconciles-scroll-bars ()
+  (let* ((view
+          (yunge-reader-webview--make-view
+           :id 26 :created t :publication 8 :publication-ready t
+           :scroll-bar-mode 'hidden
+           :surface-scroll-bar-mode 'visible))
+         (yunge-reader-webview--views
+          (make-hash-table :test #'eql))
+         requested)
+    (puthash 26 view yunge-reader-webview--views)
+    (cl-letf
+        (((symbol-function
+           'yunge-reader-webview--set-native-scroll-bar-mode)
+          (lambda (_view mode _callback) (setq requested mode))))
+      (yunge-reader-webview--sync-view-scroll-bars view))
+    (should (eq requested 'hidden))
+    (should
+     (eq (yunge-reader-webview--view-surface-scroll-bar-mode view)
+         'hidden))))
+
 (ert-deftest yunge-reader-webview-serializes-location-navigation ()
   (yunge-reader-webview-test--with-fake-process
     (yunge-reader-webview-start)
@@ -386,13 +417,15 @@
           (style (yunge-reader-webview-test--style))
           (target '((href . "OPS/chapter.xhtml#section"))))
       (yunge-reader-webview--open-view-publication
-       view 7 #'ignore location style)
+       view 7 #'ignore location style 'hidden)
       (yunge-reader-webview--navigate-view
        view "next-screen" #'ignore)
       (yunge-reader-webview--navigate-view
        view "go-to" #'ignore target)
       (yunge-reader-webview--set-native-view-style
        view style #'ignore)
+      (yunge-reader-webview--set-native-scroll-bar-mode
+       view 'visible #'ignore)
       (let* ((requests
               (mapcar
                (lambda (line)
@@ -401,18 +434,22 @@
              (open (nth 0 requests))
              (next (nth 1 requests))
              (go-to (nth 2 requests))
-             (styled (nth 3 requests)))
+             (styled (nth 3 requests))
+             (scroll-bars (nth 4 requests)))
         (should
          (equal
           (mapcar (lambda (request) (alist-get 'op request)) requests)
           '("view-open-publication" "view-navigate" "view-navigate"
-            "view-style")))
+            "view-style" "view-scroll-bars")))
         (should
          (equal (alist-get 'location (alist-get 'params open))
                 location))
         (should
          (equal (alist-get 'style (alist-get 'params open))
                 style))
+        (should
+         (eq (alist-get 'scroll-bars (alist-get 'params open))
+             :false))
         (should
          (equal (alist-get 'command (alist-get 'params next))
                 "next-screen"))
@@ -421,7 +458,9 @@
                 target))
         (should
          (equal (alist-get 'style (alist-get 'params styled))
-                style))))))
+                style))
+        (should
+         (alist-get 'visible (alist-get 'params scroll-bars)))))))
 
 (ert-deftest yunge-reader-webview-wraps-publication-operations ()
   (yunge-reader-webview-test--with-fake-process
@@ -436,7 +475,7 @@
        7 (lambda (_value _error-data)))
       (yunge-reader-webview--open-view-publication
        (yunge-reader-webview--make-view :id 4)
-       7 (lambda (_value _error-data)))
+       7 (lambda (_value _error-data)) nil nil 'hidden)
       (yunge-reader-webview--close-publication
        7 (lambda (_value _error-data)))
       (let ((requests
@@ -635,6 +674,20 @@
           (should-not
            (yunge-reader-webview--view-surface-style view))
           (should (equal (cadr warning) "bad style"))
+          (setf
+           (yunge-reader-webview--view-surface-scroll-bar-mode view)
+           'visible)
+          (cl-letf (((symbol-function 'display-warning)
+                     (lambda (&rest value) (setq warning value))))
+            (yunge-reader-webview--handle-event
+             'fake-webview-process
+             '((kind . "event")
+               (event . "scroll-bars-error")
+               (view . 6)
+               (message . "bad scroll bars"))))
+          (should-not
+           (yunge-reader-webview--view-surface-scroll-bar-mode view))
+          (should (equal (cadr warning) "bad scroll bars"))
           (cl-letf (((symbol-function 'display-warning)
                      (lambda (&rest value) (setq warning value))))
             (yunge-reader-webview--handle-event
@@ -988,17 +1041,18 @@
          (view
           (yunge-reader-webview--make-view
            :id 22 :created t :publication 8
-           :location location :style style))
+           :location location :style style :scroll-bar-mode 'hidden))
          opened)
     (cl-letf
         (((symbol-function
            'yunge-reader-webview--open-view-publication)
           (lambda (value publication _complete
-                         &optional target reading-style)
+                         target reading-style bar-mode)
             (setq opened
-                  (list value publication target reading-style)))))
+                  (list value publication target reading-style
+                        bar-mode)))))
       (yunge-reader-webview--try-open-publication view))
-    (should (equal opened (list view 8 location style)))
+    (should (equal opened (list view 8 location style 'hidden)))
     (should
      (equal (yunge-reader-webview--view-surface-style view) style))
     (should-not

@@ -512,6 +512,12 @@ export class Paginator extends HTMLElement {
             grid-row: 1 / -1;
             overflow: auto;
         }
+        :host([scroll-bars="hidden"]) #container {
+            scrollbar-width: none;
+        }
+        :host([scroll-bars="hidden"]) #container::-webkit-scrollbar {
+            display: none;
+        }
         #header {
             grid-column: 3 / 4;
             grid-row: 1;

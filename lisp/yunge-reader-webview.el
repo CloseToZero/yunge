@@ -46,6 +46,9 @@
   '(font-scale line-height content-width side-padding)
   "Semantic fields in one EPUB reading style.")
 
+(defconst yunge-reader-webview--scroll-bar-modes '(hidden visible)
+  "Resolved display modes for an EPUB spine-item scroll bar.")
+
 (defconst yunge-reader-webview--log-buffer-name
   "*Yunge Reader WebView log*"
   "Name of the WebView helper diagnostic buffer.")
@@ -95,6 +98,8 @@
   publication-ready
   style
   surface-style
+  scroll-bar-mode
+  surface-scroll-bar-mode
   location
   pending-target
   outline
@@ -110,7 +115,8 @@
   destroy-finished
   location-changed-function
   selection-changed-function
-  accelerator-function)
+  accelerator-function
+  scroll-bar-function)
 
 (define-derived-mode yunge-reader-webview-spike-mode special-mode
   "Yunge-WebView"
@@ -153,7 +159,8 @@
             "view-focus-parent" "view-info"
             "view-navigate" "view-open-publication"
             "view-selection-text"
-            "view-status" "view-style" "view-visible")))
+            "view-scroll-bars" "view-status" "view-style"
+            "view-visible")))
       (error
        "Incompatible Yunge Reader WebView helper: %S"
        message))))
@@ -460,9 +467,15 @@ returned batch, and COMPLETE receives the validated native result."
     (error "Invalid EPUB reading style: %S" style))
   style)
 
+(defun yunge-reader-webview--check-scroll-bar-mode (mode)
+  "Return resolved EPUB scroll bar MODE or signal."
+  (unless (memq mode yunge-reader-webview--scroll-bar-modes)
+    (error "Invalid EPUB scroll bar mode: %S" mode))
+  mode)
+
 (defun yunge-reader-webview--open-view-publication
-    (view publication callback &optional location style)
-  "Open PUBLICATION in native VIEW with LOCATION and STYLE.
+    (view publication callback location style bar-mode)
+  "Open PUBLICATION in native VIEW with LOCATION, STYLE, and scroll bars.
 Invoke CALLBACK when the native request completes."
   (yunge-reader-webview--request
    "view-open-publication"
@@ -472,7 +485,13 @@ Invoke CALLBACK when the native request completes."
     (when location
       `((location . ,(yunge-reader-webview--check-location location))))
     (when style
-      `((style . ,(yunge-reader-webview--check-style style)))))
+      `((style . ,(yunge-reader-webview--check-style style))))
+    `((scroll-bars
+       . ,(if (eq (yunge-reader-webview--check-scroll-bar-mode
+                   bar-mode)
+                  'visible)
+              t
+            :false))))
    callback))
 
 (defun yunge-reader-webview--navigate-view
@@ -501,6 +520,19 @@ LOCATION is required only for the go-to command."
    "view-style"
    `((view . ,(yunge-reader-webview--view-id view))
      (style . ,(yunge-reader-webview--check-style style)))
+   callback))
+
+(defun yunge-reader-webview--set-native-scroll-bar-mode
+    (view mode callback)
+  "Apply resolved scroll bar MODE to native VIEW, then invoke CALLBACK."
+  (yunge-reader-webview--request
+   "view-scroll-bars"
+   `((view . ,(yunge-reader-webview--view-id view))
+     (visible
+      . ,(if (eq (yunge-reader-webview--check-scroll-bar-mode mode)
+                 'visible)
+             t
+           :false)))
    callback))
 
 (defun yunge-reader-webview--style-complete
@@ -544,6 +576,53 @@ LOCATION is required only for the go-to command."
     (setf (yunge-reader-webview--view-style view) style)
     (yunge-reader-webview--sync-view-style view)
     style))
+
+(defun yunge-reader-webview--scroll-bar-complete
+    (view id mode _result error-data)
+  "Finish applying scroll bar MODE to VIEW surface ID."
+  (when (and error-data
+             (yunge-reader-webview--surface-current-p view id))
+    (when (eq mode
+              (yunge-reader-webview--view-surface-scroll-bar-mode view))
+      (setf (yunge-reader-webview--view-surface-scroll-bar-mode view)
+            nil))
+    (display-warning
+     'yunge-reader (error-message-string error-data) :warning)))
+
+(defun yunge-reader-webview--sync-view-scroll-bars (view)
+  "Send VIEW's resolved scroll bar mode to its ready native surface."
+  (let ((mode (yunge-reader-webview--view-scroll-bar-mode view)))
+    (when (and mode
+               (yunge-reader-webview--view-publication-ready view)
+               (yunge-reader-webview--surface-current-p
+                view (yunge-reader-webview--view-id view))
+               (not
+                (eq mode
+                    (yunge-reader-webview--view-surface-scroll-bar-mode
+                     view))))
+      (let ((id (yunge-reader-webview--view-id view)))
+        (setf (yunge-reader-webview--view-surface-scroll-bar-mode view)
+              mode)
+        (yunge-reader-webview--set-native-scroll-bar-mode
+         view mode
+         (apply-partially
+          #'yunge-reader-webview--scroll-bar-complete view id mode))))))
+
+(defun yunge-reader-webview--resolved-scroll-bar-mode (view window)
+  "Return VIEW's resolved scroll bar mode in WINDOW."
+  (yunge-reader-webview--check-scroll-bar-mode
+   (if-let* ((function
+              (yunge-reader-webview--view-scroll-bar-function view)))
+       (funcall function window)
+     'visible)))
+
+(defun yunge-reader-webview--update-scroll-bar-mode (view window)
+  "Resolve VIEW's scroll bar mode for WINDOW and synchronize it."
+  (let ((mode
+         (yunge-reader-webview--resolved-scroll-bar-mode view window)))
+    (unless (eq mode (yunge-reader-webview--view-scroll-bar-mode view))
+      (setf (yunge-reader-webview--view-scroll-bar-mode view) mode)
+      (yunge-reader-webview--sync-view-scroll-bars view))))
 
 (defun yunge-reader-webview--queue-view-target (view target)
   "Queue one transient EPUB TARGET until VIEW's surface is ready."
@@ -748,6 +827,7 @@ Unless QUIET is non-nil, notify the logical view's owner."
          (setf (yunge-reader-webview--view-publication-ready view) t)
          (yunge-reader-webview--set-view-selection view nil)
          (yunge-reader-webview--sync-view-style view)
+         (yunge-reader-webview--sync-view-scroll-bars view)
          (yunge-reader-webview--store-view-outline view message)
          (yunge-reader-webview--dispatch-pending-target view)
          (yunge-reader-webview--set-buffer-message
@@ -774,6 +854,15 @@ Unless QUIET is non-nil, notify the logical view's owner."
          (when-let* ((view (gethash id yunge-reader-webview--views)))
            (setf (yunge-reader-webview--view-surface-style view) nil))
          (display-warning 'yunge-reader detail :warning)))
+      ("scroll-bars-error"
+       (let ((detail (alist-get 'message message)))
+         (unless (stringp detail)
+           (error "Malformed EPUB scroll bar error: %S" message))
+         (when-let* ((view (gethash id yunge-reader-webview--views)))
+           (setf
+            (yunge-reader-webview--view-surface-scroll-bar-mode view)
+            nil))
+         (display-warning 'yunge-reader detail :warning)))
       ("publication-error"
        (let ((detail (alist-get 'message message)))
          (unless (stringp detail)
@@ -781,6 +870,8 @@ Unless QUIET is non-nil, notify the logical view's owner."
          (when-let* ((view (gethash id yunge-reader-webview--views)))
            (setf (yunge-reader-webview--view-publication-ready view) nil
                  (yunge-reader-webview--view-surface-style view) nil
+                 (yunge-reader-webview--view-surface-scroll-bar-mode view)
+                 nil
                  (yunge-reader-webview--view-pending-target view) nil
                  (yunge-reader-webview--view-outline-error view)
                  (list 'error detail))
@@ -1081,6 +1172,7 @@ Without FORCE, request graceful shutdown and enforce a deadline."
           (id (yunge-reader-webview--view-id view)))
       (cond
        ((and window id (eq window current))
+        (yunge-reader-webview--update-scroll-bar-mode view window)
         (setf (yunge-reader-webview--view-requested-bounds view)
               (yunge-reader-webview--window-bounds window))
         (yunge-reader-webview--send-latest-bounds view))
@@ -1155,6 +1247,7 @@ Without FORCE, request graceful shutdown and enforce a deadline."
           (yunge-reader-webview--view-created view) nil
           (yunge-reader-webview--view-publication-ready view) nil
           (yunge-reader-webview--view-surface-style view) nil
+          (yunge-reader-webview--view-surface-scroll-bar-mode view) nil
           (yunge-reader-webview--view-bounds view) nil
           (yunge-reader-webview--view-requested-bounds view) nil
           (yunge-reader-webview--view-bounds-pending view) nil)
@@ -1242,6 +1335,7 @@ Without FORCE, request graceful shutdown and enforce a deadline."
             (yunge-reader-webview--view-destroyed view) t
             (yunge-reader-webview--view-publication-ready view) nil
             (yunge-reader-webview--view-surface-style view) nil
+            (yunge-reader-webview--view-surface-scroll-bar-mode view) nil
             (yunge-reader-webview--view-pending-destroys view) nil)
       (yunge-reader-webview--set-view-selection view nil)
       (yunge-reader-webview--finish-view-destroy view)))
@@ -1266,7 +1360,8 @@ Without FORCE, request graceful shutdown and enforce a deadline."
   "Finish VIEW surface ID's attempt to attach its publication."
   (when (and error-data
              (yunge-reader-webview--surface-current-p view id))
-    (setf (yunge-reader-webview--view-surface-style view) nil))
+    (setf (yunge-reader-webview--view-surface-style view) nil
+          (yunge-reader-webview--view-surface-scroll-bar-mode view) nil))
   (cond
    ((not (yunge-reader-webview--surface-current-p view id)))
    ((and error-data
@@ -1297,14 +1392,17 @@ Without FORCE, request graceful shutdown and enforce a deadline."
       (setf (yunge-reader-webview--view-surface-style view)
             (and (yunge-reader-webview--view-style view)
                  (copy-tree
-                  (yunge-reader-webview--view-style view))))
+                  (yunge-reader-webview--view-style view)))
+            (yunge-reader-webview--view-surface-scroll-bar-mode view)
+            (yunge-reader-webview--view-scroll-bar-mode view))
       (yunge-reader-webview--open-view-publication
        view
        (yunge-reader-webview--view-publication view)
        (apply-partially
         #'yunge-reader-webview--open-complete view id)
        (yunge-reader-webview--view-location view)
-       (yunge-reader-webview--view-style view)))))
+       (yunge-reader-webview--view-style view)
+       (yunge-reader-webview--view-scroll-bar-mode view)))))
 
 (defun yunge-reader-webview--current-ready-view ()
   "Return the current buffer's ready EPUB WebView."
@@ -1317,13 +1415,15 @@ Without FORCE, request graceful shutdown and enforce a deadline."
 
 (defun yunge-reader-webview--attach-shared-publication
     (publication &optional location location-changed-function
-                 selection-changed-function accelerator-function style)
+                 selection-changed-function accelerator-function style
+                 scroll-bar-function)
   "Attach shared PUBLICATION to the current Reader buffer.
 Restore bounded LOCATION when supplied.  Invoke LOCATION-CHANGED-FUNCTION
 with the logical view whenever its renderer reports a stable location.
 Invoke SELECTION-CHANGED-FUNCTION whenever its logical selection changes.
 Invoke ACCELERATOR-FUNCTION with the view and a normalized key when the
-focused native child forwards one.  STYLE is copied into the logical view."
+focused native child forwards one.  STYLE is copied into the logical view.
+SCROLL-BAR-FUNCTION resolves its mode for the owning Emacs window."
   (unless (and (integerp publication) (> publication 0))
     (error "Invalid EPUB publication ID: %S" publication))
   (when location
@@ -1342,6 +1442,10 @@ focused native child forwards one.  STYLE is copied into the logical view."
              (not (functionp accelerator-function)))
     (error "Invalid EPUB accelerator callback: %S"
            accelerator-function))
+  (when (and scroll-bar-function
+             (not (functionp scroll-bar-function)))
+    (error "Invalid EPUB scroll bar callback: %S"
+           scroll-bar-function))
   (when (and yunge-reader-webview--buffer-view
              (not (yunge-reader-webview--view-destroyed
                    yunge-reader-webview--buffer-view)))
@@ -1355,7 +1459,8 @@ focused native child forwards one.  STYLE is copied into the logical view."
           :location (and location (copy-tree location))
           :location-changed-function location-changed-function
           :selection-changed-function selection-changed-function
-          :accelerator-function accelerator-function)))
+          :accelerator-function accelerator-function
+          :scroll-bar-function scroll-bar-function)))
     (setq yunge-reader-webview--buffer-view view)
     (yunge-reader-webview--register-view view)
     view))
@@ -1459,13 +1564,18 @@ focused native child forwards one.  STYLE is copied into the logical view."
               (yunge-reader-webview--view-destroyed view))
     (error "EPUB view already owns a native surface"))
   (unless (yunge-reader-webview--view-destroyed view)
-    (let ((id (cl-incf yunge-reader-webview--next-view-id)))
+    (let ((id (cl-incf yunge-reader-webview--next-view-id))
+          (bar-mode
+           (yunge-reader-webview--resolved-scroll-bar-mode view window)))
       (yunge-reader-webview--set-view-selection view nil)
       (setf (yunge-reader-webview--view-id view) id
             (yunge-reader-webview--view-window view) window
             (yunge-reader-webview--view-created view) nil
             (yunge-reader-webview--view-publication-ready view) nil
             (yunge-reader-webview--view-surface-style view) nil
+            (yunge-reader-webview--view-scroll-bar-mode view)
+            bar-mode
+            (yunge-reader-webview--view-surface-scroll-bar-mode view) nil
             (yunge-reader-webview--view-outline-error view) nil
             (yunge-reader-webview--view-requested-bounds view)
             (yunge-reader-webview--window-bounds window))

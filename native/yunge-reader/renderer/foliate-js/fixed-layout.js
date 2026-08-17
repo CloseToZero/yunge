@@ -55,6 +55,12 @@ export class FixedLayout extends HTMLElement {
             justify-content: center;
             align-items: center;
             overflow: auto;
+        }
+        :host([scroll-bars="hidden"]) {
+            scrollbar-width: none;
+        }
+        :host([scroll-bars="hidden"])::-webkit-scrollbar {
+            display: none;
         }`)
 
         this.#observer.observe(this)

@@ -116,6 +116,18 @@ before its first navigation.  Hiding and recreating a surface therefore keeps
 that view's style, while another view may later diverge independently.
 Fixed-layout EPUBs retain their publisher geometry.
 
+The visual spine-item scroll bar follows the owning Emacs frame by default.
+=yunge-reader-epub-scroll-bar-mode= can instead force it to =hidden= or
+=visible=.  Following Emacs reads the frame's actual vertical scroll bar state
+whenever the logical view is synchronized, so moving a view between frames or
+changing the frame policy does not require reopening the publication.  Hiding
+the bar does not disable wheel, keyboard, or pointer scrolling.
+
+Foliate lays out one EPUB spine item at a time, so a visible native bar reports
+progress within that item and its thumb can change size at chapter boundaries.
+Whole-book progress remains a separate Reader location concern; the chapter
+bar is not presented as a publication-wide position.
+
 The same complete style can be changed on a live logical view without
 reopening its publication or recreating its native child.  A hidden view keeps
 the desired style and supplies it when its next surface opens.  A change made
