@@ -499,7 +499,7 @@
          routed
          (view
           (yunge-reader-webview--make-view
-           :id 8 :window window :buffer buffer
+           :id 8 :window window :buffer buffer :created t
            :accelerator-function
            (lambda (_view key) (push key routed))))
          (yunge-reader-webview--process 'fake-webview-process)
@@ -510,9 +510,12 @@
          focused)
     (puthash 8 view yunge-reader-webview--views)
     (cl-letf
-        (((symbol-function 'yunge-reader-webview--request)
-          (lambda (operation parameters _complete)
-            (push (list operation parameters) requests)))
+        (((symbol-function 'process-live-p)
+          (lambda (_process) t))
+         ((symbol-function 'yunge-reader-webview--request)
+          (lambda (operation parameters complete)
+            (push (list operation parameters) requests)
+            (funcall complete nil nil)))
          ((symbol-function 'select-window)
           (lambda (value &optional _norecord)
             (setq selected value)))
@@ -533,6 +536,69 @@
      (equal (nreverse requests)
             '(("view-focus-parent" ((view . 8)))
               ("view-focus-parent" ((view . 8))))))))
+
+(ert-deftest yunge-reader-webview-selects-the-native-focus-owner ()
+  (let* ((reader-window 'reader-window)
+         (selected 'other-window)
+         (view
+          (yunge-reader-webview--make-view
+           :id 9 :window reader-window))
+         (yunge-reader-webview--process 'fake-webview-process)
+         (yunge-reader-webview--views
+          (make-hash-table :test #'eql)))
+    (puthash 9 view yunge-reader-webview--views)
+    (cl-letf (((symbol-function 'window-live-p)
+               (lambda (window) (eq window reader-window)))
+              ((symbol-function 'selected-window)
+               (lambda () selected))
+              ((symbol-function 'select-window)
+               (lambda (window &optional _norecord)
+                 (setq selected window))))
+      (yunge-reader-webview--handle-event
+       'fake-webview-process
+       '((kind . "event")
+         (event . "focus-gained")
+         (view . 9)))
+      (should (eq selected reader-window))
+      (should (yunge-reader-webview--view-native-focused view))
+      (yunge-reader-webview--handle-event
+       'fake-webview-process
+       '((kind . "event")
+         (event . "focus-lost")
+         (view . 9)))
+      (should-not (yunge-reader-webview--view-native-focused view)))))
+
+(ert-deftest yunge-reader-webview-releases-an-unselected-native-focus ()
+  (let* ((view
+          (yunge-reader-webview--make-view
+           :id 10 :window 'reader-window :created t
+           :native-focused t))
+         (yunge-reader-webview--process 'fake-webview-process)
+         (yunge-reader-webview--views
+          (make-hash-table :test #'eql))
+         (yunge-reader-webview--logical-views
+          (make-hash-table :test #'eq))
+         request)
+    (puthash 10 view yunge-reader-webview--views)
+    (puthash view t yunge-reader-webview--logical-views)
+    (cl-letf (((symbol-function 'selected-window)
+               (lambda () 'other-window))
+              ((symbol-function 'process-live-p)
+               (lambda (_process) t))
+              ((symbol-function 'yunge-reader-webview--request)
+               (lambda (operation parameters complete)
+                 (setq request
+                       (list operation parameters complete)))))
+      (yunge-reader-webview--sync-native-focus)
+      (should
+       (equal (seq-take request 2)
+              '("view-focus-parent" ((view . 10)))))
+      (should
+       (yunge-reader-webview--view-focus-release-pending view))
+      (funcall (nth 2 request) nil nil)
+      (should-not (yunge-reader-webview--view-native-focused view))
+      (should-not
+       (yunge-reader-webview--view-focus-release-pending view)))))
 
 (ert-deftest yunge-reader-webview-routes-keys-to-the-owning-buffer ()
   (let* (routed
@@ -557,6 +623,36 @@
              (view . 9)
              (key . "y")))
           (should (equal routed (list view "y" buffer))))
+      (kill-buffer buffer))))
+
+(ert-deftest yunge-reader-webview-relays-leaders-after-returning-focus ()
+  (let* ((buffer (generate-new-buffer " *webview leader owner*"))
+         (view
+          (yunge-reader-webview--make-view :id 11 :buffer buffer))
+         (yunge-reader-webview--process 'fake-webview-process)
+         (yunge-reader-webview--views
+          (make-hash-table :test #'eql))
+         focused)
+    (unwind-protect
+        (progn
+          (puthash 11 view yunge-reader-webview--views)
+          (cl-letf
+              (((symbol-function
+                 'yunge-reader-webview--focus-owning-window)
+                (lambda (value) (setq focused value))))
+            (dolist (key '("SPC" "M-m"))
+              (setq unread-command-events nil
+                    focused nil)
+              (yunge-reader-webview--handle-event
+               'fake-webview-process
+               `((kind . "event")
+                 (event . "accelerator")
+                 (view . 11)
+                 (key . ,key)))
+              (should (eq focused view))
+              (should
+               (equal unread-command-events
+                      (listify-key-sequence (kbd key)))))))
       (kill-buffer buffer))))
 
 (ert-deftest yunge-reader-webview-rejects-unknown-forwarded-keys ()

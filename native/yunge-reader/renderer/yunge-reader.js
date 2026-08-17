@@ -75,6 +75,7 @@ const readerCharacterKey = event => {
             + '[contenteditable]:not([contenteditable="false"])')) {
         return null
     }
+    if (event.code === 'Space') return 'SPC'
     return ['J', 'K', '+', '-', '=', 'y'].includes(event.key)
         ? event.key : null
 }
@@ -84,6 +85,7 @@ const relayReaderCharacterKey = event => {
     if (!key) return
     event.preventDefault()
     event.stopImmediatePropagation()
+    if (key === 'SPC' && event.repeat) return
     post('accelerator', { key })
 }
 

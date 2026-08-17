@@ -14,14 +14,17 @@ use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
-use webview2_com::AcceleratorKeyPressedEventHandler;
 use webview2_com::Microsoft::Web::WebView2::Win32::{
     COREWEBVIEW2_KEY_EVENT_KIND, COREWEBVIEW2_KEY_EVENT_KIND_KEY_DOWN,
     COREWEBVIEW2_KEY_EVENT_KIND_SYSTEM_KEY_DOWN,
 };
+use webview2_com::{
+    AcceleratorKeyPressedEventHandler, FocusChangedEventHandler,
+};
 use windows::Win32::Foundation::HWND;
 use windows::Win32::UI::Input::KeyboardAndMouse::{
     GetKeyState, VIRTUAL_KEY, VK_CONTROL, VK_MENU, VK_NEXT, VK_PRIOR, VK_SHIFT,
+    VK_SPACE,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     DispatchMessageW, IsWindow, MSG, PM_REMOVE, PeekMessageW, TranslateMessage,
@@ -418,6 +421,8 @@ struct ParentWindow(NonZeroIsize);
 struct NativeView {
     webview: WebView,
     accelerator_token: i64,
+    got_focus_token: i64,
+    lost_focus_token: i64,
     loaded: Arc<AtomicBool>,
     bounds: Bounds,
     visible: bool,
@@ -444,10 +449,11 @@ impl Drop for NativeView {
         // SAFETY: The token was registered on this controller, and all
         // WebView operations run on the service's single UI thread.
         unsafe {
-            let _ = self
-                .webview
-                .controller()
-                .remove_AcceleratorKeyPressed(self.accelerator_token);
+            let controller = self.webview.controller();
+            let _ =
+                controller.remove_AcceleratorKeyPressed(self.accelerator_token);
+            let _ = controller.remove_GotFocus(self.got_focus_token);
+            let _ = controller.remove_LostFocus(self.lost_focus_token);
         }
     }
 }
@@ -1021,11 +1027,18 @@ impl Service {
             params.view,
             self.outgoing_sender.clone(),
         )?;
+        let (got_focus_token, lost_focus_token) = install_focus_handlers(
+            &view,
+            params.view,
+            self.outgoing_sender.clone(),
+        )?;
         self.views.insert(
             params.view,
             NativeView {
                 webview: view,
                 accelerator_token,
+                got_focus_token,
+                lost_focus_token,
                 loaded,
                 bounds,
                 visible: params.visible,
@@ -1704,10 +1717,14 @@ fn routed_key(
     if key == ESCAPE_VIRTUAL_KEY {
         return Some("<escape>");
     }
-    if alt || shift {
+    if shift {
         return None;
     }
+    if alt {
+        return (!control && key == u32::from(b'M')).then_some("M-m");
+    }
     match (key, control) {
+        (key, false) if key == u32::from(VK_SPACE.0) => Some("SPC"),
         (key, true) if key == u32::from(b'G') => Some("C-g"),
         (key, true) if key == u32::from(b'D') => Some("C-d"),
         (key, true) if key == u32::from(b'U') => Some("C-u"),
@@ -1776,6 +1793,63 @@ fn install_accelerator_handler(
             })?;
     }
     Ok(token)
+}
+
+fn focus_event(view: u64, event: &'static str) -> ViewEvent {
+    ViewEvent {
+        kind: "event",
+        event,
+        view,
+        message: None,
+        location: None,
+        outline: None,
+        selection: None,
+        key: None,
+    }
+}
+
+fn install_focus_handlers(
+    webview: &WebView,
+    view: u64,
+    outgoing_sender: Sender<Outgoing>,
+) -> Result<(i64, i64), ServiceError> {
+    let got_sender = outgoing_sender.clone();
+    let got_handler = FocusChangedEventHandler::create(Box::new(
+        move |_controller, _args| {
+            let _ = got_sender
+                .send(Outgoing::Event(focus_event(view, "focus-gained")));
+            Ok(())
+        },
+    ));
+    let lost_handler = FocusChangedEventHandler::create(Box::new(
+        move |_controller, _args| {
+            let _ = outgoing_sender
+                .send(Outgoing::Event(focus_event(view, "focus-lost")));
+            Ok(())
+        },
+    ));
+    let controller = webview.controller();
+    let mut got_token = 0;
+    let mut lost_token = 0;
+    // SAFETY: The controller owns both callbacks until their returned tokens
+    // are removed when `NativeView' is dropped.
+    unsafe {
+        controller
+            .add_GotFocus(&got_handler, &mut got_token)
+            .map_err(|error| {
+                ServiceError::new("view-create-failed", error.to_string())
+            })?;
+        if let Err(error) =
+            controller.add_LostFocus(&lost_handler, &mut lost_token)
+        {
+            let _ = controller.remove_GotFocus(got_token);
+            return Err(ServiceError::new(
+                "view-create-failed",
+                error.to_string(),
+            ));
+        }
+    }
+    Ok((got_token, lost_token))
 }
 
 fn response(id: u64, result: Result<Value, ServiceError>) -> Response {
@@ -1972,7 +2046,10 @@ fn renderer_event(
                 return None;
             }
             let key = message.key.filter(|key| {
-                matches!(key.as_str(), "J" | "K" | "+" | "-" | "=" | "y")
+                matches!(
+                    key.as_str(),
+                    "J" | "K" | "+" | "-" | "=" | "y" | "SPC"
+                )
             })?;
             ("accelerator", None, None, None, None, Some(key))
         }
@@ -2371,6 +2448,8 @@ mod tests {
             adapter
                 .contains("['J', 'K', '+', '-', '=', 'y'].includes(event.key)")
         );
+        assert!(adapter.contains("event.code === 'Space'"));
+        assert!(adapter.contains("key === 'SPC' && event.repeat"));
         assert!(!adapter.contains("['j', 'k'].includes(event.key)"));
         assert!(adapter.contains("applyReadingStyle(view, style)"));
         assert!(adapter.contains("if (view.isFixedLayout) return"));
@@ -2734,7 +2813,7 @@ mod tests {
         assert!(event.selection.is_none());
         assert!(event.key.is_none());
 
-        for key in ["J", "K", "+", "-", "=", "y"] {
+        for key in ["J", "K", "+", "-", "=", "y", "SPC"] {
             let payload = json!({
                 "protocol": 1,
                 "event": "accelerator",
@@ -3118,6 +3197,16 @@ mod tests {
         assert_eq!(event["view"], 4);
         assert_eq!(event["key"], "<escape>");
         assert!(event.get("id").is_none());
+
+        let focus = serde_json::to_value(Outgoing::Event(focus_event(
+            4,
+            "focus-gained",
+        )))
+        .unwrap();
+        assert_eq!(focus["kind"], "event");
+        assert_eq!(focus["event"], "focus-gained");
+        assert_eq!(focus["view"], 4);
+        assert!(focus.get("key").is_none());
     }
 
     #[test]
@@ -3281,7 +3370,7 @@ mod tests {
     }
 
     #[test]
-    fn native_reader_keys_are_normalized_without_character_keys() {
+    fn native_reader_control_and_leader_keys_are_normalized() {
         assert_eq!(
             routed_key(
                 COREWEBVIEW2_KEY_EVENT_KIND_KEY_DOWN,
@@ -3321,6 +3410,26 @@ mod tests {
                 false,
             ),
             Some("C-u")
+        );
+        assert_eq!(
+            routed_key(
+                COREWEBVIEW2_KEY_EVENT_KIND_KEY_DOWN,
+                u32::from(VK_SPACE.0),
+                false,
+                false,
+                false,
+            ),
+            Some("SPC")
+        );
+        assert_eq!(
+            routed_key(
+                COREWEBVIEW2_KEY_EVENT_KIND_SYSTEM_KEY_DOWN,
+                u32::from(b'M'),
+                false,
+                true,
+                false,
+            ),
+            Some("M-m")
         );
         assert_eq!(
             routed_key(

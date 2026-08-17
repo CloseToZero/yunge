@@ -88,6 +88,8 @@
   window
   buffer
   created
+  native-focused
+  focus-release-pending
   destroyed
   persistent
   owns-publication
@@ -737,15 +739,53 @@ Unless QUIET is non-nil, notify the logical view's owner."
 
 (defun yunge-reader-webview--focus-owning-window (view)
   "Return native focus from VIEW to its owning live Emacs window."
-  (when-let* ((id (yunge-reader-webview--view-id view))
-              ((integerp id)))
-    (yunge-reader-webview--request
-     "view-focus-parent" `((view . ,id))
-     (lambda (_result _error-data))))
+  (yunge-reader-webview--request-parent-focus view)
   (when-let* ((window (yunge-reader-webview--view-window view))
               ((window-live-p window)))
     (select-window window)
     (select-frame-set-input-focus (window-frame window))))
+
+(defun yunge-reader-webview--request-parent-focus (view)
+  "Ask live native VIEW to return keyboard focus to its parent frame."
+  (when (and (integerp (yunge-reader-webview--view-id view))
+             (yunge-reader-webview--view-created view)
+             (not (yunge-reader-webview--view-focus-release-pending view))
+             (process-live-p yunge-reader-webview--process))
+    (let ((id (yunge-reader-webview--view-id view)))
+      (setf (yunge-reader-webview--view-focus-release-pending view) t)
+      (yunge-reader-webview--request
+       "view-focus-parent" `((view . ,id))
+       (lambda (_result error-data)
+         (when (yunge-reader-webview--surface-current-p view id)
+           (setf
+            (yunge-reader-webview--view-focus-release-pending view) nil)
+           (if error-data
+               (display-warning
+                'yunge-reader
+                (error-message-string error-data)
+                :warning)
+             (setf (yunge-reader-webview--view-native-focused view)
+                   nil))))))
+    t))
+
+(defun yunge-reader-webview--record-native-focus (view focused)
+  "Record whether VIEW has native focus and synchronize Emacs selection."
+  (setf (yunge-reader-webview--view-native-focused view) focused
+        (yunge-reader-webview--view-focus-release-pending view) nil)
+  (when (and focused
+             (window-live-p (yunge-reader-webview--view-window view))
+             (not (eq (selected-window)
+                      (yunge-reader-webview--view-window view))))
+    (select-window (yunge-reader-webview--view-window view))))
+
+(defun yunge-reader-webview--relay-owning-key (view key)
+  "Return focus from VIEW and enqueue normalized Emacs KEY."
+  (unless (member key '("SPC" "M-m"))
+    (error "Invalid WebView owning key: %s" key))
+  (yunge-reader-webview--focus-owning-window view)
+  (setq unread-command-events
+        (append (listify-key-sequence (kbd key))
+                unread-command-events)))
 
 (defun yunge-reader-webview--finish-outline-waiters
     (view outline error-data)
@@ -800,18 +840,22 @@ Unless QUIET is non-nil, notify the logical view's owner."
       ("accelerator"
        (let ((key (alist-get 'key message)))
          (unless (member key
-                          '("J" "K" "+" "-" "=" "y" "C-d" "C-u"
-                            "C-g" "<escape>" "<next>" "<prior>"))
+                          '("J" "K" "+" "-" "=" "y" "SPC" "M-m"
+                            "C-d" "C-u" "C-g" "<escape>"
+                            "<next>" "<prior>"))
            (error "Malformed WebView accelerator event: %S" message))
          (when-let* ((view (gethash id yunge-reader-webview--views))
-                     (function
-                      (yunge-reader-webview--view-accelerator-function
-                       view))
                      (buffer (yunge-reader-webview--view-buffer view))
                      ((buffer-live-p buffer)))
            (with-current-buffer buffer
              (condition-case error-data
-                 (funcall function view key)
+                 (if (member key '("SPC" "M-m"))
+                     (yunge-reader-webview--relay-owning-key view key)
+                   (when-let*
+                       ((function
+                         (yunge-reader-webview--view-accelerator-function
+                          view)))
+                     (funcall function view key)))
                (quit nil)
                (error
                 (display-warning
@@ -821,6 +865,12 @@ Unless QUIET is non-nil, notify the logical view's owner."
                  :warning))))
            (when (member key '("C-g" "<escape>"))
              (yunge-reader-webview--focus-owning-window view)))))
+      ("focus-gained"
+       (when-let* ((view (gethash id yunge-reader-webview--views)))
+         (yunge-reader-webview--record-native-focus view t)))
+      ("focus-lost"
+       (when-let* ((view (gethash id yunge-reader-webview--views)))
+         (yunge-reader-webview--record-native-focus view nil)))
       ("publication-ready"
        (when-let* ((view (gethash id yunge-reader-webview--views)))
          (yunge-reader-webview--store-view-location view message t)
@@ -1096,7 +1146,9 @@ Without FORCE, request graceful shutdown and enforce a deadline."
   (add-hook 'window-state-change-functions
             #'yunge-reader-webview--sync-views)
   (add-hook 'window-buffer-change-functions
-            #'yunge-reader-webview--sync-views))
+            #'yunge-reader-webview--sync-views)
+  (add-hook 'window-selection-change-functions
+            #'yunge-reader-webview--sync-native-focus))
 
 (defun yunge-reader-webview--remove-hooks ()
   "Remove native view synchronization hooks."
@@ -1105,7 +1157,9 @@ Without FORCE, request graceful shutdown and enforce a deadline."
   (remove-hook 'window-state-change-functions
                #'yunge-reader-webview--sync-views)
   (remove-hook 'window-buffer-change-functions
-               #'yunge-reader-webview--sync-views))
+               #'yunge-reader-webview--sync-views)
+  (remove-hook 'window-selection-change-functions
+               #'yunge-reader-webview--sync-native-focus))
 
 (defun yunge-reader-webview--register-view (view)
   "Register logical VIEW and synchronize its native surface."
@@ -1197,6 +1251,16 @@ Without FORCE, request graceful shutdown and enforce a deadline."
     (dolist (view views)
       (yunge-reader-webview--sync-view view))))
 
+(defun yunge-reader-webview--sync-native-focus (&rest _ignored)
+  "Release any focused native child whose Emacs window is not selected."
+  (maphash
+   (lambda (view _present)
+     (when (and (yunge-reader-webview--view-native-focused view)
+                (not (eq (selected-window)
+                         (yunge-reader-webview--view-window view))))
+       (yunge-reader-webview--request-parent-focus view)))
+   yunge-reader-webview--logical-views))
+
 (defun yunge-reader-webview--cancel-open-timer (view)
   "Cancel VIEW's renderer readiness timer."
   (when-let* ((timer (yunge-reader-webview--view-open-timer view)))
@@ -1245,6 +1309,8 @@ Without FORCE, request graceful shutdown and enforce a deadline."
     (setf (yunge-reader-webview--view-id view) nil
           (yunge-reader-webview--view-window view) nil
           (yunge-reader-webview--view-created view) nil
+          (yunge-reader-webview--view-native-focused view) nil
+          (yunge-reader-webview--view-focus-release-pending view) nil
           (yunge-reader-webview--view-publication-ready view) nil
           (yunge-reader-webview--view-surface-style view) nil
           (yunge-reader-webview--view-surface-scroll-bar-mode view) nil
@@ -1332,6 +1398,8 @@ Without FORCE, request graceful shutdown and enforce a deadline."
       (setf (yunge-reader-webview--view-id view) nil
             (yunge-reader-webview--view-window view) nil
             (yunge-reader-webview--view-created view) nil
+            (yunge-reader-webview--view-native-focused view) nil
+            (yunge-reader-webview--view-focus-release-pending view) nil
             (yunge-reader-webview--view-destroyed view) t
             (yunge-reader-webview--view-publication-ready view) nil
             (yunge-reader-webview--view-surface-style view) nil
@@ -1522,6 +1590,8 @@ SCROLL-BAR-FUNCTION resolves its mode for the owning Emacs window."
     (setf (yunge-reader-webview--view-id view) nil
           (yunge-reader-webview--view-window view) nil
           (yunge-reader-webview--view-created view) nil
+          (yunge-reader-webview--view-native-focused view) nil
+          (yunge-reader-webview--view-focus-release-pending view) nil
           (yunge-reader-webview--view-requested-bounds view) nil)
     (yunge-reader-webview--set-buffer-message
      view (error-message-string error-data))
@@ -1571,6 +1641,8 @@ SCROLL-BAR-FUNCTION resolves its mode for the owning Emacs window."
       (setf (yunge-reader-webview--view-id view) id
             (yunge-reader-webview--view-window view) window
             (yunge-reader-webview--view-created view) nil
+            (yunge-reader-webview--view-native-focused view) nil
+            (yunge-reader-webview--view-focus-release-pending view) nil
             (yunge-reader-webview--view-publication-ready view) nil
             (yunge-reader-webview--view-surface-style view) nil
             (yunge-reader-webview--view-scroll-bar-mode view)

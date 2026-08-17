@@ -214,6 +214,12 @@ remove the active publication DOM selection, and =view-destroy= removes the
 child.  =view-status= reports whether the built-in page finished loading,
 together with the last accepted bounds and visibility.
 
+The helper emits =focus-gained= and =focus-lost= from WebView2's controller
+events.  Emacs selects the surface's owning window on entry and requests
+=view-focus-parent= when another Emacs window becomes selected.
+=SPC= and =M-m= also return focus before Emacs queues the normalized key, so
+the native child does not need to reproduce Emacs prefix-map state.
+
 Chromium paints EPUB text selection directly inside the current Foliate spine;
 Yunge does not build a second highlight layer.  Once pointer or keyboard
 selection settles, the renderer emits its canonical spine href and two
@@ -290,13 +296,17 @@ write unsolicited events without request IDs:
 {"kind":"event","event":"accelerator","key":"J","view":1}
 {"kind":"event","event":"accelerator","key":"+","view":1}
 {"kind":"event","event":"accelerator","key":"y","view":1}
+{"kind":"event","event":"accelerator","key":"SPC","view":1}
+{"kind":"event","event":"accelerator","key":"M-m","view":1}
+{"kind":"event","event":"focus-gained","view":1}
+{"kind":"event","event":"focus-lost","view":1}
 #+end_src
 
-The helper accepts only =J=, =K=, =+=, =-=, ===, =y=, =C-d=, =C-u=, =C-g=,
-=<escape>=, =<next>=, and =<prior>=.  It never interprets them as commands.
-Emacs resolves each normalized key through the owning EPUB buffer's active
-maps, so Reader, Evil, and user bindings remain authoritative.  After
-=<escape>= or =C-g=, the child returns focus to its owning Emacs window.
+The helper accepts only =J=, =K=, =+=, =-=, ===, =y=, =SPC=, =M-m=, =C-d=,
+=C-u=, =C-g=, =<escape>=, =<next>=, and =<prior>=.  It never interprets them
+as commands.  Emacs resolves reading keys through the owning EPUB buffer's
+active maps.  Leader keys return focus and re-enter Emacs's input loop; after
+=<escape>= or =C-g=, the child also returns focus to its owning Emacs window.
 
 View IDs are independent, so multiple Reader views do not share layout or
 scroll state.  Positions must be nonnegative; dimensions must be positive and

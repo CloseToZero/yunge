@@ -101,6 +101,13 @@ inputs.
 previous screen.  Page Down and Page Up provide the same portable commands,
 including after a mouse click gives the child WebView native focus.  The same
 focused path forwards =+=, =-=, ===, and =y= through the active Emacs keymaps.
+=GotFocus= selects the child surface's owning Emacs window.  Selecting another
+Emacs window asks any focused child to return keyboard focus to its parent, so
+ordinary Emacs bindings resume without an extra click.
+Pressing =SPC= or =M-m= in a focused child also returns native focus first,
+then queues the key through Emacs itself.  Global and local leader sequences
+therefore continue through the ordinary active maps instead of being copied
+into the renderer.
 =o= displays the bounded EPUB 3 navigation or EPUB 2 NCX outline through the
 same persistent per-view outline UI used by fixed-layout documents.
 
@@ -667,12 +674,15 @@ from the renderer application origin.
 
 WebView2 forwards =ESC=, =C-g=, =C-d/C-u=, and Page Down or Page Up through
 its native accelerator event.  A bounded renderer listener forwards =J/K=,
-=+=, =-=, ===, and =y= because WebView2 does not classify character keys as
-accelerators.  Both paths emit only normalized key events; they never choose
-or execute commands.  Emacs resolves each key through the owning EPUB buffer's
-active maps, preserving Reader, Evil, and user bindings while native focus
-remains in the child.  =ESC= and =C-g= then return native focus to the parent,
-select the owning Emacs window, and focus its frame.
+=+=, =-=, ===, =y=, and a =SPC= fallback because WebView2 does not classify
+character keys uniformly as accelerators.  Both paths emit only normalized key
+events; they never choose or execute commands.  Emacs resolves reading keys
+through the owning EPUB buffer's active maps.  Leader keys first restore parent
+focus and enter Emacs's ordinary input loop.  =ESC= and =C-g= return native
+focus to the parent, select the owning Emacs window, and focus its frame.
+WebView2 =GotFocus= and =LostFocus= events keep this native state synchronized
+with the owning logical view; an Emacs window-selection change releases a
+focused child when its owner is no longer selected.
 
 =M-x yunge-reader-webview-stop= requests graceful shutdown and then enforces a
 deadline; a prefix argument terminates it immediately.  Emacs exit also ends
