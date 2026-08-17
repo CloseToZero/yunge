@@ -414,6 +414,7 @@ const protectBook = book => {
 const closeCurrent = () => {
     if (!current) return
     if (current.locationTimer) clearTimeout(current.locationTimer)
+    current.pendingNavigation = null
     if (current.styleFrame !== null) {
         cancelAnimationFrame(current.styleFrame)
     }
@@ -888,7 +889,8 @@ const open = async ({
             opening: true,
             commandNavigation: false,
             userMovementDeadline: 0,
-            navigation: Promise.resolve(),
+            pendingNavigation: null,
+            navigationRunning: false,
         }
         installLocationActivity(view, session)
         current = session
@@ -947,6 +949,28 @@ const runNavigation = async (session, command, location) => {
     }
 }
 
+const drainNavigation = async session => {
+    if (session.navigationRunning) return
+    session.navigationRunning = true
+    try {
+        while (current === session && session.pendingNavigation) {
+            const navigation = session.pendingNavigation
+            session.pendingNavigation = null
+            await runNavigation(
+                session, navigation.command, navigation.location)
+        }
+    } catch (error) {
+        session.pendingNavigation = null
+        if (current === session) {
+            post('navigation-error', {
+                message: error?.message ?? error,
+            })
+        }
+    } finally {
+        session.navigationRunning = false
+    }
+}
+
 const navigate = ({ view: viewID, command, location }) => {
     try {
         viewID = checkedView(viewID)
@@ -959,15 +983,8 @@ const navigate = ({ view: viewID, command, location }) => {
         location = command === 'go-to'
             ? checkedNavigationTarget(location) : null
         const session = current
-        session.navigation = session.navigation
-            .then(() => runNavigation(session, command, location))
-            .catch(error => {
-                if (current === session) {
-                    post('navigation-error', {
-                        message: error?.message ?? error,
-                    })
-                }
-            })
+        session.pendingNavigation = { command, location }
+        void drainNavigation(session)
     } catch (error) {
         post('navigation-error', { message: error?.message ?? error })
     }

@@ -272,6 +272,11 @@ target.  Href-only targets are transient: the helper and Emacs do not promote
 them to a saved location.  A later =location= event supplies the complete CFI,
 canonical spine href, and fraction that the owning view may persist.
 
+The renderer runs at most one navigation operation and retains only the latest
+pending intent.  Repeated keys can therefore continue moving through the book
+without building an unbounded queue.  A newer direction or =go-to= target
+replaces older pending movement.
+
 =<escape>=, =C-g=, Control reader keys, and non-character reader keys are
 captured by the native WebView2 accelerator event.  Uppercase character reader
 keys, the three zoom keys, and lowercase =y= are relayed by the trusted

@@ -104,6 +104,11 @@ focused path forwards =+=, =-=, ===, and =y= through the active Emacs keymaps.
 =o= displays the bounded EPUB 3 navigation or EPUB 2 NCX outline through the
 same persistent per-view outline UI used by fixed-layout documents.
 
+EPUB navigation has one active operation and one latest pending intent.  This
+keeps a held key moving continuously, while releasing it leaves at most the
+latest requested screen instead of a long queue of stale repeat events.  A
+new direction or an explicit outline target replaces older pending movement.
+
 Each logical EPUB view owns a semantic reading style.  The initial style uses
 a 1.0 font scale, 1.6 line height, 720 CSS-pixel maximum content width, and 7%
 side padding.  The four values are configurable through

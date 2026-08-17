@@ -2376,6 +2376,13 @@ mod tests {
         assert!(adapter.contains("if (view.isFixedLayout) return"));
         assert!(adapter.contains("collapseCFI(relocation.cfi)"));
         assert!(adapter.contains("session.commandNavigation"));
+        assert!(adapter.contains("pendingNavigation"));
+        assert!(adapter.contains("navigationRunning"));
+        assert!(
+            adapter
+                .contains("session.pendingNavigation = { command, location }")
+        );
+        assert!(!adapter.contains("session.navigation = session.navigation"));
         assert!(adapter.contains("if (session.opening) return"));
         assert!(adapter.contains("view.renderer.addEventListener('relocate'"));
         assert!(adapter.contains("pendingStyle"));
