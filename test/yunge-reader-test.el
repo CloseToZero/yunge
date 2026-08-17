@@ -2325,4 +2325,91 @@
          nil))
       (should (eq yunge-reader-search-result last)))))
 
+(ert-deftest yunge-reader-search-coalesces-navigation-while-loading ()
+  (with-temp-buffer
+    (yunge-reader-mode)
+    (let* ((yunge-reader-drivers nil)
+           completion
+           (requests 0)
+           (first
+            (make-yunge-reader-search-result
+             :start (make-yunge-reader-position :unit 0 :offset 0)
+             :end (make-yunge-reader-position :unit 0 :offset 1)))
+           (last
+            (make-yunge-reader-search-result
+             :start (make-yunge-reader-position :unit 0 :offset 2)
+             :end (make-yunge-reader-position :unit 0 :offset 3)))
+           (driver
+            (yunge-reader-register-driver
+             'coalesced-search-test
+             :match #'ignore :open #'ignore :close #'ignore
+             :request
+             (lambda (_document _operation _arguments complete)
+               (cl-incf requests)
+               (setq completion complete)))))
+      (setq yunge-reader-document
+            (make-yunge-reader-document
+             :file "search.pdf" :driver driver :handle 'handle
+             :layout 'fixed))
+      (let ((inhibit-message t))
+        (yunge-reader-search "x")
+        (yunge-reader-search-next)
+        (yunge-reader-search-next)
+        (yunge-reader-search-previous))
+      (should (= requests 1))
+      (should (eq yunge-reader--search-navigation-intent 'previous))
+      (let ((inhibit-message t))
+        (funcall
+         completion
+         (make-yunge-reader-search-batch
+          :results (list first last) :done t)
+         nil))
+      (should (= requests 1))
+      (should (eq yunge-reader-search-result last))
+      (should-not yunge-reader--search-navigation-intent))))
+
+(ert-deftest yunge-reader-quit-cancels-delayed-search-navigation ()
+  (with-temp-buffer
+    (yunge-reader-mode)
+    (let* ((yunge-reader-drivers nil)
+           completion
+           (requests 0)
+           (result
+            (make-yunge-reader-search-result
+             :start (make-yunge-reader-position :unit 1 :offset 0)
+             :end (make-yunge-reader-position :unit 1 :offset 1)))
+           (driver
+            (yunge-reader-register-driver
+             'cancelled-search-test
+             :match #'ignore :open #'ignore :close #'ignore
+             :request
+             (lambda (_document _operation _arguments complete)
+               (cl-incf requests)
+               (setq completion complete)))))
+      (setq yunge-reader-document
+            (make-yunge-reader-document
+             :file "search.pdf" :driver driver :handle 'handle
+             :layout 'fixed))
+      (let ((inhibit-message t))
+        (yunge-reader-search "x")
+        (yunge-reader-search-next)
+        (yunge-reader-keyboard-quit))
+      (should-not yunge-reader--search-navigation-intent)
+      (should-not yunge-reader-search-highlight-visible)
+      (let ((inhibit-message t))
+        (funcall
+         completion
+         (make-yunge-reader-search-batch
+          :results (list result)
+          :cursor (make-yunge-reader-position :unit 2 :offset 0))
+         nil))
+      (should (= requests 1))
+      (should (equal yunge-reader-search-query "x"))
+      (should (equal yunge-reader-search-results (list result)))
+      (should-not yunge-reader-search-result)
+      (let ((inhibit-message t))
+        (yunge-reader-search-next))
+      (should (eq yunge-reader-search-result result))
+      (should (= requests 1)))))
+
 ;;; yunge-reader-test.el ends here

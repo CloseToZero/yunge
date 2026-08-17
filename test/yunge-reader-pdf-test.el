@@ -124,7 +124,8 @@
            ("r" nil "refresh")))))
 
 (ert-deftest yunge-reader-pdf-scrolls-half-windows-by-pixels ()
-  (let (scrolls updates)
+  (let (scrolls updates
+        (yunge-reader--search-navigation-intent 'next))
     (cl-letf (((symbol-function 'window-text-height)
                (lambda (&rest _arguments) 601))
               ((symbol-function 'selected-window)
@@ -146,7 +147,8 @@
     (should
      (equal (nreverse scrolls)
             '((up 300) (up 300) (down 300))))
-    (should (equal updates '(window window)))))
+    (should (equal updates '(window window)))
+    (should-not yunge-reader--search-navigation-intent)))
 
 (ert-deftest yunge-reader-pdf-scrolls-screen-lines-by-pixels ()
   (let (scrolls updates)

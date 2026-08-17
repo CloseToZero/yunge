@@ -3126,10 +3126,12 @@ when non-nil, is a previously resolved start character position."
   "Update PDF virtualization after WINDOW scrolls."
   (when (and (window-live-p window)
              (eq (window-buffer window) (current-buffer)))
+    (yunge-reader--cancel-search-navigation)
     (yunge-reader-pdf--update-visible-pages window)))
 
 (defun yunge-reader-pdf--set-page (page)
   "Display zero-based PDF PAGE."
+  (yunge-reader--cancel-search-navigation)
   (let ((count (yunge-reader-pdf--page-count)))
     (unless (> count 0)
       (user-error "This PDF has no pages"))
@@ -3149,6 +3151,7 @@ when non-nil, is a previously resolved start character position."
 
 (defun yunge-reader-pdf--scroll-half-window (direction count)
   "Scroll in DIRECTION by half a window COUNT times."
+  (yunge-reader--cancel-search-navigation)
   (let ((function
          (if (eq direction 'up)
              #'pixel-scroll-precision-scroll-up-page
@@ -3175,6 +3178,7 @@ when non-nil, is a previously resolved start character position."
 
 (defun yunge-reader-pdf--scroll-line (direction count)
   "Scroll in DIRECTION by one screen line COUNT times."
+  (yunge-reader--cancel-search-navigation)
   (let ((function
          (if (eq direction 'up)
              #'pixel-scroll-precision-scroll-up-page

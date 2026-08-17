@@ -89,12 +89,16 @@ scrolling behavior."
                   #'yunge-reader-epub--refresh nil t)
         (add-hook 'yunge-reader-selection-change-hook
                   #'yunge-reader-epub--selection-state-changed nil t)
+        (add-hook 'yunge-reader-search-result-hook
+                  #'yunge-reader-epub--search-result-changed nil t)
         (add-hook 'yunge-reader-view-role-change-hook
                   #'yunge-reader-epub--update-header nil t))
     (remove-hook 'yunge-reader-refresh-hook
                  #'yunge-reader-epub--refresh t)
     (remove-hook 'yunge-reader-selection-change-hook
                  #'yunge-reader-epub--selection-state-changed t)
+    (remove-hook 'yunge-reader-search-result-hook
+                 #'yunge-reader-epub--search-result-changed t)
     (remove-hook 'yunge-reader-view-role-change-hook
                  #'yunge-reader-epub--update-header t)
     (kill-local-variable 'yunge-reader-default-scale)
@@ -231,13 +235,15 @@ scrolling behavior."
           (format " %s  EPUB  Font %d%%  %s "
                   role font-percent title))))
 
-(defun yunge-reader-epub--location-changed (view)
+(defun yunge-reader-epub--location-changed (view user)
   "Record the stable location reported by EPUB VIEW."
   (when-let* ((buffer (yunge-reader-webview--view-buffer view))
               ((buffer-live-p buffer)))
     (with-current-buffer buffer
       (when (and yunge-reader-epub-view-mode
                  (eq view yunge-reader-webview--buffer-view))
+        (when user
+          (yunge-reader--cancel-search-navigation))
         (yunge-reader-record-place
          (yunge-reader-webview--view-window view))))))
 
@@ -272,6 +278,30 @@ scrolling behavior."
              yunge-reader-webview--buffer-view)
     (yunge-reader-webview--clear-view-selection
      yunge-reader-webview--buffer-view)))
+
+(defun yunge-reader-epub--search-result-changed ()
+  "Synchronize the current Reader search result with the EPUB surface."
+  (when-let* ((view yunge-reader-webview--buffer-view)
+              ((not (yunge-reader-webview--view-destroyed view))))
+    (let ((selection
+           (and yunge-reader-search-highlight-visible
+                yunge-reader-search-result
+                (yunge-reader-epub--selection-range
+                 (yunge-reader-search-result-start
+                  yunge-reader-search-result)
+                 (yunge-reader-search-result-end
+                  yunge-reader-search-result)))))
+      (if (and yunge-reader-search-highlight-visible
+               yunge-reader-search-result
+               (null selection))
+          (progn
+            (yunge-reader-webview--set-view-search-result view nil)
+            (display-warning
+             'yunge-reader
+             "The EPUB search result has invalid CFI endpoints"
+             :warning))
+        (yunge-reader-webview--set-view-search-result
+         view selection)))))
 
 (defun yunge-reader-epub--font-scale (scale)
   "Return EPUB font SCALE restricted to renderer bounds."
@@ -738,6 +768,7 @@ scrolling behavior."
 
 (defun yunge-reader-epub--navigate (command)
   "Run semantic EPUB navigation COMMAND in the current view."
+  (yunge-reader--cancel-search-navigation)
   (yunge-reader-webview--navigate-view
    (yunge-reader-webview--current-ready-view)
    command #'yunge-reader-epub--restore-complete))

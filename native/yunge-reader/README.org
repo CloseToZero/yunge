@@ -92,6 +92,7 @@ installing or downloading it:
                  "view-destroy","view-events","view-focus",
                  "view-focus-parent","view-info","view-navigate",
                  "view-open-publication","view-search",
+                 "view-search-result",
                  "view-selection-text",
                  "view-scroll-bars","view-status","view-style",
                  "view-visible"],
@@ -197,6 +198,15 @@ to 1 MiB.  Structural items omit =href=.  Paths must remain internal and
 canonical; an optional single fragment is permitted, while schemes, queries,
 absolute paths, traversal, controls, and backslashes are rejected.
 
+Stable relocation is reported separately.  =user= is true only when the
+coalesced location followed direct wheel, pointer, or touch activity:
+
+#+begin_src json
+{"kind":"event","event":"location","view":1,"user":true,
+ "location":{"cfi":"epubcfi(/6/4!/4/2)",
+             "href":"OPS/chapter.xhtml","fraction":0.2}}
+#+end_src
+
 =view-create= accepts a logical =view= ID, a live Emacs frame HWND as
 =parent=, a physical-pixel =bounds= object, and optional =visible=.  The
 current spike loads only its built-in local HTML page.
@@ -294,6 +304,35 @@ accepts at most 512 KiB.  Rust independently validates every field, CFI range,
 result count, cursor advance, error code, and byte bound.
 This operation only discovers results.  Navigation and visible search paint
 remain separate view behavior.
+
+=view-search-result= applies that separate view behavior to one current
+match.  A non-null selection must carry same-spine href, start CFI, and end
+CFI fields.  The renderer verifies that both CFIs resolve into the claimed
+spine, builds one range CFI, navigates through the coalescing view scheduler,
+and paints only that range in Foliate's SVG overlayer.
+
+#+begin_src json
+{"id":6,"op":"view-search-result",
+ "params":{"view":1,"selection":
+   {"href":"OPS/chapter.xhtml",
+    "start":"epubcfi(/6/4!/4/2/1:0)",
+    "end":"epubcfi(/6/4!/4/2/1:7)"},"reveal":true}}
+{"id":6,"ok":true,"result":{"view":1,"selection":true}}
+{"id":7,"op":"view-search-result",
+ "params":{"view":1,"selection":null,"reveal":false}}
+#+end_src
+
+The logical view retains the desired current result while its native surface
+is hidden.  A newly selected result uses =reveal=true= to move before paint.
+A recreated surface uses =reveal=false= after =publication-ready=, restoring
+the overlayer without overriding the independently restored reading place.
+Search paint is independent of the Chromium selection: ESC and C-g clear both
+transient layers while Reader keeps the query and discovered results, and n/N
+shows the current search range again before moving through those results.
+While discovery is outstanding, Reader retains one latest navigation intent
+instead of queuing repeat keys.  A direct reading movement or dismissal drops
+that intent; one in-flight bounded batch may still be cached, but cannot start
+another batch or reveal a result.
 
 Emacs maps the same href and CFI endpoints into Reader's logical selection.
 Focused =y= is a normalized renderer key event that reaches the owning

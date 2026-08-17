@@ -301,6 +301,9 @@ Each entry maps a canonical file name to versioned, printable place data.")
 (defvar-local yunge-reader--search-pending nil
   "Non-nil while one search batch is outstanding.")
 
+(defvar-local yunge-reader--search-navigation-intent nil
+  "Pending search navigation intent: `first', `next', or `previous'.")
+
 (defvar-local yunge-reader--search-generation 0
   "Generation used to reject late reader search completions.")
 
@@ -1429,7 +1432,9 @@ Capture and save this view's stable place before changing the primary view."
     (cl-incf yunge-reader--search-generation)
     (cl-incf yunge-reader--outline-generation)
     (cl-incf yunge-reader--copy-generation)
-    (setq yunge-reader--copy-pending nil)
+    (setq yunge-reader--copy-pending nil
+          yunge-reader--search-pending nil
+          yunge-reader--search-navigation-intent nil)
     (when (buffer-live-p yunge-reader--outline-buffer)
       (let ((outline yunge-reader--outline-buffer))
         (setq yunge-reader--outline-buffer nil)
@@ -1830,20 +1835,88 @@ Render OUTLINE when non-nil; otherwise display STATUS."
        (yunge-reader--search-context result)))
     result))
 
-(defun yunge-reader--schedule-search-request
-    (buffer generation intent)
-  "Schedule BUFFER's next search request for GENERATION and INTENT."
+(defun yunge-reader--schedule-search-navigation (buffer generation)
+  "Resume BUFFER's search navigation for GENERATION asynchronously."
   (run-at-time
    0 nil
    (lambda ()
      (when (buffer-live-p buffer)
        (with-current-buffer buffer
          (when (= generation yunge-reader--search-generation)
-           (yunge-reader--request-search-batch intent)))))))
+           (yunge-reader--drive-search-navigation)))))))
+
+(defun yunge-reader--finish-search-navigation (index)
+  "Visit loaded search result INDEX and finish the pending intent."
+  (setq yunge-reader--search-navigation-intent nil)
+  (yunge-reader--set-search-index index))
+
+(defun yunge-reader--finish-empty-search ()
+  "Finish pending search navigation when no results exist."
+  (setq yunge-reader--search-navigation-intent nil)
+  (message "No matches for: %s" yunge-reader-search-query))
+
+(defun yunge-reader--search-navigation-ready-p ()
+  "Return non-nil when the current intent needs no additional batch."
+  (pcase yunge-reader--search-navigation-intent
+    ('first
+     (or yunge-reader-search-results yunge-reader--search-done))
+    ('next
+     (or yunge-reader--search-done
+         (and (null yunge-reader--search-index)
+              yunge-reader-search-results)
+         (and (natnump yunge-reader--search-index)
+              (< (1+ yunge-reader--search-index)
+                 (length yunge-reader-search-results)))))
+    ('previous
+     (or yunge-reader--search-done
+         (and (natnump yunge-reader--search-index)
+              (> yunge-reader--search-index 0))))))
+
+(defun yunge-reader--drive-search-navigation ()
+  "Fulfill the latest search navigation intent without queuing commands."
+  (unless yunge-reader--search-pending
+    (pcase yunge-reader--search-navigation-intent
+      ('first
+       (cond
+        (yunge-reader-search-results
+         (yunge-reader--finish-search-navigation 0))
+        (yunge-reader--search-done
+         (yunge-reader--finish-empty-search))
+        (t
+         (yunge-reader--request-search-batch))))
+      ('next
+       (cond
+        ((and (natnump yunge-reader--search-index)
+              (< (1+ yunge-reader--search-index)
+                 (length yunge-reader-search-results)))
+         (yunge-reader--finish-search-navigation
+          (1+ yunge-reader--search-index)))
+        ((and (null yunge-reader--search-index)
+              yunge-reader-search-results)
+         (yunge-reader--finish-search-navigation 0))
+        (yunge-reader--search-done
+         (if yunge-reader-search-results
+             (yunge-reader--finish-search-navigation 0)
+           (yunge-reader--finish-empty-search)))
+        (t
+         (yunge-reader--request-search-batch))))
+      ('previous
+       (cond
+        ((and (natnump yunge-reader--search-index)
+              (> yunge-reader--search-index 0))
+         (yunge-reader--finish-search-navigation
+          (1- yunge-reader--search-index)))
+        (yunge-reader--search-done
+         (if yunge-reader-search-results
+             (yunge-reader--finish-search-navigation
+              (1- (length yunge-reader-search-results)))
+           (yunge-reader--finish-empty-search)))
+        (t
+         (yunge-reader--request-search-batch)))))))
 
 (defun yunge-reader--complete-search-batch
-    (buffer document generation intent old-count old-cursor value error-data)
-  "Complete one search request in BUFFER for DOCUMENT and GENERATION."
+    (buffer document generation old-cursor value error-data)
+  "Complete BUFFER's search request for DOCUMENT and GENERATION."
   (when (buffer-live-p buffer)
     (with-current-buffer buffer
       (when (and (= generation yunge-reader--search-generation)
@@ -1851,54 +1924,46 @@ Render OUTLINE when non-nil; otherwise display STATUS."
         (setq yunge-reader--search-pending nil)
         (cond
          (error-data
+          (setq yunge-reader--search-navigation-intent nil)
           (display-warning
            'yunge-reader
            (format "Could not search document: %s"
                    (error-message-string error-data))
            :warning))
          ((not (yunge-reader--search-batch-valid-p value))
+          (setq yunge-reader--search-navigation-intent nil)
           (display-warning
            'yunge-reader
            "Reader driver returned an invalid search batch"
            :warning))
          (t
-          (let* ((new-results
-                  (yunge-reader-search-batch-results value))
-                 (cursor (yunge-reader-search-batch-cursor value))
-                 (done (yunge-reader-search-batch-done value)))
+          (let ((new-results
+                 (yunge-reader-search-batch-results value))
+                (cursor (yunge-reader-search-batch-cursor value))
+                (done (yunge-reader-search-batch-done value)))
             (setq yunge-reader-search-results
                   (append yunge-reader-search-results new-results)
                   yunge-reader--search-cursor cursor
                   yunge-reader--search-done done)
             (cond
-             ((and (memq intent '(first next)) new-results)
-              (yunge-reader--set-search-index old-count))
-             ((and (eq intent 'last) done
-                   yunge-reader-search-results)
-              (yunge-reader--set-search-index
-               (1- (length yunge-reader-search-results))))
-             ((and done yunge-reader-search-results
-                   (eq intent 'next))
-              (yunge-reader--set-search-index 0))
-             (done
-              (message "No matches for: %s"
-                       yunge-reader-search-query))
-             ((equal cursor old-cursor)
+             ((and (not done) (equal cursor old-cursor))
+              (setq yunge-reader--search-navigation-intent nil)
               (display-warning
                'yunge-reader
                "Reader search cursor did not advance"
                :warning))
-             (t
-              (yunge-reader--schedule-search-request
-               buffer generation intent))))))))))
+             (yunge-reader--search-navigation-intent
+              (if (yunge-reader--search-navigation-ready-p)
+                  (yunge-reader--drive-search-navigation)
+                (yunge-reader--schedule-search-navigation
+                 buffer generation)))))))))))
 
-(defun yunge-reader--request-search-batch (intent)
-  "Request the next search batch needed for INTENT."
+(defun yunge-reader--request-search-batch ()
+  "Request the next batch needed by the current search intent."
   (unless yunge-reader--search-pending
     (let ((buffer (current-buffer))
           (document yunge-reader-document)
           (generation yunge-reader--search-generation)
-          (old-count (length yunge-reader-search-results))
           (old-cursor yunge-reader--search-cursor))
       (setq yunge-reader--search-pending t)
       (yunge-reader-request
@@ -1910,8 +1975,33 @@ Render OUTLINE when non-nil; otherwise display STATUS."
              :page-limit yunge-reader-search-page-limit)
        (lambda (value error-data)
          (yunge-reader--complete-search-batch
-          buffer document generation intent old-count old-cursor
-          value error-data))))))
+          buffer document generation old-cursor value error-data))))))
+
+(defun yunge-reader--search-loading-message (intent)
+  "Describe the outstanding search for navigation INTENT."
+  (message
+   (pcase intent
+     ('previous "Searching to previous match...")
+     (_ "Searching forward..."))))
+
+(defun yunge-reader--navigate-search (intent)
+  "Request search navigation INTENT without accumulating commands."
+  (unless yunge-reader-search-query
+    (user-error "There is no active document search"))
+  (let ((was-visible yunge-reader-search-highlight-visible))
+    (setq yunge-reader-search-highlight-visible t
+          yunge-reader--search-navigation-intent intent)
+    (unless was-visible
+      (run-hooks 'yunge-reader-search-result-hook)))
+  (if yunge-reader--search-pending
+      (yunge-reader--search-loading-message intent)
+    (yunge-reader--drive-search-navigation)))
+
+(defun yunge-reader--cancel-search-navigation ()
+  "Cancel one delayed search jump without discarding discovered results."
+  (when yunge-reader--search-navigation-intent
+    (setq yunge-reader--search-navigation-intent nil)
+    t))
 
 (defun yunge-reader-search (query)
   "Search the current document for literal QUERY.
@@ -1934,53 +2024,22 @@ Case is ignored unless QUERY contains an uppercase character."
         yunge-reader--search-index nil
         yunge-reader--search-cursor nil
         yunge-reader--search-done nil
-        yunge-reader--search-pending nil)
+        yunge-reader--search-pending nil
+        yunge-reader--search-navigation-intent 'first)
   (run-hooks 'yunge-reader-search-result-hook)
   (message "Searching for: %s" query)
-  (yunge-reader--request-search-batch 'first))
+  (yunge-reader--drive-search-navigation))
 
 (defun yunge-reader-search-next ()
   "Visit the next match for the active document search."
   (interactive)
-  (unless yunge-reader-search-query
-    (user-error "There is no active document search"))
-  (when yunge-reader--search-pending
-    (user-error "Document search is still loading"))
-  (setq yunge-reader-search-highlight-visible t)
-  (cond
-   ((and (natnump yunge-reader--search-index)
-         (< (1+ yunge-reader--search-index)
-            (length yunge-reader-search-results)))
-    (yunge-reader--set-search-index
-     (1+ yunge-reader--search-index)))
-   (yunge-reader--search-done
-    (if yunge-reader-search-results
-        (yunge-reader--set-search-index 0)
-      (message "No matches for: %s" yunge-reader-search-query)))
-   (t
-    (yunge-reader--request-search-batch 'next))))
+  (yunge-reader--navigate-search 'next))
 
 (defun yunge-reader-search-previous ()
   "Visit the previous match for the active document search.
 At the first loaded match, finish the bounded search before wrapping."
   (interactive)
-  (unless yunge-reader-search-query
-    (user-error "There is no active document search"))
-  (when yunge-reader--search-pending
-    (user-error "Document search is still loading"))
-  (setq yunge-reader-search-highlight-visible t)
-  (cond
-   ((and (natnump yunge-reader--search-index)
-         (> yunge-reader--search-index 0))
-    (yunge-reader--set-search-index
-     (1- yunge-reader--search-index)))
-   (yunge-reader--search-done
-    (if yunge-reader-search-results
-        (yunge-reader--set-search-index
-         (1- (length yunge-reader-search-results)))
-      (message "No matches for: %s" yunge-reader-search-query)))
-   (t
-    (yunge-reader--request-search-batch 'last))))
+  (yunge-reader--navigate-search 'previous))
 
 (defun yunge-reader-clear-search ()
   "Clear the active document search and its view highlight."
@@ -1993,7 +2052,8 @@ At the first loaded match, finish the bounded search before wrapping."
         yunge-reader--search-index nil
         yunge-reader--search-cursor nil
         yunge-reader--search-done nil
-        yunge-reader--search-pending nil)
+        yunge-reader--search-pending nil
+        yunge-reader--search-navigation-intent nil)
   (run-hooks 'yunge-reader-search-result-hook)
   (message "Cleared document search"))
 
@@ -2114,14 +2174,18 @@ Return non-nil when at least one transient highlight was active."
 (defun yunge-reader-keyboard-quit ()
   "Dismiss Reader highlights or perform the ordinary keyboard quit."
   (interactive)
-  (unless (yunge-reader--clear-transient-highlights)
-    (keyboard-quit)))
+  (let ((cancelled (yunge-reader--cancel-search-navigation))
+        (cleared (yunge-reader--clear-transient-highlights)))
+    (unless (or cancelled cleared)
+      (keyboard-quit))))
 
 (defun yunge-reader-escape ()
   "Clear Reader highlights or perform the ordinary escape action."
   (interactive)
-  (unless (yunge-reader--clear-transient-highlights)
-    (keyboard-escape-quit)))
+  (let ((cancelled (yunge-reader--cancel-search-navigation))
+        (cleared (yunge-reader--clear-transient-highlights)))
+    (unless (or cancelled cleared)
+      (keyboard-escape-quit))))
 
 (defun yunge-reader--selection-batch-valid-p (batch)
   "Return non-nil when BATCH follows the selection text contract."

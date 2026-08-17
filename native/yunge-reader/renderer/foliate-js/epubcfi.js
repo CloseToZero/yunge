@@ -136,7 +136,7 @@ export const collapse = (x, toEnd) => typeof x === 'string'
     : x.parent ? concatArrays(x.parent, x[toEnd ? 'end' : 'start']) : x
 
 // create range CFI from two CFIs
-const buildRange = (from, to) => {
+export const fromRangeEndpoints = (from, to) => {
     if (typeof from === 'string') from = parse(from)
     if (typeof to === 'string') to = parse(to)
     from = collapse(from)
@@ -290,7 +290,7 @@ export const fromRange = (range, filter) => {
     const start = nodeToParts(startContainer, startOffset, filter)
     if (range.collapsed) return toString([start])
     const end = nodeToParts(endContainer, endOffset, filter)
-    return buildRange([start], [end])
+    return fromRangeEndpoints([start], [end])
 }
 
 export const toRange = (doc, parts, filter) => {
@@ -345,5 +345,7 @@ export const fromCalibrePos = pos => {
 }
 export const fromCalibreHighlight = ({ spine_index, start_cfi, end_cfi }) => {
     const pre = fake.fromIndex(spine_index) + '!'
-    return buildRange(pre + start_cfi.slice(2), pre + end_cfi.slice(2))
+    return fromRangeEndpoints(
+        pre + start_cfi.slice(2), pre + end_cfi.slice(2),
+    )
 }

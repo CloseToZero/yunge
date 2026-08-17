@@ -60,6 +60,13 @@ same search and shows its highlight again.  With no Reader highlight to
 dismiss, the keys retain their ordinary quit or force-normal behavior.
 =M-x yunge-reader-clear-search= ends the search session completely.
 
+Search discovery never blocks the Emacs command loop.  If the next needed
+batch is still loading, repeated =n/N= stores only the latest direction rather
+than queuing key events.  =C-g=, =ESC=, or an explicit reading movement cancels
+that delayed jump while retaining the query and every result already found.
+The current native batch may finish and enter the cache, but it cannot continue
+scanning or move the view after cancellation.
+
 =M-x yunge-reader-new-view= creates an independent buffer at the current
 stable location and zoom while sharing the open document resource.  It refuses
 to create a view before the current location is stable, so an incomplete view
@@ -185,13 +192,23 @@ Evil maps, dismiss the same Reader transient highlights as their ordinary
 buffer bindings, clear the DOM selection through the selection-change hook,
 and return focus to that view's Emacs window.
 
-EPUB literal search discovery now follows Reader's bounded batch contract.
-Each native request scans at most a configured number of spine items and
-returns stable href and CFI ranges with compact context.  Its cursor is a
-transient match ordinal within one spine; it is never saved as a reading
-place.  Discovery does not create Foliate annotations, so result navigation,
-visible search paint, and their dismissal lifecycle remain the next slice.
-Interactive width and line-height controls also remain later work.
+EPUB literal search follows Reader's bounded batch contract.  Each native
+request scans at most a configured number of spine items and returns stable
+href and CFI ranges with compact context.  Its cursor is a transient match
+ordinal within one spine; it is never saved as a reading place.
+
+Discovery itself creates no annotations.  Reader sends only its current match
+back to the renderer, which verifies the same-spine endpoints, navigates via
+the coalescing view scheduler, and paints one SVG-overlayer range.  The
+logical view retains that desired range across native surface recreation.
+Recreation restores only the overlayer and does not override the reading
+place already restored for that view.
+Chromium selection remains a separate transient layer: ESC and C-g hide both
+without ending the search, while n/N restores and moves the search highlight.
+Direct wheel, pointer, and touch relocation is reported as user activity, so
+it also cancels a delayed search jump before the completed batch can replace
+the user's new reading position.
+Interactive width and line-height controls remain later work.
 
 * Library boundary
 
@@ -512,6 +529,10 @@ cannot publish results, and each native batch is short enough to let render
 requests run between batches.  The search prompt starts empty instead of
 preselecting the active query; ordinary minibuffer history still recalls
 earlier queries.
+
+Repeat navigation is a one-slot intent rather than an input queue.  While a
+batch is outstanding, the last =n= or =N= wins.  Reader stays responsive, and
+manual navigation or transient-highlight dismissal drops the pending jump.
 
 The PDF adapter requests text geometry only for ordinary visible prefetch or a
 target search page.  It projects the first drawable match character into

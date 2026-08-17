@@ -1,6 +1,9 @@
 import './foliate-js/view.js'
 import { EPUB } from './foliate-js/epub.js'
-import { collapse as collapseCFI } from './foliate-js/epubcfi.js'
+import {
+    collapse as collapseCFI,
+    fromRangeEndpoints,
+} from './foliate-js/epubcfi.js'
 import { searchMatcher } from './foliate-js/search.js'
 import { textWalker } from './foliate-js/text-walker.js'
 
@@ -33,6 +36,7 @@ const MAX_SEARCH_MATCH_LIMIT = 200
 const MAX_SEARCH_SECTION_LIMIT = 64
 const MAX_SEARCH_CURSOR_OFFSET = 1024 * 1024
 const MAX_SEARCH_RESULT_BYTES = 384 * 1024
+const SEARCH_HIGHLIGHT_COLOR = '#ff7800'
 const MAX_MEDIA_CANDIDATES = 256
 const MAX_TEXT_NODES = 4096
 const MAX_TEXT_SAMPLE = 4096
@@ -68,7 +72,7 @@ let generation = 0
 let current = null
 
 const post = (event, {
-    message, location, outline, selection, key,
+    message, location, outline, selection, key, user,
 } = {}) => {
     const payload = { protocol: 1, event }
     if (message) payload.message = String(message).slice(0, 4096)
@@ -76,6 +80,7 @@ const post = (event, {
     if (outline) payload.outline = outline
     if (selection !== undefined) payload.selection = selection
     if (key) payload.key = key
+    if (typeof user === 'boolean') payload.user = user
     window.ipc.postMessage(JSON.stringify(payload))
 }
 
@@ -404,6 +409,20 @@ const checkedSearchRequest = value => {
     }
 }
 
+const checkedSearchResultRequest = value => {
+    if (!value || typeof value !== 'object' || Array.isArray(value)
+        || Object.keys(value).sort().join() !== 'reveal,selection,view') {
+        throw new Error('Invalid EPUB search result request')
+    }
+    const viewID = checkedView(value.view)
+    const selection = value.selection === null
+        ? null : checkedSelection(value.selection)
+    if (typeof value.reveal !== 'boolean') {
+        throw new Error('Invalid EPUB search result reveal flag')
+    }
+    return { viewID, selection, reveal: value.reveal }
+}
+
 const checkedNavigationTarget = value => {
     if (!value || typeof value !== 'object' || Array.isArray(value)) {
         throw new Error('Invalid EPUB navigation target')
@@ -720,7 +739,9 @@ const flushLocation = session => {
     if (current !== session || !session.location) return
     if (session.locationTimer) clearTimeout(session.locationTimer)
     session.locationTimer = null
-    post('location', { location: session.location })
+    const user = session.locationUser
+    session.locationUser = false
+    post('location', { location: session.location, user })
 }
 
 const queueLocation = (session, relocation) => {
@@ -736,6 +757,7 @@ const queueLocation = (session, relocation) => {
         && !(reason === 'scroll' && userMovement)) return
     try {
         session.location = locatorFromRelocation(session.book, relocation)
+        session.locationUser ||= userMovement
     } catch (error) {
         console.warn(error)
         return
@@ -1109,6 +1131,7 @@ const open = async ({
             book,
             view,
             location: null,
+            locationUser: false,
             locationTimer: null,
             selection: null,
             selectionDocument: null,
@@ -1121,6 +1144,7 @@ const open = async ({
             userMovementDeadline: 0,
             pendingNavigation: null,
             navigationRunning: false,
+            searchResultRevision: 0,
         }
         installLocationActivity(view, session)
         current = session
@@ -1157,8 +1181,25 @@ const open = async ({
     }
 }
 
-const runNavigation = async (session, command, location) => {
+const searchResultCFI = (session, selection) => {
+    const start = session.view.resolveNavigation(selection.start)
+    const end = session.view.resolveNavigation(selection.end)
+    const index = start?.index
+    if (!Number.isInteger(index) || end?.index !== index
+        || session.book.sections[index]?.id !== selection.href) {
+        throw new Error('EPUB search result is not in its spine')
+    }
+    return fromRangeEndpoints(selection.start, selection.end)
+}
+
+const paintSearchResult = (session, cfi) =>
+    session.view.setSearchResult(cfi, {
+        drawOptions: { color: SEARCH_HIGHLIGHT_COLOR },
+    })
+
+const runNavigation = async (session, navigation) => {
     if (current !== session) return
+    const { command, location, selection, revision } = navigation
     session.commandNavigation = true
     try {
         switch (command) {
@@ -1171,6 +1212,15 @@ const runNavigation = async (session, command, location) => {
         case 'go-to':
             await showLocation(session.view, location)
             break
+        case 'show-search-result': {
+            const cfi = searchResultCFI(session, selection)
+            await showTarget(session.view, cfi)
+            if (current === session
+                && revision === session.searchResultRevision) {
+                await paintSearchResult(session, cfi)
+            }
+            break
+        }
         default:
             throw new Error(`Unsupported EPUB navigation command: ${command}`)
         }
@@ -1186,8 +1236,7 @@ const drainNavigation = async session => {
         while (current === session && session.pendingNavigation) {
             const navigation = session.pendingNavigation
             session.pendingNavigation = null
-            await runNavigation(
-                session, navigation.command, navigation.location)
+            await runNavigation(session, navigation)
         }
     } catch (error) {
         session.pendingNavigation = null
@@ -1220,7 +1269,42 @@ const navigate = ({ view: viewID, command, location }) => {
     }
 }
 
+const setSearchResult = request => {
+    try {
+        const { viewID, selection, reveal } =
+            checkedSearchResultRequest(request)
+        if (!current || current.viewID !== viewID) {
+            throw new Error('EPUB view is not open')
+        }
+        const session = current
+        const revision = ++session.searchResultRevision
+        session.view.setSearchResult(null)
+        if (session.pendingNavigation?.command === 'show-search-result') {
+            session.pendingNavigation = null
+        }
+        if (selection && reveal) {
+            session.pendingNavigation = {
+                command: 'show-search-result', selection, revision,
+            }
+            void drainNavigation(session)
+        } else if (selection) {
+            const cfi = searchResultCFI(session, selection)
+            void Promise.resolve(paintSearchResult(session, cfi))
+                .catch(error => {
+                    if (current === session
+                        && revision === session.searchResultRevision) {
+                        post('navigation-error', {
+                            message: error?.message ?? error,
+                        })
+                    }
+                })
+        }
+    } catch (error) {
+        post('navigation-error', { message: error?.message ?? error })
+    }
+}
+
 globalThis.yungeReader = Object.freeze({
     clearSelection, navigate, open, search, selectionText, setScrollBars,
-    setStyle,
+    setSearchResult, setStyle,
 })

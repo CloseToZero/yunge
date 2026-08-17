@@ -581,6 +581,17 @@ export class View extends HTMLElement {
             for (const item of list) this.deleteAnnotation(item)
         this.#searchResults.clear()
     }
+    setSearchResult(cfi, options = {}) {
+        this.clearSearch()
+        if (!cfi) return
+        const resolved = this.resolveNavigation(cfi)
+        if (!resolved) throw new Error('Could not resolve search result')
+        this.#searchDraw = options.draw ?? Overlayer.highlight
+        this.#searchDrawOptions = options.drawOptions
+        const item = { value: SEARCH_PREFIX + cfi }
+        this.#searchResults.set(resolved.index, [item])
+        return this.addAnnotation(item)
+    }
     async initTTS(granularity = 'word', highlight) {
         const doc = this.renderer.getContents()[0].doc
         if (this.tts && this.tts.doc === doc) return

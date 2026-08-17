@@ -105,7 +105,7 @@ const RESOURCE_CSP: &str = concat!(
     "base-uri 'none'; ",
     "form-action 'none'"
 );
-const CAPABILITIES: [&str; 20] = [
+const CAPABILITIES: [&str; 21] = [
     "publication-close",
     "publication-info",
     "publication-open",
@@ -121,6 +121,7 @@ const CAPABILITIES: [&str; 20] = [
     "view-navigate",
     "view-open-publication",
     "view-search",
+    "view-search-result",
     "view-selection-text",
     "view-scroll-bars",
     "view-status",
@@ -178,6 +179,8 @@ struct ViewEvent {
     selection: Option<Option<EpubSelection>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     key: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    user: Option<bool>,
 }
 
 #[derive(Debug)]
@@ -269,6 +272,14 @@ struct ViewSearchParams {
     cursor: Option<EpubSearchCursor>,
     match_limit: u32,
     section_limit: u32,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ViewSearchResultParams {
+    view: u64,
+    selection: Value,
+    reveal: bool,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
@@ -428,6 +439,8 @@ struct RendererMessage {
     selection: Option<Option<EpubSelection>>,
     #[serde(default)]
     key: Option<String>,
+    #[serde(default)]
+    user: Option<bool>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1342,6 +1355,37 @@ impl Service {
         Ok(())
     }
 
+    fn set_search_result(
+        &mut self,
+        params: Value,
+    ) -> Result<Value, ServiceError> {
+        let params: ViewSearchResultParams = Self::parse(params)?;
+        let selection = if params.selection.is_null() {
+            None
+        } else {
+            Some(Self::parse::<EpubSelection>(params.selection)?.validate()?)
+        };
+        let view = self.view(params.view)?;
+        if view.publication.is_none() {
+            return Err(ServiceError::new(
+                "view-has-no-publication",
+                format!("view {} has no attached publication", params.view),
+            ));
+        }
+        let script = publication_search_result_script(
+            params.view,
+            selection.as_ref(),
+            params.reveal,
+        );
+        view.webview.evaluate_script(&script).map_err(|error| {
+            ServiceError::new("view-update-failed", error.to_string())
+        })?;
+        Ok(json!({
+            "view": params.view,
+            "selection": selection.is_some(),
+        }))
+    }
+
     fn complete_search(
         &mut self,
         callback: RendererSearchCallback,
@@ -1570,6 +1614,7 @@ impl Service {
             "view-bounds" => self.set_bounds(request.params),
             "view-clear-selection" => self.clear_selection(request.params),
             "view-navigate" => self.navigate_view(request.params),
+            "view-search-result" => self.set_search_result(request.params),
             "view-open-publication" => {
                 self.open_view_publication(request.params)
             }
@@ -2015,6 +2060,7 @@ fn install_accelerator_handler(
                         outline: None,
                         selection: None,
                         key: Some(key.to_owned()),
+                        user: None,
                     }));
                 }
             }
@@ -2045,6 +2091,7 @@ fn focus_event(view: u64, event: &'static str) -> ViewEvent {
         outline: None,
         selection: None,
         key: None,
+        user: None,
     }
 }
 
@@ -2414,6 +2461,15 @@ fn renderer_event(
     {
         return None;
     }
+    let user = match &message.event {
+        RendererEvent::Location => Some(message.user?),
+        _ => {
+            if message.user.is_some() {
+                return None;
+            }
+            None
+        }
+    };
     let (event, detail, location, outline, selection, key) = match message.event
     {
         RendererEvent::Accelerator => {
@@ -2530,6 +2586,7 @@ fn renderer_event(
         outline,
         selection,
         key,
+        user,
     })
 }
 
@@ -2607,6 +2664,20 @@ fn publication_search_script(id: u64, params: &ViewSearchParams) -> String {
     let payload = serde_json::to_string(&payload)
         .expect("search payload remains serializable");
     format!("globalThis.yungeReader.search({payload});")
+}
+
+fn publication_search_result_script(
+    view: u64,
+    selection: Option<&EpubSelection>,
+    reveal: bool,
+) -> String {
+    let payload = serde_json::to_string(&json!({
+        "view": view,
+        "selection": selection,
+        "reveal": reveal,
+    }))
+    .expect("search result payload is serializable");
+    format!("void globalThis.yungeReader.setSearchResult({payload});")
 }
 
 fn write_message(
@@ -2875,12 +2946,23 @@ mod tests {
         assert!(adapter.contains("Array.from(text)"));
         assert!(adapter.contains("searchMatcher(textWalker"));
         assert!(adapter.contains("search, selectionText"));
+        assert!(adapter.contains("fromRangeEndpoints("));
+        assert!(adapter.contains("searchResultRevision"));
+        assert!(adapter.contains("setSearchResult, setStyle"));
         let search =
             std::str::from_utf8(app_asset("foliate-js/search.js").unwrap().1)
                 .unwrap();
         assert!(search.contains("startIndex === endIndex"));
         assert!(search.contains("strs.slice(startIndex + 1, endIndex)"));
         assert!(search.contains("while (sum < end)"));
+        let cfi_asset = app_asset("foliate-js/epubcfi.js").unwrap().1;
+        let cfi = std::str::from_utf8(cfi_asset).unwrap();
+        assert!(cfi.contains("export const fromRangeEndpoints"));
+        let view =
+            std::str::from_utf8(app_asset("foliate-js/view.js").unwrap().1)
+                .unwrap();
+        assert!(view.contains("setSearchResult(cfi, options = {})"));
+        assert!(view.contains("options.draw ?? Overlayer.highlight"));
         for path in ["foliate-js/paginator.js", "foliate-js/fixed-layout.js"] {
             let source =
                 std::str::from_utf8(app_asset(path).unwrap().1).unwrap();
@@ -3143,7 +3225,8 @@ mod tests {
             .uri(APP_URL)
             .body(
                 concat!(
-                    r#"{"protocol":1,"event":"location","location":{"#,
+                    r#"{"protocol":1,"event":"location","user":true,"#,
+                    r#""location":{"#,
                     r#""cfi":"epubcfi(/6/6)","#,
                     r#""href":"OPS/next.xhtml"}}"#,
                 )
@@ -3152,6 +3235,7 @@ mod tests {
             .unwrap();
         let event = renderer_event(7, &location).unwrap();
         assert_eq!(event.event, "location");
+        assert_eq!(event.user, Some(true));
         assert_eq!(event.location.unwrap().fraction, None);
         assert!(event.outline.is_none());
         assert!(event.selection.is_none());
@@ -3284,6 +3368,17 @@ mod tests {
                 .body(
                     r#"{"protocol":1,"event":"accelerator","key":"C-d"}"#
                         .into(),
+                )
+                .unwrap(),
+            HttpRequest::builder()
+                .uri(APP_URL)
+                .body(
+                    concat!(
+                        r#"{"protocol":1,"event":"location","location":{"#,
+                        r#""cfi":"epubcfi(/6/6)","#,
+                        r#""href":"OPS/next.xhtml"}}"#,
+                    )
+                    .into(),
                 )
                 .unwrap(),
             HttpRequest::builder()
@@ -3495,6 +3590,26 @@ mod tests {
         assert!(search.contains(r#""section-limit":8"#));
         assert!(search.contains(r#""offset":2"#));
         assert!(!search.contains("eval"));
+
+        let selection = EpubSelection {
+            href: "OPS/chapter.xhtml".into(),
+            start: "epubcfi(/6/4!/4/2/1:0)".into(),
+            end: "epubcfi(/6/4!/4/2/1:7)".into(),
+        };
+        let search_result =
+            publication_search_result_script(4, Some(&selection), true);
+        assert!(
+            search_result
+                .starts_with("void globalThis.yungeReader.setSearchResult(")
+        );
+        assert!(search_result.contains(r#""selection":{"#));
+        assert!(search_result.contains(r#""href":"OPS/chapter.xhtml""#));
+        assert!(search_result.contains(r#""start":"epubcfi("#));
+        assert!(search_result.contains(r#""reveal":true"#));
+        assert!(!search_result.contains("eval"));
+        let cleared = publication_search_result_script(4, None, false);
+        assert!(cleared.contains(r#""selection":null"#));
+        assert!(cleared.contains(r#""reveal":false"#));
     }
 
     #[test]
@@ -3570,6 +3685,22 @@ mod tests {
                 end: format!("epubcfi({})", "x".repeat(3_072)),
             }
             .validate()
+            .is_err()
+        );
+        assert!(
+            Service::parse::<ViewSearchResultParams>(json!({
+                "view": 4,
+                "reveal": true,
+            }))
+            .is_err()
+        );
+        assert!(
+            Service::parse::<ViewSearchResultParams>(json!({
+                "view": 4,
+                "selection": null,
+                "reveal": false,
+                "extra": true,
+            }))
             .is_err()
         );
     }
@@ -3846,6 +3977,7 @@ mod tests {
             outline: None,
             selection: None,
             key: Some("<escape>".into()),
+            user: None,
         }))
         .unwrap();
         assert_eq!(event["kind"], "event");

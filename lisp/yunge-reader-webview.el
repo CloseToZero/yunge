@@ -127,6 +127,7 @@
   outline-error
   outline-waiters
   selection
+  search-result
   path
   open-deadline
   open-timer
@@ -179,6 +180,7 @@
             "view-focus-parent" "view-info"
             "view-navigate" "view-open-publication"
             "view-search"
+            "view-search-result"
             "view-selection-text"
             "view-scroll-bars" "view-status" "view-style"
             "view-visible")))
@@ -572,7 +574,7 @@ returned batch, and COMPLETE receives the validated native result."
    "view-search"
    `((view . ,(yunge-reader-webview--view-id view))
      (query . ,query)
-     (case-sensitive . ,case-sensitive)
+     (case-sensitive . ,(if case-sensitive t :false))
      (cursor . ,(copy-tree cursor))
      (match-limit . ,match-limit)
      (section-limit . ,section-limit))
@@ -812,24 +814,35 @@ LOCATION is required only for the go-to command."
       (error "Malformed EPUB location event: %S" message))
     (copy-tree location)))
 
+(defun yunge-reader-webview--event-location-user (message)
+  "Return whether location event MESSAGE came from direct user movement."
+  (let ((user (alist-get 'user message)))
+    (unless (and (assq 'user message)
+                 (memq user '(nil t)))
+      (error "Malformed EPUB location user flag: %S" message))
+    user))
+
 (defun yunge-reader-webview--store-view-location
     (view message &optional quiet)
   "Store VIEW's locator from MESSAGE.
 Unless QUIET is non-nil, notify the logical view's owner."
-  (setf (yunge-reader-webview--view-location view)
-        (yunge-reader-webview--event-location message))
-  (when-let* (((not quiet))
-              (function
-               (yunge-reader-webview--view-location-changed-function
-                view)))
-    (condition-case error-data
-        (funcall function view)
-      (error
-       (display-warning
-        'yunge-reader
-        (format "Could not record EPUB location: %s"
-                (error-message-string error-data))
-        :warning)))))
+  (let ((location (yunge-reader-webview--event-location message))
+        (user
+         (unless quiet
+           (yunge-reader-webview--event-location-user message))))
+    (setf (yunge-reader-webview--view-location view) location)
+    (when-let* (((not quiet))
+                (function
+                 (yunge-reader-webview--view-location-changed-function
+                  view)))
+      (condition-case error-data
+          (funcall function view user)
+        (error
+         (display-warning
+          'yunge-reader
+          (format "Could not record EPUB location: %s"
+                  (error-message-string error-data))
+          :warning))))))
 
 (defun yunge-reader-webview--event-outline (message)
   "Return the validated EPUB outline carried by event MESSAGE."
@@ -882,6 +895,51 @@ Unless QUIET is non-nil, notify the logical view's owner."
      `((view . ,(yunge-reader-webview--view-id view)))
      (lambda (_result _error-data)))
     t))
+
+(defun yunge-reader-webview--search-result-complete
+    (view id selection _result error-data)
+  "Report failure to apply SELECTION to VIEW surface ID."
+  (when (and error-data
+             (yunge-reader-webview--surface-current-p view id)
+             (equal selection
+                    (yunge-reader-webview--view-search-result view)))
+    (display-warning
+     'yunge-reader (error-message-string error-data) :warning)))
+
+(defun yunge-reader-webview--sync-view-search-result (view &optional reveal)
+  "Apply logical VIEW's desired search result to its ready surface.
+When REVEAL is non-nil, navigate to the result before painting it."
+  (when (and (integerp (yunge-reader-webview--view-id view))
+             (yunge-reader-webview--view-created view)
+             (yunge-reader-webview--view-publication-ready view)
+             (not (yunge-reader-webview--view-destroyed view))
+             (process-live-p yunge-reader-webview--process))
+    (let ((id (yunge-reader-webview--view-id view))
+          (selection
+           (copy-tree
+            (yunge-reader-webview--view-search-result view))))
+      (yunge-reader-webview--request
+       "view-search-result"
+       `((view . ,id)
+         (selection . ,selection)
+         (reveal . ,(if reveal t :false)))
+       (apply-partially
+        #'yunge-reader-webview--search-result-complete
+        view id selection)))
+    t))
+
+(defun yunge-reader-webview--set-view-search-result (view selection)
+  "Set logical VIEW's desired native search-result SELECTION."
+  (when (or (null view)
+            (yunge-reader-webview--view-destroyed view))
+    (error "Cannot set a search result on a dead EPUB view"))
+  (unless (or (null selection)
+              (yunge-reader-webview--valid-selection-p selection))
+    (error "Invalid EPUB search result selection: %S" selection))
+  (setf (yunge-reader-webview--view-search-result view)
+        (and selection (copy-tree selection)))
+  (yunge-reader-webview--sync-view-search-result view t)
+  selection)
 
 (defun yunge-reader-webview--focus-owning-window (view)
   "Return native focus from VIEW to its owning live Emacs window."
@@ -1024,6 +1082,7 @@ Unless QUIET is non-nil, notify the logical view's owner."
          (yunge-reader-webview--set-view-selection view nil)
          (yunge-reader-webview--sync-view-style view)
          (yunge-reader-webview--sync-view-scroll-bars view)
+         (yunge-reader-webview--sync-view-search-result view)
          (yunge-reader-webview--store-view-outline view message)
          (yunge-reader-webview--dispatch-pending-target view)
          (yunge-reader-webview--set-buffer-message
@@ -1486,7 +1545,8 @@ Without FORCE, request graceful shutdown and enforce a deadline."
   "Finish permanent destruction of logical VIEW."
   (unless (yunge-reader-webview--view-destroy-finished view)
     (setf (yunge-reader-webview--view-destroy-finished view) t
-          (yunge-reader-webview--view-pending-target view) nil)
+          (yunge-reader-webview--view-pending-target view) nil
+          (yunge-reader-webview--view-search-result view) nil)
     (yunge-reader-webview--finish-outline-waiters
      view nil '(error "The EPUB view was destroyed before its outline loaded"))
     (let ((publication

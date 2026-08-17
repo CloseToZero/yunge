@@ -73,6 +73,7 @@
          "view-focus-parent" "view-info"
          "view-navigate" "view-open-publication"
          "view-search"
+         "view-search-result"
          "view-selection-text"
          "view-scroll-bars" "view-status" "view-style"
          "view-visible")))))
@@ -166,6 +167,21 @@
          ((cfi . "epubcfi(/6/4)")
           (href . "OPS/chapter.xhtml") (fraction . 2))))
     (should-not (yunge-reader-webview--valid-location-p location))))
+
+(ert-deftest yunge-reader-webview-requires-location-user-origin ()
+  (let ((location (yunge-reader-webview-test--location 0.25)))
+    (should
+     (yunge-reader-webview--event-location-user
+      `((user . t) (location . ,location))))
+    (should-not
+     (yunge-reader-webview--event-location-user
+      `((user) (location . ,location))))
+    (should-error
+     (yunge-reader-webview--event-location-user
+      `((location . ,location))))
+    (should-error
+     (yunge-reader-webview--event-location-user
+      `((user . "yes") (location . ,location))))))
 
 (ert-deftest yunge-reader-webview-validates-bounded-epub-targets ()
   (should
@@ -313,7 +329,14 @@
         (should (= (alist-get 'section-limit params) 8))
         (should (= (alist-get 'offset
                               (alist-get 'cursor params))
-                   3))))))
+                   3)))
+      (yunge-reader-webview--request-search
+       view "chapter" nil nil 16 4 #'ignore)
+      (let* ((request
+              (json-parse-string (car sent) :object-type 'alist))
+             (params (alist-get 'params request)))
+        (should (equal (alist-get 'query params) "chapter"))
+        (should (eq (alist-get 'case-sensitive params) :false))))))
 
 (ert-deftest yunge-reader-webview-rejects-malformed-search-results ()
   (let (result error-data)
@@ -326,6 +349,37 @@
      nil)
     (should-not result)
     (should (eq (car error-data) 'error))))
+
+(ert-deftest yunge-reader-webview-persists-current-epub-search-result ()
+  (yunge-reader-webview-test--with-fake-process
+    (yunge-reader-webview-start)
+    (yunge-reader-webview--handle-message
+     'fake-webview-process
+     (yunge-reader-webview-test--ready-message))
+    (let ((view (yunge-reader-webview--make-view :publication 7))
+          (selection (yunge-reader-webview-test--selection)))
+      (yunge-reader-webview--set-view-search-result view selection)
+      (should-not sent)
+      (setf (yunge-reader-webview--view-id view) 9
+            (yunge-reader-webview--view-created view) t
+            (yunge-reader-webview--view-publication-ready view) t)
+      (should (yunge-reader-webview--sync-view-search-result view))
+      (let* ((request
+              (json-parse-string (car sent) :object-type 'alist))
+             (params (alist-get 'params request)))
+        (should (equal (alist-get 'op request)
+                       "view-search-result"))
+        (should (= (alist-get 'view params) 9))
+        (should (equal (alist-get 'selection params) selection))
+        (should (eq (alist-get 'reveal params) :false)))
+      (yunge-reader-webview--set-view-search-result view nil)
+      (let* ((request
+              (json-parse-string (car sent) :object-type 'alist))
+             (params (alist-get 'params request)))
+        (should (equal (alist-get 'op request)
+                       "view-search-result"))
+        (should (eq (alist-get 'selection params) :null))
+        (should (eq (alist-get 'reveal params) t))))))
 
 (ert-deftest yunge-reader-webview-validates-bounded-epub-styles ()
   (let ((style (yunge-reader-webview-test--style)))
@@ -767,6 +821,7 @@
           (make-hash-table :test #'eql))
          warning
          (location-notifications 0)
+         location-user
          outline-result
          outline-error)
     (unwind-protect
@@ -774,7 +829,9 @@
           (puthash 6 view yunge-reader-webview--views)
           (setf
            (yunge-reader-webview--view-location-changed-function view)
-           (lambda (_value) (cl-incf location-notifications)))
+           (lambda (_value user)
+             (setq location-user user)
+             (cl-incf location-notifications)))
           (yunge-reader-webview--request-view-outline
            view
            (lambda (value error-data)
@@ -813,11 +870,13 @@
            '((kind . "event")
              (event . "location")
              (view . 6)
+             (user . t)
              (location
               . ((cfi . "epubcfi(/6/6!/4/2)")
                  (href . "OPS/next.xhtml")
                  (fraction . 0.3)))))
           (should (= location-notifications 1))
+          (should location-user)
           (should
            (equal (yunge-reader-webview--view-location view)
                   '((cfi . "epubcfi(/6/6!/4/2)")
@@ -924,6 +983,7 @@
      '((kind . "event")
        (event . "location")
        (view . 11)
+       (user)
        (location
         . ((cfi . "epubcfi(/6/4)")
            (href . "OPS/first.xhtml")
@@ -933,6 +993,7 @@
      '((kind . "event")
        (event . "location")
        (view . 12)
+       (user . t)
        (location
         . ((cfi . "epubcfi(/6/8)")
            (href . "OPS/second.xhtml")

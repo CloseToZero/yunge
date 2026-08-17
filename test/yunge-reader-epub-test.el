@@ -377,6 +377,21 @@
         (yunge-reader-epub--accelerator view "y"))
       (should (equal called (list 'copied (current-buffer)))))))
 
+(ert-deftest yunge-reader-epub-navigation-cancels-a-delayed-search-jump ()
+  (let ((view (yunge-reader-webview--make-view))
+        (yunge-reader--search-navigation-intent 'next)
+        navigated)
+    (cl-letf
+        (((symbol-function 'yunge-reader-webview--current-ready-view)
+          (lambda () view))
+         ((symbol-function 'yunge-reader-webview--navigate-view)
+          (lambda (actual command complete &optional target)
+            (setq navigated (list actual command complete target)))))
+      (yunge-reader-epub--navigate "next-screen"))
+    (should-not yunge-reader--search-navigation-intent)
+    (should (eq (car navigated) view))
+    (should (equal (cadr navigated) "next-screen"))))
+
 (ert-deftest yunge-reader-epub-maps-native-selection-to-reader-state ()
   (let* ((buffer (generate-new-buffer " *EPUB selection owner*"))
          (view
@@ -432,6 +447,37 @@
             (lambda (value) (setq cleared value))))
         (yunge-reader-clear-selection t))
       (should (eq cleared view)))))
+
+(ert-deftest yunge-reader-epub-syncs-only-the-current-search-result ()
+  (let ((view (yunge-reader-webview--make-view))
+        updates)
+    (with-temp-buffer
+      (yunge-reader-mode)
+      (yunge-reader-epub-view-mode 1)
+      (setq yunge-reader-webview--buffer-view view
+            yunge-reader-search-highlight-visible t
+            yunge-reader-search-result
+            (make-yunge-reader-search-result
+             :start
+             (make-yunge-reader-position
+              :unit "OPS/chapter.xhtml"
+              :offset "epubcfi(/6/4!/4/2/1:0)")
+             :end
+             (make-yunge-reader-position
+              :unit "OPS/chapter.xhtml"
+              :offset "epubcfi(/6/4!/4/2/1:8)")))
+      (cl-letf
+          (((symbol-function
+             'yunge-reader-webview--set-view-search-result)
+            (lambda (_view selection) (push selection updates))))
+        (run-hooks 'yunge-reader-search-result-hook)
+        (setq yunge-reader-search-highlight-visible nil)
+        (run-hooks 'yunge-reader-search-result-hook))
+      (should (= (length updates) 2))
+      (should-not (car updates))
+      (should
+       (equal (cadr updates)
+              (yunge-reader-epub-test--selection))))))
 
 (ert-deftest yunge-reader-epub-dismiss-keys-use-active-evil-maps ()
   (yunge-test-enable-evil)
@@ -768,8 +814,27 @@
           (cl-letf (((symbol-function 'yunge-reader-record-place)
                      (lambda (&optional value)
                        (setq recorded value))))
-            (yunge-reader-epub--location-changed view))
+            (yunge-reader-epub--location-changed view nil))
           (should (eq recorded window)))
+      (kill-buffer buffer))))
+
+(ert-deftest yunge-reader-epub-user-location-cancels-search-navigation ()
+  (let* ((buffer (generate-new-buffer " *EPUB user location owner*"))
+         (view
+          (yunge-reader-webview--make-view
+           :buffer buffer
+           :window (selected-window)
+           :persistent t)))
+    (unwind-protect
+        (with-current-buffer buffer
+          (yunge-reader-mode)
+          (yunge-reader-epub-view-mode 1)
+          (setq yunge-reader-webview--buffer-view view
+                yunge-reader--search-navigation-intent 'next)
+          (cl-letf (((symbol-function 'yunge-reader-record-place)
+                     #'ignore))
+            (yunge-reader-epub--location-changed view t))
+          (should-not yunge-reader--search-navigation-intent))
       (kill-buffer buffer))))
 
 ;;; yunge-reader-epub-test.el ends here

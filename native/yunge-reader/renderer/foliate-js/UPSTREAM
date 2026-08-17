@@ -16,6 +16,8 @@ Included modules:
 Local adjustments remain source-level and reviewable:
 
 - renderer iframe sandboxes omit allow-scripts;
-- paginators release navigation locks and avoid absent boundary sections; and
+- epubcfi.js exports same-document range construction from two endpoints;
+- paginators release navigation locks and avoid absent boundary sections;
+- view.js exposes one current search result through its SVG overlayer; and
 - search.js follows the local width style and corrects upstream cross-node and
   terminal-boundary index arithmetic.
