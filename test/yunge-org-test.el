@@ -414,20 +414,56 @@
   (yunge-org-test--load-config)
   (with-temp-buffer
     (org-mode)
-    (insert "| First |\n| Last  |\n")
+    (insert "| First |x|\n| Last  |long |\n")
     (goto-char (point-min))
     (evil-normal-state)
     (yunge-org-open-below 1)
     (should (eq evil-state 'insert))
     (should
      (equal (buffer-string)
-            "| First |\n|       |\n| Last  |\n"))
+            "| First |x|\n|  |  |\n| Last  |long |\n"))
     (evil-normal-state)
     (goto-char (point-min))
     (yunge-org-open-above 1)
     (should
      (equal (buffer-string)
-            "|       |\n| First |\n|       |\n| Last  |\n"))))
+            "|  |  |\n| First |x|\n|  |  |\n| Last  |long |\n"))))
+
+(ert-deftest yunge-org-inserts-minimum-width-table-columns ()
+  (yunge-org-test--load-config)
+  (with-temp-buffer
+    (org-mode)
+    (insert "| a|long |\n|--+-----|\n| wider |b |\n")
+    (goto-char (point-min))
+    (search-forward "a")
+    (org-table-insert-column)
+    (should
+     (equal (buffer-string)
+            "|  | a|long |\n|--+--+-----|\n|  | wider |b |\n"))))
+
+(ert-deftest yunge-org-deletes-table-columns-without-realignment ()
+  (yunge-org-test--load-config)
+  (with-temp-buffer
+    (org-mode)
+    (insert "|  | a|long |\n|--+--+-----|\n|  | wider |b |\n")
+    (goto-char (point-min))
+    (search-forward "  ")
+    (org-table-delete-column)
+    (should
+     (equal (buffer-string)
+            "| a|long |\n|--+-----|\n| wider |b |\n"))))
+
+(ert-deftest yunge-org-moves-table-columns-without-realignment ()
+  (yunge-org-test--load-config)
+  (with-temp-buffer
+    (org-mode)
+    (insert "| a|long |\n|--+-----|\n| wider |b |\n")
+    (goto-char (point-min))
+    (search-forward "a")
+    (org-table-move-column)
+    (should
+     (equal (buffer-string)
+            "|long | a|\n|-----+--|\n|b | wider |\n"))))
 
 (ert-deftest yunge-org-keeps-evil-open-outside-structures ()
   (yunge-org-test--load-config)

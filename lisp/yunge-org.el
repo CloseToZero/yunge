@@ -2,6 +2,8 @@
 ;; SPDX-FileCopyrightText: 2026 Chen Zhexuan
 ;; SPDX-License-Identifier: MIT
 
+(require 'cl-lib)
+(require 'subr-x)
 (require 'yunge-evil)
 (require 'yunge-key)
 
@@ -21,6 +23,7 @@
 (declare-function org-at-item-checkbox-p "org-list" ())
 (declare-function org-at-item-p "org-list" ())
 (declare-function org-at-table-p "org-table" (&optional table-type))
+(declare-function org-at-table-hline-p "org-table" ())
 (declare-function org-back-to-heading "org" (&optional invisible-ok))
 (declare-function org-beginning-of-line "org" (&optional n))
 (declare-function org-end-of-line "org" (&optional n))
@@ -36,6 +39,11 @@
 (declare-function org-move-item-down "org-list" ())
 (declare-function org-region-active-p "org" ())
 (declare-function org-table-insert-row "org-table" (&optional arg))
+(declare-function org-table-begin "org-table" ())
+(declare-function org-table-current-column "org-table" ())
+(declare-function org-table-end "org-table" ())
+(declare-function org-table-goto-column
+                  "org-table" (n &optional on-delim force))
 (declare-function org-up-heading-safe "org" ())
 (declare-function org-edit-src-abort "org-src" ())
 (declare-function org-edit-src-exit "org-src" ())
@@ -87,6 +95,170 @@
       org-auto-align-tags nil
       org-tags-column 0
       org-table-automatic-realign nil)
+
+(defun yunge-org-table--parse-line (separator)
+  "Return the current table line split around SEPARATOR.
+The return value is (PREFIX FIELDS SUFFIX).  PREFIX includes the
+opening pipe and SUFFIX includes the closing pipe."
+  (let* ((line (buffer-substring-no-properties
+                (line-beginning-position) (line-end-position)))
+         (first (cl-position ?| line))
+         (last (cl-position ?| line :from-end t)))
+    (when (and first last (< first last))
+      (list (substring line 0 (1+ first))
+            (split-string
+             (substring line (1+ first) last)
+             (regexp-quote (char-to-string separator)) nil)
+            (substring line last)))))
+
+(defun yunge-org-table--replace-line (parts separator)
+  "Replace the current line from PARTS joined with SEPARATOR."
+  (let ((beginning (line-beginning-position))
+        (end (line-end-position)))
+    (delete-region beginning end)
+    (goto-char beginning)
+    (insert (nth 0 parts)
+            (mapconcat #'identity (nth 1 parts)
+                       (char-to-string separator))
+            (nth 2 parts))))
+
+(defun yunge-org-table--compact-current-row ()
+  "Give every field in the current table row minimum padding."
+  (let ((column (max 1 (org-table-current-column)))
+        (parts (yunge-org-table--parse-line ?|)))
+    (when parts
+      (setcar (cdr parts)
+              (mapcar
+               (lambda (field)
+                 (concat " " (string-trim field) " "))
+               (nth 1 parts)))
+      (yunge-org-table--replace-line parts ?|)
+      (beginning-of-line)
+      (org-table-goto-column column))))
+
+(defun yunge-org-table--transform-hlines (beginning end function)
+  "Apply FUNCTION to hline segments between BEGINNING and END."
+  (save-excursion
+    (goto-char beginning)
+    (while (< (point) end)
+      (when (org-at-table-hline-p)
+        (let ((parts (yunge-org-table--parse-line ?+)))
+          (when parts
+            (setcar (cdr parts) (funcall function (nth 1 parts)))
+            (yunge-org-table--replace-line parts ?+))))
+      (forward-line))))
+
+(defun yunge-org-table--call-without-realignment (function &rest arguments)
+  "Call FUNCTION with ARGUMENTS without implicit table alignment."
+  (cl-letf (((symbol-function 'org-table-align)
+             (lambda (&rest _arguments))))
+    (apply function arguments)))
+
+(defun yunge-org-table--insert-row-compactly
+    (function &optional argument)
+  "Call row insertion FUNCTION and compact the inserted row."
+  (let ((result
+         (yunge-org-table--call-without-realignment
+          function argument)))
+    (when (and (org-at-table-p) (not (org-at-table-hline-p)))
+      (yunge-org-table--compact-current-row))
+    result))
+
+(defun yunge-org-table--insert-column-compactly (function)
+  "Call column insertion FUNCTION without changing existing widths."
+  (let* ((column (max 1 (org-table-current-column)))
+         (index (1- column))
+         (beginning (copy-marker (org-table-begin)))
+         (end (copy-marker (org-table-end) t))
+         result)
+    (unwind-protect
+        (progn
+          (setq result
+                (yunge-org-table--call-without-realignment function))
+          (save-excursion
+            (goto-char beginning)
+            (while (< (point) end)
+              (unless (org-at-table-hline-p)
+                (let* ((parts (yunge-org-table--parse-line ?|))
+                       (fields (and parts (nth 1 parts))))
+                  (when (< index (length fields))
+                    (setcar (nthcdr index fields) "  ")
+                    (yunge-org-table--replace-line parts ?|))))
+              (forward-line)))
+          (yunge-org-table--transform-hlines
+           beginning end
+           (lambda (segments)
+             (let ((position (min index (length segments))))
+               (append (cl-subseq segments 0 position)
+                       (list "--")
+                       (nthcdr position segments)))))
+          result)
+      (set-marker beginning nil)
+      (set-marker end nil))))
+
+(defun yunge-org-table--delete-column-without-realignment (function)
+  "Call column deletion FUNCTION without changing remaining widths."
+  (let* ((index (1- (max 1 (org-table-current-column))))
+         (beginning (copy-marker (org-table-begin)))
+         (end (copy-marker (org-table-end) t))
+         result)
+    (unwind-protect
+        (progn
+          (setq result
+                (yunge-org-table--call-without-realignment function))
+          (yunge-org-table--transform-hlines
+           beginning end
+           (lambda (segments)
+             (if (< index (length segments))
+                 (append (cl-subseq segments 0 index)
+                         (nthcdr (1+ index) segments))
+               segments)))
+          result)
+      (set-marker beginning nil)
+      (set-marker end nil))))
+
+(defun yunge-org-table--move-column-without-realignment
+    (function &optional left)
+  "Call column movement FUNCTION without changing cell widths.
+When LEFT is non-nil, also move the hline segment to the left."
+  (let* ((index (1- (max 1 (org-table-current-column))))
+         (other (+ index (if left -1 1)))
+         (beginning (copy-marker (org-table-begin)))
+         (end (copy-marker (org-table-end) t))
+         result)
+    (unwind-protect
+        (progn
+          (setq result
+                (yunge-org-table--call-without-realignment
+                 function left))
+          (yunge-org-table--transform-hlines
+           beginning end
+           (lambda (segments)
+             (when (and (>= other 0) (< other (length segments)))
+               (cl-rotatef (nth index segments) (nth other segments)))
+             segments))
+          result)
+      (set-marker beginning nil)
+      (set-marker end nil))))
+
+;; These structural commands align unconditionally, independently of
+;; `org-table-automatic-realign'.  Keep source layout text-first while
+;; leaving an explicit `org-table-align' untouched.
+(with-eval-after-load 'org-table
+  (advice-add 'org-table-insert-row :around
+              #'yunge-org-table--insert-row-compactly)
+  (advice-add 'org-table-insert-column :around
+              #'yunge-org-table--insert-column-compactly)
+  (advice-add 'org-table-delete-column :around
+              #'yunge-org-table--delete-column-without-realignment)
+  (advice-add 'org-table-move-column :around
+              #'yunge-org-table--move-column-without-realignment)
+  (dolist (command '(org-table-move-cell-up
+                     org-table-move-cell-down
+                     org-table-move-cell-left
+                     org-table-move-cell-right))
+    (advice-add command :around
+                #'yunge-org-table--call-without-realignment)))
 
 (defconst yunge-org-command-bindings
   '(("p" shuying-org-preview "preview LaTeX")
