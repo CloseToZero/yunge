@@ -94,6 +94,7 @@ installing or downloading it:
                  "view-open-publication","view-search",
                  "view-search-result",
                  "view-selection-text",
+                 "view-set-selection",
                  "view-scroll-bars","view-status","view-style",
                  "view-visible","view-zoom"],
  "accelerators":["+","-","=","<escape>","<next>","<prior>",
@@ -259,6 +260,13 @@ contain a whole-book =fraction=.  A pre-paginated view also reports =x= and
 spine target loads, so changing zoom or recreating a child surface does not
 discard the page-relative position.
 
+When the retained CFI itself restores successfully, =publication-ready=
+reports that exact locator.  It does not replace the CFI with a slightly
+earlier visible-range measurement that may include one partial line above the
+target.  Href and whole-book fraction fallbacks still report the renderer's
+resolved locator.  Repeated reflow surface recreation therefore cannot drift
+backward while a broken CFI can still recover.
+
 Foliate follows internal EPUB anchors itself.  An explicit click on an
 external anchor is canceled inside the child and becomes a semantic event
 containing its resolved absolute URI:
@@ -317,6 +325,21 @@ not contain fragments, and selection state belongs to one logical view.  A
 surface replacement clears it.  The current scrolled paginator owns one
 iframe, so this contract deliberately describes one-spine ranges; it does not
 silently approximate cross-spine selection.
+
+=view-set-selection= resolves one validated same-spine range, reveals it, and
+creates a real Chromium DOM selection.  The renderer emits the ordinary
+=selection= event only after its DOM range retains the requested canonical
+endpoints.  Clearing the selection or beginning a pointer selection cancels a
+pending programmatic range instead of allowing it to overwrite newer input:
+
+#+begin_src json
+{"id":4,"op":"view-set-selection",
+ "params":{"view":1,
+           "selection":{"href":"OPS/chapter.xhtml",
+                        "start":"epubcfi(/6/4!/4/2/1:0)",
+                        "end":"epubcfi(/6/4!/4/2/1:7)"}}}
+{"id":4,"ok":true,"result":{"view":1,"selection":true}}
+#+end_src
 
 =view-selection-text= resolves only the exact selection still owned by the
 view and returns Chromium's =Range.toString()= text in bounded Unicode
@@ -680,6 +703,33 @@ The process owns one lazy PDFium instance.  Documents borrow that instance and
 are explicitly removed on =close= or =shutdown=.  The singleton itself lives
 for the helper process lifetime because the underlying bindings are global;
 the operating system reclaims it at process exit.
+
+* Reflowable test fixture
+
+The =reflow_epub_fixture= example generates a deterministic three-chapter EPUB
+3 publication.  Each chapter contains enough identified text to exercise line
+and screen movement without external resources or installed fonts.  The
+command refuses to replace an existing file:
+
+#+begin_src shell
+cargo run --example reflow_epub_fixture -- D:/tmp/yunge-reflow.epub
+#+end_src
+
+The graphical smoke opens that fixture through ordinary Reader registration,
+moves by one rendered screen, and recreates its native surface at the exact
+retained CFI.  It treats Reader warnings as failures.  The same pass searches
+one shared beacon from chapter one into chapter two, turns that result into a
+real DOM selection, copies its text through Reader, and verifies the kill
+ring.  It then loads the exact three-entry publication outline and follows its
+last destination.  Finally, a second native surface opens at the same chapter,
+moves independently to chapter one, and leaves the primary surface unchanged:
+
+#+begin_src shell
+emacs -Q --load script/yunge-reader-reflow-epub-smoke.el
+#+end_src
+
+The fixed and reflow fixture examples share one deterministic EPUB ZIP and
+container writer; their package metadata and content remain layout-specific.
 
 * Fixed-layout test fixture
 

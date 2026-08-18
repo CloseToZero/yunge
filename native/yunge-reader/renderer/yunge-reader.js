@@ -514,6 +514,17 @@ const checkedSearchResultRequest = value => {
     return { viewID, selection, reveal: value.reveal }
 }
 
+const checkedSetSelectionRequest = value => {
+    if (!value || typeof value !== 'object' || Array.isArray(value)
+        || Object.keys(value).sort().join() !== 'selection,view') {
+        throw new Error('Invalid EPUB set selection request')
+    }
+    return {
+        viewID: checkedView(value.view),
+        selection: checkedSelection(value.selection),
+    }
+}
+
 const checkedNavigationTarget = value => {
     if (!value || typeof value !== 'object' || Array.isArray(value)) {
         throw new Error('Invalid EPUB navigation target')
@@ -799,17 +810,24 @@ const showFirstVisibleSection = async (view, book) => {
 }
 
 const showLocation = async (view, location) => {
-    const targets = [location.cfi, location.href]
+    const targets = [
+        [location.cfi, true],
+        [location.href, false],
+    ]
     if (location.fraction !== undefined) {
-        targets.push({ fraction: location.fraction })
+        targets.push([{ fraction: location.fraction }, false])
     }
-    for (const target of targets) {
+    for (const [target, exact] of targets) {
         try {
             await showTarget(view, target)
+            const index = view.lastLocation?.section?.current
+            if (exact && view.book.sections[index]?.id !== location.href) {
+                throw new Error('EPUB location CFI and href do not match')
+            }
             if (view.isFixedLayout && location.x !== undefined) {
                 view.renderer.setViewport(location.x, location.y)
             }
-            return
+            return exact
         } catch (error) {
             console.warn(error)
         }
@@ -918,9 +936,17 @@ const queueSelection = (session, doc) => {
     })
 }
 
+const cancelPendingSelection = session => {
+    session.selectionRevision++
+    if (session.pendingNavigation?.command === 'show-selection') {
+        session.pendingNavigation = null
+    }
+}
+
 const installSelectionTracking = (doc, session) => {
     let pointerSelecting = false
     doc.addEventListener('pointerdown', () => {
+        cancelPendingSelection(session)
         pointerSelecting = true
     })
     const finishPointerSelection = () => {
@@ -939,8 +965,10 @@ const clearSelection = ({ view: viewID }) => {
     if (!current || current.viewID !== viewID) {
         throw new Error('EPUB view is not open')
     }
-    current.view.deselect()
-    emitSelection(current, null)
+    const session = current
+    cancelPendingSelection(session)
+    session.view.deselect()
+    emitSelection(session, null)
 }
 
 const selectedRange = (session, selection) => {
@@ -978,6 +1006,21 @@ const selectedRange = (session, selection) => {
             'EPUB selection range is unavailable')
     }
     return range
+}
+
+const applySelection = (session, selection) => {
+    const range = selectedRange(session, selection)
+    const doc = range.startContainer.ownerDocument
+    const selected = doc.getSelection()
+    if (!selected) throw new Error('EPUB selection is unavailable')
+    selected.removeAllRanges()
+    selected.addRange(range)
+    const actual = selectionFromDocument(session, doc)
+    if (!sameSelection(actual, selection)) {
+        selected.removeAllRanges()
+        throw new Error('EPUB selection endpoints were not retained')
+    }
+    emitSelection(session, actual)
 }
 
 const selectionText = request => {
@@ -1334,6 +1377,7 @@ const open = async ({
             pendingNavigation: null,
             navigationRunning: false,
             searchResultRevision: 0,
+            selectionRevision: 0,
         }
         installLocationActivity(view, session)
         current = session
@@ -1358,15 +1402,17 @@ const open = async ({
             scheduleNavigation(session, { command })
         })
         status.hidden = true
+        let restoredLocation = false
         if (location) {
             try {
-                await showLocation(view, location)
+                restoredLocation = await showLocation(view, location)
             } catch (error) {
                 console.warn(error)
                 await showFirstVisibleSection(view, book)
             }
         } else await showFirstVisibleSection(view, book)
         if (mine !== generation || current !== session) return
+        if (restoredLocation) session.location = location
         session.location ??= locatorFromRelocation(book, view.lastLocation)
         if (session.locationTimer) clearTimeout(session.locationTimer)
         session.locationTimer = null
@@ -1384,13 +1430,13 @@ const open = async ({
     }
 }
 
-const searchResultCFI = (session, selection) => {
+const selectionCFI = (session, selection, label) => {
     const start = session.view.resolveNavigation(selection.start)
     const end = session.view.resolveNavigation(selection.end)
     const index = start?.index
     if (!Number.isInteger(index) || end?.index !== index
         || session.book.sections[index]?.id !== selection.href) {
-        throw new Error('EPUB search result is not in its spine')
+        throw new Error(`EPUB ${label} is not in its spine`)
     }
     return fromRangeEndpoints(selection.start, selection.end)
 }
@@ -1489,11 +1535,20 @@ const runNavigation = async (session, navigation) => {
             await showLocation(session.view, location)
             break
         case 'show-search-result': {
-            const cfi = searchResultCFI(session, selection)
+            const cfi = selectionCFI(session, selection, 'search result')
             await showTarget(session.view, cfi)
             if (current === session
                 && revision === session.searchResultRevision) {
                 await paintSearchResult(session, cfi)
+            }
+            break
+        }
+        case 'show-selection': {
+            const cfi = selectionCFI(session, selection, 'selection')
+            await showTarget(session.view, cfi)
+            if (current === session
+                && revision === session.selectionRevision) {
+                applySelection(session, selection)
             }
             break
         }
@@ -1569,7 +1624,8 @@ const setSearchResult = request => {
             }
             void drainNavigation(session)
         } else if (selection) {
-            const cfi = searchResultCFI(session, selection)
+            const cfi = selectionCFI(
+                session, selection, 'search result')
             void Promise.resolve(paintSearchResult(session, cfi))
                 .catch(error => {
                     if (current === session
@@ -1585,7 +1641,25 @@ const setSearchResult = request => {
     }
 }
 
+const setSelection = request => {
+    try {
+        const { viewID, selection } = checkedSetSelectionRequest(request)
+        if (!current || current.viewID !== viewID) {
+            throw new Error('EPUB view is not open')
+        }
+        const session = current
+        const revision = ++session.selectionRevision
+        session.view.deselect()
+        session.pendingNavigation = {
+            command: 'show-selection', selection, revision,
+        }
+        void drainNavigation(session)
+    } catch (error) {
+        post('navigation-error', { message: error?.message ?? error })
+    }
+}
+
 globalThis.yungeReader = Object.freeze({
     clearSelection, navigate, open, search, selectionText, setScrollBars,
-    setSearchResult, setStyle, setZoom,
+    setSearchResult, setSelection, setStyle, setZoom,
 })

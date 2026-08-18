@@ -220,6 +220,12 @@ normal place-recording rules.  Layout-anchor and text-selection relocations do
 not masquerade as reading movement.  Explicit view closure still records its
 current stable location.
 
+When an exact retained CFI restores successfully, readiness reports that CFI
+instead of replacing it with the renderer's slightly earlier visible-range
+measurement.  This prevents repeated surface recreation from walking a
+reflowable place backward by one partially visible line.  Href or progression
+fallbacks still report the renderer's resolved location.
+
 Chromium remains the only visual EPUB selection layer.  A settled same-spine
 range maps its canonical href and collapsed CFI endpoints into Reader's
 logical selection.  =y= asks the trusted renderer for the exact current
@@ -924,11 +930,13 @@ printable place conversion, bounded outline mapping, transient href targets,
 view-local reading styles, bounded font zoom, strict zoom-state validation,
 restore timing, and primary-only place recording.
 Isolated graphical Emacs smoke tests open real EPUBs through WebView2, move one
-screen, destroy and recreate the native view, restore the exact CFI, and check
-the href and fraction fallback order.  The formal driver smoke test also opens
-through =auto-mode-alist=, hides and recreates a persistent surface, creates an
-independent additional view over the same publication, verifies primary place
-ownership, and closes the resource only after both views detach.
+screen, destroy and recreate the native view, and restore the exact CFI.  The
+reflowable pass also crosses a chapter during search, copies a real DOM
+selection, follows an exact outline destination, and moves a second native
+surface without changing the primary surface.  The formal driver smoke test
+opens through =auto-mode-alist=, hides and recreates a persistent surface,
+verifies primary place ownership, and closes the resource only after both
+views detach.
 A focused-key smoke test sends =+=, =-=, and === to a real child WebView,
 requires the expected Reader font-scale changes, and then sends =J= and =C-d=
 to require two successive locator changes.

@@ -100,6 +100,7 @@
             "view-search"
             "view-search-result"
             "view-selection-text"
+            "view-set-selection"
             "view-scroll-bars" "view-status" "view-style"
             "view-visible" "view-zoom")))
       (error

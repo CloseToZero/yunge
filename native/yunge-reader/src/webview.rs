@@ -43,6 +43,7 @@ use renderer::{
     search_script as publication_search_script,
     selection_text_response as renderer_selection_text_response,
     selection_text_script as publication_selection_text_script,
+    set_selection_script as publication_set_selection_script,
     style_script as publication_style_script,
     zoom_script as publication_zoom_script,
 };
@@ -180,6 +181,13 @@ struct ViewSelectionTextParams {
     selection: EpubSelection,
     offset: u32,
     character_limit: u32,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct ViewSetSelectionParams {
+    view: u64,
+    selection: EpubSelection,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -954,6 +962,26 @@ impl Service {
         Ok(json!({ "view": params.view, "selection": false }))
     }
 
+    fn set_selection(&mut self, params: Value) -> Result<Value, ServiceError> {
+        let params = Self::parse::<ViewSetSelectionParams>(params)?;
+        let selection = params.selection.validate()?;
+        let view = self.view(params.view)?;
+        if view.publication.is_none() {
+            return Err(ServiceError::new(
+                "view-has-no-publication",
+                format!("view {} has no attached publication", params.view),
+            ));
+        }
+        let script = publication_set_selection_script(params.view, &selection);
+        view.surface
+            .webview()
+            .evaluate_script(&script)
+            .map_err(|error| {
+                ServiceError::new("view-update-failed", error.to_string())
+            })?;
+        Ok(json!({ "view": params.view, "selection": true }))
+    }
+
     fn selection_text(
         &self,
         id: u64,
@@ -1352,6 +1380,7 @@ impl Service {
             Operation::ViewSearchResult => {
                 self.set_search_result(request.params)
             }
+            Operation::ViewSetSelection => self.set_selection(request.params),
             Operation::ViewOpenPublication => {
                 self.open_view_publication(request.params)
             }
@@ -1659,6 +1688,9 @@ mod tests {
         assert!(adapter.contains("case 'last':"));
         assert!(adapter.contains("const showBoundary"));
         assert!(adapter.contains("section.linear !== 'no'"));
+        assert!(adapter.contains("[location.cfi, true]"));
+        assert!(adapter.contains("location CFI and href do not match"));
+        assert!(adapter.contains("session.location = location"));
         assert!(adapter.contains("lineDistance(session), false"));
         assert!(adapter.contains("moveFixedViewport(session, -40)"));
         assert!(adapter.contains("moveFixedViewport(session, 40)"));
@@ -1671,6 +1703,8 @@ mod tests {
         assert!(adapter.contains("view.renderer.setAttribute('animated', '')"));
         assert!(adapter.contains("pendingNavigation"));
         assert!(adapter.contains("navigationRunning"));
+        assert!(adapter.contains("case 'show-selection':"));
+        assert!(adapter.contains("selected.addRange(range)"));
         assert!(adapter.contains("'boundary-scroll', event =>"));
         assert!(adapter.contains("scheduleNavigation(session, { command })"));
         assert!(
@@ -1695,7 +1729,10 @@ mod tests {
         assert!(adapter.contains("search, selectionText"));
         assert!(adapter.contains("fromRangeEndpoints("));
         assert!(adapter.contains("searchResultRevision"));
-        assert!(adapter.contains("setSearchResult, setStyle, setZoom"));
+        assert!(
+            adapter
+                .contains("setSearchResult, setSelection, setStyle, setZoom")
+        );
         let search =
             std::str::from_utf8(app_asset("foliate-js/search.js").unwrap().1)
                 .unwrap();
@@ -2447,14 +2484,24 @@ mod tests {
         assert!(clear.contains(r#""view":4"#));
         assert!(!clear.contains("eval"));
 
+        let selection = EpubSelection {
+            href: "OPS/chapter.xhtml".into(),
+            start: "epubcfi(/6/4!/4/2/1:0)".into(),
+            end: "epubcfi(/6/4!/4/2/1:7)".into(),
+        };
+        let set_selection = publication_set_selection_script(4, &selection);
+        assert!(
+            set_selection
+                .starts_with("void globalThis.yungeReader.setSelection(")
+        );
+        assert!(set_selection.contains(r#""selection":{"#));
+        assert!(set_selection.contains(r#""href":"OPS/chapter.xhtml""#));
+        assert!(!set_selection.contains("eval"));
+
         let selection_text =
             publication_selection_text_script(&ViewSelectionTextParams {
                 view: 4,
-                selection: EpubSelection {
-                    href: "OPS/chapter.xhtml".into(),
-                    start: "epubcfi(/6/4!/4/2/1:0)".into(),
-                    end: "epubcfi(/6/4!/4/2/1:7)".into(),
-                },
+                selection: selection.clone(),
                 offset: 0,
                 character_limit: 16_384,
             });
@@ -2490,11 +2537,6 @@ mod tests {
         assert!(search.contains(r#""offset":2"#));
         assert!(!search.contains("eval"));
 
-        let selection = EpubSelection {
-            href: "OPS/chapter.xhtml".into(),
-            start: "epubcfi(/6/4!/4/2/1:0)".into(),
-            end: "epubcfi(/6/4!/4/2/1:7)".into(),
-        };
         let search_result =
             publication_search_result_script(4, Some(&selection), true);
         assert!(
@@ -2614,6 +2656,14 @@ mod tests {
             Service::parse::<ViewSearchResultParams>(json!({
                 "view": 4,
                 "reveal": true,
+            }))
+            .is_err()
+        );
+        assert!(
+            Service::parse::<ViewSetSelectionParams>(json!({
+                "view": 4,
+                "selection": valid,
+                "extra": true,
             }))
             .is_err()
         );

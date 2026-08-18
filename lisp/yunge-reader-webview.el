@@ -238,6 +238,35 @@ An INITIAL publication location has no direct-user origin."
      (lambda (_result _error-data)))
     t))
 
+(defun yunge-reader-webview--select-view-range-complete
+    (view id _selection _result error-data)
+  "Report a failure to select text in VIEW surface ID."
+  (when (and error-data
+             (yunge-reader-webview--surface-current-p view id))
+    (display-warning
+     'yunge-reader
+     (format "Could not select EPUB text: %s"
+             (error-message-string error-data))
+     :warning)))
+
+(defun yunge-reader-webview--select-view-range (view selection)
+  "Ask live native VIEW to select validated CFI range SELECTION."
+  (unless (yunge-reader-webview--valid-selection-p selection)
+    (error "Invalid EPUB view selection: %S" selection))
+  (when (and (integerp (yunge-reader-webview--view-id view))
+             (yunge-reader-webview--surface-ready-p view)
+             (not (yunge-reader-webview--view-destroyed view))
+             (process-live-p yunge-reader-webview--process))
+    (let ((id (yunge-reader-webview--view-id view))
+          (selection (copy-tree selection)))
+      (yunge-reader-webview--request
+       "view-set-selection"
+       `((view . ,id) (selection . ,selection))
+       (apply-partially
+        #'yunge-reader-webview--select-view-range-complete
+        view id selection)))
+    t))
+
 (defun yunge-reader-webview--search-result-complete
     (view id selection _result error-data)
   "Report failure to apply SELECTION to VIEW surface ID."

@@ -710,6 +710,18 @@ pub(super) fn clear_selection_script(view: u64) -> String {
     format!("void globalThis.yungeReader.clearSelection({payload});")
 }
 
+pub(super) fn set_selection_script(
+    view: u64,
+    selection: &EpubSelection,
+) -> String {
+    let payload = serde_json::to_string(&json!({
+        "view": view,
+        "selection": selection,
+    }))
+    .expect("selection payload is serializable");
+    format!("void globalThis.yungeReader.setSelection({payload});")
+}
+
 pub(super) fn selection_text_script(
     params: &ViewSelectionTextParams,
 ) -> String {

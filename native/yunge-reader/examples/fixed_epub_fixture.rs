@@ -4,23 +4,13 @@
 use std::env;
 use std::error::Error;
 use std::ffi::OsString;
-use std::fs::OpenOptions;
-use std::io::{Cursor, Seek, Write};
 use std::path::Path;
-use zip::write::SimpleFileOptions;
-use zip::{CompressionMethod, ZipWriter};
 
-const MIMETYPE: &[u8] = b"application/epub+zip";
+mod support;
 
-const CONTAINER: &str = r#"<?xml version="1.0" encoding="UTF-8"?>
-<container xmlns="urn:oasis:names:tc:opendocument:xmlns:container"
-           version="1.0">
-  <rootfiles>
-    <rootfile full-path="OPS/package.opf"
-              media-type="application/oebps-package+xml"/>
-  </rootfiles>
-</container>
-"#;
+#[cfg(test)]
+use support::epub_fixture::build_epub;
+use support::epub_fixture::{EpubEntry, write_epub};
 
 const PACKAGE_TEMPLATE: &str = r#"<?xml version="1.0" encoding="UTF-8"?>
 <package xmlns="http://www.idpf.org/2007/opf"
@@ -229,59 +219,30 @@ fn page_xhtml(page: &FixturePage, variant: Variant) -> String {
     )
 }
 
-fn add_entry<W>(
-    archive: &mut ZipWriter<W>,
-    name: &str,
-    bytes: &[u8],
-    method: CompressionMethod,
-) -> Result<(), Box<dyn Error>>
-where
-    W: Write + Seek,
-{
-    let options = SimpleFileOptions::default().compression_method(method);
-    archive.start_file(name, options)?;
-    archive.write_all(bytes)?;
-    Ok(())
+fn fixture_entries(variant: Variant) -> Vec<EpubEntry> {
+    let mut entries = vec![
+        (
+            "OPS/package.opf".to_owned(),
+            package_document(variant).into_bytes(),
+        ),
+        ("OPS/nav.xhtml".to_owned(), NAVIGATION.as_bytes().to_vec()),
+    ];
+    for page in &PAGES {
+        entries.push((
+            format!("OPS/page-{}.xhtml", page.number),
+            page_xhtml(page, variant).into_bytes(),
+        ));
+    }
+    entries
 }
 
+#[cfg(test)]
 fn build_fixture(variant: Variant) -> Result<Vec<u8>, Box<dyn Error>> {
-    let mut archive = ZipWriter::new(Cursor::new(Vec::new()));
-    add_entry(
-        &mut archive,
-        "mimetype",
-        MIMETYPE,
-        CompressionMethod::Stored,
-    )?;
-    for (name, contents) in [
-        ("META-INF/container.xml", CONTAINER.to_owned()),
-        ("OPS/package.opf", package_document(variant)),
-        ("OPS/nav.xhtml", NAVIGATION.to_owned()),
-    ] {
-        add_entry(
-            &mut archive,
-            name,
-            contents.as_bytes(),
-            CompressionMethod::Deflated,
-        )?;
-    }
-    for page in &PAGES {
-        add_entry(
-            &mut archive,
-            &format!("OPS/page-{}.xhtml", page.number),
-            page_xhtml(page, variant).as_bytes(),
-            CompressionMethod::Deflated,
-        )?;
-    }
-    Ok(archive.finish()?.into_inner())
+    build_epub(fixture_entries(variant))
 }
 
 fn write_fixture(path: &Path, variant: Variant) -> Result<(), Box<dyn Error>> {
-    let bytes = build_fixture(variant)?;
-    let mut output =
-        OpenOptions::new().write(true).create_new(true).open(path)?;
-    output.write_all(&bytes)?;
-    output.flush()?;
-    Ok(())
+    write_epub(path, fixture_entries(variant))
 }
 
 fn parse_arguments() -> Result<(Variant, OsString), Box<dyn Error>> {
@@ -315,10 +276,10 @@ fn main() -> Result<(), Box<dyn Error>> {
 mod tests {
     use super::*;
     use std::fs;
-    use std::io::Read;
+    use std::io::{Cursor, Read};
     use std::time::{SystemTime, UNIX_EPOCH};
     use yunge_reader::epub::{Publication, PublicationLayout};
-    use zip::ZipArchive;
+    use zip::{CompressionMethod, ZipArchive};
 
     #[test]
     fn fixture_has_fixed_layout_structure_and_geometry() {

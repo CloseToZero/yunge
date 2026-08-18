@@ -76,6 +76,7 @@
          "view-search"
          "view-search-result"
          "view-selection-text"
+         "view-set-selection"
          "view-scroll-bars" "view-status" "view-style"
          "view-visible" "view-zoom")))))
 
@@ -1333,6 +1334,30 @@
     (should
      (equal requests
             '(("view-clear-selection" ((view . 31))))))))
+
+(ert-deftest yunge-reader-webview-selects-only-live-native-ranges ()
+  (let ((view
+         (yunge-reader-webview--make-view
+          :id 31 :surface-state 'ready))
+        (selection (yunge-reader-webview-test--selection))
+        (yunge-reader-webview--process 'fake-webview-process)
+        requests)
+    (cl-letf
+        (((symbol-function 'process-live-p) (lambda (_process) t))
+         ((symbol-function 'yunge-reader-webview--request)
+          (lambda (operation parameters _complete)
+            (push (list operation parameters) requests))))
+      (should
+       (yunge-reader-webview--select-view-range view selection))
+      (should-not (yunge-reader-webview--view-selection view))
+      (setf (yunge-reader-webview--view-destroyed view) t)
+      (should-not
+       (yunge-reader-webview--select-view-range view selection)))
+    (should
+     (equal
+      requests
+      `(("view-set-selection"
+         ((view . 31) (selection . ,selection))))))))
 
 (ert-deftest yunge-reader-webview-reconciles-resize-during-creation ()
   (let* ((created-bounds

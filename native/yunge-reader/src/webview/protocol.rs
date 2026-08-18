@@ -13,7 +13,7 @@ pub(super) const ACCELERATORS: [&str; 18] = [
     "+", "-", "=", "<escape>", "<next>", "<prior>", "C-d", "C-g", "C-u", "G",
     "J", "K", "M-m", "SPC", "g", "j", "k", "y",
 ];
-pub(super) const CAPABILITIES: [&str; 22] = [
+pub(super) const CAPABILITIES: [&str; 23] = [
     "publication-close",
     "publication-info",
     "publication-open",
@@ -31,6 +31,7 @@ pub(super) const CAPABILITIES: [&str; 22] = [
     "view-search",
     "view-search-result",
     "view-selection-text",
+    "view-set-selection",
     "view-scroll-bars",
     "view-status",
     "view-style",
@@ -61,6 +62,7 @@ pub(super) enum Operation {
     ViewSearch,
     ViewSearchResult,
     ViewSelectionText,
+    ViewSetSelection,
     ViewOpenPublication,
     ViewStyle,
     ViewScrollBars,
@@ -91,6 +93,7 @@ impl Request {
             "view-search" => Operation::ViewSearch,
             "view-search-result" => Operation::ViewSearchResult,
             "view-selection-text" => Operation::ViewSelectionText,
+            "view-set-selection" => Operation::ViewSetSelection,
             "view-open-publication" => Operation::ViewOpenPublication,
             "view-style" => Operation::ViewStyle,
             "view-scroll-bars" => Operation::ViewScrollBars,
@@ -225,6 +228,12 @@ mod tests {
             Request::decode(r#"{"id":9,"op":"view-zoom","params":{"view":3}}"#)
                 .unwrap();
         assert_eq!(request.operation().unwrap(), Operation::ViewZoom);
+
+        let request = Request::decode(
+            r#"{"id":10,"op":"view-set-selection","params":{"view":3}}"#,
+        )
+        .unwrap();
+        assert_eq!(request.operation().unwrap(), Operation::ViewSetSelection);
     }
 
     #[test]
