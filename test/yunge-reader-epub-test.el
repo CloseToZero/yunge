@@ -226,6 +226,17 @@
       (should (= (alist-get 'font-scale attached-style) 1.8))
       (should (string-match-p "Font 180%" header-line-format)))))
 
+(ert-deftest yunge-reader-epub-header-shows-view-progress ()
+  (with-temp-buffer
+    (yunge-reader-mode)
+    (setq yunge-reader-document (yunge-reader-epub-test--document)
+          yunge-reader-webview--buffer-view
+          (yunge-reader-webview--make-view
+           :location (yunge-reader-epub-test--location 0.359)))
+    (yunge-reader-epub-view-mode 1)
+    (yunge-reader-epub--update-header)
+    (should (string-match-p "EPUB  35%  Font" header-line-format))))
+
 (ert-deftest yunge-reader-epub-rejects-a-nonmanual-pending-place ()
   (with-temp-buffer
     (yunge-reader-mode)
@@ -916,7 +927,8 @@
           (yunge-reader-webview--make-view
            :buffer buffer
            :window window
-           :persistent t))
+           :persistent t
+           :surface-state 'opening))
          recorded)
     (unwind-protect
         (with-current-buffer buffer
@@ -926,6 +938,10 @@
           (cl-letf (((symbol-function 'yunge-reader-record-place)
                      (lambda (&optional value)
                        (setq recorded value))))
+            (yunge-reader-epub--location-changed view nil)
+            (should-not recorded)
+            (setf (yunge-reader-webview--view-surface-state view)
+                  'ready)
             (yunge-reader-epub--location-changed view nil))
           (should (eq recorded window)))
       (kill-buffer buffer))))

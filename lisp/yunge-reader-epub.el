@@ -290,22 +290,37 @@ scrolling behavior."
            (* 100
               (or yunge-reader-effective-scale
                   yunge-reader-scale
-                  yunge-reader-epub-default-font-scale)))))
+                  yunge-reader-epub-default-font-scale))))
+         (location
+          (and yunge-reader-webview--buffer-view
+               (yunge-reader-webview--view-location
+                yunge-reader-webview--buffer-view)))
+         (fraction (and location (alist-get 'fraction location)))
+         (progress
+          (and (numberp fraction)
+               (if (= fraction 1)
+                   100
+                 (floor (* 100 fraction))))))
     (setq header-line-format
-          (format " %s  EPUB  Font %d%%  %s "
-                  role font-percent title))))
+          (format " %s  EPUB%s  Font %d%%  %s "
+                  role
+                  (if progress (format "  %d%%" progress) "")
+                  font-percent title))))
 
 (defun yunge-reader-epub--location-changed (view user)
-  "Record the stable location reported by EPUB VIEW."
+  "Handle the stable location reported by EPUB VIEW.
+USER is non-nil when direct reader movement produced the location."
   (when-let* ((buffer (yunge-reader-webview--view-buffer view))
               ((buffer-live-p buffer)))
     (with-current-buffer buffer
       (when (and yunge-reader-epub-view-mode
                  (eq view yunge-reader-webview--buffer-view))
+        (yunge-reader-epub--update-header)
         (when user
           (yunge-reader--detach-search-navigation))
-        (yunge-reader-record-place
-         (yunge-reader-webview--view-window view))))))
+        (when (yunge-reader-webview--surface-ready-p view)
+          (yunge-reader-record-place
+           (yunge-reader-webview--view-window view)))))))
 
 (defun yunge-reader-epub--selection-position (href cfi)
   "Return a Reader position for EPUB HREF and collapsed CFI."

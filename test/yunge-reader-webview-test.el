@@ -965,7 +965,8 @@
           (should
            (equal (yunge-reader-webview--view-location view)
                   (yunge-reader-webview-test--location 0.25)))
-          (should (zerop location-notifications))
+          (should (= location-notifications 1))
+          (should-not location-user)
           (should
            (yunge-reader-webview--view-outline-ready view))
           (should-not outline-error)
@@ -982,7 +983,7 @@
               . ((cfi . "epubcfi(/6/6!/4/2)")
                  (href . "OPS/next.xhtml")
                  (fraction . 0.3)))))
-          (should (= location-notifications 1))
+          (should (= location-notifications 2))
           (should location-user)
           (should
            (equal (yunge-reader-webview--view-location view)

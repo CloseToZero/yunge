@@ -142,16 +142,15 @@
           (set-buffer-modified-p nil))))))
 
 (defun yunge-reader-webview--store-view-location
-    (view message &optional quiet)
-  "Store VIEW's locator from MESSAGE.
-Unless QUIET is non-nil, notify the logical view's owner."
+    (view message &optional initial)
+  "Store VIEW's locator from MESSAGE and notify its logical owner.
+An INITIAL publication location has no direct-user origin."
   (let ((location (yunge-reader-webview--event-location message))
         (user
-         (unless quiet
+         (unless initial
            (yunge-reader-webview--event-location-user message))))
     (setf (yunge-reader-webview--view-location view) location)
-    (when-let* (((not quiet))
-                (function
+    (when-let* ((function
                  (yunge-reader-webview--view-location-changed-function
                   view)))
       (condition-case error-data
@@ -159,7 +158,7 @@ Unless QUIET is non-nil, notify the logical view's owner."
         (error
          (display-warning
           'yunge-reader
-          (format "Could not record EPUB location: %s"
+          (format "Could not update EPUB location: %s"
                   (error-message-string error-data))
           :warning))))))
 
