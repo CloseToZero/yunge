@@ -53,6 +53,9 @@
 (defvar-local shuying-org--previous-point nil
   "Point before the most recent command.")
 
+(defvar-local shuying-org--previous-tick nil
+  "Buffer modification tick before the most recent command.")
+
 (defvar-local shuying-org--visible-window-state nil
   "Last window state populated with Shuying previews.")
 
@@ -174,6 +177,30 @@ EQUATION-NUMBER is the next automatic number at the fragment's start."
   "Return the Org LaTeX fragment containing point, or nil."
   (shuying-org--fragment-at-position (point)))
 
+(defun shuying-org--delimited-fragment-p (fragment)
+  "Return whether FRAGMENT has explicit LaTeX delimiters."
+  (let ((source (shuying-org-fragment-value fragment)))
+    (or (string-prefix-p "$" source)
+        (string-prefix-p "\\(" source)
+        (string-prefix-p "\\[" source)
+        (string-prefix-p "\\begin{" source))))
+
+(defun shuying-org--fragment-at-edit-boundary
+    (active-position text-changed)
+  "Return the delimited fragment whose end is point, or nil.
+ACTIVE-POSITION is the start remembered from the previous command.
+TEXT-CHANGED permits a newly closed fragment to become active."
+  (when (> (point) (point-min))
+    (when-let* ((fragment
+                 (shuying-org--fragment-at-position (1- (point))))
+                (beginning
+                 (shuying-org-fragment-beginning fragment)))
+      (when (and (= (shuying-org-fragment-end fragment) (point))
+                 (shuying-org--delimited-fragment-p fragment)
+                 (or text-changed
+                     (equal beginning active-position)))
+        fragment))))
+
 (defun shuying-org--fragment-overlays (beginning end)
   "Return Shuying overlays between BEGINNING and END."
   (seq-filter
@@ -223,7 +250,14 @@ Return nil when POSITION has no preview or its source is currently visible."
   "Return the display overlay for FRAGMENT, creating it if needed."
   (pcase-let* ((`(,beginning . ,end)
                 (shuying-org--fragment-bounds fragment))
-               (overlay (shuying-org--fragment-overlay fragment)))
+               (overlay (shuying-org--fragment-overlay fragment))
+               (shuying-overlays
+                (shuying-org--fragment-overlays beginning end)))
+    ;; Org fragments cannot nest.  A differently bounded Shuying overlay is
+    ;; stale parser state left behind while delimiters were incomplete.
+    (dolist (candidate shuying-overlays)
+      (unless (eq candidate overlay)
+        (delete-overlay candidate)))
     (dolist (candidate (overlays-in beginning end))
       (when (eq (overlay-get candidate 'org-overlay-type)
                 'org-latex-overlay)
@@ -453,8 +487,14 @@ When AUTOMATIC is non-nil, silently retain unavailable dependency errors."
 
 (defun shuying-org--enter-fragment (fragment)
   "Reveal the source of Org FRAGMENT."
-  (when-let* ((overlay (shuying-org--fragment-overlay fragment)))
-    (overlay-put overlay 'display nil)))
+  (pcase-let ((`(,beginning . ,end)
+               (shuying-org--fragment-bounds fragment)))
+    (dolist (overlay
+             (shuying-org--fragment-overlays beginning end))
+      (if (and (= (overlay-start overlay) beginning)
+               (= (overlay-end overlay) end))
+          (overlay-put overlay 'display nil)
+        (delete-overlay overlay)))))
 
 (defun shuying-org--set-active-fragment (fragment)
   "Remember FRAGMENT as the one containing point."
@@ -473,12 +513,18 @@ When AUTOMATIC is non-nil, silently retain unavailable dependency errors."
 
 (defun shuying-org--post-command ()
   "Update preview visibility after point moves or source changes."
-  (let* ((current (shuying-org--fragment-at-point))
-         (current-start
-          (and current (shuying-org-fragment-beginning current)))
-         (active-position
+  (let* ((active-position
           (and (markerp shuying-org--active-start)
                (marker-position shuying-org--active-start)))
+         (text-changed
+          (not (equal shuying-org--previous-tick
+                      (buffer-chars-modified-tick))))
+         (current
+          (or (shuying-org--fragment-at-point)
+              (shuying-org--fragment-at-edit-boundary
+               active-position text-changed)))
+         (current-start
+          (and current (shuying-org-fragment-beginning current)))
          (changed-overlays
           (prog1 shuying-org--changed-overlays
             (setq shuying-org--changed-overlays nil)))
@@ -506,8 +552,9 @@ When AUTOMATIC is non-nil, silently retain unavailable dependency errors."
       (when-let* ((completed
                   (shuying-org--fragment-at-position
                    shuying-org--previous-point)))
-        (unless (memq (shuying-org-fragment-beginning completed)
-                      processed-starts)
+        (unless (or (= (point) (shuying-org-fragment-end completed))
+                    (memq (shuying-org-fragment-beginning completed)
+                          processed-starts))
           (push (shuying-org-fragment-beginning completed)
                 processed-starts)
           (shuying-org--leave-fragment completed))))
@@ -518,11 +565,10 @@ When AUTOMATIC is non-nil, silently retain unavailable dependency errors."
         (if-let* ((fragment
                    (shuying-org--fragment-at-position
                     (overlay-start overlay))))
-            (pcase-let ((`(,beginning . ,end)
-                         (shuying-org--fragment-bounds fragment)))
+            (let ((beginning
+                   (shuying-org-fragment-beginning fragment)))
               (unless (or (memq beginning processed-starts)
-                          (and (<= beginning (point))
-                               (< (point) end)))
+                          (equal beginning current-start))
                 (push beginning processed-starts)
                 (shuying-org--leave-fragment fragment)))
           (delete-overlay overlay)
@@ -530,7 +576,9 @@ When AUTOMATIC is non-nil, silently retain unavailable dependency errors."
     (when refresh-visible
       (setq shuying-org--visible-window-state nil)
       (shuying-org--schedule-visible-preview t))
-    (setq shuying-org--previous-point (point))))
+    (setq shuying-org--previous-point (point)
+          shuying-org--previous-tick
+          (buffer-chars-modified-tick))))
 
 (defun shuying-org--rebuild-fragment-catalog ()
   "Parse and remember every Org LaTeX fragment in the current buffer."
@@ -750,7 +798,9 @@ preview the whole buffer.  With three, clear the whole buffer."
         (unless (derived-mode-p 'org-mode)
           (setq shuying-org-mode nil)
           (user-error "Shuying Org mode requires an Org buffer"))
-        (setq shuying-org--previous-point (point))
+        (setq shuying-org--previous-point (point)
+              shuying-org--previous-tick
+              (buffer-chars-modified-tick))
         (add-hook 'post-command-hook
                   #'shuying-org--post-command nil t)
         (setq shuying-org--visible-window-state nil)

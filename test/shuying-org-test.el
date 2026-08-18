@@ -40,6 +40,21 @@
       (overlay-put overlay 'display nil)
       (should-not (shuying-org-preview-overlay-at 9)))))
 
+(ert-deftest shuying-org-removes-a-stale-nested-preview-on-entry ()
+  (with-temp-buffer
+    (org-mode)
+    (insert "\\( \\m\\)")
+    (goto-char (point-min))
+    (let ((fragment (shuying-org--fragment-at-point))
+          (outer (make-overlay 1 8))
+          (inner (make-overlay 4 6)))
+      (dolist (overlay (list outer inner))
+        (overlay-put overlay 'shuying-org t)
+        (overlay-put overlay 'display 'image))
+      (shuying-org--enter-fragment fragment)
+      (should-not (overlay-get outer 'display))
+      (should-not (overlay-buffer inner)))))
+
 (ert-deftest shuying-org-rechecks-viewport-after-displaying-an-image ()
   (with-temp-buffer
     (insert "formula")
@@ -740,7 +755,7 @@
         (kill-buffer buffer))
       (delete-directory root t))))
 
-(ert-deftest shuying-org-previews-a-newly-closed-fragment ()
+(ert-deftest shuying-org-previews-after-leaving-a-newly-closed-fragment ()
   (let* ((root (make-temp-file "shuying-org-" t))
          (shuying-cache-directory root)
          (shuying-backends nil)
@@ -759,6 +774,53 @@
               (insert "Text $x")
               (shuying-org-mode 1)
               (insert "$")
+              (shuying-org--post-command)
+              (should (= shuying-org-test--render-count 0))
+              (should-not (shuying-org-test--overlay))
+              ;; A state change at the same editing boundary must not make
+              ;; the source disappear.
+              (shuying-org--post-command)
+              (should (= shuying-org-test--render-count 0))
+              (goto-char (point-min))
+              (shuying-org--post-command)
+              (should (= shuying-org-test--render-count 1))
+              (should
+               (overlay-get
+                (shuying-org-test--overlay) 'display)))))
+      (delete-directory root t))))
+
+(ert-deftest shuying-org-keeps-an-incomplete-inline-formula-visible ()
+  (let* ((root (make-temp-file "shuying-org-" t))
+         (shuying-cache-directory root)
+         (shuying-backends nil)
+         (shuying--pending-jobs (make-hash-table :test #'equal))
+         (shuying-org-test--render-count 0))
+    (unwind-protect
+        (progn
+          (shuying-register-backend
+           'shuying-latex
+           #'shuying-org-test--render-now)
+          (cl-letf (((symbol-function 'create-image)
+                     (lambda (file &rest _properties)
+                       (list 'image file))))
+            (with-temp-buffer
+              (org-mode)
+              (insert "Before.\n")
+              (shuying-org-mode 1)
+              (dolist (character '(?\\ ?\( ?\s ?\\ ?m))
+                (insert character)
+                (shuying-org--post-command))
+              (should (equal (buffer-string) "Before.\n\\( \\m"))
+              (should (= shuying-org-test--render-count 0))
+              (should-not (shuying-org-test--overlay))
+              (dolist (character '(?\\ ?\)))
+                (insert character)
+                (shuying-org--post-command))
+              (should (equal (buffer-string) "Before.\n\\( \\m\\)"))
+              (should (= shuying-org-test--render-count 0))
+              (shuying-org--post-command)
+              (should (= shuying-org-test--render-count 0))
+              (goto-char (point-min))
               (shuying-org--post-command)
               (should (= shuying-org-test--render-count 1))
               (should
