@@ -113,11 +113,17 @@ path to JavaScript.  =publication-info= repeats the bounded metadata and
 resource statistics, while =publication-close= releases the ZIP handle.  Both
 open and info also return a private =resource-root= capability URL.
 
+The metadata =layout= is =reflowable= when the package omits
+=rendition:layout=, and =pre-paginated= only when the package declares that
+standard value.  Invalid or duplicate package-level layout declarations reject
+the publication before a renderer view is created.
+
 #+begin_src json
 {"id":1,"op":"publication-open",
  "params":{"path":"D:/books/example.epub"}}
 {"id":1,"ok":true,
  "result":{"publication":1,
+           "metadata":{"layout":"reflowable",...},
            "resource-root":"yunge-reader-book://TOKEN/",...}}
 #+end_src
 

@@ -1605,6 +1605,7 @@ mod tests {
         let result = opened.result.unwrap();
         assert_eq!(result["publication"], 1);
         assert_eq!(result["metadata"]["package-path"], "OPS/package.opf");
+        assert_eq!(result["metadata"]["layout"], "reflowable");
         assert_eq!(result["metadata"]["title"], "Protocol Book");
         assert_eq!(result["entry-count"], 4);
         assert!(result["expanded-bytes"].as_u64().unwrap() > 0);

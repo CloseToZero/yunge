@@ -34,10 +34,18 @@ const MAX_XML_NODES: u32 = 100_000;
 #[serde(rename_all = "kebab-case")]
 pub struct PublicationMetadata {
     pub package_path: String,
+    pub layout: PublicationLayout,
     pub title: Option<String>,
     pub language: Option<String>,
     pub identifier: Option<String>,
     pub version: Option<String>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum PublicationLayout {
+    Reflowable,
+    PrePaginated,
 }
 
 #[derive(Debug)]
@@ -747,6 +755,7 @@ fn parse_package(
     Ok((
         PublicationMetadata {
             package_path: package_path.to_owned(),
+            layout: parse_layout(metadata, package_path)?,
             title: first_dc_text(metadata, "title"),
             language: first_dc_text(metadata, "language"),
             identifier,
@@ -754,6 +763,48 @@ fn parse_package(
         },
         resources,
     ))
+}
+
+fn parse_layout(
+    metadata: Node<'_, '_>,
+    package_path: &str,
+) -> Result<PublicationLayout, EpubError> {
+    let mut declarations = metadata.children().filter(|node| {
+        is_opf_element(*node, "meta")
+            && node.attribute("property") == Some("rendition:layout")
+    });
+    let Some(declaration) = declarations.next() else {
+        return Ok(PublicationLayout::Reflowable);
+    };
+    if declarations.next().is_some() {
+        return Err(EpubError::new(
+            "invalid-epub",
+            format!(
+                "package document declares rendition:layout more than once: \
+                 {package_path}"
+            ),
+        ));
+    }
+    let value = normalized_text(declaration).ok_or_else(|| {
+        EpubError::new(
+            "invalid-epub",
+            format!(
+                "package document has empty rendition:layout: \
+                 {package_path}"
+            ),
+        )
+    })?;
+    match value.as_str() {
+        "reflowable" => Ok(PublicationLayout::Reflowable),
+        "pre-paginated" => Ok(PublicationLayout::PrePaginated),
+        _ => Err(EpubError::new(
+            "invalid-epub",
+            format!(
+                "package document has invalid rendition:layout {value}: \
+                 {package_path}"
+            ),
+        )),
+    }
 }
 
 fn parse_manifest(
@@ -950,6 +1001,10 @@ mod tests {
         assert_eq!(publication.entry_count(), 4);
         assert!(publication.expanded_size() > 0);
         assert_eq!(publication.metadata().package_path, "OPS/package.opf");
+        assert_eq!(
+            publication.metadata().layout,
+            PublicationLayout::Reflowable
+        );
         assert_eq!(publication.metadata().title.as_deref(), Some("Test Book"));
         assert_eq!(publication.metadata().language.as_deref(), Some("en"));
         assert_eq!(
@@ -968,6 +1023,42 @@ mod tests {
                 size: 33,
             }]
         );
+    }
+
+    #[test]
+    fn parses_and_validates_package_layout() {
+        let fixed = PACKAGE.replace(
+            "</metadata>",
+            concat!(
+                "<meta property=\"rendition:layout\">",
+                "pre-paginated</meta></metadata>"
+            ),
+        );
+        let metadata = parse_package("OPS/package.opf", fixed.as_bytes())
+            .unwrap()
+            .0;
+        assert_eq!(metadata.layout, PublicationLayout::PrePaginated);
+
+        for value in [
+            "",
+            "invalid",
+            concat!(
+                "pre-paginated</meta>",
+                "<meta property=\"rendition:layout\">reflowable"
+            ),
+        ] {
+            let package = PACKAGE.replace(
+                "</metadata>",
+                &format!(
+                    "<meta property=\"rendition:layout\">{value}</meta>\
+                     </metadata>"
+                ),
+            );
+            let error = parse_package("OPS/package.opf", package.as_bytes())
+                .unwrap_err();
+            assert_eq!(error.code(), "invalid-epub");
+            assert!(error.message().contains("rendition:layout"));
+        }
     }
 
     #[test]
