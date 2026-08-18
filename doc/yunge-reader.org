@@ -399,6 +399,23 @@ A driver that supports places supplies location and restore functions as a
 pair.  EPUB uses that contract without storing an Emacs buffer point, and
 later reflowable drivers can do the same.
 
+Document appearance has a separate inheritance chain.  Each format reads its
+default from =yunge-reader-default-appearances=; both PDF and EPUB default to
+=original=.  A document without an explicit override inherits that value, so
+=yunge-reader-set-default-appearance= updates every live inheriting document
+of the format.  An explicit override survives default changes and is shared by
+all logical views of the same document.  Use
+=yunge-reader-set-document-appearance= to create one and
+=yunge-reader-unset-document-appearance= to restore inheritance.
+
+Appearance overrides are durable user preferences rather than recency data.
+They persist through =savehist= separately from bounded saved places and are
+not evicted automatically.  The explicit
+=yunge-reader-cleanup-missing-document-state= command removes both places and
+appearance overrides whose files no longer exist.  It never runs on a timer,
+because a temporarily disconnected volume must not silently lose book
+preferences.
+
 A restore result of =:deferred= means that the driver accepted a transient
 navigation target but cannot yet provide its durable destination.  The core
 records the source jump without replacing the current location or saved place;

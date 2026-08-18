@@ -15,6 +15,9 @@
   (should
    (memq 'yunge-reader-saved-places
          savehist-additional-variables))
+  (should
+   (memq 'yunge-reader-saved-appearance-overrides
+         savehist-additional-variables))
   (should recentf-mode)
   (should (= recentf-max-saved-items 1000))
   (should (= recentf-auto-cleanup (* 10 60)))

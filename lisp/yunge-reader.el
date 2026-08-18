@@ -76,6 +76,19 @@
   :type '(integer :tag "Places" 1)
   :group 'yunge-reader)
 
+(defcustom yunge-reader-default-appearances
+  '((pdf . original)
+    (epub . original))
+  "Default appearance for each Reader document format.
+An omitted format also defaults to `original'."
+  :type '(alist
+          :key-type (symbol :tag "Format")
+          :value-type
+          (choice
+           (const :tag "Original" original)
+           (const :tag "Follow Emacs" follow-emacs)))
+  :group 'yunge-reader)
+
 (defcustom yunge-reader-uri-schemes '("https" "http" "mailto")
   "URI schemes that document actions may open through `browse-url'."
   :type '(repeat (string :tag "Scheme"))
@@ -86,6 +99,9 @@
 
 (defconst yunge-reader-place-version 1
   "Current durable Reader place format version.")
+
+(defconst yunge-reader-appearances '(original follow-emacs)
+  "Appearance values accepted by Reader documents.")
 
 (define-error 'yunge-reader-no-driver
   "No Yunge Reader driver accepts the document")
@@ -227,6 +243,10 @@ unscaled coordinate system of UNIT."
   "Most recently used durable Reader places.
 Each entry maps a canonical file name to versioned, printable place data.")
 
+(defvar yunge-reader-saved-appearance-overrides nil
+  "Durable Reader appearance overrides.
+Each entry maps a canonical file name to `original' or `follow-emacs'.")
+
 (defvar-local yunge-reader-document nil
   "Document displayed by the current reader buffer.")
 
@@ -345,6 +365,10 @@ artifacts.  Functions run in the reader buffer without arguments.")
 Functions run in the affected Reader buffer without arguments.  A view
 adapter should update role-dependent presentation without rebuilding its
 document contents.")
+
+(defvar-local yunge-reader-appearance-change-hook nil
+  "Hook run after the current Reader view's effective appearance changes.
+Functions run in the affected Reader buffer without arguments.")
 
 (defconst yunge-reader-command-bindings
   '(("p" yunge-reader-make-primary "make primary")
@@ -509,6 +533,102 @@ new definition highest precedence."
   (let ((absolute (expand-file-name file)))
     (or (ignore-errors (file-truename absolute)) absolute)))
 
+(defun yunge-reader--appearance-p (appearance)
+  "Return whether APPEARANCE is a supported Reader appearance."
+  (memq appearance yunge-reader-appearances))
+
+(defun yunge-reader--driver-format (driver)
+  "Return the format symbol represented by DRIVER."
+  (cond
+   ((yunge-reader-driver-p driver)
+    (yunge-reader-driver-name driver))
+   ((symbolp driver) driver)
+   (t (error "Invalid Reader driver: %S" driver))))
+
+(defun yunge-reader--default-appearance (driver)
+  "Return DRIVER's effective format default appearance."
+  (let ((appearance
+         (alist-get (yunge-reader--driver-format driver)
+                    yunge-reader-default-appearances)))
+    (if (yunge-reader--appearance-p appearance)
+        appearance
+      'original)))
+
+(defun yunge-reader--saved-appearance-override (file)
+  "Return FILE's valid saved appearance override, or nil."
+  (let ((appearance
+         (cdr
+          (assoc (yunge-reader--place-file-key file)
+                 yunge-reader-saved-appearance-overrides))))
+    (and (yunge-reader--appearance-p appearance) appearance)))
+
+(defun yunge-reader-document-appearance-override (&optional document)
+  "Return DOCUMENT's explicit appearance override, or nil.
+DOCUMENT defaults to the document in the current Reader buffer."
+  (let ((document (or document yunge-reader-document)))
+    (when document
+      (yunge-reader--saved-appearance-override
+       (yunge-reader-document-file document)))))
+
+(defun yunge-reader-effective-appearance (&optional document)
+  "Return DOCUMENT's effective Reader appearance.
+DOCUMENT defaults to the document in the current Reader buffer."
+  (let ((document (or document yunge-reader-document)))
+    (unless (yunge-reader-document-p document)
+      (error "The current Reader buffer has no document"))
+    (or (yunge-reader-document-appearance-override document)
+        (yunge-reader--default-appearance
+         (yunge-reader-document-driver document)))))
+
+(defun yunge-reader--store-appearance-override (file appearance)
+  "Persist APPEARANCE as FILE's explicit override."
+  (unless (yunge-reader--appearance-p appearance)
+    (error "Invalid Reader appearance: %S" appearance))
+  (let ((key (yunge-reader--place-file-key file)))
+    (setq yunge-reader-saved-appearance-overrides
+          (cons
+           (cons key appearance)
+           (seq-remove
+            (lambda (entry) (equal (car-safe entry) key))
+            yunge-reader-saved-appearance-overrides)))))
+
+(defun yunge-reader--unset-appearance-override (file)
+  "Remove FILE's explicit appearance override."
+  (let ((key (yunge-reader--place-file-key file)))
+    (setq yunge-reader-saved-appearance-overrides
+          (seq-remove
+           (lambda (entry) (equal (car-safe entry) key))
+           yunge-reader-saved-appearance-overrides))))
+
+(defun yunge-reader--existing-document-state-entries (entries)
+  "Return ENTRIES whose file keys still exist."
+  (seq-filter
+   (lambda (entry)
+     (let ((file (car-safe entry)))
+       (and (stringp file) (file-exists-p file))))
+   entries))
+
+(defun yunge-reader-cleanup-missing-document-state ()
+  "Forget saved state for document files that no longer exist.
+This removes both durable places and explicit appearance overrides.  A file
+on a disconnected volume is considered missing, so this command is never run
+automatically."
+  (interactive)
+  (let ((place-count (length yunge-reader-saved-places))
+        (appearance-count
+         (length yunge-reader-saved-appearance-overrides)))
+    (setq yunge-reader-saved-places
+          (yunge-reader--existing-document-state-entries
+           yunge-reader-saved-places)
+          yunge-reader-saved-appearance-overrides
+          (yunge-reader--existing-document-state-entries
+           yunge-reader-saved-appearance-overrides))
+    (message
+     "Removed %d saved places and %d appearance overrides"
+     (- place-count (length yunge-reader-saved-places))
+     (- appearance-count
+        (length yunge-reader-saved-appearance-overrides)))))
+
 (defun yunge-reader--document-key (file driver)
   "Return the registry key for FILE opened through DRIVER."
   (list (yunge-reader-driver-name driver)
@@ -572,6 +692,35 @@ new definition highest precedence."
        (list (yunge-reader--document-entry-primary-view entry))))
     views))
 
+(defun yunge-reader--notify-appearance-change (entry)
+  "Run appearance hooks safely in every live view of ENTRY."
+  (dolist (buffer (yunge-reader--entry-live-views entry))
+    (condition-case error-data
+        (with-current-buffer buffer
+          (run-hooks 'yunge-reader-appearance-change-hook))
+      (error
+       (display-warning
+        'yunge-reader
+        (format "Could not update Reader appearance in %s: %s"
+                (buffer-name buffer)
+                (error-message-string error-data))
+        :warning)))))
+
+(defun yunge-reader--notify-format-appearance-change (format)
+  "Notify live FORMAT documents that inherit their appearance."
+  (maphash
+   (lambda (_key entry)
+     (when (and
+            (eq (yunge-reader--document-entry-state entry) 'ready)
+            (eq (yunge-reader--driver-format
+                 (yunge-reader--document-entry-driver entry))
+                format)
+            (not
+             (yunge-reader--saved-appearance-override
+              (yunge-reader--document-entry-file entry))))
+       (yunge-reader--notify-appearance-change entry)))
+   yunge-reader--document-registry))
+
 (defun yunge-reader--entry-view (entry &optional preferred)
   "Return a live view of ENTRY, preferring PREFERRED."
   (let ((views (yunge-reader--entry-live-views entry)))
@@ -634,6 +783,155 @@ The possible roles are `primary' and `additional'."
             (yunge-reader--document-entry-primary-view entry))
         'primary
       'additional)))
+
+(defun yunge-reader--appearance-label (appearance)
+  "Return a user-facing label for APPEARANCE."
+  (pcase appearance
+    ('original "Original")
+    ('follow-emacs "Follow Emacs")
+    (_ (error "Invalid Reader appearance: %S" appearance))))
+
+(defun yunge-reader--format-label (format)
+  "Return a user-facing label for FORMAT."
+  (upcase (symbol-name format)))
+
+(defun yunge-reader--read-appearance (prompt default)
+  "Read an appearance with PROMPT and DEFAULT."
+  (let* ((choices
+          (mapcar
+           (lambda (appearance)
+             (cons (yunge-reader--appearance-label appearance)
+                   appearance))
+           yunge-reader-appearances))
+         (answer
+          (completing-read
+           prompt choices nil t nil nil
+           (yunge-reader--appearance-label default))))
+    (or (cdr (assoc-string answer choices))
+        (error "Invalid Reader appearance: %s" answer))))
+
+(defun yunge-reader--read-default-appearance-arguments ()
+  "Read a format and appearance for the default appearance command."
+  (let* ((current-format
+          (and yunge-reader-document
+               (yunge-reader--driver-format
+                (yunge-reader-document-driver yunge-reader-document))))
+         (formats
+          (delete-dups
+           (append
+            (mapcar #'car yunge-reader-default-appearances)
+            (mapcar #'yunge-reader-driver-name yunge-reader-drivers))))
+         (choices
+          (mapcar
+           (lambda (format)
+             (cons (yunge-reader--format-label format) format))
+           formats))
+         (format
+          (or current-format
+              (let ((answer
+                     (completing-read
+                      "Document format: " choices nil t)))
+                (cdr (assoc-string answer choices)))))
+         (default (yunge-reader--default-appearance format)))
+    (unless format
+      (user-error "No Reader document formats are available"))
+    (list
+     format
+     (yunge-reader--read-appearance
+      (format "%s default appearance: "
+              (yunge-reader--format-label format))
+      default))))
+
+(defun yunge-reader--set-default-appearance
+    (format appearance &optional persist)
+  "Set FORMAT's default to APPEARANCE.
+When PERSIST is non-nil, save the setting through Customize."
+  (unless (symbolp format)
+    (error "Invalid Reader format: %S" format))
+  (unless (yunge-reader--appearance-p appearance)
+    (error "Invalid Reader appearance: %S" appearance))
+  (let ((old (yunge-reader--default-appearance format))
+        (updated (copy-tree yunge-reader-default-appearances)))
+    (setf (alist-get format updated) appearance)
+    (if persist
+        (customize-save-variable
+         'yunge-reader-default-appearances updated)
+      (setq yunge-reader-default-appearances updated))
+    (unless (eq old appearance)
+      (yunge-reader--notify-format-appearance-change format))
+    appearance))
+
+(defun yunge-reader-set-default-appearance (format appearance)
+  "Persist APPEARANCE as FORMAT's default.
+An explicit override on the current book remains unchanged."
+  (interactive (yunge-reader--read-default-appearance-arguments))
+  (yunge-reader--set-default-appearance format appearance t)
+  (let* ((document
+          (and yunge-reader-document
+               (eq format
+                   (yunge-reader--driver-format
+                    (yunge-reader-document-driver
+                     yunge-reader-document)))
+               yunge-reader-document))
+         (override
+          (and document
+               (yunge-reader-document-appearance-override document))))
+    (cond
+     ((and override (not (eq override appearance)))
+      (message
+       (concat
+        "%s default is now %s; this book remains %s because it has "
+        "a document override.  Use M-x "
+        "yunge-reader-unset-document-appearance to inherit the default")
+       (yunge-reader--format-label format)
+       (yunge-reader--appearance-label appearance)
+       (yunge-reader--appearance-label override)))
+     (override
+      (message "%s default is now %s; this book keeps its matching override"
+               (yunge-reader--format-label format)
+               (yunge-reader--appearance-label appearance)))
+     (t
+      (message "%s default appearance is now %s"
+               (yunge-reader--format-label format)
+               (yunge-reader--appearance-label appearance))))))
+
+(defun yunge-reader-set-document-appearance (appearance)
+  "Persist APPEARANCE as an override for the current document."
+  (interactive
+   (list
+    (yunge-reader--read-appearance
+     "Book appearance: "
+     (yunge-reader-effective-appearance))))
+  (let* ((entry (yunge-reader--ready-view-entry))
+         (document yunge-reader-document))
+    (unless entry
+      (user-error "This Reader view has no ready document"))
+    (let ((old (yunge-reader-effective-appearance document)))
+      (yunge-reader--store-appearance-override
+       (yunge-reader-document-file document) appearance)
+      (unless (eq old appearance)
+        (yunge-reader--notify-appearance-change entry)))
+    (message "This book now uses %s"
+             (yunge-reader--appearance-label appearance))))
+
+(defun yunge-reader-unset-document-appearance ()
+  "Remove the current document's appearance override."
+  (interactive)
+  (let* ((entry (yunge-reader--ready-view-entry))
+         (document yunge-reader-document))
+    (unless entry
+      (user-error "This Reader view has no ready document"))
+    (if-let* ((override
+               (yunge-reader-document-appearance-override document)))
+        (let ((file (yunge-reader-document-file document)))
+          (yunge-reader--unset-appearance-override file)
+          (let ((inherited
+                 (yunge-reader-effective-appearance document)))
+            (unless (eq override inherited)
+              (yunge-reader--notify-appearance-change entry))
+            (message "This book now inherits %s"
+                     (yunge-reader--appearance-label inherited))))
+      (message "This book already inherits its format default"))))
 
 (defun yunge-reader--note-view-activity ()
   "Remember the current presentation and document view as active."

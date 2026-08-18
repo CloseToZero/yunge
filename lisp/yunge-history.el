@@ -13,6 +13,9 @@
 (defvar yunge-reader-saved-places nil
   "Most recently used durable Yunge Reader places.")
 
+(defvar yunge-reader-saved-appearance-overrides nil
+  "Durable Yunge Reader appearance overrides.")
+
 ;; Keep each history useful without allowing it to grow without bound.
 (setq history-length 1000
       history-delete-duplicates t)
@@ -21,6 +24,8 @@
         yunge-history-autosave-interval)
 (add-to-list 'savehist-additional-variables
              'yunge-reader-saved-places)
+(add-to-list 'savehist-additional-variables
+             'yunge-reader-saved-appearance-overrides)
 (savehist-mode 1)
 
 (setq recentf-max-saved-items 1000

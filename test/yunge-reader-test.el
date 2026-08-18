@@ -1115,6 +1115,128 @@
                     yunge-reader-saved-places)
             '("three.pdf" "two.pdf")))))
 
+(ert-deftest yunge-reader-resolves-durable-appearance-overrides ()
+  (let* ((file (expand-file-name "appearance.epub"))
+         (driver
+          (yunge-reader--make-driver
+           :name 'epub :close-function #'ignore))
+         (document
+          (make-yunge-reader-document :file file :driver driver))
+         (yunge-reader-default-appearances
+          '((epub . follow-emacs)))
+         (yunge-reader-saved-appearance-overrides nil))
+    (should (eq (yunge-reader-effective-appearance document)
+                'follow-emacs))
+    (should-not
+     (yunge-reader-document-appearance-override document))
+    (yunge-reader--store-appearance-override file 'original)
+    (should (eq (yunge-reader-effective-appearance document) 'original))
+    (should
+     (eq (yunge-reader-document-appearance-override document)
+         'original))
+    (yunge-reader--unset-appearance-override file)
+    (should (eq (yunge-reader-effective-appearance document)
+                'follow-emacs))))
+
+(ert-deftest yunge-reader-cleans-missing-durable-document-state ()
+  (let* ((existing (make-temp-file "yunge-reader-state-"))
+         (missing (concat existing ".missing"))
+         (yunge-reader-saved-places
+          (list (cons existing 'existing-place)
+                (cons missing 'missing-place)))
+         (yunge-reader-saved-appearance-overrides
+          (list (cons missing 'original)
+                (cons existing 'follow-emacs))))
+    (unwind-protect
+        (let ((inhibit-message t))
+          (yunge-reader-cleanup-missing-document-state)
+          (should
+           (equal yunge-reader-saved-places
+                  (list (cons existing 'existing-place))))
+          (should
+           (equal yunge-reader-saved-appearance-overrides
+                  (list (cons existing 'follow-emacs)))))
+      (when (file-exists-p existing)
+        (delete-file existing)))))
+
+(ert-deftest yunge-reader-appearance-commands-synchronize-document-views ()
+  (let* ((file (expand-file-name "appearance-views.epub"))
+         (driver
+          (yunge-reader--make-driver
+           :name 'epub :close-function #'ignore))
+         (key (list 'epub (yunge-reader--place-file-key file)))
+         (document
+          (make-yunge-reader-document
+           :key key :file file :driver driver))
+         (entry
+          (yunge-reader--make-document-entry
+           :key key :file file :driver driver :state 'ready
+           :document document))
+         (yunge-reader--document-registry
+          (make-hash-table :test #'equal))
+         (yunge-reader-default-appearances '((epub . original)))
+         (yunge-reader-saved-appearance-overrides nil)
+         first
+         second
+         events
+         messages)
+    (unwind-protect
+        (progn
+          (setq first (yunge-reader-test--buffer
+                       " *reader-appearance-one*")
+                second (yunge-reader-test--buffer
+                        " *reader-appearance-two*"))
+          (setf (yunge-reader--document-entry-views entry)
+                (list first second)
+                (yunge-reader--document-entry-primary-view entry) first
+                (yunge-reader--document-entry-active-view entry) first)
+          (puthash key entry yunge-reader--document-registry)
+          (dolist (buffer (list first second))
+            (with-current-buffer buffer
+              (setq yunge-reader-document document
+                    yunge-reader--document-entry entry)
+              (add-hook
+               'yunge-reader-appearance-change-hook
+               (lambda ()
+                 (push
+                  (cons (current-buffer)
+                        (yunge-reader-effective-appearance))
+                  events))
+               nil t)))
+          (with-current-buffer first
+            (yunge-reader-set-document-appearance 'original))
+          (should-not events)
+          (cl-letf
+              (((symbol-function 'customize-save-variable)
+                (lambda (symbol value) (set symbol value)))
+               ((symbol-function 'message)
+                (lambda (format-string &rest arguments)
+                  (push (apply #'format format-string arguments)
+                        messages))))
+            (with-current-buffer first
+              (yunge-reader-set-default-appearance
+               'epub 'follow-emacs)))
+          (should-not events)
+          (should
+           (string-match-p
+            "this book remains Original"
+            (car messages)))
+          (with-current-buffer second
+            (yunge-reader-unset-document-appearance))
+          (should
+           (equal
+            (sort events
+                  (lambda (left right)
+                    (string< (buffer-name (car left))
+                             (buffer-name (car right)))))
+            (list (cons first 'follow-emacs)
+                  (cons second 'follow-emacs))))
+          (should-not yunge-reader-saved-appearance-overrides))
+      (when (buffer-live-p second)
+        (kill-buffer second))
+      (when (buffer-live-p first)
+        (kill-buffer first)))))
+
 (ert-deftest yunge-reader-orders-document-and-view-lifecycles ()
   (let ((yunge-reader-drivers nil)
         events
