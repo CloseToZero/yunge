@@ -126,17 +126,17 @@ Pinyin search is literal, so its `/` and `?` remain part of PATTERN."
   (let ((yunge-evil--pinyin-search t))
     (evil-ex-search-backward count)))
 
-(defun yunge-evil-visual-search-forward (beginning end)
-  "Search forward for the text selected in Visual state."
-  (interactive "r")
+(defun yunge-evil--visual-search (beginning end direction)
+  "Search in DIRECTION for the text from BEGINNING to END."
   (when (eq evil-visual-selection 'block)
     (user-error "Visual block search is not supported"))
   (let ((regexp
          (regexp-quote
-          (buffer-substring-no-properties beginning end))))
+           (buffer-substring-no-properties beginning end))))
     (evil-exit-visual-state)
+    (goto-char (if (eq direction 'forward) end beginning))
     (setq evil-ex-search-count 1
-          evil-ex-search-direction 'forward
+          evil-ex-search-direction direction
           evil-ex-search-pattern
           (let ((evil-ex-search-vim-style-regexp nil))
             (evil-ex-make-search-pattern regexp))
@@ -144,9 +144,19 @@ Pinyin search is literal, so its `/` and `?` remain part of PATTERN."
           evil-ex-last-was-search t)
     (unless (equal regexp (car evil-ex-search-history))
       (push regexp evil-ex-search-history))
-    (evil-push-search-history regexp t)
+    (evil-push-search-history regexp (eq direction 'forward))
     (evil-ex-delete-hl 'evil-ex-search)
     (evil-ex-search-next 1)))
+
+(defun yunge-evil-visual-search-forward (beginning end)
+  "Search forward for the text selected in Visual state."
+  (interactive "r")
+  (yunge-evil--visual-search beginning end 'forward))
+
+(defun yunge-evil-visual-search-backward (beginning end)
+  "Search backward for the text selected in Visual state."
+  (interactive "r")
+  (yunge-evil--visual-search beginning end 'backward))
 
 (defgroup yunge nil
   "Personal Emacs configuration."
@@ -306,7 +316,9 @@ Pinyin search is literal, so its `/` and `?` remain part of PATTERN."
      ("M-p" previous-history-element "previous history")))
   (yunge-key-evil-define
    'visual global-map
-   '(("*" yunge-evil-visual-search-forward "search selection")))
+   '(("*" yunge-evil-visual-search-forward "search selection forward")
+     ("#" yunge-evil-visual-search-backward
+      "search selection backward")))
   (evil-add-command-properties 'yunge-evil-pinyin-search-forward
                                :jump t :type 'exclusive
                                :repeat 'evil-repeat-ex-search
@@ -316,6 +328,8 @@ Pinyin search is literal, so its `/` and `?` remain part of PATTERN."
                                :repeat 'evil-repeat-ex-search
                                :keep-visual t)
   (evil-add-command-properties 'yunge-evil-visual-search-forward
+                               :jump t :repeat nil)
+  (evil-add-command-properties 'yunge-evil-visual-search-backward
                                :jump t :repeat nil))
 
 (with-eval-after-load 'which-key

@@ -249,8 +249,29 @@
       (should (equal (car evil-ex-search-history) "bl"))
       (execute-kbd-macro (kbd "n"))
       (should (= (point) 10))
+       (execute-kbd-macro (kbd "N"))
+       (should (= (point) 7)))))
+
+(ert-deftest yunge-evil-visual-hash-searches-the-selected-text-backward ()
+  (yunge-test-enable-evil)
+  (with-temp-buffer
+    (insert "bl bl \u4fdd\u7559 bl")
+    (goto-char (point-max))
+    (search-backward "bl")
+    (evil-normal-state)
+    (save-window-excursion
+      (switch-to-buffer (current-buffer))
+      (execute-kbd-macro (kbd "v l #"))
+      (should (eq evil-state 'normal))
+      (should (= (point) 4))
+      (should (equal (evil-ex-pattern-regex evil-ex-search-pattern)
+                     "bl"))
+      (should (eq evil-ex-search-direction 'backward))
+      (should (equal (car evil-ex-search-history) "bl"))
+      (execute-kbd-macro (kbd "n"))
+      (should (= (point) 1))
       (execute-kbd-macro (kbd "N"))
-      (should (= (point) 7)))))
+      (should (= (point) 4)))))
 
 (ert-deftest yunge-evil-visual-star-quotes-regular-expression-syntax ()
   (yunge-test-enable-evil)
@@ -265,7 +286,7 @@
       (should (equal (evil-ex-pattern-regex evil-ex-search-pattern)
                      "a\\.b")))))
 
-(ert-deftest yunge-evil-visual-star-rejects-block-selections ()
+(ert-deftest yunge-evil-visual-search-rejects-block-selections ()
   (yunge-test-enable-evil)
   (with-temp-buffer
     (insert "ab\ncd")
@@ -274,9 +295,11 @@
     (save-window-excursion
       (switch-to-buffer (current-buffer))
       (execute-kbd-macro (kbd "C-v l"))
-      (should-error
-       (call-interactively #'yunge-evil-visual-search-forward)
-       :type 'user-error)
+      (dolist (command '(yunge-evil-visual-search-forward
+                         yunge-evil-visual-search-backward))
+        (should-error
+         (call-interactively command)
+         :type 'user-error))
       (should (eq evil-state 'visual)))))
 
 (ert-deftest yunge-evil-opens-config-directory ()
