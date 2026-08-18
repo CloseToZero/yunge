@@ -368,7 +368,7 @@ REPORT-ERROR reports a current render failure without duplicating its batch."
 (defun shuying-org--preview-fragments
     (fragments &optional stale-only automatic)
   "Request previews for Org FRAGMENTS as one render group.
-When STALE-ONLY is non-nil, skip overlays whose render inputs still match.
+When STALE-ONLY is non-nil, reuse overlays whose render inputs still match.
 When AUTOMATIC is non-nil, silently retain unavailable dependency errors."
   (when fragments
     (let ((preamble (shuying-org--preamble))
@@ -380,27 +380,29 @@ When AUTOMATIC is non-nil, silently retain unavailable dependency errors."
                (specification-hash
                 (shuying-render-spec-hash specification))
                (overlay (shuying-org--fragment-overlay fragment)))
-          (unless (and stale-only overlay
-                       (not (overlay-get overlay 'shuying-org-dirty))
-                       (equal
-                        (overlay-get
-                         overlay 'shuying-org-specification-hash)
-                        specification-hash))
+          (if (and stale-only overlay
+                   (not (overlay-get overlay 'shuying-org-dirty))
+                   (equal
+                    (overlay-get
+                     overlay 'shuying-org-specification-hash)
+                    specification-hash))
+              (unless (shuying-org--point-inside-overlay-p overlay)
+                (shuying-org--show-overlay overlay))
             (push
              (shuying-org--render-request
-               fragment specification specification-hash
-               (lambda (error-data)
-                 (unless error-reported
-                   (setq error-reported t)
-                   (unless
-                       (and automatic
-                            (eq (car-safe error-data)
-                                'shuying-latex-unavailable))
-                     (display-warning
-                      'shuying
-                      (error-message-string error-data)
-                      :error)))))
-              requests))))
+              fragment specification specification-hash
+              (lambda (error-data)
+                (unless error-reported
+                  (setq error-reported t)
+                  (unless
+                      (and automatic
+                           (eq (car-safe error-data)
+                               'shuying-latex-unavailable))
+                    (display-warning
+                     'shuying
+                     (error-message-string error-data)
+                     :error)))))
+             requests))))
       (when requests
         (shuying-render-batch (nreverse requests))))))
 

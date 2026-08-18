@@ -309,6 +309,39 @@
                 (shuying-org-test--overlay) 'shuying-org-dirty)))))
       (delete-directory root t))))
 
+(ert-deftest shuying-org-restores-a-cache-hit-after-catalog-change ()
+  (let* ((root (make-temp-file "shuying-org-" t))
+         (shuying-cache-directory root)
+         (shuying-backends nil)
+         (shuying--pending-jobs (make-hash-table :test #'equal))
+         (shuying-org-test--render-count 0))
+    (unwind-protect
+        (progn
+          (shuying-register-backend
+           'shuying-latex
+           #'shuying-org-test--render-now)
+          (cl-letf (((symbol-function 'create-image)
+                     (lambda (file &rest _properties)
+                       (list 'image file))))
+            (with-temp-buffer
+              (org-mode)
+              (insert "Above.\n|\\( A \\)|\n")
+              (goto-char (point-min))
+              (shuying-org-mode 1)
+              (shuying-org-preview-buffer)
+              (let ((overlay (shuying-org-test--overlay)))
+                (should (overlay-get overlay 'display))
+                (search-forward "\\( A")
+                (shuying-org--post-command)
+                (should-not (overlay-get overlay 'display))
+                (end-of-line)
+                (insert "\\( T \\)|")
+                (shuying-org--post-command)
+                (should (overlay-get overlay 'display))
+                ;; Reusing the unchanged artifact must not render it again.
+                (should (= shuying-org-test--render-count 1))))))
+      (delete-directory root t))))
+
 (ert-deftest shuying-org-previews-visible-fragments-after-display ()
   (let* ((root (make-temp-file "shuying-org-" t))
          (shuying-cache-directory root)
