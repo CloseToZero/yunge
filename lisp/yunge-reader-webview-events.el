@@ -83,7 +83,8 @@
       ("accelerator"
        (let ((key (alist-get 'key message)))
          (unless (member key
-                         '("J" "K" "+" "-" "=" "y" "SPC" "M-m"
+                         '("J" "K" "j" "k" "+" "-" "=" "y"
+                           "SPC" "M-m"
                            "C-d" "C-u" "C-g" "<escape>"
                            "<next>" "<prior>"))
            (error "Malformed WebView accelerator event: %S" message))

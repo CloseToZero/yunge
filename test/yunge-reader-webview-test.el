@@ -787,13 +787,14 @@
     (unwind-protect
         (progn
           (puthash 9 view yunge-reader-webview--views)
-          (yunge-reader-webview--handle-event
-           'fake-webview-process
-           '((kind . "event")
-             (event . "accelerator")
-             (view . 9)
-             (key . "y")))
-          (should (equal routed (list view "y" buffer))))
+          (dolist (key '("y" "j" "k"))
+            (yunge-reader-webview--handle-event
+             'fake-webview-process
+             `((kind . "event")
+               (event . "accelerator")
+               (view . 9)
+               (key . ,key)))
+            (should (equal routed (list view key buffer)))))
       (kill-buffer buffer))))
 
 (ert-deftest yunge-reader-webview-relays-leaders-after-returning-focus ()
@@ -836,7 +837,7 @@
       '((kind . "event")
         (event . "accelerator")
         (view . 9)
-        (key . "j")))
+        (key . "g")))
      :type 'error)))
 
 (ert-deftest yunge-reader-webview-events-do-not-consume-callbacks ()
