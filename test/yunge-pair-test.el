@@ -115,6 +115,35 @@
               (concat "text " delimiter delimiter)))
       (should (= (point) (1- (point-max)))))))
 
+(ert-deftest yunge-pair-pairs-markup-at-special-block-line-start ()
+  (yunge-pair-test--load-config)
+  (yunge-pair-test--with-org-buffer
+    (insert "#+begin_definition\n\n#+end_definition")
+    (goto-char (point-min))
+    (forward-line 1)
+    (execute-kbd-macro "*")
+    (should
+     (equal
+      (buffer-string)
+      "#+begin_definition\n**\n#+end_definition"))
+    (should (= (point) (1- (line-end-position))))))
+
+(ert-deftest yunge-pair-inserts-chinese-punctuation-in-org ()
+  (yunge-pair-test--load-config)
+  (dolist (pair yunge-pair--org-chinese-pairs)
+    (yunge-pair-test--with-org-buffer
+      (let ((open (car pair))
+            (close (cdr pair)))
+        (execute-kbd-macro (vconcat open))
+        (should (equal (buffer-string) (concat open close)))
+        (should (= (point) (1- (point-max))))
+        (execute-kbd-macro (kbd "DEL"))
+        (should (equal (buffer-string) ""))
+        (execute-kbd-macro (vconcat open))
+        (execute-kbd-macro (vconcat "文" close))
+        (should (equal (buffer-string) (concat open "文" close)))
+        (should (= (point) (point-max)))))))
+
 (ert-deftest yunge-pair-space-abandons-org-markup-pair ()
   (yunge-pair-test--load-config)
   (dolist (delimiter '("*" "_" "/" "~" "="))
@@ -144,11 +173,20 @@
     (insert "#+begin_src emacs-lisp\n\n#+end_src")
     (goto-char (point-min))
     (forward-line 1)
-    (execute-kbd-macro "=")
+    (execute-kbd-macro "=*")
     (should (equal (buffer-string)
-                   (concat "#+begin_src emacs-lisp\n"
-                           "=\n"
-                           "#+end_src"))))
+                    (concat "#+begin_src emacs-lisp\n"
+                            "=*\n"
+                            "#+end_src"))))
+  (yunge-pair-test--with-org-buffer
+    (insert "#+begin_comment\n\n#+end_comment")
+    (goto-char (point-min))
+    (forward-line 1)
+    (execute-kbd-macro (vconcat "“"))
+    (should (equal (buffer-string)
+                   (concat "#+begin_comment\n"
+                           "“\n"
+                           "#+end_comment"))))
   (yunge-pair-test--with-org-buffer
     (execute-kbd-macro "\\( =")
     (should (equal (buffer-string) "\\( = \\)"))))

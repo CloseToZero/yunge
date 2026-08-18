@@ -39,6 +39,22 @@
     ("SPC" yunge-pair-space "insert space")
     ("DEL" yunge-pair-backward-delete "delete backward")))
 
+(defconst yunge-pair--org-block-types
+  '(center-block comment-block dynamic-block example-block export-block
+    quote-block special-block src-block verse-block)
+  "Org block types whose contents cannot start a heading.")
+
+(defconst yunge-pair--org-chinese-pairs
+  '(("“" . "”")
+    ("‘" . "’")
+    ("（" . "）")
+    ("【" . "】")
+    ("《" . "》")
+    ("〈" . "〉")
+    ("「" . "」")
+    ("『" . "』"))
+  "Chinese punctuation pairs used in Org prose.")
+
 (defun yunge-pair--org-literal-context-p (_id action _context)
   "Return non-nil when Org markup pairing would alter literal text.
 ACTION is the Smartparens operation being considered."
@@ -46,11 +62,11 @@ ACTION is the Smartparens operation being considered."
     (let ((element (org-element-context)))
       (or (org-in-src-block-p t)
           (org-inside-LaTeX-fragment-p element)
-          (org-element-lineage
-           element
-           '(code example-block export-block fixed-width
-             inline-src-block src-block verbatim)
-           t)))))
+           (org-element-lineage
+            element
+            '(code comment-block example-block export-block fixed-width
+              inline-src-block src-block verbatim)
+            t)))))
 
 (defun yunge-pair--org-heading-star-p (_match beginning _end)
   "Return non-nil when the star at BEGINNING is an Org heading marker."
@@ -61,6 +77,18 @@ ACTION is the Smartparens operation being considered."
            (beginning-of-line)
            (skip-chars-forward "*")
            (< beginning (point))))))
+
+(defun yunge-pair--org-heading-start-p (id action _context)
+  "Return non-nil when pair ID starts a possible Org heading for ACTION."
+  (when (eq action 'insert)
+    (let ((beginning (- (point) (length id))))
+      (and (= beginning (line-beginning-position))
+           (save-excursion
+             (goto-char beginning)
+             (not
+              (org-element-lineage
+               (org-element-context)
+               yunge-pair--org-block-types t)))))))
 
 (defun yunge-pair--org-after-left-bracket-p (id action _context)
   "Return non-nil when Org pair ID follows a left bracket for ACTION."
@@ -174,7 +202,7 @@ than one character, such as `\\)' and `\\]'."
   (sp-local-pair
    'org-mode "*" "*"
    :unless '(sp-point-after-word-p
-             sp-point-at-bol-p
+             yunge-pair--org-heading-start-p
              yunge-pair--org-literal-context-p)
    :post-handlers '(("[d1]" "SPC"))
    :skip-match 'yunge-pair--org-heading-star-p)
@@ -194,7 +222,11 @@ than one character, such as `\\)' and `\\]'."
      'org-mode delimiter delimiter
      :unless '(sp-point-after-word-p
                yunge-pair--org-literal-context-p)
-     :post-handlers '(("[d1]" "SPC")))))
+     :post-handlers '(("[d1]" "SPC"))))
+  (dolist (pair yunge-pair--org-chinese-pairs)
+    (sp-local-pair
+     'org-mode (car pair) (cdr pair)
+     :unless '(yunge-pair--org-literal-context-p))))
 
 (defun yunge-pair--setup ()
   "Configure paired delimiter insertion."
