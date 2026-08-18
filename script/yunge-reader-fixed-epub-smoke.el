@@ -34,6 +34,8 @@
 (declare-function yunge-reader-epub-next-line "yunge-reader-epub")
 (declare-function yunge-reader-epub-next-page "yunge-reader-epub")
 (declare-function yunge-reader-epub-next-screen "yunge-reader-epub")
+(declare-function yunge-reader-epub-first-location "yunge-reader-epub")
+(declare-function yunge-reader-epub-last-location "yunge-reader-epub")
 (declare-function yunge-reader-epub-previous-page "yunge-reader-epub")
 
 (defun yunge-reader-native-program ()
@@ -250,6 +252,26 @@
                      (yunge-reader-fixed-smoke--record 'initial location)
                      (yunge-reader-fixed-smoke--observe
                       'initial view location)
+                     (setq yunge-reader-fixed-smoke--phase 'last)
+                     (yunge-reader-epub-last-location)
+                     (run-at-time
+                      0.1 nil #'yunge-reader-fixed-smoke--poll))
+                 (run-at-time
+                  0.1 nil #'yunge-reader-fixed-smoke--poll)))
+              ('last
+               (if (yunge-reader-fixed-smoke--page-p location 3)
+                   (progn
+                     (yunge-reader-fixed-smoke--record 'last location)
+                     (setq yunge-reader-fixed-smoke--phase 'first)
+                     (yunge-reader-epub-first-location)
+                     (run-at-time
+                      0.1 nil #'yunge-reader-fixed-smoke--poll))
+                 (run-at-time
+                  0.1 nil #'yunge-reader-fixed-smoke--poll)))
+              ('first
+               (if (yunge-reader-fixed-smoke--page-p location 1)
+                   (progn
+                     (yunge-reader-fixed-smoke--record 'first location)
                      (setq yunge-reader-fixed-smoke--phase 'next)
                      (yunge-reader-epub-next-page)
                      (run-at-time

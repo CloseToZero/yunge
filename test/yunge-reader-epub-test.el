@@ -41,8 +41,10 @@
      ("k" . yunge-reader-epub-previous-line)
      ("C-d" . yunge-reader-epub-next-screen)
      ("C-u" . yunge-reader-epub-previous-screen)
+     ("G" . yunge-reader-epub-last-location)
      ("J" . yunge-reader-epub-next-page)
-     ("K" . yunge-reader-epub-previous-page))))
+     ("K" . yunge-reader-epub-previous-page)
+     ("gg" . yunge-reader-epub-first-location))))
 
 (ert-deftest yunge-reader-epub-keeps-layout-under-local-leader ()
   (should
@@ -78,8 +80,10 @@
        ("k" . yunge-reader-epub-previous-line)
        ("C-d" . yunge-reader-epub-next-screen)
        ("C-u" . yunge-reader-epub-previous-screen)
+       ("G" . yunge-reader-epub-last-location)
        ("J" . yunge-reader-epub-next-page)
        ("K" . yunge-reader-epub-previous-page)
+       ("gg" . yunge-reader-epub-first-location)
        ("+" . yunge-reader-zoom-in)
        ("-" . yunge-reader-zoom-out)
        ("=" . yunge-reader-zoom-reset)
@@ -690,7 +694,14 @@
               (interactive)
               (setq called (list 'copied (current-buffer))))))
         (yunge-reader-epub--accelerator view "y"))
-      (should (equal called (list 'copied (current-buffer)))))))
+      (should (equal called (list 'copied (current-buffer))))
+      (cl-letf
+          (((symbol-function 'yunge-reader-epub-last-location)
+            (lambda ()
+              (interactive)
+              (setq called (list 'last (current-buffer))))))
+        (yunge-reader-epub--accelerator view "G"))
+      (should (equal called (list 'last (current-buffer)))))))
 
 (ert-deftest yunge-reader-epub-navigation-cancels-a-delayed-search-jump ()
   (let ((view (yunge-reader-webview--make-view))
@@ -722,6 +733,32 @@
              '("next-line" "next-line" "next-line"
                "next-line" "next-line"
                "next-page" "next-page" "next-page")))))
+
+(ert-deftest yunge-reader-epub-maps-semantic-boundary-navigation ()
+  (let (navigations)
+    (cl-letf (((symbol-function 'yunge-reader-epub--navigate)
+               (lambda (command) (push command navigations))))
+      (should (eq (yunge-reader-epub-first-location) :deferred))
+      (should (eq (yunge-reader-epub-last-location) :deferred)))
+    (should (equal navigations '("last" "first")))))
+
+(ert-deftest yunge-reader-epub-tracks-only-semantic-boundaries ()
+  (dolist (command
+           '(yunge-reader-epub-first-location
+             yunge-reader-epub-last-location))
+    (should
+     (advice-member-p
+      #'yunge-jump-history--track-navigation command)))
+  (dolist (command
+           '(yunge-reader-epub-next-page
+             yunge-reader-epub-previous-page
+             yunge-reader-epub-next-screen
+             yunge-reader-epub-previous-screen
+             yunge-reader-epub-next-line
+             yunge-reader-epub-previous-line))
+    (should-not
+     (advice-member-p
+      #'yunge-jump-history--track-navigation command))))
 
 (ert-deftest yunge-reader-epub-maps-native-selection-to-reader-state ()
   (let* ((buffer (generate-new-buffer " *EPUB selection owner*"))

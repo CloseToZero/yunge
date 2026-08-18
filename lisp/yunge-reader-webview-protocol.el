@@ -70,7 +70,7 @@
 
 (defconst yunge-reader-webview--accelerators
   '("+" "-" "=" "<escape>" "<next>" "<prior>" "C-d" "C-g" "C-u"
-    "J" "K" "M-m" "SPC" "j" "k" "y")
+    "G" "J" "K" "M-m" "SPC" "g" "j" "k" "y")
   "Normalized keys accepted from the WebView helper.")
 
 (defun yunge-reader-webview--validate-ready (message)

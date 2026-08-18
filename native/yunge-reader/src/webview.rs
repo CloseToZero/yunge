@@ -314,6 +314,8 @@ enum NavigationCommand {
     NextScreen,
     PreviousLine,
     NextLine,
+    First,
+    Last,
     GoTo,
 }
 
@@ -1126,7 +1128,7 @@ impl Service {
             (_, Some(_)) => {
                 return Err(ServiceError::new(
                     "invalid-params",
-                    "relative navigation does not accept an EPUB location",
+                    "non-go-to navigation does not accept an EPUB location",
                 ));
             }
             (_, None) => {}
@@ -1649,10 +1651,14 @@ mod tests {
         assert!(adapter.contains("const READER_CHARACTER_KEYS"));
         assert!(adapter.contains("checkedRendererAccelerators"));
         assert!(adapter.contains("event.code === 'Space'"));
-        assert!(adapter.contains("key === 'SPC' && event.repeat"));
+        assert!(adapter.contains("key === 'SPC' || key === 'g'"));
         assert!(adapter.contains("case 'previous-page':"));
         assert!(adapter.contains("case 'next-page':"));
         assert!(adapter.contains("case 'previous-line':"));
+        assert!(adapter.contains("case 'first':"));
+        assert!(adapter.contains("case 'last':"));
+        assert!(adapter.contains("const showBoundary"));
+        assert!(adapter.contains("section.linear !== 'no'"));
         assert!(adapter.contains("lineDistance(session), false"));
         assert!(adapter.contains("moveFixedViewport(session, -40)"));
         assert!(adapter.contains("moveFixedViewport(session, 40)"));
@@ -2429,6 +2435,11 @@ mod tests {
         assert!(navigation.contains(r#""y":30.0"#));
         assert!(!navigation.contains("eval"));
 
+        let first =
+            publication_navigation_script(4, NavigationCommand::First, None);
+        assert!(first.contains(r#""command":"first""#));
+        assert!(first.contains(r#""location":null"#));
+
         let clear = publication_clear_selection_script(4);
         assert!(
             clear.starts_with("void globalThis.yungeReader.clearSelection(")
@@ -3132,7 +3143,7 @@ mod tests {
     }
 
     #[test]
-    fn epub_relative_navigation_accepts_page_line_and_screen_scales() {
+    fn epub_navigation_accepts_relative_scales_and_boundaries() {
         for command in [
             "previous-page",
             "next-page",
@@ -3140,6 +3151,8 @@ mod tests {
             "next-line",
             "previous-screen",
             "next-screen",
+            "first",
+            "last",
         ] {
             let params = Service::parse::<ViewNavigateParams>(json!({
                 "view": 4,

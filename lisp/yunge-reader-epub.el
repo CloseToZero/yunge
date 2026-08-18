@@ -125,8 +125,10 @@ scrolling behavior."
     ("k" yunge-reader-epub-previous-line "previous line")
     ("C-d" yunge-reader-epub-next-screen "next screen")
     ("C-u" yunge-reader-epub-previous-screen "previous screen")
+    ("G" yunge-reader-epub-last-location "last location")
     ("J" yunge-reader-epub-next-page "next page")
-    ("K" yunge-reader-epub-previous-page "previous page"))
+    ("K" yunge-reader-epub-previous-page "previous page")
+    ("gg" yunge-reader-epub-first-location "first location"))
   "Normal-state bindings for EPUB views.")
 
 (defconst yunge-reader-epub-reflow-normal-bindings
@@ -138,10 +140,12 @@ scrolling behavior."
   "k" #'yunge-reader-epub-previous-line
   "C-d" #'yunge-reader-epub-next-screen
   "C-u" #'yunge-reader-epub-previous-screen
+  "G" #'yunge-reader-epub-last-location
   "J" #'yunge-reader-epub-next-page
   "K" #'yunge-reader-epub-previous-page
   "<next>" #'yunge-reader-epub-next-screen
-  "<prior>" #'yunge-reader-epub-previous-screen)
+  "<prior>" #'yunge-reader-epub-previous-screen
+  "g g" #'yunge-reader-epub-first-location)
 
 (define-minor-mode yunge-reader-epub-view-mode
   "Display an EPUB through a native WebView."
@@ -1202,6 +1206,18 @@ VALUES is an alist containing complete, already bounded property values."
     (dotimes (_ count)
       (yunge-reader-epub--navigate "previous-line"))))
 
+(defun yunge-reader-epub-first-location ()
+  "Move to the first linear location in the EPUB."
+  (interactive)
+  (yunge-reader-epub--navigate "first")
+  :deferred)
+
+(defun yunge-reader-epub-last-location ()
+  "Move to the last linear location in the EPUB."
+  (interactive)
+  (yunge-reader-epub--navigate "last")
+  :deferred)
+
 (defun yunge-reader-epub-register ()
   "Register the EPUB driver."
   (yunge-reader-register-driver
@@ -1234,6 +1250,11 @@ VALUES is an alist containing complete, already bounded property values."
   (interactive "fRead EPUB: ")
   (yunge-reader-epub-register)
   (yunge-reader-open file))
+
+(dolist (command
+         '(yunge-reader-epub-first-location
+           yunge-reader-epub-last-location))
+  (yunge-jump-history-track-command command))
 
 (provide 'yunge-reader-epub)
 

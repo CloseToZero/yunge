@@ -175,12 +175,13 @@ STYLE and ZOOM are mutually exclusive.  Invoke CALLBACK when complete."
 LOCATION is required only for the go-to command."
   (unless (member command '("previous-page" "next-page"
                             "previous-screen" "next-screen"
-                            "previous-line" "next-line" "go-to"))
+                            "previous-line" "next-line"
+                            "first" "last" "go-to"))
     (error "Unsupported EPUB navigation command: %S" command))
   (when (and (equal command "go-to") (null location))
     (error "EPUB go-to navigation requires a location"))
   (when (and location (not (equal command "go-to")))
-    (error "EPUB relative navigation does not accept a location"))
+    (error "EPUB non-go-to navigation does not accept a location"))
   (yunge-reader-webview--request
    "view-navigate"
    (append

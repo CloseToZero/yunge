@@ -52,7 +52,7 @@ const MAX_VIEWPORT_COORDINATE = 1000000
 const LOCATION_DELAY_MS = 75
 const USER_MOVEMENT_WINDOW_MS = 1000
 const READER_CHARACTER_KEYS = Object.freeze([
-    '+', '-', '=', 'J', 'K', 'SPC', 'j', 'k', 'y',
+    '+', '-', '=', 'G', 'J', 'K', 'SPC', 'g', 'j', 'k', 'y',
 ])
 const SELECTION_TEXT_ERROR_MESSAGES = Object.freeze({
     'invalid-selection-offset':
@@ -140,7 +140,7 @@ const relayReaderCharacterKey = event => {
     if (!key) return
     event.preventDefault()
     event.stopImmediatePropagation()
-    if (key === 'SPC' && event.repeat) return
+    if ((key === 'SPC' || key === 'g') && event.repeat) return
     post('accelerator', { key })
 }
 
@@ -1422,6 +1422,21 @@ const moveFixedViewport = async (session, distance) => {
     return turnFixedPage(session, Math.sign(distance), distance < 0)
 }
 
+const showBoundary = async (session, end) => {
+    const sections = session.book.sections
+    const index = end
+        ? sections.findLastIndex(section => section.linear !== 'no')
+        : sections.findIndex(section => section.linear !== 'no')
+    if (index < 0) throw new Error('EPUB has no linear spine item')
+    await session.view.renderer.goTo({ index, anchor: end ? 1 : 0 })
+    if (!await sectionIsVisible(session.view)) {
+        throw new Error('EPUB boundary has no visible content')
+    }
+    if (session.view.isFixedLayout) {
+        session.view.renderer.setViewport(0, 0, end)
+    }
+}
+
 const runNavigation = async (session, navigation) => {
     if (current !== session) return
     const { command, location, selection, revision } = navigation
@@ -1463,6 +1478,12 @@ const runNavigation = async (session, navigation) => {
                 await moveFixedViewport(session, 40)
             }
             else await session.view.next(lineDistance(session), false)
+            break
+        case 'first':
+            await showBoundary(session, false)
+            break
+        case 'last':
+            await showBoundary(session, true)
             break
         case 'go-to':
             await showLocation(session.view, location)

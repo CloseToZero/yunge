@@ -64,7 +64,8 @@
      (version . "test-version")
      (accelerators
       . ("+" "-" "=" "<escape>" "<next>" "<prior>"
-         "C-d" "C-g" "C-u" "J" "K" "M-m" "SPC" "j" "k" "y"))
+         "C-d" "C-g" "C-u" "G" "J" "K" "M-m" "SPC"
+         "g" "j" "k" "y"))
      (capabilities
       . ("publication-close" "publication-info" "publication-open"
          "publication-resources" "view-bounds"
@@ -188,7 +189,8 @@
   (dolist (accelerators
            '(nil
              ("+" "-" "=" "<escape>" "<next>" "<prior>"
-              "C-d" "C-g" "C-u" "J" "K" "M-m" "SPC" "j" "k")))
+              "C-d" "C-g" "C-u" "G" "J" "K" "M-m" "SPC"
+              "g" "j" "k")))
     (let ((message (yunge-reader-webview-test--ready-message)))
       (setf (alist-get 'accelerators message) accelerators)
       (should-error
@@ -748,6 +750,25 @@
       (should (equal (alist-get 'zoom parameters) "fit-page"))
       (should-not (assq 'style parameters)))))
 
+(ert-deftest yunge-reader-webview-serializes-boundary-navigation ()
+  (let ((view (yunge-reader-webview--make-view :id 4))
+        requests)
+    (cl-letf
+        (((symbol-function 'yunge-reader-webview--request)
+          (lambda (operation parameters _callback)
+            (push (list operation parameters) requests))))
+      (yunge-reader-webview--navigate-view view "first" #'ignore)
+      (yunge-reader-webview--navigate-view view "last" #'ignore)
+      (should-error
+       (yunge-reader-webview--navigate-view
+        view "first" #'ignore
+        '((href . "OPS/chapter.xhtml")))))
+    (should
+     (equal
+      (nreverse requests)
+      '(("view-navigate" ((view . 4) (command . "first")))
+        ("view-navigate" ((view . 4) (command . "last"))))))))
+
 (ert-deftest yunge-reader-webview-wraps-publication-operations ()
   (yunge-reader-webview-test--with-fake-process
     (yunge-reader-webview-start)
@@ -948,13 +969,14 @@
                 (uri . ,uri))))))
       (kill-buffer buffer))))
 
-(ert-deftest yunge-reader-webview-relays-leaders-after-returning-focus ()
+(ert-deftest yunge-reader-webview-relays-prefixes-after-returning-focus ()
   (let* ((buffer (generate-new-buffer " *webview leader owner*"))
          (view
           (yunge-reader-webview--make-view :id 11 :buffer buffer))
          (yunge-reader-webview--process 'fake-webview-process)
          (yunge-reader-webview--views
           (make-hash-table :test #'eql))
+         (unread-command-events nil)
          focused)
     (unwind-protect
         (progn
@@ -963,7 +985,7 @@
               (((symbol-function
                  'yunge-reader-webview--focus-owning-window)
                 (lambda (value) (setq focused value))))
-            (dolist (key '("SPC" "M-m"))
+            (dolist (key '("SPC" "M-m" "g"))
               (setq unread-command-events nil
                     focused nil)
               (yunge-reader-webview--handle-event
@@ -988,7 +1010,7 @@
       '((kind . "event")
         (event . "accelerator")
         (view . 9)
-        (key . "g")))
+        (key . "z")))
      :type 'error)))
 
 (ert-deftest yunge-reader-webview-events-do-not-consume-callbacks ()

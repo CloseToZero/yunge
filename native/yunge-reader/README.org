@@ -97,7 +97,8 @@ installing or downloading it:
                  "view-scroll-bars","view-status","view-style",
                  "view-visible","view-zoom"],
  "accelerators":["+","-","=","<escape>","<next>","<prior>",
-                 "C-d","C-g","C-u","J","K","M-m","SPC","j","k","y"],
+                 "C-d","C-g","C-u","G","J","K","M-m","SPC",
+                 "g","j","k","y"],
  "engine":"webview2","kind":"webview-ready","platform":"windows",
  "protocol":1,"version":"151.0.4129.86"}
 #+end_src
@@ -293,8 +294,9 @@ together with the last accepted bounds and visibility.
 The helper emits =focus-gained= and =focus-lost= from WebView2's controller
 events.  Emacs selects the surface's owning window on entry and requests
 =view-focus-parent= when another Emacs window becomes selected.
-=SPC= and =M-m= also return focus before Emacs queues the normalized key, so
-the native child does not need to reproduce Emacs prefix-map state.
+=SPC=, =M-m=, and the first =g= also return focus before Emacs queues the
+normalized key, so the native child does not need to reproduce Emacs
+prefix-map state.
 
 Chromium paints EPUB text selection directly inside the current Foliate spine;
 Yunge does not build a second highlight layer.  Once pointer or keyboard
@@ -411,8 +413,10 @@ the kill ring only after the complete selection succeeds.  Native =C-c= is
 not intercepted and remains available to WebView2.
 
 =view-navigate= accepts =previous-page=, =next-page=, =previous-line=,
-=next-line=, =previous-screen=, =next-screen=, or =go-to=.  A =go-to= target
-may be a complete stable locator or a bounded href-only outline target.
+=next-line=, =previous-screen=, =next-screen=, =first=, =last=, or =go-to=.
+=first= and =last= select the corresponding edge of the linear spine.  A
+=go-to= target may be a complete stable locator or a bounded href-only outline
+target.
 Href-only targets are transient: the helper and Emacs do not promote them to
 a saved location.  A later =location= event supplies the complete locator
 that the owning view may persist.

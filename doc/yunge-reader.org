@@ -119,17 +119,17 @@ inputs.
 In a reflowable view, =j/k= move by one computed content line without screen
 animation.  =C-d/C-u= and Page Down or Page Up move by reflowed screens, while
 =J/K= use semantic page commands that have the same reflowed presentation.
-All three scales cross linear spine-item boundaries.  The portable commands
-continue to work after a mouse click gives the child WebView native focus.
-The same focused path forwards =+=, =-=, ===, and =y= through the active Emacs
-keymaps.
+All three scales cross linear spine-item boundaries.  =gg/G= jump to the first
+or last linear book location.  The portable commands continue to work after a
+mouse click gives the child WebView native focus.  The same focused path
+forwards =G=, =+=, =-=, ===, and =y= through the active Emacs keymaps.
 =GotFocus= selects the child surface's owning Emacs window.  Selecting another
 Emacs window asks any focused child to return keyboard focus to its parent, so
 ordinary Emacs bindings resume without an extra click.
-Pressing =SPC= or =M-m= in a focused child also returns native focus first,
-then queues the key through Emacs itself.  Global and local leader sequences
-therefore continue through the ordinary active maps instead of being copied
-into the renderer.
+Pressing =SPC=, =M-m=, or the first =g= in a focused child also returns native
+focus, then queues the key through Emacs itself.  Leader and =g= prefix
+sequences therefore continue through the ordinary active maps instead of
+being copied into the renderer.
 =o= displays the bounded EPUB 3 navigation or EPUB 2 NCX outline through the
 same persistent per-view outline UI used by fixed-layout documents.
 
@@ -408,10 +408,10 @@ does not consult a newer saved place and cannot change the entry underneath a
 later traversal.
 
 Reader targets use the same window-local =C-o/C-i= history as ordinary
-buffers.  PDF =gg=, =G=, and =gp= commands, together with successful search
-result and outline changes, create semantic jumps.  =J/K= paging, Page Up or
-Page Down, =C-d/C-u=, mouse wheel movement, and ordinary scrolling do not
-fill the history.
+buffers.  PDF and EPUB =gg/G= commands, PDF =gp=, and successful search result
+and outline changes create semantic jumps.  =J/K= paging, Page Up or Page
+Down, =C-d/C-u=, mouse wheel movement, and ordinary scrolling do not fill the
+history.
 
 If a target Reader buffer was killed, traversal reopens the document
 asynchronously in a hidden buffer.  It replaces the jump window only after the
@@ -833,13 +833,14 @@ external navigation.  Renderer IPC accepts only bounded, versioned messages
 from the renderer application origin.
 
 WebView2 forwards =ESC=, =C-g=, =C-d/C-u=, and Page Down or Page Up through
-its native accelerator event.  A bounded renderer listener forwards =J/K=,
-=+=, =-=, ===, =y=, and a =SPC= fallback because WebView2 does not classify
-character keys uniformly as accelerators.  Both paths emit only normalized key
-events; they never choose or execute commands.  Emacs resolves reading keys
-through the owning EPUB buffer's active maps.  Leader keys first restore parent
-focus and enter Emacs's ordinary input loop.  =ESC= and =C-g= return native
-focus to the parent, select the owning Emacs window, and focus its frame.
+its native accelerator event.  A bounded renderer listener forwards =G=,
+=J/K=, =g=, =+=, =-=, ===, =y=, and a =SPC= fallback because WebView2 does
+not classify character keys uniformly as accelerators.  Both paths emit only
+normalized key events; they never choose or execute commands.  Emacs resolves
+reading keys through the owning EPUB buffer's active maps.  Leader keys and
+the first =g= restore parent focus and enter Emacs's ordinary input loop.
+=ESC= and =C-g= return native focus to the parent, select the owning Emacs
+window, and focus its frame.
 WebView2 =GotFocus= and =LostFocus= events keep this native state synchronized
 with the owning logical view; an Emacs window-selection change releases a
 focused child when its owner is no longer selected.
