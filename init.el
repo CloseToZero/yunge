@@ -32,6 +32,7 @@
 (require 'yunge-vertico)
 (require 'yunge-orderless)
 (require 'yunge-corfu)
+(require 'yunge-tempel)
 (require 'yunge-slime)
 (require 'yunge-marginalia)
 (require 'yunge-avy)

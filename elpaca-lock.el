@@ -249,6 +249,15 @@
     (:exclude "contrib/test" "contrib/Makefile"))
    :source "MELPA"
    :ref "957f61d8b8b57c1f463b56620a274eb77a09bc16"))
+ (tempel
+  :source "elpaca-menu-lock-file"
+  :recipe
+  (:package "tempel"
+   :repo "minad/tempel"
+   :fetcher github
+   :files (:defaults)
+   :source "MELPA"
+   :ref "9299c5d0f35dbb02de2565404a082224c4d11654"))
  (vertico
   :source "elpaca-menu-lock-file"
   :recipe
