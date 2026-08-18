@@ -99,6 +99,9 @@ When the helper is unavailable, synchronization falls back to Emacs."
    (file-name-directory fangcun--native-helper-manifest))
   "Tracked source hash embedded in the Fangcun native helper.")
 
+(defconst fangcun--native-build-buffer-name "*Fangcun Helper Build*"
+  "Name of the Fangcun native helper build buffer.")
+
 (define-error 'fangcun-native-helper-outdated
   "Fangcun native helper is outdated")
 
@@ -1242,9 +1245,10 @@ When NO-MESSAGE is non-nil, do not report synchronization results."
       (setq fangcun--native-build-process nil))
     (if (and (zerop (process-exit-status process))
               (fangcun--native-helper-available-p))
-        (when fangcun--session-active-p
+        (progn
           (message "Built Fangcun native helper")
-          (fangcun--start-native-watch fangcun--session-yiyus))
+          (when fangcun--session-active-p
+            (fangcun--start-native-watch fangcun--session-yiyus)))
       (fangcun--native-warning
        (concat
         "Fangcun native helper build failed; external changes require "
@@ -1255,12 +1259,16 @@ When NO-MESSAGE is non-nil, do not report synchronization results."
   "Build the Fangcun native helper asynchronously when possible."
   (unless (process-live-p fangcun--native-build-process)
     (if-let* ((cargo (executable-find "cargo")))
-        (let ((buffer (get-buffer-create "*Fangcun Helper Build*"))
+        (let ((buffer (get-buffer-create fangcun--native-build-buffer-name))
               (target (fangcun--cargo-target-directory)))
           (fangcun--stop-native-watch)
           (make-directory target t)
           (with-current-buffer buffer
-            (erase-buffer))
+            (let ((inhibit-read-only t))
+              (erase-buffer)
+              (insert "Fangcun native helper build\n\n"))
+            (setq default-directory fangcun--source-directory)
+            (compilation-mode))
           (setq fangcun--native-build-process
                 (make-process
                  :name "fangcun-helper-build"
@@ -1272,6 +1280,7 @@ When NO-MESSAGE is non-nil, do not report synchronization results."
                        "--target-dir" target)
                  :noquery t
                  :sentinel #'fangcun--native-build-sentinel))
+          (display-buffer buffer)
           (message "Building Fangcun native helper..."))
       (fangcun--native-warning
        (concat
