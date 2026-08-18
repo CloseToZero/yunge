@@ -46,6 +46,8 @@ const MAX_TOC_HREF_BYTES = 3072
 const MAX_TOC_TITLE_BYTES = 1024
 const MAX_TOC_TOTAL_TEXT_BYTES = 384 * 1024
 const MAX_EXTERNAL_URI_BYTES = 4096
+const MIN_FIXED_SCALE = 0.25
+const MAX_FIXED_SCALE = 8.0
 const LOCATION_DELAY_MS = 75
 const USER_MOVEMENT_WINDOW_MS = 1000
 const READER_CHARACTER_KEYS = Object.freeze([
@@ -76,7 +78,7 @@ let generation = 0
 let current = null
 
 const post = (event, {
-    message, location, outline, selection, key, uri, user,
+    message, location, outline, selection, key, uri, user, scale,
 } = {}) => {
     const payload = { protocol: 1, event }
     if (message) payload.message = String(message).slice(0, 4096)
@@ -86,6 +88,7 @@ const post = (event, {
     if (key) payload.key = key
     if (uri) payload.uri = uri
     if (typeof user === 'boolean') payload.user = user
+    if (typeof scale === 'number') payload.scale = scale
     window.ipc.postMessage(JSON.stringify(payload))
 }
 
@@ -224,6 +227,22 @@ const applyReadingStyle = (view, style) => {
     `)
 }
 
+const checkedZoom = value => {
+    if (value === 'fit-width' || value === 'fit-page') return value
+    if (!Number.isFinite(value)
+        || value < MIN_FIXED_SCALE || value > MAX_FIXED_SCALE) {
+        throw new Error('Invalid EPUB fixed-layout zoom')
+    }
+    return value
+}
+
+const applyFixedZoom = (view, zoom) => {
+    if (!view.isFixedLayout) {
+        throw new Error('Cannot zoom a reflowable EPUB as fixed layout')
+    }
+    view.renderer.setAttribute('zoom', String(zoom))
+}
+
 const checkedScrollBars = value => {
     if (typeof value !== 'boolean') {
         throw new Error('Invalid EPUB scroll bar visibility')
@@ -263,12 +282,29 @@ const setStyle = ({ view: viewID, style }) => {
         if (!current || current.viewID !== viewID) {
             throw new Error('EPUB view is not open')
         }
+        if (current.view.isFixedLayout) {
+            throw new Error('Cannot style a fixed-layout EPUB as reflowable')
+        }
         const session = current
         session.pendingStyle = style
         session.styleFrame ??= requestAnimationFrame(
             () => applyPendingStyle(session))
     } catch (error) {
         post('style-error', { message: error?.message ?? error })
+    }
+}
+
+const setZoom = ({ view: viewID, zoom }) => {
+    try {
+        viewID = checkedView(viewID)
+        zoom = checkedZoom(zoom)
+        if (!current || current.viewID !== viewID) {
+            throw new Error('EPUB view is not open')
+        }
+        applyFixedZoom(current.view, zoom)
+        current.zoom = zoom
+    } catch (error) {
+        post('zoom-error', { message: error?.message ?? error })
     }
 }
 
@@ -1190,7 +1226,7 @@ const search = request => {
 }
 
 const open = async ({
-    view: viewID, resourceRoot, location, style, scrollBars,
+    view: viewID, resourceRoot, location, style, zoom, scrollBars,
     rendererAccelerators,
 }) => {
     const mine = ++generation
@@ -1200,7 +1236,6 @@ const open = async ({
     try {
         viewID = checkedView(viewID)
         location = location ? checkedLocator(location) : null
-        style = checkedStyle(style)
         scrollBars = checkedScrollBars(scrollBars)
         checkedRendererAccelerators(rendererAccelerators)
         const root = checkedRoot(resourceRoot)
@@ -1226,6 +1261,19 @@ const open = async ({
             }
         })
         await view.open(book)
+        if (view.isFixedLayout) {
+            if (style != null) {
+                throw new Error(
+                    'Fixed-layout EPUB cannot use reflow style')
+            }
+            zoom = checkedZoom(zoom ?? 'fit-page')
+        } else {
+            if (zoom != null) {
+                throw new Error(
+                    'Reflowable EPUB cannot use fixed-layout zoom')
+            }
+            style = checkedStyle(style)
+        }
         view.renderer.setAttribute('flow', 'scrolled')
         view.renderer.setAttribute('animated', '')
         applyReadingStyle(view, style)
@@ -1253,6 +1301,8 @@ const open = async ({
             selectionDocument: null,
             selectionFrame: null,
             style,
+            zoom,
+            effectiveScale: null,
             pendingStyle: null,
             styleFrame: null,
             opening: true,
@@ -1264,6 +1314,15 @@ const open = async ({
         }
         installLocationActivity(view, session)
         current = session
+        view.renderer.addEventListener('zoom', event => {
+            const scale = event.detail?.scale
+            if (current === session && Number.isFinite(scale) && scale > 0
+                && scale !== session.effectiveScale) {
+                session.effectiveScale = scale
+                post('zoom-changed', { scale })
+            }
+        })
+        if (view.isFixedLayout) applyFixedZoom(view, zoom)
         view.renderer.addEventListener('relocate', event => {
             queueLocation(session, {
                 ...view.lastLocation,
@@ -1336,10 +1395,12 @@ const runNavigation = async (session, navigation) => {
             await session.view.next()
             break
         case 'previous-line':
-            await session.view.prev(lineDistance(session), false)
+            if (session.view.isFixedLayout) await session.view.prev()
+            else await session.view.prev(lineDistance(session), false)
             break
         case 'next-line':
-            await session.view.next(lineDistance(session), false)
+            if (session.view.isFixedLayout) await session.view.next()
+            else await session.view.next(lineDistance(session), false)
             break
         case 'go-to':
             await showLocation(session.view, location)
@@ -1438,5 +1499,5 @@ const setSearchResult = request => {
 
 globalThis.yungeReader = Object.freeze({
     clearSelection, navigate, open, search, selectionText, setScrollBars,
-    setSearchResult, setStyle,
+    setSearchResult, setStyle, setZoom,
 })

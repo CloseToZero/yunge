@@ -15,7 +15,7 @@ use wry::{
     NewWindowResponse, PermissionResponse, WebViewBuilder,
     WebViewBuilderExtWindows,
 };
-use yunge_reader::epub::Publication;
+use yunge_reader::epub::{Publication, PublicationLayout};
 
 use super::{BUILD_ID, Error};
 
@@ -44,6 +44,7 @@ use renderer::{
     selection_text_response as renderer_selection_text_response,
     selection_text_script as publication_selection_text_script,
     style_script as publication_style_script,
+    zoom_script as publication_zoom_script,
 };
 #[cfg(test)]
 use resources::{
@@ -78,6 +79,8 @@ const MAX_EPUB_LINE_HEIGHT: f64 = 3.0;
 const MIN_EPUB_CONTENT_WIDTH: u32 = 320;
 const MAX_EPUB_CONTENT_WIDTH: u32 = 1_600;
 const MAX_EPUB_SIDE_PADDING: f64 = 20.0;
+const MIN_EPUB_FIXED_SCALE: f64 = 0.25;
+const MAX_EPUB_FIXED_SCALE: f64 = 8.0;
 const MAX_RENDERER_MESSAGE_BYTES: usize = 1_024 * 1_024;
 const MAX_RENDERER_ERROR_BYTES: usize = 4 * 1_024;
 const MESSAGE_PUMP_INTERVAL: Duration = Duration::from_millis(8);
@@ -101,6 +104,8 @@ struct ViewEvent {
     uri: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     user: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    scale: Option<f64>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -139,7 +144,9 @@ struct ViewPublicationParams {
     #[serde(default)]
     location: Option<EpubLocator>,
     #[serde(default)]
-    style: EpubStyle,
+    style: Option<EpubStyle>,
+    #[serde(default)]
+    zoom: Option<EpubZoom>,
     #[serde(rename = "scroll-bars")]
     scroll_bars: bool,
 }
@@ -149,6 +156,13 @@ struct ViewPublicationParams {
 struct ViewStyleParams {
     view: u64,
     style: EpubStyle,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ViewZoomParams {
+    view: u64,
+    zoom: EpubZoom,
 }
 
 #[derive(Debug, Deserialize)]
@@ -212,6 +226,20 @@ struct EpubStyle {
     line_height: f64,
     content_width: u32,
     side_padding: f64,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+enum EpubZoomMode {
+    FitPage,
+    FitWidth,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(untagged)]
+enum EpubZoom {
+    Scale(f64),
+    Mode(EpubZoomMode),
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
@@ -393,6 +421,55 @@ impl EpubStyle {
             ));
         }
         Ok(self)
+    }
+}
+
+impl Default for EpubZoom {
+    fn default() -> Self {
+        Self::Mode(EpubZoomMode::FitPage)
+    }
+}
+
+impl EpubZoom {
+    fn validate(self) -> Result<Self, ServiceError> {
+        if let Self::Scale(scale) = self
+            && (!scale.is_finite()
+                || !(MIN_EPUB_FIXED_SCALE..=MAX_EPUB_FIXED_SCALE)
+                    .contains(&scale))
+        {
+            return Err(ServiceError::new(
+                "invalid-epub-zoom",
+                "EPUB fixed-layout scale is outside its supported bounds",
+            ));
+        }
+        Ok(self)
+    }
+}
+
+fn view_layout_options(
+    layout: PublicationLayout,
+    style: Option<EpubStyle>,
+    zoom: Option<EpubZoom>,
+) -> Result<(Option<EpubStyle>, Option<EpubZoom>), ServiceError> {
+    match layout {
+        PublicationLayout::Reflowable => {
+            if zoom.is_some() {
+                return Err(ServiceError::new(
+                    "invalid-epub-view-layout",
+                    "reflowable EPUB views do not accept fixed zoom",
+                ));
+            }
+            Ok((Some(style.unwrap_or_default()), None))
+        }
+        PublicationLayout::PrePaginated => {
+            if style.is_some() {
+                return Err(ServiceError::new(
+                    "invalid-epub-view-layout",
+                    "fixed-layout EPUB views do not accept reflow style",
+                ));
+            }
+            Ok((None, Some(zoom.unwrap_or_default())))
+        }
     }
 }
 
@@ -963,7 +1040,8 @@ impl Service {
         let params: ViewPublicationParams = Self::parse(params)?;
         let location =
             params.location.map(EpubLocator::validate).transpose()?;
-        let style = params.style.validate()?;
+        let style = params.style.map(EpubStyle::validate).transpose()?;
+        let zoom = params.zoom.map(EpubZoom::validate).transpose()?;
         let view = self.view(params.view)?;
         if !view.surface.loaded() {
             return Err(ServiceError::new(
@@ -971,12 +1049,15 @@ impl Service {
                 format!("view {} has not finished loading", params.view),
             ));
         }
+        let layout = self.resources.layout(params.publication)?;
+        let (style, zoom) = view_layout_options(layout, style, zoom)?;
         let resource_root = self.resources.resource_root(params.publication)?;
         let script = publication_open_script(
             params.view,
             &resource_root,
             location.as_ref(),
-            &style,
+            style.as_ref(),
+            zoom.as_ref(),
             params.scroll_bars,
         );
         self.view(params.view)?
@@ -1048,10 +1129,17 @@ impl Service {
         let params: ViewStyleParams = Self::parse(params)?;
         let style = params.style.validate()?;
         let view = self.view(params.view)?;
-        if view.publication.is_none() {
-            return Err(ServiceError::new(
+        let publication = view.publication.ok_or_else(|| {
+            ServiceError::new(
                 "view-has-no-publication",
                 format!("view {} has no attached publication", params.view),
+            )
+        })?;
+        if self.resources.layout(publication)? != PublicationLayout::Reflowable
+        {
+            return Err(ServiceError::new(
+                "invalid-epub-view-layout",
+                "fixed-layout EPUB views do not accept reflow style",
             ));
         }
         let script = publication_style_script(params.view, &style);
@@ -1064,6 +1152,37 @@ impl Service {
         Ok(json!({
             "view": params.view,
             "style": style,
+        }))
+    }
+
+    fn set_view_zoom(&mut self, params: Value) -> Result<Value, ServiceError> {
+        let params: ViewZoomParams = Self::parse(params)?;
+        let zoom = params.zoom.validate()?;
+        let view = self.view(params.view)?;
+        let publication = view.publication.ok_or_else(|| {
+            ServiceError::new(
+                "view-has-no-publication",
+                format!("view {} has no attached publication", params.view),
+            )
+        })?;
+        if self.resources.layout(publication)?
+            != PublicationLayout::PrePaginated
+        {
+            return Err(ServiceError::new(
+                "invalid-epub-view-layout",
+                "reflowable EPUB views do not accept fixed zoom",
+            ));
+        }
+        let script = publication_zoom_script(params.view, &zoom);
+        view.surface
+            .webview()
+            .evaluate_script(&script)
+            .map_err(|error| {
+                ServiceError::new("view-update-failed", error.to_string())
+            })?;
+        Ok(json!({
+            "view": params.view,
+            "zoom": zoom,
         }))
     }
 
@@ -1204,6 +1323,7 @@ impl Service {
                 self.open_view_publication(request.params)
             }
             Operation::ViewStyle => self.set_view_style(request.params),
+            Operation::ViewZoom => self.set_view_zoom(request.params),
             Operation::ViewScrollBars => {
                 self.set_view_scroll_bars(request.params)
             }
@@ -1249,6 +1369,7 @@ fn surface_view_event(surface: SurfaceEvent) -> ViewEvent {
         key,
         uri: None,
         user: None,
+        scale: None,
     }
 }
 
@@ -1519,6 +1640,7 @@ mod tests {
         assert!(adapter.contains("pendingStyle"));
         assert!(adapter.contains("requestAnimationFrame("));
         assert!(adapter.contains("post('style-error'"));
+        assert!(adapter.contains("post('zoom-changed', { scale })"));
         assert!(adapter.contains("installSelectionTracking"));
         assert!(adapter.contains(
             "clearSelection, navigate, open, search, selectionText, \
@@ -1530,7 +1652,7 @@ mod tests {
         assert!(adapter.contains("search, selectionText"));
         assert!(adapter.contains("fromRangeEndpoints("));
         assert!(adapter.contains("searchResultRevision"));
-        assert!(adapter.contains("setSearchResult, setStyle"));
+        assert!(adapter.contains("setSearchResult, setStyle, setZoom"));
         let search =
             std::str::from_utf8(app_asset("foliate-js/search.js").unwrap().1)
                 .unwrap();
@@ -1560,6 +1682,12 @@ mod tests {
                 std::str::from_utf8(app_asset(path).unwrap().1).unwrap();
             assert!(!source.contains("allow-same-origin allow-scripts"));
         }
+        let fixed = std::str::from_utf8(
+            app_asset("foliate-js/fixed-layout.js").unwrap().1,
+        )
+        .unwrap();
+        assert!(fixed.contains("new CustomEvent('zoom'"));
+        assert!(fixed.contains("detail: { scale }"));
         let paginator = std::str::from_utf8(
             app_asset("foliate-js/paginator.js").unwrap().1,
         )
@@ -1912,6 +2040,32 @@ mod tests {
         assert!(event.selection.is_none());
         assert!(event.key.is_none());
 
+        let zoom_changed = HttpRequest::builder()
+            .uri(APP_URL)
+            .body(
+                r#"{"protocol":1,"event":"zoom-changed","scale":1.25}"#.into(),
+            )
+            .unwrap();
+        let event = renderer_event(8, &zoom_changed).unwrap();
+        assert_eq!(event.event, "zoom-changed");
+        assert_eq!(event.scale, Some(1.25));
+        assert!(event.message.is_none());
+        assert!(event.location.is_none());
+
+        let zoom_error = HttpRequest::builder()
+            .uri(APP_URL)
+            .body(
+                r#"{"protocol":1,"event":"zoom-error",
+                    "message":"bad zoom"}"#
+                    .into(),
+            )
+            .unwrap();
+        let event = renderer_event(8, &zoom_error).unwrap();
+        assert_eq!(event.event, "zoom-error");
+        assert_eq!(event.message.as_deref(), Some("bad zoom"));
+        assert!(event.scale.is_none());
+        assert!(event.location.is_none());
+
         let scroll_bars_error = HttpRequest::builder()
             .uri(APP_URL)
             .body(
@@ -2037,6 +2191,27 @@ mod tests {
                     .into(),
                 )
                 .unwrap(),
+            HttpRequest::builder()
+                .uri(APP_URL)
+                .body(r#"{"protocol":1,"event":"zoom-changed"}"#.into())
+                .unwrap(),
+            HttpRequest::builder()
+                .uri(APP_URL)
+                .body(
+                    r#"{"protocol":1,"event":"zoom-changed","scale":0}"#.into(),
+                )
+                .unwrap(),
+            HttpRequest::builder()
+                .uri(APP_URL)
+                .body(
+                    concat!(
+                        r#"{"protocol":1,"event":"location","scale":1,"#,
+                        r#""location":{"cfi":"epubcfi(/6/6)","#,
+                        r#""href":"OPS/next.xhtml"}}"#,
+                    )
+                    .into(),
+                )
+                .unwrap(),
         ] {
             assert!(renderer_event(9, &request).is_none());
         }
@@ -2132,7 +2307,8 @@ mod tests {
             4,
             "https://yunge-reader-book.localhost/token/",
             Some(&location),
-            &EpubStyle::default(),
+            Some(&EpubStyle::default()),
+            None,
             false,
         );
         assert!(script.starts_with("void globalThis.yungeReader.open("));
@@ -2147,6 +2323,17 @@ mod tests {
         assert!(script.contains(r#""rendererAccelerators":["+","-","=""#));
         assert!(!script.contains("eval"));
 
+        let fixed_script = publication_open_script(
+            4,
+            "https://yunge-reader-book.localhost/token/",
+            None,
+            None,
+            Some(&EpubZoom::Mode(EpubZoomMode::FitPage)),
+            false,
+        );
+        assert!(fixed_script.contains(r#""style":null"#));
+        assert!(fixed_script.contains(r#""zoom":"fit-page""#));
+
         let style_script = publication_style_script(4, &EpubStyle::default());
         assert!(
             style_script.starts_with("void globalThis.yungeReader.setStyle(")
@@ -2154,6 +2341,14 @@ mod tests {
         assert!(style_script.contains(r#""view":4"#));
         assert!(style_script.contains(r#""font-scale":1.0"#));
         assert!(!style_script.contains("eval"));
+
+        let zoom_script =
+            publication_zoom_script(4, &EpubZoom::Mode(EpubZoomMode::FitWidth));
+        assert!(
+            zoom_script.starts_with("void globalThis.yungeReader.setZoom(")
+        );
+        assert!(zoom_script.contains(r#""zoom":"fit-width""#));
+        assert!(!zoom_script.contains("eval"));
 
         let scroll_bars = publication_scroll_bars_script(4, true);
         assert!(
@@ -2702,7 +2897,8 @@ mod tests {
             "scroll-bars": false,
         }))
         .unwrap();
-        assert_eq!(parsed.style, default);
+        assert_eq!(parsed.style, None);
+        assert_eq!(parsed.zoom, None);
         assert!(!parsed.scroll_bars);
 
         assert!(
@@ -2712,6 +2908,58 @@ mod tests {
             }))
             .is_err()
         );
+
+        for zoom in [
+            EpubZoom::Mode(EpubZoomMode::FitPage),
+            EpubZoom::Mode(EpubZoomMode::FitWidth),
+            EpubZoom::Scale(1.5),
+        ] {
+            assert_eq!(zoom.validate().unwrap(), zoom);
+        }
+        for scale in [0.24, 8.01, f64::NAN] {
+            assert_eq!(
+                EpubZoom::Scale(scale).validate().unwrap_err().code,
+                "invalid-epub-zoom"
+            );
+        }
+
+        let (style, zoom) =
+            view_layout_options(PublicationLayout::Reflowable, None, None)
+                .unwrap();
+        assert_eq!(style, Some(EpubStyle::default()));
+        assert_eq!(zoom, None);
+        let (style, zoom) =
+            view_layout_options(PublicationLayout::PrePaginated, None, None)
+                .unwrap();
+        assert_eq!(style, None);
+        assert_eq!(zoom, Some(EpubZoom::default()));
+        assert_eq!(
+            view_layout_options(
+                PublicationLayout::Reflowable,
+                None,
+                Some(EpubZoom::default()),
+            )
+            .unwrap_err()
+            .code,
+            "invalid-epub-view-layout"
+        );
+        assert_eq!(
+            view_layout_options(
+                PublicationLayout::PrePaginated,
+                Some(EpubStyle::default()),
+                None,
+            )
+            .unwrap_err()
+            .code,
+            "invalid-epub-view-layout"
+        );
+
+        let parsed = Service::parse::<ViewZoomParams>(json!({
+            "view": 4,
+            "zoom": "fit-width",
+        }))
+        .unwrap();
+        assert_eq!(parsed.zoom, EpubZoom::Mode(EpubZoomMode::FitWidth));
 
         let parsed = Service::parse::<ViewStyleParams>(json!({
             "view": 4,

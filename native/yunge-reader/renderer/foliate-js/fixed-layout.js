@@ -137,6 +137,10 @@ export class FixedLayout extends HTMLElement {
                             right.height ?? blankHeight)))
             ) || 1
 
+        this.dispatchEvent(new CustomEvent('zoom', {
+            detail: { scale },
+        }))
+
         const transform = frame => {
             let { element, iframe, width, height, blank, onZoom } = frame
             if (!iframe) return

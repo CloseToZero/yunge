@@ -191,6 +191,18 @@ LOCATION is required only for the go-to command."
      (style . ,(yunge-reader-webview--check-style style)))
    callback))
 
+(defun yunge-reader-webview--set-native-view-zoom
+    (view zoom callback)
+  "Apply fixed-layout ZOOM to native VIEW, then invoke CALLBACK."
+  (let ((value (yunge-reader-webview--check-fixed-zoom zoom)))
+    (yunge-reader-webview--request
+     "view-zoom"
+     `((view . ,(yunge-reader-webview--view-id view))
+       (zoom . ,(if (symbolp value)
+                    (symbol-name value)
+                  value)))
+     callback)))
+
 (defun yunge-reader-webview--set-native-scroll-bar-mode
     (view mode callback)
   "Apply resolved scroll bar MODE to native VIEW, then invoke CALLBACK."

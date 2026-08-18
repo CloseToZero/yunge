@@ -168,6 +168,15 @@
          (when-let* ((view (gethash id yunge-reader-webview--views)))
            (setf (yunge-reader-webview--view-surface-style view) nil))
          (display-warning 'yunge-reader detail :warning)))
+      ("zoom-changed"
+       (let ((scale (alist-get 'scale message)))
+         (unless (and (numberp scale) (> scale 0))
+           (error "Malformed EPUB zoom event: %S" message))))
+      ("zoom-error"
+       (let ((detail (alist-get 'message message)))
+         (unless (stringp detail)
+           (error "Malformed EPUB zoom error: %S" message))
+         (display-warning 'yunge-reader detail :warning)))
       ("scroll-bars-error"
        (let ((detail (alist-get 'message message)))
          (unless (stringp detail)

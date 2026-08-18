@@ -95,7 +95,7 @@ installing or downloading it:
                  "view-search-result",
                  "view-selection-text",
                  "view-scroll-bars","view-status","view-style",
-                  "view-visible"],
+                 "view-visible","view-zoom"],
  "accelerators":["+","-","=","<escape>","<next>","<prior>",
                  "C-d","C-g","C-u","J","K","M-m","SPC","j","k","y"],
  "engine":"webview2","kind":"webview-ready","platform":"windows",
@@ -149,8 +149,8 @@ layout, native text selection, links, relocation events, and semantic screen
 navigation without exposing the local EPUB path.
 
 =view-open-publication= attaches an open publication to a child view.  It
-accepts an optional stable locator, a complete semantic reading style, and a
-required resolved scroll bar policy:
+accepts an optional stable locator and a required resolved scroll bar policy.
+A reflowable publication accepts a complete semantic reading style:
 
 #+begin_src json
 {"id":2,"op":"view-open-publication",
@@ -164,15 +164,51 @@ Font scale is bounded to 0.5--3.0, line height to 1.0--3.0, content width to
 320--1,600 CSS pixels, and side padding to 0--20 percent.  Omission selects
 the same defaults shown above.  Unknown or partial style objects are rejected;
 arbitrary CSS, fonts, and colors never cross the protocol boundary.  The
-renderer maps these fields to reflowable layout before its first navigation
-and leaves fixed-layout publication geometry unchanged.
+renderer maps these fields to reflowable layout before its first navigation.
 
-=view-style= accepts the same complete style object for an attached view.
+A pre-paginated publication instead accepts =zoom= as =fit-page=,
+=fit-width=, or a numeric scale from 0.25 through 8.0.  Omission selects
+=fit-page=:
+
+#+begin_src json
+{"id":3,"op":"view-open-publication",
+ "params":{"view":2,"publication":2,
+           "scroll-bars":false,"zoom":"fit-page"}}
+#+end_src
+
+Layout is authoritative: reflowable views reject =zoom=, and pre-paginated
+views reject =style=.  This keeps font reflow and fixed page scaling as
+separate state rather than assigning ambiguous meaning to one zoom value.
+
+=view-style= accepts the same complete style object for an attached
+reflowable view.
 The renderer coalesces updates requested within one animation frame and lets
 Foliate retain its current visible-range anchor while the document reflows.
 Changing style does not reopen the publication, recreate the child surface,
 or emit a durable location for layout-only movement.  A renderer-side failure
 is reported as a bounded =style-error= event.
+
+=view-zoom= changes an attached pre-paginated view without reopening its
+publication.  It accepts the same fit modes and numeric bounds as the initial
+=zoom=.  =fit-page= and =fit-width= remain semantic modes across surface
+resizes; a number remains a manual scale.  Reflowable views reject this
+operation.
+
+#+begin_src json
+{"id":4,"op":"view-zoom",
+ "params":{"view":2,"zoom":"fit-width"}}
+#+end_src
+
+After each effective fixed-layout render, including a fit-mode resize, the
+renderer reports the positive numeric scale it actually used.  Repeated
+identical scales are coalesced.  This value is presentation feedback, not a
+replacement for the semantic fit mode:
+
+#+begin_src json
+{"kind":"event","event":"zoom-changed","view":2,"scale":1.25}
+#+end_src
+
+A renderer-side failure is reported as a bounded =zoom-error= event.
 
 =view-scroll-bars= changes only the visual bar of an attached view.  The
 boolean =visible= field is required, scrolling remains enabled in either
@@ -377,10 +413,13 @@ owning view may persist.
 The renderer runs at most one navigation operation and retains only the latest
 pending intent.  Repeated keys can therefore continue moving through the book
 without building an unbounded queue.  A newer direction or =go-to= target
-replaces older pending movement.  Line movement uses the loaded document's
-computed line height without animation.  Screen movement within a loaded
-spine item uses Foliate's bounded 300 ms ease-out animation.  Either scale can
-cross a linear spine-item boundary, which may pause while the next item loads.
+replaces older pending movement.  Line movement in a reflowable publication
+uses the loaded document's computed line height without animation.  In a
+pre-paginated publication, line commands move by one fixed page because it
+has no meaningful text line distance.  Screen movement within a loaded
+reflowable spine item uses Foliate's bounded 300 ms ease-out animation.  Either
+scale can cross a linear spine-item boundary, which may pause while the next
+item loads.
 Moving beyond either end is a no-op, and unsuccessful movement releases the
 renderer lock for later navigation.
 

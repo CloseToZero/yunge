@@ -76,7 +76,7 @@
          "view-search-result"
          "view-selection-text"
          "view-scroll-bars" "view-status" "view-style"
-         "view-visible")))))
+         "view-visible" "view-zoom")))))
 
 (defun yunge-reader-webview-test--location (&optional fraction)
   "Return one valid EPUB test locator with optional FRACTION."
@@ -471,6 +471,14 @@
           (color . "red"))))
     (should-not (yunge-reader-webview--valid-style-p style))))
 
+(ert-deftest yunge-reader-webview-validates-fixed-layout-zoom ()
+  (dolist (zoom '(fit-page fit-width 0.25 1.0 8.0))
+    (should (yunge-reader-webview--valid-fixed-zoom-p zoom))
+    (should (eq (yunge-reader-webview--check-fixed-zoom zoom) zoom)))
+  (dolist (zoom '(fit-height 0.24 8.01 "fit-page"))
+    (should-not (yunge-reader-webview--valid-fixed-zoom-p zoom))
+    (should-error (yunge-reader-webview--check-fixed-zoom zoom))))
+
 (ert-deftest yunge-reader-webview-validates-resolved-scroll-bar-modes ()
   (should
    (eq (yunge-reader-webview--check-scroll-bar-mode 'hidden)
@@ -604,6 +612,8 @@
        view "go-to" #'ignore target)
       (yunge-reader-webview--set-native-view-style
        view style #'ignore)
+      (yunge-reader-webview--set-native-view-zoom
+       view 'fit-width #'ignore)
       (yunge-reader-webview--set-native-scroll-bar-mode
        view 'visible #'ignore)
       (let* ((requests
@@ -616,12 +626,14 @@
              (line (nth 2 requests))
              (go-to (nth 3 requests))
              (styled (nth 4 requests))
-             (scroll-bars (nth 5 requests)))
+             (zoomed (nth 5 requests))
+             (scroll-bars (nth 6 requests)))
         (should
          (equal
           (mapcar (lambda (request) (alist-get 'op request)) requests)
           '("view-open-publication" "view-navigate" "view-navigate"
-            "view-navigate" "view-style" "view-scroll-bars")))
+            "view-navigate" "view-style" "view-zoom"
+            "view-scroll-bars")))
         (should
          (equal (alist-get 'location (alist-get 'params open))
                 location))
@@ -637,6 +649,9 @@
         (should
          (equal (alist-get 'command (alist-get 'params line))
                 "next-line"))
+        (should
+         (equal (alist-get 'zoom (alist-get 'params zoomed))
+                "fit-width"))
         (should
          (equal (alist-get 'location (alist-get 'params go-to))
                 target))
@@ -1003,6 +1018,28 @@
           (should-not
            (yunge-reader-webview--view-surface-style view))
           (should (equal (cadr warning) "bad style"))
+          (yunge-reader-webview--handle-event
+           'fake-webview-process
+           '((kind . "event")
+             (event . "zoom-changed")
+             (view . 6)
+             (scale . 1.25)))
+          (should-error
+           (yunge-reader-webview--handle-event
+            'fake-webview-process
+            '((kind . "event")
+              (event . "zoom-changed")
+              (view . 6)
+              (scale . 0))))
+          (cl-letf (((symbol-function 'display-warning)
+                     (lambda (&rest value) (setq warning value))))
+            (yunge-reader-webview--handle-event
+             'fake-webview-process
+             '((kind . "event")
+               (event . "zoom-error")
+               (view . 6)
+               (message . "bad zoom"))))
+          (should (equal (cadr warning) "bad zoom"))
           (setf
            (yunge-reader-webview--view-surface-scroll-bar-mode view)
            'visible)

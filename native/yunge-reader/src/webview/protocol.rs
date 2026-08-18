@@ -13,7 +13,7 @@ pub(super) const ACCELERATORS: [&str; 16] = [
     "+", "-", "=", "<escape>", "<next>", "<prior>", "C-d", "C-g", "C-u", "J",
     "K", "M-m", "SPC", "j", "k", "y",
 ];
-pub(super) const CAPABILITIES: [&str; 21] = [
+pub(super) const CAPABILITIES: [&str; 22] = [
     "publication-close",
     "publication-info",
     "publication-open",
@@ -35,6 +35,7 @@ pub(super) const CAPABILITIES: [&str; 21] = [
     "view-status",
     "view-style",
     "view-visible",
+    "view-zoom",
 ];
 
 #[derive(Debug, Deserialize)]
@@ -68,6 +69,7 @@ pub(super) enum Operation {
     ViewFocusParent,
     ViewStatus,
     ViewDestroy,
+    ViewZoom,
 }
 
 impl Request {
@@ -97,6 +99,7 @@ impl Request {
             "view-focus-parent" => Operation::ViewFocusParent,
             "view-status" => Operation::ViewStatus,
             "view-destroy" => Operation::ViewDestroy,
+            "view-zoom" => Operation::ViewZoom,
             _ => {
                 return Err(ServiceError::new(
                     "unsupported-operation",
@@ -217,6 +220,11 @@ mod tests {
         let request = Request::decode(r#"{"id":8,"op":"view-info"}"#).unwrap();
         assert!(request.params.is_null());
         assert_eq!(request.operation().unwrap(), Operation::ViewInfo);
+
+        let request =
+            Request::decode(r#"{"id":9,"op":"view-zoom","params":{"view":3}}"#)
+                .unwrap();
+        assert_eq!(request.operation().unwrap(), Operation::ViewZoom);
     }
 
     #[test]

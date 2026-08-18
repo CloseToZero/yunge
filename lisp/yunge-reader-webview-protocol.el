@@ -52,6 +52,16 @@
   '(font-scale line-height content-width side-padding)
   "Semantic fields in one EPUB reading style.")
 
+(defconst yunge-reader-webview--epub-fixed-scale-min 0.25
+  "Minimum manual scale accepted for a fixed-layout EPUB.")
+
+(defconst yunge-reader-webview--epub-fixed-scale-max 8.0
+  "Maximum manual scale accepted for a fixed-layout EPUB.")
+
+(defconst yunge-reader-webview--epub-fixed-fit-modes
+  '(fit-page fit-width)
+  "Automatic fit modes accepted for a fixed-layout EPUB.")
+
 (defconst yunge-reader-webview--scroll-bar-modes '(hidden visible)
   "Resolved display modes for an EPUB spine-item scroll bar.")
 
@@ -88,7 +98,7 @@
             "view-search-result"
             "view-selection-text"
             "view-scroll-bars" "view-status" "view-style"
-            "view-visible")))
+            "view-visible" "view-zoom")))
       (error
        "Incompatible Yunge Reader WebView helper: %S"
        message))))
@@ -390,6 +400,23 @@ OFFSET and CHARACTER-LIMIT describe the request that produced RESULT."
   (unless (yunge-reader-webview--valid-style-p style)
     (error "Invalid EPUB reading style: %S" style))
   style)
+
+(defun yunge-reader-webview--valid-fixed-zoom-p (zoom)
+  "Return non-nil when ZOOM is a bounded fixed-layout EPUB zoom."
+  (or
+   (memq zoom yunge-reader-webview--epub-fixed-fit-modes)
+   (and
+    (numberp zoom)
+    (= zoom zoom)
+    (<= yunge-reader-webview--epub-fixed-scale-min
+        zoom
+        yunge-reader-webview--epub-fixed-scale-max))))
+
+(defun yunge-reader-webview--check-fixed-zoom (zoom)
+  "Return ZOOM or signal when it is not a fixed-layout EPUB zoom."
+  (unless (yunge-reader-webview--valid-fixed-zoom-p zoom)
+    (error "Invalid EPUB fixed-layout zoom: %S" zoom))
+  zoom)
 
 (defun yunge-reader-webview--check-scroll-bar-mode (mode)
   "Return resolved EPUB scroll bar MODE or signal."

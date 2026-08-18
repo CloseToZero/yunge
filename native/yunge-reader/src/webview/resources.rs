@@ -10,7 +10,7 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use std::thread;
 use wry::RequestAsyncResponder;
 use wry::http::{Method, Request as HttpRequest, Response as HttpResponse};
-use yunge_reader::epub::{EpubError, Publication};
+use yunge_reader::epub::{EpubError, Publication, PublicationLayout};
 
 use super::protocol::ServiceError;
 
@@ -152,6 +152,18 @@ impl ResourceService {
             .get(&id)
             .ok_or_else(|| unknown_publication(id))?;
         Ok(format!("{BOOK_BROWSER_ROOT}{}/", publication.token))
+    }
+
+    pub(super) fn layout(
+        &self,
+        id: u64,
+    ) -> Result<PublicationLayout, ServiceError> {
+        let publications = self.lock()?;
+        let publication = publications
+            .entries
+            .get(&id)
+            .ok_or_else(|| unknown_publication(id))?;
+        Ok(publication.publication.metadata().layout)
     }
 
     pub(super) fn respond(

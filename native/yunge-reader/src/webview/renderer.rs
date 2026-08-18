@@ -9,11 +9,11 @@ use super::protocol::{PROTOCOL_VERSION, RENDERER_ACCELERATORS, Response};
 use super::resources::{APP_BROWSER_URL, APP_URL};
 use super::{
     EpubLocator, EpubNavigationTarget, EpubOutline, EpubSearchCursor,
-    EpubSearchMatch, EpubSelection, EpubStyle, MAX_EPUB_EXTERNAL_URI_BYTES,
-    MAX_EPUB_SEARCH_RESULT_BYTES, MAX_EPUB_SELECTION_CHARACTERS,
-    MAX_EPUB_SELECTION_RESULT_BYTES, MAX_RENDERER_ERROR_BYTES,
-    MAX_RENDERER_MESSAGE_BYTES, NavigationCommand, SearchDirection, ViewEvent,
-    ViewSearchParams, ViewSelectionTextParams,
+    EpubSearchMatch, EpubSelection, EpubStyle, EpubZoom,
+    MAX_EPUB_EXTERNAL_URI_BYTES, MAX_EPUB_SEARCH_RESULT_BYTES,
+    MAX_EPUB_SELECTION_CHARACTERS, MAX_EPUB_SELECTION_RESULT_BYTES,
+    MAX_RENDERER_ERROR_BYTES, MAX_RENDERER_MESSAGE_BYTES, NavigationCommand,
+    SearchDirection, ViewEvent, ViewSearchParams, ViewSelectionTextParams,
 };
 
 #[derive(Debug, Deserialize)]
@@ -90,6 +90,8 @@ struct RendererMessage {
     uri: Option<String>,
     #[serde(default)]
     user: Option<bool>,
+    #[serde(default)]
+    scale: Option<f64>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -104,6 +106,8 @@ enum RendererEvent {
     ScrollBarsError,
     Selection,
     StyleError,
+    ZoomChanged,
+    ZoomError,
 }
 
 fn valid_external_uri(value: &str) -> bool {
@@ -434,6 +438,21 @@ pub(super) fn event(
             None
         }
     };
+    let scale = match &message.event {
+        RendererEvent::ZoomChanged => {
+            let scale = message.scale?;
+            if !scale.is_finite() || scale <= 0.0 {
+                return None;
+            }
+            Some(scale)
+        }
+        _ => {
+            if message.scale.is_some() {
+                return None;
+            }
+            None
+        }
+    };
     let (event, detail, location, outline, selection, key, uri) = match message
         .event
     {
@@ -583,6 +602,30 @@ pub(super) fn event(
             let detail = message.message.filter(|value| !value.is_empty())?;
             ("style-error", Some(detail), None, None, None, None, None)
         }
+        RendererEvent::ZoomChanged => {
+            if message.message.is_some()
+                || message.location.is_some()
+                || message.outline.is_some()
+                || message.selection.is_some()
+                || message.key.is_some()
+                || message.uri.is_some()
+            {
+                return None;
+            }
+            ("zoom-changed", None, None, None, None, None, None)
+        }
+        RendererEvent::ZoomError => {
+            if message.location.is_some()
+                || message.outline.is_some()
+                || message.selection.is_some()
+                || message.key.is_some()
+                || message.uri.is_some()
+            {
+                return None;
+            }
+            let detail = message.message.filter(|value| !value.is_empty())?;
+            ("zoom-error", Some(detail), None, None, None, None, None)
+        }
     };
     Some(ViewEvent {
         kind: "event",
@@ -595,6 +638,7 @@ pub(super) fn event(
         key,
         uri,
         user,
+        scale,
     })
 }
 
@@ -602,7 +646,8 @@ pub(super) fn open_script(
     view: u64,
     resource_root: &str,
     location: Option<&EpubLocator>,
-    style: &EpubStyle,
+    style: Option<&EpubStyle>,
+    zoom: Option<&EpubZoom>,
     scroll_bars: bool,
 ) -> String {
     let payload = serde_json::to_string(&json!({
@@ -610,6 +655,7 @@ pub(super) fn open_script(
         "resourceRoot": resource_root,
         "location": location,
         "style": style,
+        "zoom": zoom,
         "scrollBars": scroll_bars,
         "rendererAccelerators": RENDERER_ACCELERATORS,
     }))
@@ -638,6 +684,15 @@ pub(super) fn style_script(view: u64, style: &EpubStyle) -> String {
     }))
     .expect("publication style payload is serializable");
     format!("void globalThis.yungeReader.setStyle({payload});")
+}
+
+pub(super) fn zoom_script(view: u64, zoom: &EpubZoom) -> String {
+    let payload = serde_json::to_string(&json!({
+        "view": view,
+        "zoom": zoom,
+    }))
+    .expect("fixed-layout zoom payload is serializable");
+    format!("void globalThis.yungeReader.setZoom({payload});")
 }
 
 pub(super) fn scroll_bars_script(view: u64, visible: bool) -> String {
