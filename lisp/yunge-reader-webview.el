@@ -1365,7 +1365,7 @@ Without FORCE, request graceful shutdown and enforce a deadline."
   (add-hook 'window-buffer-change-functions
             #'yunge-reader-webview--sync-views)
   (add-hook 'window-selection-change-functions
-            #'yunge-reader-webview--sync-native-focus))
+            #'yunge-reader-webview--window-selection-changed))
 
 (defun yunge-reader-webview--remove-hooks ()
   "Remove native view synchronization hooks."
@@ -1376,7 +1376,7 @@ Without FORCE, request graceful shutdown and enforce a deadline."
   (remove-hook 'window-buffer-change-functions
                #'yunge-reader-webview--sync-views)
   (remove-hook 'window-selection-change-functions
-               #'yunge-reader-webview--sync-native-focus))
+               #'yunge-reader-webview--window-selection-changed))
 
 (defun yunge-reader-webview--register-view (view)
   "Register logical VIEW and synchronize its native surface."
@@ -1425,15 +1425,11 @@ Without FORCE, request graceful shutdown and enforce a deadline."
                (yunge-reader-webview--send-latest-bounds view)))))))))
 
 (defun yunge-reader-webview--visible-window (view)
-  "Return a live window displaying VIEW's buffer, if any."
-  (let ((window (yunge-reader-webview--view-window view))
-        (buffer (yunge-reader-webview--view-buffer view)))
+  "Return VIEW's active presentation window, if any."
+  (let ((buffer (yunge-reader-webview--view-buffer view)))
     (when (buffer-live-p buffer)
-      (if (and window
-               (window-live-p window)
-               (eq (window-buffer window) buffer))
-          window
-        (get-buffer-window buffer t)))))
+      (with-current-buffer buffer
+        (yunge-reader--presentation-window)))))
 
 (defun yunge-reader-webview--sync-view (view)
   "Synchronize logical VIEW with its currently visible window."
@@ -1443,6 +1439,14 @@ Without FORCE, request graceful shutdown and enforce a deadline."
           (id (yunge-reader-webview--view-id view)))
       (cond
        ((and window id (eq window current))
+        (yunge-reader-webview--update-scroll-bar-mode view window)
+        (setf (yunge-reader-webview--view-requested-bounds view)
+              (yunge-reader-webview--window-bounds window))
+        (yunge-reader-webview--send-latest-bounds view))
+       ((and window id current
+             (window-live-p current)
+             (eq (window-frame window) (window-frame current)))
+        (setf (yunge-reader-webview--view-window view) window)
         (yunge-reader-webview--update-scroll-bar-mode view window)
         (setf (yunge-reader-webview--view-requested-bounds view)
               (yunge-reader-webview--window-bounds window))
@@ -1467,6 +1471,11 @@ Without FORCE, request graceful shutdown and enforce a deadline."
      yunge-reader-webview--logical-views)
     (dolist (view views)
       (yunge-reader-webview--sync-view view))))
+
+(defun yunge-reader-webview--window-selection-changed (&rest _ignored)
+  "Move native surfaces and synchronize focus after window selection."
+  (yunge-reader-webview--sync-views)
+  (yunge-reader-webview--sync-native-focus))
 
 (defun yunge-reader-webview--sync-native-focus (&rest _ignored)
   "Release any focused native child whose Emacs window is not selected."

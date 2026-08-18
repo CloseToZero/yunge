@@ -1181,6 +1181,102 @@
       (should-not (yunge-reader-webview--view-bounds view))
       (should (= (length requests) 1)))))
 
+(ert-deftest yunge-reader-webview-targets-the-active-presentation ()
+  (let ((buffer (generate-new-buffer " *webview presentations*")))
+    (unwind-protect
+        (save-window-excursion
+          (switch-to-buffer buffer)
+          (yunge-reader-mode)
+          (let ((second (split-window-right))
+                (view
+                 (yunge-reader-webview--make-view :buffer buffer)))
+            (set-window-buffer second buffer)
+            (select-window second)
+            (should
+             (eq (yunge-reader-webview--visible-window view) second))))
+      (when (buffer-live-p buffer)
+        (kill-buffer buffer)))))
+
+(ert-deftest yunge-reader-webview-moves-a-surface-within-its-frame ()
+  (let ((buffer (generate-new-buffer " *webview same frame*")))
+    (unwind-protect
+        (save-window-excursion
+          (switch-to-buffer buffer)
+          (yunge-reader-mode)
+          (let* ((first (selected-window))
+                 (second (split-window-right))
+                 (bounds
+                  '((x . 500) (y . 0) (width . 500) (height . 600)))
+                 (view
+                  (yunge-reader-webview--make-view
+                   :id 9
+                   :window first
+                   :buffer buffer
+                   :created t
+                   :publication-ready t))
+                 synchronized)
+            (set-window-buffer second buffer)
+            (select-window second)
+            (cl-letf
+                (((symbol-function
+                   'yunge-reader-webview--update-scroll-bar-mode)
+                  #'ignore)
+                 ((symbol-function 'yunge-reader-webview--window-bounds)
+                  (lambda (window)
+                    (should (eq window second))
+                    bounds))
+                 ((symbol-function
+                   'yunge-reader-webview--send-latest-bounds)
+                  (lambda (value) (setq synchronized value)))
+                 ((symbol-function 'yunge-reader-webview--release-surface)
+                  (lambda (&rest _arguments)
+                    (ert-fail "Same-frame move released the surface")))
+                 ((symbol-function 'yunge-reader-webview--start-surface)
+                  (lambda (&rest _arguments)
+                    (ert-fail "Same-frame move recreated the surface"))))
+              (yunge-reader-webview--sync-view view))
+            (should (eq synchronized view))
+            (should (eq (yunge-reader-webview--view-window view) second))
+            (should (= (yunge-reader-webview--view-id view) 9))
+            (should (yunge-reader-webview--view-publication-ready view))
+            (should
+             (equal (yunge-reader-webview--view-requested-bounds view)
+                    bounds))))
+      (when (buffer-live-p buffer)
+        (kill-buffer buffer)))))
+
+(ert-deftest yunge-reader-webview-recreates-a-surface-across-frames ()
+  (let* ((view
+          (yunge-reader-webview--make-view
+           :id 9 :window 'first :buffer (current-buffer) :created t))
+         transitions)
+    (cl-letf
+        (((symbol-function 'yunge-reader-webview--visible-window)
+          (lambda (_view) 'second))
+         ((symbol-function 'window-live-p) (lambda (_window) t))
+         ((symbol-function 'window-frame)
+          (lambda (window)
+            (if (eq window 'first) 'first-frame 'second-frame)))
+         ((symbol-function 'yunge-reader-webview--release-surface)
+          (lambda (value &optional _complete)
+            (should (eq value view))
+            (push 'release transitions)))
+         ((symbol-function 'yunge-reader-webview--start-surface)
+          (lambda (value window)
+            (should (eq value view))
+            (push window transitions))))
+      (yunge-reader-webview--sync-view view)
+      (should (equal (nreverse transitions) '(release second))))))
+
+(ert-deftest yunge-reader-webview-moves-before-synchronizing-focus ()
+  (let (calls)
+    (cl-letf (((symbol-function 'yunge-reader-webview--sync-views)
+               (lambda (&rest _arguments) (push 'views calls)))
+              ((symbol-function 'yunge-reader-webview--sync-native-focus)
+               (lambda (&rest _arguments) (push 'focus calls))))
+      (yunge-reader-webview--window-selection-changed 'frame)
+      (should (equal (nreverse calls) '(views focus))))))
+
 (ert-deftest yunge-reader-webview-destroys-a-replaced-window-view ()
   (let* ((buffer (generate-new-buffer " *webview owner*"))
          (other (generate-new-buffer " *webview replacement*"))

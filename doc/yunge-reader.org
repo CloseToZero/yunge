@@ -266,6 +266,11 @@ For PDF, passive duplicate windows may remain visible, while their scrolling
 and resizing cannot change the shared current page, fit geometry, search
 anchor, or saved location.
 
+An embedded EPUB surface follows the active presentation.  Moving it between
+windows on one frame updates the native child bounds without reopening the
+publication.  A move across frames recreates the surface because its native
+parent changes, while the buffer-owned view retains its logical state.
+
 Opening a document declares one of two layouts:
 
 - =fixed= documents have stable spatial units, normally pages.  PDF, DjVu,
