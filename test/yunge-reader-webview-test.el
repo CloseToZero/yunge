@@ -1475,7 +1475,8 @@
     (with-temp-buffer
       (let ((view
              (yunge-reader-webview--attach-shared-publication
-              8 nil nil nil nil style nil link-function)))
+              8 'reflow nil nil nil nil style nil link-function)))
+        (should (eq (yunge-reader-webview--view-layout view) 'reflow))
         (should
          (equal (yunge-reader-webview--view-style view) style))
         (should-not (eq (yunge-reader-webview--view-style view) style))
@@ -1487,6 +1488,13 @@
         (should
          (eq (yunge-reader-webview--view-external-link-function view)
              link-function))))))
+
+(ert-deftest yunge-reader-webview-rejects-style-for-fixed-layout ()
+  (let ((view
+         (yunge-reader-webview--make-view :layout 'fixed)))
+    (should-error
+     (yunge-reader-webview--set-view-style
+      view (yunge-reader-webview-test--style)))))
 
 (ert-deftest yunge-reader-webview-waits-for-every-obsolete-surface ()
   (let* ((view

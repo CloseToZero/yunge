@@ -55,6 +55,8 @@
   (when (or (null view)
             (yunge-reader-webview--view-destroyed view))
     (error "Cannot style a dead EPUB view"))
+  (when (eq (yunge-reader-webview--view-layout view) 'fixed)
+    (error "Cannot apply reflow style to a fixed-layout EPUB view"))
   (let ((style (copy-tree
                 (yunge-reader-webview--check-style style))))
     (setf (yunge-reader-webview--view-style view) style)
@@ -531,10 +533,10 @@ When REVEAL is non-nil, navigate to the result before painting it."
     view))
 
 (defun yunge-reader-webview--attach-shared-publication
-    (publication &optional location location-changed-function
+    (publication layout &optional location location-changed-function
                  selection-changed-function accelerator-function style
                  scroll-bar-function external-link-function)
-  "Attach shared PUBLICATION to the current Reader buffer.
+  "Attach shared PUBLICATION with Reader LAYOUT to the current buffer.
 Restore bounded LOCATION when supplied.  Invoke LOCATION-CHANGED-FUNCTION
 with the logical view whenever its renderer reports a stable location.
 Invoke SELECTION-CHANGED-FUNCTION whenever its logical selection changes.
@@ -544,6 +546,10 @@ SCROLL-BAR-FUNCTION resolves its mode for the owning Emacs window.
 Invoke EXTERNAL-LINK-FUNCTION with the view and a validated absolute URI."
   (unless (and (integerp publication) (> publication 0))
     (error "Invalid EPUB publication ID: %S" publication))
+  (unless (memq layout '(fixed reflow))
+    (error "Invalid EPUB publication layout: %S" layout))
+  (when (and (eq layout 'fixed) style)
+    (error "Fixed-layout EPUB views do not accept reflow style"))
   (when location
     (yunge-reader-webview--check-location location))
   (when style
@@ -577,6 +583,7 @@ Invoke EXTERNAL-LINK-FUNCTION with the view and a validated absolute URI."
           :buffer (current-buffer)
           :persistent t
           :publication publication
+          :layout layout
           :style (and style (copy-tree style))
           :location (and location (copy-tree location))
           :location-changed-function location-changed-function

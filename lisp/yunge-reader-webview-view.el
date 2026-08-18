@@ -33,6 +33,7 @@
   destroyed
   persistent
   owns-publication
+  layout
   bounds
   requested-bounds
   bounds-pending

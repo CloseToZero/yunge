@@ -110,15 +110,23 @@ scrolling behavior."
 (yunge-key-define yunge-reader-epub-command-map
                   yunge-reader-epub-command-bindings)
 
+(define-minor-mode yunge-reader-epub-reflow-view-mode
+  "Expose text-layout commands for one reflowable EPUB view."
+  :init-value nil
+  :lighter nil)
+
 (defconst yunge-reader-epub-normal-bindings
   `(("j" yunge-reader-epub-next-line "next line")
     ("k" yunge-reader-epub-previous-line "previous line")
     ("C-d" yunge-reader-epub-next-screen "next screen")
     ("C-u" yunge-reader-epub-previous-screen "previous screen")
     ("J" yunge-reader-epub-next-screen "next screen")
-    ("K" yunge-reader-epub-previous-screen "previous screen")
-    ([localleader] ,yunge-reader-epub-command-map nil))
-  "Normal-state bindings for reflowable EPUB views.")
+    ("K" yunge-reader-epub-previous-screen "previous screen"))
+  "Normal-state bindings for EPUB views.")
+
+(defconst yunge-reader-epub-reflow-normal-bindings
+  `(([localleader] ,yunge-reader-epub-command-map nil))
+  "Normal-state bindings available only in reflowable EPUB views.")
 
 (defvar-keymap yunge-reader-epub-view-mode-map
   "j" #'yunge-reader-epub-next-line
@@ -131,7 +139,7 @@ scrolling behavior."
   "<prior>" #'yunge-reader-epub-previous-screen)
 
 (define-minor-mode yunge-reader-epub-view-mode
-  "Display a reflowable EPUB through a native WebView."
+  "Display an EPUB through a native WebView."
   :init-value nil
   :lighter " EPUB"
   :keymap yunge-reader-epub-view-mode-map
@@ -153,6 +161,7 @@ scrolling behavior."
                  #'yunge-reader-epub--search-result-changed t)
     (remove-hook 'yunge-reader-view-role-change-hook
                  #'yunge-reader-epub--update-header t)
+    (yunge-reader-epub-reflow-view-mode -1)
     (kill-local-variable 'yunge-reader-default-scale)
     (kill-local-variable 'yunge-reader-minimum-scale)
     (kill-local-variable 'yunge-reader-maximum-scale)
@@ -161,7 +170,10 @@ scrolling behavior."
 (with-eval-after-load 'evil
   (yunge-key-evil-define-minor-mode
    'normal 'yunge-reader-epub-view-mode
-   yunge-reader-epub-normal-bindings))
+   yunge-reader-epub-normal-bindings)
+  (yunge-key-evil-define-minor-mode
+   'normal 'yunge-reader-epub-reflow-view-mode
+   yunge-reader-epub-reflow-normal-bindings))
 
 (with-eval-after-load 'which-key
   (yunge-key-add-which-key-descriptions
@@ -194,6 +206,14 @@ scrolling behavior."
      :version (alist-get 'version metadata)
      :entry-count (alist-get 'entry-count result))))
 
+(defun yunge-reader-epub--layout (result)
+  "Return the Reader layout parsed from native publication RESULT."
+  (let ((layout (alist-get 'layout (alist-get 'metadata result))))
+    (pcase layout
+      ("reflowable" 'reflow)
+      ("pre-paginated" 'fixed)
+      (_ (error "Invalid EPUB package layout: %S" layout)))))
+
 (defun yunge-reader-epub--open-complete
     (complete result error-data)
   "Call COMPLETE after validating native EPUB RESULT or ERROR-DATA."
@@ -203,14 +223,15 @@ scrolling behavior."
         (let ((publication (alist-get 'publication result)))
           (unless (and (integerp publication) (> publication 0))
             (error "Malformed EPUB publication result: %S" result))
-          (let ((metadata (yunge-reader-epub--metadata result)))
+          (let ((layout (yunge-reader-epub--layout result))
+                (metadata (yunge-reader-epub--metadata result)))
             (funcall
              complete
              (make-yunge-reader-epub-handle
               :publication publication
               :metadata metadata
               :pending-detaches 0)
-             (list :layout 'reflow :metadata metadata)
+             (list :layout layout :metadata metadata)
              nil)))
       (error
        (when-let* ((publication (alist-get 'publication result))
@@ -285,12 +306,18 @@ scrolling behavior."
             ('primary "Primary")
             ('additional "Additional")
             (_ "Reader")))
+         (layout
+          (and yunge-reader-document
+               (yunge-reader-document-layout
+                yunge-reader-document)))
          (font-percent
-          (round
-           (* 100
-              (or yunge-reader-effective-scale
-                  yunge-reader-scale
-                  yunge-reader-epub-default-font-scale))))
+          (and
+           (eq layout 'reflow)
+           (round
+            (* 100
+               (or yunge-reader-effective-scale
+                   yunge-reader-scale
+                   yunge-reader-epub-default-font-scale)))))
          (location
           (and yunge-reader-webview--buffer-view
                (yunge-reader-webview--view-location
@@ -302,10 +329,13 @@ scrolling behavior."
                    100
                  (floor (* 100 fraction))))))
     (setq header-line-format
-          (format " %s  EPUB%s  Font %d%%  %s "
+          (format " %s  EPUB%s  %s  %s "
                   role
                   (if progress (format "  %d%%" progress) "")
-                  font-percent title))))
+                  (if font-percent
+                      (format "Font %d%%" font-percent)
+                    "Fixed")
+                  title))))
 
 (defun yunge-reader-epub--location-changed (view user)
   "Handle the stable location reported by EPUB VIEW.
@@ -429,6 +459,12 @@ USER is non-nil when direct reader movement produced the location."
   "Return the current live EPUB view and a fresh copy of its style."
   (unless yunge-reader-epub-view-mode
     (user-error "The current buffer is not an EPUB view"))
+  (unless (and yunge-reader-document
+               (eq (yunge-reader-document-layout
+                    yunge-reader-document)
+                   'reflow))
+    (user-error
+     "Text layout is available only for reflowable EPUB views"))
   (let ((view yunge-reader-webview--buffer-view))
     (when (or (null view)
               (yunge-reader-webview--view-destroyed view))
@@ -574,19 +610,30 @@ VALUES is an alist containing complete, already bounded property values."
 
 (defun yunge-reader-epub--attach (document)
   "Attach a persistent EPUB WebView for DOCUMENT."
-  (let ((handle (yunge-reader-document-handle document)))
+  (let ((handle (yunge-reader-document-handle document))
+        (layout (yunge-reader-document-layout document)))
     (unless (and (yunge-reader-epub-handle-p handle)
                   (not (yunge-reader-epub-handle-closing handle)))
       (error "EPUB document has no live publication"))
-    (let ((font-scale (yunge-reader-epub--configure-zoom)))
+    (unless (memq layout '(fixed reflow))
+      (error "EPUB document has invalid layout: %S" layout))
+    (let* ((font-scale
+            (and (eq layout 'reflow)
+                 (yunge-reader-epub--configure-zoom)))
+           (style
+            (and font-scale
+                 (yunge-reader-epub--default-style font-scale))))
       (yunge-reader-epub-view-mode 1)
+      (yunge-reader-epub-reflow-view-mode
+       (if (eq layout 'reflow) 1 -1))
       (yunge-reader-epub--update-header)
       (yunge-reader-webview--attach-shared-publication
        (yunge-reader-epub-handle-publication handle)
+       layout
        nil #'yunge-reader-epub--location-changed
        #'yunge-reader-epub--selection-changed
        #'yunge-reader-epub--accelerator
-       (yunge-reader-epub--default-style font-scale)
+       style
        #'yunge-reader-epub--scroll-bar-mode
        #'yunge-reader-epub--external-link))))
 
@@ -720,18 +767,21 @@ VALUES is an alist containing complete, already bounded property values."
   "Synchronize the current EPUB surface with its Reader window."
   (when-let* ((view yunge-reader-webview--buffer-view)
               ((not (yunge-reader-webview--view-destroyed view))))
-    (unless (eq yunge-reader-zoom-mode 'manual)
-      (error "EPUB views require manual Reader zoom mode"))
-    (let* ((scale
-            (yunge-reader-epub--font-scale yunge-reader-scale))
-           (style
-            (copy-tree
-             (or (yunge-reader-webview--view-style view)
-                 (yunge-reader-epub--default-style scale)))))
-      (setq yunge-reader-scale scale
-            yunge-reader-effective-scale scale)
-      (setcdr (assq 'font-scale style) scale)
-      (yunge-reader-epub--apply-style view style))))
+    (if (eq (yunge-reader-document-layout yunge-reader-document)
+            'fixed)
+        (yunge-reader-webview--sync-view view)
+      (unless (eq yunge-reader-zoom-mode 'manual)
+        (error "Reflowable EPUB views require manual zoom mode"))
+      (let* ((scale
+              (yunge-reader-epub--font-scale yunge-reader-scale))
+             (style
+              (copy-tree
+               (or (yunge-reader-webview--view-style view)
+                   (yunge-reader-epub--default-style scale)))))
+        (setq yunge-reader-scale scale
+              yunge-reader-effective-scale scale)
+        (setcdr (assq 'font-scale style) scale)
+        (yunge-reader-epub--apply-style view style)))))
 
 (defun yunge-reader-epub--outline-complete
     (complete value error-data)

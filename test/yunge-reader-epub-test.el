@@ -19,12 +19,12 @@
    :metadata '(:title "Test Book")
    :pending-detaches 0))
 
-(defun yunge-reader-epub-test--document (&optional handle)
-  "Return a reflowable document backed by HANDLE."
+(defun yunge-reader-epub-test--document (&optional handle layout)
+  "Return an EPUB document backed by HANDLE with optional LAYOUT."
   (make-yunge-reader-document
    :file "test.epub"
    :handle (or handle (yunge-reader-epub-test--handle))
-   :layout 'reflow
+   :layout (or layout 'reflow)
    :metadata '(:title "Test Book")))
 
 (defun yunge-reader-epub-test--selection ()
@@ -63,6 +63,7 @@
   (with-temp-buffer
     (yunge-reader-mode)
     (yunge-reader-epub-view-mode 1)
+    (yunge-reader-epub-reflow-view-mode 1)
     (let ((local-map (key-binding [localleader])))
       (should
        (eq (lookup-key local-map (kbd "l"))
@@ -83,6 +84,17 @@
        ("=" . yunge-reader-zoom-reset)
        ("n" . yunge-reader-search-next)
        ("q" . evil-record-macro)))))
+
+(ert-deftest yunge-reader-epub-hides-reflow-menu-in-fixed-views ()
+  (yunge-test-enable-evil)
+  (with-temp-buffer
+    (yunge-reader-mode)
+    (yunge-reader-epub-view-mode 1)
+    (let ((local-map (key-binding [localleader])))
+      (should-not (lookup-key local-map (kbd "l")))
+      (should
+       (eq (lookup-key local-map (kbd "p"))
+           #'yunge-reader-make-primary)))))
 
 (ert-deftest yunge-reader-epub-registers-only-when-requested ()
   (let ((yunge-reader-drivers nil)
@@ -162,7 +174,8 @@
         . ((title . "Protocol Book")
            (language . "en")
            (identifier . "urn:test")
-           (version . "3.0")))
+           (version . "3.0")
+           (layout . "reflowable")))
        (entry-count . 12))
      nil)
     (should-not error-data)
@@ -174,6 +187,39 @@
     (should
      (= (plist-get (plist-get properties :metadata) :entry-count)
         12))))
+
+(ert-deftest yunge-reader-epub-maps-pre-paginated-package-layout ()
+  (let (handle properties error-data)
+    (yunge-reader-epub--open-complete
+     (lambda (value props error)
+       (setq handle value
+             properties props
+             error-data error))
+     '((publication . 10)
+       (metadata
+        . ((title . "Fixed Book")
+           (layout . "pre-paginated")))
+       (entry-count . 4))
+     nil)
+    (should-not error-data)
+    (should (= (yunge-reader-epub-handle-publication handle) 10))
+    (should (eq (plist-get properties :layout) 'fixed))))
+
+(ert-deftest yunge-reader-epub-rejects-invalid-package-layouts ()
+  (dolist (layout '(nil "scrolling" 7))
+    (let (closed error-data)
+      (cl-letf
+          (((symbol-function
+             'yunge-reader-webview--close-owned-publication)
+            (lambda (publication) (setq closed publication))))
+        (yunge-reader-epub--open-complete
+         (lambda (_value _properties error)
+           (setq error-data error))
+         `((publication . 11)
+           (metadata . ((layout . ,layout))))
+         nil))
+      (should error-data)
+      (should (= closed 11)))))
 
 (ert-deftest yunge-reader-epub-builds-independent-default-styles ()
   (let ((first (yunge-reader-epub--default-style))
@@ -206,14 +252,16 @@
         attached-style)
     (with-temp-buffer
       (yunge-reader-mode)
-      (setq yunge-reader--pending-place
+      (setq yunge-reader-document document
+            yunge-reader--pending-place
             '(:zoom-mode manual :scale 1.8))
       (cl-letf
           (((symbol-function
              'yunge-reader-webview--attach-shared-publication)
-            (lambda (_publication _location _location-function
+            (lambda (_publication layout _location _location-function
                      _selection-function _accelerator-function style
                      _scroll-bar-function _external-link-function)
+              (should (eq layout 'reflow))
               (setq attached-style style))))
         (yunge-reader-epub--attach document))
       (should yunge-reader-epub-view-mode)
@@ -225,6 +273,33 @@
       (should (= yunge-reader-effective-scale 1.8))
       (should (= (alist-get 'font-scale attached-style) 1.8))
       (should (string-match-p "Font 180%" header-line-format)))))
+
+(ert-deftest yunge-reader-epub-keeps-reflow-controls-from-fixed-views ()
+  (let ((document
+         (yunge-reader-epub-test--document nil 'fixed))
+        attached-layout
+        attached-style)
+    (with-temp-buffer
+      (yunge-reader-mode)
+      (setq yunge-reader-document document)
+      (cl-letf
+          (((symbol-function
+             'yunge-reader-webview--attach-shared-publication)
+            (lambda (_publication layout _location _location-function
+                     _selection-function _accelerator-function style
+                     _scroll-bar-function _external-link-function)
+              (setq attached-layout layout
+                    attached-style style))))
+        (yunge-reader-epub--attach document))
+      (should yunge-reader-epub-view-mode)
+      (should-not yunge-reader-epub-reflow-view-mode)
+      (should (eq attached-layout 'fixed))
+      (should-not attached-style)
+      (should (string-match-p "EPUB  Fixed" header-line-format))
+      (should-not (string-match-p "Font" header-line-format))
+      (should-error
+       (yunge-reader-epub-increase-line-height)
+       :type 'user-error))))
 
 (ert-deftest yunge-reader-epub-header-shows-view-progress ()
   (with-temp-buffer
@@ -252,6 +327,8 @@
         (records 0))
     (with-temp-buffer
       (yunge-reader-mode)
+      (setq yunge-reader-document
+            (yunge-reader-epub-test--document))
       (let ((view
              (yunge-reader-webview--make-view
               :style (yunge-reader-epub--default-style))))
@@ -293,6 +370,8 @@
         (records 0))
     (with-temp-buffer
       (yunge-reader-mode)
+      (setq yunge-reader-document
+            (yunge-reader-epub-test--document))
       (let ((view
              (yunge-reader-webview--make-view
               :style (yunge-reader-epub--default-style))))
@@ -350,15 +429,17 @@
       (cl-letf
           (((symbol-function
              'yunge-reader-webview--attach-shared-publication)
-            (lambda (publication _location location-function
+            (lambda (publication layout _location location-function
                                  selection-function
                                  accelerator-function style
                                  scroll-bar-function
                                  external-link-function)
+              (should (eq layout 'reflow))
               (setq yunge-reader-webview--buffer-view
                     (yunge-reader-webview--make-view
                      :buffer (current-buffer)
                      :publication publication
+                     :layout layout
                      :persistent t
                      :style (copy-tree style)
                      :location-changed-function location-function
