@@ -253,6 +253,13 @@ The implementation is divided into thirteen pieces:
 - =yunge-reader-epub.el= maps shared EPUB publications and reflowable
   locations onto the Reader driver interface.
 
+The native WebView helper keeps request decoding, stable operation names,
+response envelopes, and protocol errors in =src/webview/protocol.rs=.  The
+service remains responsible for executing those typed operations and owning
+all publication, renderer, and WebView2 state.  Unsupported operations are
+therefore rejected at the protocol boundary before they can reach native
+resources.
+
 PDF selection and search geometry uses one compound SVG path per page and
 highlight kind.  Overlapping glyph bounds therefore share one opacity pass
 instead of producing darker intersections.  Adjacent axis-aligned glyphs

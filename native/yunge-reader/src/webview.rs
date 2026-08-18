@@ -43,7 +43,13 @@ use yunge_reader::epub::{EpubError, Publication};
 
 use super::{BUILD_ID, Error};
 
-const PROTOCOL_VERSION: u32 = 1;
+mod protocol;
+
+use protocol::{
+    CAPABILITIES, Control, Operation, Outgoing, PROTOCOL_VERSION, Request,
+    Response, ServiceError, response,
+};
+
 const APP_PROTOCOL: &str = "yunge-reader-app";
 const APP_URL: &str = "yunge-reader-app://localhost/index.html";
 const APP_BROWSER_URL: &str = "https://yunge-reader-app.localhost/index.html";
@@ -105,64 +111,9 @@ const RESOURCE_CSP: &str = concat!(
     "base-uri 'none'; ",
     "form-action 'none'"
 );
-const CAPABILITIES: [&str; 21] = [
-    "publication-close",
-    "publication-info",
-    "publication-open",
-    "publication-resources",
-    "view-bounds",
-    "view-clear-selection",
-    "view-create",
-    "view-destroy",
-    "view-events",
-    "view-focus",
-    "view-focus-parent",
-    "view-info",
-    "view-navigate",
-    "view-open-publication",
-    "view-search",
-    "view-search-result",
-    "view-selection-text",
-    "view-scroll-bars",
-    "view-status",
-    "view-style",
-    "view-visible",
-];
 const MAX_VIEW_EXTENT: u32 = 32_768;
 const MESSAGE_PUMP_INTERVAL: Duration = Duration::from_millis(8);
 const ESCAPE_VIRTUAL_KEY: u32 = 0x1b;
-
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct Request {
-    id: u64,
-    op: String,
-    #[serde(default)]
-    params: Value,
-}
-
-#[derive(Debug, Serialize)]
-struct ProtocolError {
-    code: &'static str,
-    message: String,
-}
-
-#[derive(Debug, Serialize)]
-struct Response {
-    id: Option<u64>,
-    ok: bool,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    result: Option<Value>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    error: Option<ProtocolError>,
-}
-
-#[derive(Debug, Serialize)]
-#[serde(untagged)]
-enum Outgoing {
-    Response(Response),
-    Event(ViewEvent),
-}
 
 #[derive(Debug, Serialize)]
 struct ViewEvent {
@@ -181,12 +132,6 @@ struct ViewEvent {
     key: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     user: Option<bool>,
-}
-
-#[derive(Debug)]
-struct ServiceError {
-    code: &'static str,
-    message: String,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Serialize)]
@@ -495,12 +440,6 @@ struct VisibleParams {
 #[serde(deny_unknown_fields)]
 struct EmptyParams {}
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum Control {
-    Continue,
-    Shutdown,
-}
-
 enum Incoming {
     Request(Request),
     Invalid(String),
@@ -639,42 +578,6 @@ struct Service {
     outgoing_sender: Sender<Outgoing>,
     incoming_sender: Sender<Incoming>,
     pending_searches: HashMap<u64, ViewSearchParams>,
-}
-
-impl ServiceError {
-    fn new(code: &'static str, message: impl Into<String>) -> Self {
-        Self {
-            code,
-            message: message.into(),
-        }
-    }
-}
-
-impl Response {
-    fn success(id: u64, result: Value) -> Self {
-        Self {
-            id: Some(id),
-            ok: true,
-            result: Some(result),
-            error: None,
-        }
-    }
-
-    fn failure(
-        id: Option<u64>,
-        code: &'static str,
-        message: impl Into<String>,
-    ) -> Self {
-        Self {
-            id,
-            ok: false,
-            result: None,
-            error: Some(ProtocolError {
-                code,
-                message: message.into(),
-            }),
-        }
-    }
 }
 
 impl Bounds {
@@ -1599,7 +1502,20 @@ impl Service {
     }
 
     fn handle(&mut self, request: Request) -> (Option<Response>, Control) {
-        if request.op == "shutdown" {
+        let operation = match request.operation() {
+            Ok(operation) => operation,
+            Err(error) => {
+                return (
+                    Some(Response::failure(
+                        Some(request.id),
+                        error.code,
+                        error.message,
+                    )),
+                    Control::Continue,
+                );
+            }
+        };
+        if operation == Operation::Shutdown {
             let result =
                 Self::parse::<EmptyParams>(request.params).and_then(|_| {
                     self.views.clear();
@@ -1613,42 +1529,57 @@ impl Service {
             };
             return (Some(response(request.id, result)), control);
         }
-        if matches!(request.op.as_str(), "view-search" | "view-selection-text")
-        {
-            let result = if request.op == "view-search" {
-                self.search(request.id, request.params)
-            } else {
-                self.selection_text(request.id, request.params)
+        if matches!(
+            operation,
+            Operation::ViewSearch | Operation::ViewSelectionText
+        ) {
+            let result = match operation {
+                Operation::ViewSearch => {
+                    self.search(request.id, request.params)
+                }
+                Operation::ViewSelectionText => {
+                    self.selection_text(request.id, request.params)
+                }
+                _ => unreachable!("matched asynchronous operation"),
             };
             let response = result.err().map(|error| {
                 Response::failure(Some(request.id), error.code, error.message)
             });
             return (response, Control::Continue);
         }
-        let result = match request.op.as_str() {
-            "publication-open" => self.open_publication(request.params),
-            "publication-info" => self.publication_info(request.params),
-            "publication-close" => self.close_publication(request.params),
-            "view-info" => self.info(request.params),
-            "view-create" => self.create_view(request.params),
-            "view-bounds" => self.set_bounds(request.params),
-            "view-clear-selection" => self.clear_selection(request.params),
-            "view-navigate" => self.navigate_view(request.params),
-            "view-search-result" => self.set_search_result(request.params),
-            "view-open-publication" => {
+        let result = match operation {
+            Operation::PublicationOpen => self.open_publication(request.params),
+            Operation::PublicationInfo => self.publication_info(request.params),
+            Operation::PublicationClose => {
+                self.close_publication(request.params)
+            }
+            Operation::ViewInfo => self.info(request.params),
+            Operation::ViewCreate => self.create_view(request.params),
+            Operation::ViewBounds => self.set_bounds(request.params),
+            Operation::ViewClearSelection => {
+                self.clear_selection(request.params)
+            }
+            Operation::ViewNavigate => self.navigate_view(request.params),
+            Operation::ViewSearchResult => {
+                self.set_search_result(request.params)
+            }
+            Operation::ViewOpenPublication => {
                 self.open_view_publication(request.params)
             }
-            "view-style" => self.set_view_style(request.params),
-            "view-scroll-bars" => self.set_view_scroll_bars(request.params),
-            "view-visible" => self.set_visible(request.params),
-            "view-focus" => self.focus(request.params),
-            "view-focus-parent" => self.focus_parent(request.params),
-            "view-status" => self.status(request.params),
-            "view-destroy" => self.destroy(request.params),
-            _ => Err(ServiceError::new(
-                "unsupported-operation",
-                format!("unsupported operation: {}", request.op),
-            )),
+            Operation::ViewStyle => self.set_view_style(request.params),
+            Operation::ViewScrollBars => {
+                self.set_view_scroll_bars(request.params)
+            }
+            Operation::ViewVisible => self.set_visible(request.params),
+            Operation::ViewFocus => self.focus(request.params),
+            Operation::ViewFocusParent => self.focus_parent(request.params),
+            Operation::ViewStatus => self.status(request.params),
+            Operation::ViewDestroy => self.destroy(request.params),
+            Operation::Shutdown
+            | Operation::ViewSearch
+            | Operation::ViewSelectionText => {
+                unreachable!("handled protocol operation")
+            }
         };
         (Some(response(request.id, result)), Control::Continue)
     }
@@ -2157,13 +2088,6 @@ fn install_focus_handlers(
         }
     }
     Ok((got_token, lost_token))
-}
-
-fn response(id: u64, result: Result<Value, ServiceError>) -> Response {
-    match result {
-        Ok(value) => Response::success(id, value),
-        Err(error) => Response::failure(Some(id), error.code, error.message),
-    }
 }
 
 fn invalid_renderer_selection_result(
@@ -2752,7 +2676,7 @@ pub(super) fn serve() -> Result<(), Error> {
         for line in io::stdin().lock().lines() {
             let incoming = match line {
                 Ok(line) if line.trim().is_empty() => continue,
-                Ok(line) => match serde_json::from_str(&line) {
+                Ok(line) => match Request::decode(&line) {
                     Ok(request) => Incoming::Request(request),
                     Err(error) => Incoming::Invalid(error.to_string()),
                 },
@@ -2955,9 +2879,7 @@ mod tests {
         assert!(adapter.contains("if (view.isFixedLayout) return"));
         assert!(adapter.contains("collapseCFI(relocation.cfi)"));
         assert!(adapter.contains("session.commandNavigation"));
-        assert!(adapter.contains(
-            "view.renderer.setAttribute('animated', '')"
-        ));
+        assert!(adapter.contains("view.renderer.setAttribute('animated', '')"));
         assert!(adapter.contains("pendingNavigation"));
         assert!(adapter.contains("navigationRunning"));
         assert!(
@@ -3008,12 +2930,10 @@ mod tests {
         assert!(paginator.contains(
             "const index = shouldGo ? this.#adjacentIndex(dir) : null"
         ));
-        assert!(paginator.contains(
-            "if (index != null) await this.#goTo({"
-        ));
-        assert!(paginator.contains(
-            "finally {\n            this.#locked = false"
-        ));
+        assert!(paginator.contains("if (index != null) await this.#goTo({"));
+        assert!(
+            paginator.contains("finally {\n            this.#locked = false")
+        );
     }
 
     #[test]
