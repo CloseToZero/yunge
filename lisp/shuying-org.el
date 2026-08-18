@@ -47,6 +47,12 @@
       (group (seq "tag" (? "*") (* space) "{"))))))
   "Regexp matching LaTeX structure relevant to equation numbering.")
 
+(defconst shuying-org--math-start-regexp
+  (rx string-start
+      (* (any " \t\n"))
+      (or "$" "\\(" "\\[" "\\begin{"))
+  "Regexp matching an explicit Org LaTeX math start.")
+
 (defvar-local shuying-org--active-start nil
   "Marker at the fragment currently containing point.")
 
@@ -91,7 +97,11 @@
 
 (defun shuying-org--latex-fragment-p (datum)
   "Return whether Org DATUM is previewable LaTeX."
-  (org-element-type-p datum '(latex-fragment latex-environment)))
+  (and (org-element-type-p datum
+                           '(latex-fragment latex-environment))
+       (string-match-p
+        shuying-org--math-start-regexp
+        (org-element-property :value datum))))
 
 (defun shuying-org--escaped-p (position)
   "Return whether the character at POSITION is backslash-escaped."
@@ -179,11 +189,9 @@ EQUATION-NUMBER is the next automatic number at the fragment's start."
 
 (defun shuying-org--delimited-fragment-p (fragment)
   "Return whether FRAGMENT has explicit LaTeX delimiters."
-  (let ((source (shuying-org-fragment-value fragment)))
-    (or (string-prefix-p "$" source)
-        (string-prefix-p "\\(" source)
-        (string-prefix-p "\\[" source)
-        (string-prefix-p "\\begin{" source))))
+  (string-match-p
+   shuying-org--math-start-regexp
+   (shuying-org-fragment-value fragment)))
 
 (defun shuying-org--fragment-at-edit-boundary
     (active-position text-changed)
@@ -590,12 +598,13 @@ When AUTOMATIC is non-nil, silently retain unavailable dependency errors."
                 (org-element-parse-buffer)
                 '(latex-fragment latex-environment)
               (lambda (element)
-                (let ((count (shuying-org--equation-count element)))
-                  (prog1
-                      (shuying-org--fragment-from-element
-                       element (and count equation-number))
-                    (when count
-                      (cl-incf equation-number count))))))
+                (when (shuying-org--latex-fragment-p element)
+                  (let ((count (shuying-org--equation-count element)))
+                    (prog1
+                        (shuying-org--fragment-from-element
+                         element (and count equation-number))
+                      (when count
+                        (cl-incf equation-number count)))))))
             shuying-org--catalog-tick
             (buffer-chars-modified-tick)))))
 

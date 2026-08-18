@@ -192,6 +192,70 @@
       (should (< (abs (- (plist-get (cadr geometries) :depth) 0.44))
                  0.0001)))))
 
+(ert-deftest shuying-latex-rejects-only-errored-empty-svg-pages ()
+  (let* ((root (make-temp-file "shuying-latex-test-" t))
+         (directory (expand-file-name "work" root))
+         (log-buffer (generate-new-buffer " *Shuying LaTeX test*"))
+         (first-output (expand-file-name "first.svg" root))
+         (second-output (expand-file-name "second.svg" root))
+         (first
+          (make-shuying-backend-request
+           :specification (shuying-latex-test--spec "$x$")
+           :output-file first-output))
+         (second
+          (make-shuying-backend-request
+           :specification (shuying-latex-test--spec "$y$")
+           :output-file second-output))
+         results
+         (batch
+          (make-shuying-latex--batch
+           :requests (list first second)
+           :complete
+           (lambda (request error-data)
+             (push (cons request error-data) results))
+           :directory directory
+           :log-buffer log-buffer)))
+    (make-directory directory)
+    (with-temp-file (expand-file-name "page-1.svg" directory)
+      (insert "<svg><g id='page1'/></svg>"))
+    (with-temp-file (expand-file-name "page-2.svg" directory)
+      (insert "<svg><g id='page2'/></svg>"))
+    (with-current-buffer log-buffer
+      (insert
+       "Preview: Fontsize 10pt\n"
+       "! Preview: Snippet 1 started.\n"
+       "! LaTeX Error: invalid fragment.\n"
+       "! Preview: Snippet 1 ended.\n"
+       "  width=1pt, height=.5pt, depth=.5pt\n"
+       "! Preview: Snippet 2 started.\n"
+       "! Preview: Snippet 2 ended.\n"
+       "  width=20pt, height=8pt, depth=2pt\n"))
+    (unwind-protect
+        (cl-letf (((symbol-function 'process-status)
+                   (lambda (_process) 'exit))
+                  ((symbol-function 'process-exit-status)
+                   (lambda (_process) 0)))
+          (shuying-latex--finish-conversion batch 'dvisvgm-process)
+          (let ((first-result (assq first results))
+                (second-result (assq second results)))
+            (should
+             (eq (car (cdr first-result)) 'shuying-latex-error))
+            (should
+             (string-match-p
+              "empty preview page 1"
+              (error-message-string (cdr first-result))))
+            (should-not (file-exists-p first-output))
+            (should-not (cdr second-result))
+            (should (file-exists-p second-output))
+            (should
+             (= (plist-get
+                 (shuying-backend-request-metadata second)
+                 :width)
+                2.0))))
+      (when (buffer-live-p log-buffer)
+        (kill-buffer log-buffer))
+      (delete-directory root t))))
+
 (ert-deftest shuying-latex-shares-a-pending-format-build ()
   (let* ((root (make-temp-file "shuying-latex-test-" t))
          (shuying-work-directory (expand-file-name "work" root))

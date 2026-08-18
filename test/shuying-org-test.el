@@ -122,6 +122,24 @@
           '("test-dvisvgm")))
         (should (= (shuying-render-spec-scale specification) 1.7))))))
 
+(ert-deftest shuying-org-previews-only-explicit-latex-math ()
+  (with-temp-buffer
+    (org-mode)
+    (insert
+     "\\mathrm{A}\n"
+     "$x$\n"
+     "\\(y\\)\n"
+     "\\[z\\]\n"
+     "\\begin{equation}\nw = 1\n\\end{equation}\n")
+    (goto-char (point-min))
+    (should-not (shuying-org--fragment-at-point))
+    (should
+     (equal
+      (mapcar #'shuying-org-fragment-value
+              (shuying-org--fragments))
+      '("$x$" "\\(y\\)" "\\[z\\]"
+        "\\begin{equation}\nw = 1\n\\end{equation}\n")))))
+
 (ert-deftest shuying-org-tracks-equation-numbering-context ()
   (with-temp-buffer
     (org-mode)

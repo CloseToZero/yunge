@@ -398,6 +398,43 @@ dvisvgm zero-pads page numbers to the width of the final page number."
     (expand-file-name
      (concat "page-" padding page-string ".svg") directory)))
 
+(defun shuying-latex--empty-svg-page-p (file)
+  "Return whether dvisvgm FILE contains an empty page group."
+  (with-temp-buffer
+    (insert-file-contents-literally file)
+    (goto-char (point-min))
+    (re-search-forward
+     (concat
+      "<g[^>]*\\bid=['\"]page[0-9]+['\"][^>]*"
+      "\\(?:/>\\|>[ \t\r\n]*</g>\\)")
+     nil t)))
+
+(defun shuying-latex--errored-pages (buffer)
+  "Return preview page numbers containing LaTeX errors in BUFFER."
+  (with-current-buffer buffer
+    (save-excursion
+      (goto-char (point-min))
+      (let (pages)
+        (while (re-search-forward
+                "^! Preview: Snippet \\([0-9]+\\) started\\."
+                nil t)
+          (let* ((page (string-to-number (match-string 1)))
+                 (beginning (line-end-position))
+                 (end
+                  (save-excursion
+                    (when (re-search-forward
+                           (format
+                            "^! Preview: Snippet %d ended\\."
+                            page)
+                           nil t)
+                      (match-beginning 0)))))
+            (when (and end
+                       (save-excursion
+                         (goto-char beginning)
+                         (re-search-forward "^! " end t)))
+              (push page pages))))
+        (nreverse pages)))))
+
 (defun shuying-latex--finish-conversion (batch process)
   "Publish the pages produced for BATCH by PROCESS."
   (let* ((directory (shuying-latex--batch-directory batch))
@@ -418,9 +455,10 @@ dvisvgm zero-pads page numbers to the width of the final page number."
           (and (not process-error)
                (shuying-latex--font-size log-buffer)))
          (geometries
-          (and font-size
-               (shuying-latex--page-geometries
-                log-buffer font-size scale)))
+           (and font-size
+                (shuying-latex--page-geometries
+                 log-buffer font-size scale)))
+         (errored-pages (shuying-latex--errored-pages log-buffer))
          failed)
     (unwind-protect
         (cl-loop
@@ -428,9 +466,15 @@ dvisvgm zero-pads page numbers to the width of the final page number."
          for page from 1
          for geometry = (nth (1- page) geometries)
          for page-file = (shuying-latex--page-file
-                          directory page page-count)
+                           directory page page-count)
+         for errored-page = (memq page errored-pages)
+         for unusable-page = (and errored-page
+                                  (file-exists-p page-file)
+                                  (shuying-latex--empty-svg-page-p
+                                   page-file))
          do
-         (if (and (file-exists-p page-file) geometry)
+         (if (and (file-exists-p page-file) geometry
+                  (not unusable-page))
              (condition-case error-data
                  (progn
                    (copy-file
@@ -445,12 +489,21 @@ dvisvgm zero-pads page numbers to the width of the final page number."
            (setq failed t)
            (funcall
             complete request
-            (or process-error
-                (list
-                 'shuying-latex-error
-                 (format
-                  "dvisvgm did not produce page %d with geometry; see %s"
-                  page (buffer-name log-buffer)))))))
+            (cond
+             (process-error)
+             (unusable-page
+              (list
+               'shuying-latex-error
+               (format
+                "LaTeX produced an empty preview page %d; see %s"
+                page (buffer-name log-buffer))))
+             (t
+              (list
+               'shuying-latex-error
+               (format
+                (concat "dvisvgm did not produce page %d with "
+                        "geometry; see %s")
+                page (buffer-name log-buffer))))))))
       (shuying-latex--cleanup batch (or failed process-error)))))
 
 (defun shuying-latex--conversion-sentinel (batch process _event)
