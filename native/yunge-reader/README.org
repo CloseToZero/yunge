@@ -676,3 +676,20 @@ The process owns one lazy PDFium instance.  Documents borrow that instance and
 are explicitly removed on =close= or =shutdown=.  The singleton itself lives
 for the helper process lifetime because the underlying bindings are global;
 the operating system reclaims it at process exit.
+
+* Fixed-layout test fixture
+
+The =fixed_epub_fixture= example generates a three-page, left-to-right EPUB 3
+publication for graphical tests.  Every 800 by 1200 page has distinct colors,
+corner coordinates, center axes, and a page number.  These marks make page
+turns, clipped edges, manual zoom, and restored viewport positions visible.
+The command refuses to replace an existing output file:
+
+#+begin_src shell
+cargo run --example fixed_epub_fixture -- D:/tmp/yunge-fixed.epub
+#+end_src
+
+Open the result through the ordinary Reader command rather than the WebView
+spike.  The package declares =pre-paginated= layout, no synthetic spreads, and
+left-to-right progression.  Later directional fixtures can vary those package
+properties without depending on a copyrighted book.

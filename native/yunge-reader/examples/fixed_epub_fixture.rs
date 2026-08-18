@@ -1,0 +1,276 @@
+// SPDX-FileCopyrightText: 2026 Chen Zhexuan
+// SPDX-License-Identifier: MIT
+
+use std::env;
+use std::error::Error;
+use std::fs::OpenOptions;
+use std::io::{Cursor, Seek, Write};
+use std::path::Path;
+use zip::write::SimpleFileOptions;
+use zip::{CompressionMethod, ZipWriter};
+
+const MIMETYPE: &[u8] = b"application/epub+zip";
+
+const CONTAINER: &str = r#"<?xml version="1.0" encoding="UTF-8"?>
+<container xmlns="urn:oasis:names:tc:opendocument:xmlns:container"
+           version="1.0">
+  <rootfiles>
+    <rootfile full-path="OPS/package.opf"
+              media-type="application/oebps-package+xml"/>
+  </rootfiles>
+</container>
+"#;
+
+const PACKAGE: &str = r#"<?xml version="1.0" encoding="UTF-8"?>
+<package xmlns="http://www.idpf.org/2007/opf"
+         unique-identifier="book-id" version="3.0">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+    <dc:identifier id="book-id">urn:yunge-reader:fixed-fixture</dc:identifier>
+    <dc:title>Yunge Reader Fixed Layout Fixture</dc:title>
+    <dc:language>en</dc:language>
+    <meta property="dcterms:modified">2026-01-01T00:00:00Z</meta>
+    <meta property="rendition:layout">pre-paginated</meta>
+    <meta property="rendition:spread">none</meta>
+  </metadata>
+  <manifest>
+    <item id="nav" href="nav.xhtml" properties="nav"
+          media-type="application/xhtml+xml"/>
+    <item id="page-1" href="page-1.xhtml"
+          media-type="application/xhtml+xml"/>
+    <item id="page-2" href="page-2.xhtml"
+          media-type="application/xhtml+xml"/>
+    <item id="page-3" href="page-3.xhtml"
+          media-type="application/xhtml+xml"/>
+  </manifest>
+  <spine page-progression-direction="ltr">
+    <itemref idref="page-1"/>
+    <itemref idref="page-2"/>
+    <itemref idref="page-3"/>
+  </spine>
+</package>
+"#;
+
+const NAVIGATION: &str = r#"<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE html>
+<html xmlns="http://www.w3.org/1999/xhtml"
+      xmlns:epub="http://www.idpf.org/2007/ops">
+<head><title>Contents</title></head>
+<body>
+  <nav epub:type="toc">
+    <h1>Contents</h1>
+    <ol>
+      <li><a href="page-1.xhtml">Red page</a></li>
+      <li><a href="page-2.xhtml">Green page</a></li>
+      <li><a href="page-3.xhtml">Blue page</a></li>
+    </ol>
+  </nav>
+</body>
+</html>
+"#;
+
+struct FixturePage {
+    number: u8,
+    name: &'static str,
+    background: &'static str,
+    foreground: &'static str,
+}
+
+const PAGES: [FixturePage; 3] = [
+    FixturePage {
+        number: 1,
+        name: "RED",
+        background: "#fff0f0",
+        foreground: "#8a1515",
+    },
+    FixturePage {
+        number: 2,
+        name: "GREEN",
+        background: "#effbef",
+        foreground: "#145c2b",
+    },
+    FixturePage {
+        number: 3,
+        name: "BLUE",
+        background: "#eef5ff",
+        foreground: "#174f88",
+    },
+];
+
+fn page_xhtml(page: &FixturePage) -> String {
+    format!(
+        r#"<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE html>
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+  <title>{name} page</title>
+  <meta name="viewport" content="width=800, height=1200"/>
+  <style>
+    html, body {{ margin: 0; width: 800px; height: 1200px; }}
+    body {{ background: {background}; color: {foreground};
+            font-family: sans-serif; overflow: hidden; }}
+    .frame {{ position: absolute; inset: 40px;
+              border: 8px solid currentColor; }}
+    .title {{ position: absolute; inset: 510px 0 auto;
+              text-align: center; font-size: 72px; font-weight: bold; }}
+    .axis-x {{ position: absolute; left: 40px; right: 40px; top: 600px;
+               border-top: 2px dashed currentColor; }}
+    .axis-y {{ position: absolute; top: 40px; bottom: 40px; left: 400px;
+               border-left: 2px dashed currentColor; }}
+    .mark {{ position: absolute; font: bold 28px monospace; }}
+    .tl {{ left: 58px; top: 58px; }}
+    .tr {{ right: 58px; top: 58px; }}
+    .bl {{ left: 58px; bottom: 58px; }}
+    .br {{ right: 58px; bottom: 58px; }}
+  </style>
+</head>
+<body>
+  <div class="frame"></div>
+  <div class="axis-x"></div><div class="axis-y"></div>
+  <div class="mark tl">0,0</div>
+  <div class="mark tr">800,0</div>
+  <div class="mark bl">0,1200</div>
+  <div class="mark br">800,1200</div>
+  <div class="title">PAGE {number} · {name}</div>
+</body>
+</html>
+"#,
+        number = page.number,
+        name = page.name,
+        background = page.background,
+        foreground = page.foreground,
+    )
+}
+
+fn add_entry<W>(
+    archive: &mut ZipWriter<W>,
+    name: &str,
+    bytes: &[u8],
+    method: CompressionMethod,
+) -> Result<(), Box<dyn Error>>
+where
+    W: Write + Seek,
+{
+    let options = SimpleFileOptions::default().compression_method(method);
+    archive.start_file(name, options)?;
+    archive.write_all(bytes)?;
+    Ok(())
+}
+
+fn build_fixture() -> Result<Vec<u8>, Box<dyn Error>> {
+    let mut archive = ZipWriter::new(Cursor::new(Vec::new()));
+    add_entry(
+        &mut archive,
+        "mimetype",
+        MIMETYPE,
+        CompressionMethod::Stored,
+    )?;
+    for (name, contents) in [
+        ("META-INF/container.xml", CONTAINER),
+        ("OPS/package.opf", PACKAGE),
+        ("OPS/nav.xhtml", NAVIGATION),
+    ] {
+        add_entry(
+            &mut archive,
+            name,
+            contents.as_bytes(),
+            CompressionMethod::Deflated,
+        )?;
+    }
+    for page in &PAGES {
+        add_entry(
+            &mut archive,
+            &format!("OPS/page-{}.xhtml", page.number),
+            page_xhtml(page).as_bytes(),
+            CompressionMethod::Deflated,
+        )?;
+    }
+    Ok(archive.finish()?.into_inner())
+}
+
+fn write_fixture(path: &Path) -> Result<(), Box<dyn Error>> {
+    let bytes = build_fixture()?;
+    let mut output =
+        OpenOptions::new().write(true).create_new(true).open(path)?;
+    output.write_all(&bytes)?;
+    output.flush()?;
+    Ok(())
+}
+
+fn main() -> Result<(), Box<dyn Error>> {
+    let mut arguments = env::args_os().skip(1);
+    let output = arguments
+        .next()
+        .ok_or("usage: fixed_epub_fixture OUTPUT.epub")?;
+    if arguments.next().is_some() {
+        return Err("usage: fixed_epub_fixture OUTPUT.epub".into());
+    }
+    write_fixture(Path::new(&output))?;
+    println!("Wrote {}", Path::new(&output).display());
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+    use std::io::Read;
+    use std::time::{SystemTime, UNIX_EPOCH};
+    use yunge_reader::epub::{Publication, PublicationLayout};
+    use zip::ZipArchive;
+
+    #[test]
+    fn fixture_has_fixed_layout_structure_and_geometry() {
+        let bytes = build_fixture().unwrap();
+        assert_eq!(bytes, build_fixture().unwrap());
+        let mut archive = ZipArchive::new(Cursor::new(bytes)).unwrap();
+        assert_eq!(archive.len(), 7);
+
+        let first = archive.by_index(0).unwrap();
+        assert_eq!(first.name(), "mimetype");
+        assert_eq!(first.compression(), CompressionMethod::Stored);
+        drop(first);
+
+        let mut package = String::new();
+        archive
+            .by_name("OPS/package.opf")
+            .unwrap()
+            .read_to_string(&mut package)
+            .unwrap();
+        assert!(package.contains("pre-paginated"));
+        assert!(package.contains("rendition:spread\">none"));
+        assert!(package.contains("page-progression-direction=\"ltr\""));
+
+        for page in &PAGES {
+            let mut contents = String::new();
+            archive
+                .by_name(&format!("OPS/page-{}.xhtml", page.number))
+                .unwrap()
+                .read_to_string(&mut contents)
+                .unwrap();
+            assert!(contents.contains("width=800, height=1200"));
+            assert!(contents.contains(&format!("PAGE {}", page.number)));
+            assert!(contents.contains("800,1200"));
+        }
+    }
+
+    #[test]
+    fn fixture_opens_as_a_fixed_publication() {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let path = env::temp_dir().join(format!(
+            "yunge-reader-fixed-fixture-{}-{nonce}.epub",
+            std::process::id()
+        ));
+        write_fixture(&path).unwrap();
+        let publication = Publication::open(&path).unwrap();
+        assert_eq!(
+            publication.metadata().layout,
+            PublicationLayout::PrePaginated
+        );
+        assert_eq!(publication.entry_count(), 7);
+        drop(publication);
+        fs::remove_file(path).unwrap();
+    }
+}
