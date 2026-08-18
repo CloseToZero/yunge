@@ -36,14 +36,12 @@
 (ert-deftest yunge-reader-epub-uses-reflowable-screen-bindings ()
   (yunge-test-keymap-keys
    yunge-reader-epub-view-mode-map
-   '(("C-d" . yunge-reader-epub-next-screen)
+   '(("j" . yunge-reader-epub-next-line)
+     ("k" . yunge-reader-epub-previous-line)
+     ("C-d" . yunge-reader-epub-next-screen)
      ("C-u" . yunge-reader-epub-previous-screen)
      ("J" . yunge-reader-epub-next-screen)
-     ("K" . yunge-reader-epub-previous-screen)))
-  (should-not
-   (lookup-key yunge-reader-epub-view-mode-map (kbd "j")))
-  (should-not
-   (lookup-key yunge-reader-epub-view-mode-map (kbd "k"))))
+     ("K" . yunge-reader-epub-previous-screen))))
 
 (ert-deftest yunge-reader-epub-keeps-layout-under-local-leader ()
   (should
@@ -74,15 +72,15 @@
            #'yunge-reader-make-primary)))
     (yunge-test-evil-keys
      'normal
-     '(("C-d" . yunge-reader-epub-next-screen)
+     '(("j" . yunge-reader-epub-next-line)
+       ("k" . yunge-reader-epub-previous-line)
+       ("C-d" . yunge-reader-epub-next-screen)
        ("C-u" . yunge-reader-epub-previous-screen)
        ("J" . yunge-reader-epub-next-screen)
        ("K" . yunge-reader-epub-previous-screen)
        ("+" . yunge-reader-zoom-in)
        ("-" . yunge-reader-zoom-out)
        ("=" . yunge-reader-zoom-reset)
-       ("j" . evil-next-line)
-       ("k" . evil-previous-line)
        ("n" . yunge-reader-search-next)
        ("q" . evil-record-macro)))))
 
@@ -420,6 +418,14 @@
               (setq called (list count (current-buffer))))))
         (yunge-reader-epub--accelerator view "J"))
       (should (equal called (list 1 (current-buffer))))
+      (cl-letf
+          (((symbol-function 'yunge-reader-epub-next-line)
+            (lambda (&optional count)
+              (interactive "p")
+              (setq called (list 'line count (current-buffer))))))
+        (yunge-reader-epub--accelerator view "j"))
+      (should
+       (equal called (list 'line 1 (current-buffer))))
       (let ((command
              (lambda ()
                (interactive)
@@ -458,6 +464,17 @@
     (should yunge-reader--search-detached)
     (should (eq (car navigated) view))
     (should (equal (cadr navigated) "next-screen"))))
+
+(ert-deftest yunge-reader-epub-maps-counted-line-movement ()
+  (let (navigations)
+    (cl-letf (((symbol-function 'yunge-reader-epub--navigate)
+               (lambda (command) (push command navigations))))
+      (yunge-reader-epub-next-line 3)
+      (yunge-reader-epub-previous-line -2))
+    (should
+     (equal navigations
+            '("next-line" "next-line" "next-line"
+              "next-line" "next-line")))))
 
 (ert-deftest yunge-reader-epub-maps-native-selection-to-reader-state ()
   (let* ((buffer (generate-new-buffer " *EPUB selection owner*"))

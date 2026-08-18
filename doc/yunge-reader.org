@@ -113,10 +113,12 @@ reading style, so retaining the whole range would make an otherwise stable
 place change during reflow.  Previously saved range CFIs remain valid restore
 inputs.
 
-=J= and =C-d= move to the next reflowed screen; =K= and =C-u= move to the
-previous screen.  Page Down and Page Up provide the same portable commands,
-including after a mouse click gives the child WebView native focus.  The same
-focused path forwards =+=, =-=, ===, and =y= through the active Emacs keymaps.
+=j/k= move by one computed content line without screen animation.  =J= and
+=C-d= move to the next reflowed screen; =K= and =C-u= move to the previous
+screen.  Both movement scales cross linear spine-item boundaries.  Page Down
+and Page Up provide the same portable screen commands, including after a mouse
+click gives the child WebView native focus.  The same focused path forwards
+=+=, =-=, ===, and =y= through the active Emacs keymaps.
 =GotFocus= selects the child surface's owning Emacs window.  Selecting another
 Emacs window asks any focused child to return keyboard focus to its parent, so
 ordinary Emacs bindings resume without an extra click.
@@ -131,10 +133,11 @@ EPUB navigation has one active operation and one latest pending intent.  This
 keeps a held key moving continuously, while releasing it leaves at most the
 latest requested screen instead of a long queue of stale repeat events.  A
 new direction or an explicit outline target replaces older pending movement.
-Screen movement within a loaded spine item uses Foliate's bounded 300 ms
-ease-out animation; crossing into another item may pause while it loads.
-Moving backward at the beginning or forward at the end is a no-op and leaves
-the view ready for later navigation.
+Line movement uses the current document's computed line height and completes
+without an animation.  Screen movement within a loaded spine item uses
+Foliate's bounded 300 ms ease-out animation; crossing into another item may
+pause while it loads.  Moving backward at the beginning or forward at the end
+is a no-op and leaves the view ready for later navigation.
 
 Each logical EPUB view owns a semantic reading style.  The initial style uses
 a 1.0 font scale, 1.6 line height, 720 CSS-pixel maximum content width, and 7%

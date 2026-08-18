@@ -166,12 +166,13 @@ Invoke CALLBACK when the native request completes."
     (view command callback &optional location)
   "Ask native VIEW to run semantic COMMAND and invoke CALLBACK.
 LOCATION is required only for the go-to command."
-  (unless (member command '("previous-screen" "next-screen" "go-to"))
+  (unless (member command '("previous-screen" "next-screen"
+                            "previous-line" "next-line" "go-to"))
     (error "Unsupported EPUB navigation command: %S" command))
   (when (and (equal command "go-to") (null location))
     (error "EPUB go-to navigation requires a location"))
   (when (and location (not (equal command "go-to")))
-    (error "EPUB screen navigation does not accept a location"))
+    (error "EPUB relative navigation does not accept a location"))
   (yunge-reader-webview--request
    "view-navigate"
    (append

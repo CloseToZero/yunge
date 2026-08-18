@@ -102,7 +102,7 @@ const readerCharacterKey = event => {
         return null
     }
     if (event.code === 'Space') return 'SPC'
-    return ['J', 'K', '+', '-', '=', 'y'].includes(event.key)
+    return ['J', 'K', 'j', 'k', '+', '-', '=', 'y'].includes(event.key)
         ? event.key : null
 }
 
@@ -1279,6 +1279,16 @@ const paintSearchResult = (session, cfi) =>
         drawOptions: { color: SEARCH_HIGHLIGHT_COLOR },
     })
 
+const lineDistance = session => {
+    const content = session.view.renderer.getContents()?.[0]
+    const computed = content?.doc?.defaultView
+        ?.getComputedStyle(content.doc.body)?.lineHeight
+    const measured = Number.parseFloat(computed)
+    const fallback = 16 * session.style.fontScale * session.style.lineHeight
+    return Math.max(8, Math.min(256,
+        Number.isFinite(measured) && measured > 0 ? measured : fallback))
+}
+
 const runNavigation = async (session, navigation) => {
     if (current !== session) return
     const { command, location, selection, revision } = navigation
@@ -1290,6 +1300,12 @@ const runNavigation = async (session, navigation) => {
             break
         case 'next-screen':
             await session.view.next()
+            break
+        case 'previous-line':
+            await session.view.prev(lineDistance(session), false)
+            break
+        case 'next-line':
+            await session.view.next(lineDistance(session), false)
             break
         case 'go-to':
             await showLocation(session.view, location)

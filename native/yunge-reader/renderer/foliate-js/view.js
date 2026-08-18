@@ -510,11 +510,11 @@ export class View extends HTMLElement {
             console.error(`Could not get ${target}`)
         }
     }
-    async prev(distance) {
-        await this.renderer.prev(distance)
+    async prev(distance, smooth) {
+        await this.renderer.prev(distance, smooth)
     }
-    async next(distance) {
-        await this.renderer.next(distance)
+    async next(distance, smooth) {
+        await this.renderer.next(distance, smooth)
     }
     goLeft() {
         return this.book.dir === 'rtl' ? this.next() : this.prev()

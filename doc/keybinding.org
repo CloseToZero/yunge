@@ -362,8 +362,9 @@ ordinary scrolling do not add jump entries.
 
 In paginated reflowable readers, ~J/K~ and ~C-d/C-u~ move to the next or
 previous reflowed screen; Page Down and Page Up provide the same commands.
-Keep ~j/k~ unbound by the adapter until it can provide genuine line-scale
-movement rather than disguising a whole screen transition as a text line.
+~j/k~ move by one computed content line without the screen-transition
+animation.  At a spine-item boundary, line movement continues into the
+adjacent linear item.
 
 Mouse-1 selects one character and dragging selects a text range.
 Ctrl-Mouse-1 follows a link at the pointer.  ~RET~ remains the portable primary

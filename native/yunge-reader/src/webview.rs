@@ -268,6 +268,8 @@ struct EpubSearchMatch {
 enum NavigationCommand {
     PreviousScreen,
     NextScreen,
+    PreviousLine,
+    NextLine,
     GoTo,
 }
 
@@ -1007,7 +1009,7 @@ impl Service {
             (_, Some(_)) => {
                 return Err(ServiceError::new(
                     "invalid-params",
-                    "screen navigation does not accept an EPUB location",
+                    "relative navigation does not accept an EPUB location",
                 ));
             }
             (_, None) => {}
@@ -1485,13 +1487,14 @@ mod tests {
             std::str::from_utf8(app_asset("yunge-reader.js").unwrap().1)
                 .unwrap();
         assert!(adapter.contains("post('accelerator', { key })"));
-        assert!(
-            adapter
-                .contains("['J', 'K', '+', '-', '=', 'y'].includes(event.key)")
-        );
+        assert!(adapter.contains(
+            "['J', 'K', 'j', 'k', '+', '-', '=', 'y']\
+                     .includes(event.key)"
+        ));
         assert!(adapter.contains("event.code === 'Space'"));
         assert!(adapter.contains("key === 'SPC' && event.repeat"));
-        assert!(!adapter.contains("['j', 'k'].includes(event.key)"));
+        assert!(adapter.contains("case 'previous-line':"));
+        assert!(adapter.contains("lineDistance(session), false"));
         assert!(adapter.contains("applyReadingStyle(view, style)"));
         assert!(adapter.contains("if (view.isFixedLayout) return"));
         assert!(adapter.contains("collapseCFI(relocation.cfi)"));
@@ -1527,6 +1530,12 @@ mod tests {
         assert!(search.contains("startIndex === endIndex"));
         assert!(search.contains("strs.slice(startIndex + 1, endIndex)"));
         assert!(search.contains("while (sum < end)"));
+        let paginator = std::str::from_utf8(
+            app_asset("foliate-js/paginator.js").unwrap().1,
+        )
+        .unwrap();
+        assert!(paginator.contains("prev(distance, smooth = true)"));
+        assert!(paginator.contains("#scrollPrev(distance, smooth = true)"));
         let cfi_asset = app_asset("foliate-js/epubcfi.js").unwrap().1;
         let cfi = std::str::from_utf8(cfi_asset).unwrap();
         assert!(cfi.contains("export const fromRangeEndpoints"));
@@ -2727,6 +2736,32 @@ mod tests {
                 "invalid-epub-target"
             );
         }
+    }
+
+    #[test]
+    fn epub_relative_navigation_accepts_line_and_screen_scales() {
+        for command in [
+            "previous-line",
+            "next-line",
+            "previous-screen",
+            "next-screen",
+        ] {
+            let params = Service::parse::<ViewNavigateParams>(json!({
+                "view": 4,
+                "command": command,
+            }))
+            .unwrap();
+            assert_eq!(params.view, 4);
+            assert!(params.location.is_none());
+        }
+
+        assert!(
+            Service::parse::<ViewNavigateParams>(json!({
+                "view": 4,
+                "command": "next-paragraph",
+            }))
+            .is_err()
+        );
     }
 
     #[test]

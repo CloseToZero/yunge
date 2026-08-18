@@ -111,7 +111,9 @@ scrolling behavior."
                   yunge-reader-epub-command-bindings)
 
 (defconst yunge-reader-epub-normal-bindings
-  `(("C-d" yunge-reader-epub-next-screen "next screen")
+  `(("j" yunge-reader-epub-next-line "next line")
+    ("k" yunge-reader-epub-previous-line "previous line")
+    ("C-d" yunge-reader-epub-next-screen "next screen")
     ("C-u" yunge-reader-epub-previous-screen "previous screen")
     ("J" yunge-reader-epub-next-screen "next screen")
     ("K" yunge-reader-epub-previous-screen "previous screen")
@@ -119,6 +121,8 @@ scrolling behavior."
   "Normal-state bindings for reflowable EPUB views.")
 
 (defvar-keymap yunge-reader-epub-view-mode-map
+  "j" #'yunge-reader-epub-next-line
+  "k" #'yunge-reader-epub-previous-line
   "C-d" #'yunge-reader-epub-next-screen
   "C-u" #'yunge-reader-epub-previous-screen
   "J" #'yunge-reader-epub-next-screen
@@ -995,6 +999,24 @@ VALUES is an alist containing complete, already bounded property values."
       (yunge-reader-epub-next-screen (- count))
     (dotimes (_ count)
       (yunge-reader-epub--navigate "previous-screen"))))
+
+(defun yunge-reader-epub-next-line (&optional count)
+  "Move forward COUNT rendered EPUB lines."
+  (interactive "p")
+  (setq count (or count 1))
+  (if (< count 0)
+      (yunge-reader-epub-previous-line (- count))
+    (dotimes (_ count)
+      (yunge-reader-epub--navigate "next-line"))))
+
+(defun yunge-reader-epub-previous-line (&optional count)
+  "Move backward COUNT rendered EPUB lines."
+  (interactive "p")
+  (setq count (or count 1))
+  (if (< count 0)
+      (yunge-reader-epub-next-line (- count))
+    (dotimes (_ count)
+      (yunge-reader-epub--navigate "previous-line"))))
 
 (defun yunge-reader-epub-register ()
   "Register the EPUB driver."

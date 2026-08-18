@@ -345,23 +345,26 @@ buffer's active keymaps; Reader then drives these bounded batches and updates
 the kill ring only after the complete selection succeeds.  Native =C-c= is
 not intercepted and remains available to WebView2.
 
-=view-navigate= accepts =previous-screen=, =next-screen=, or =go-to=.  A
-=go-to= target may be a complete stable locator or a bounded href-only outline
-target.  Href-only targets are transient: the helper and Emacs do not promote
-them to a saved location.  A later =location= event supplies the complete CFI,
-canonical spine href, and fraction that the owning view may persist.
+=view-navigate= accepts =previous-line=, =next-line=, =previous-screen=,
+=next-screen=, or =go-to=.  A =go-to= target may be a complete stable locator
+or a bounded href-only outline target.  Href-only targets are transient: the
+helper and Emacs do not promote them to a saved location.  A later =location=
+event supplies the complete CFI, canonical spine href, and fraction that the
+owning view may persist.
 
 The renderer runs at most one navigation operation and retains only the latest
 pending intent.  Repeated keys can therefore continue moving through the book
 without building an unbounded queue.  A newer direction or =go-to= target
-replaces older pending movement.  Screen movement within a loaded spine item
-uses Foliate's bounded 300 ms ease-out animation.  Cross-spine movement may
-pause while the next item loads.  Moving beyond either end is a no-op, and an
-unsuccessful movement releases the renderer lock for later navigation.
+replaces older pending movement.  Line movement uses the loaded document's
+computed line height without animation.  Screen movement within a loaded
+spine item uses Foliate's bounded 300 ms ease-out animation.  Either scale can
+cross a linear spine-item boundary, which may pause while the next item loads.
+Moving beyond either end is a no-op, and unsuccessful movement releases the
+renderer lock for later navigation.
 
 =<escape>=, =C-g=, Control reader keys, and non-character reader keys are
-captured by the native WebView2 accelerator event.  Uppercase character reader
-keys, the three zoom keys, and lowercase =y= are relayed by the trusted
+captured by the native WebView2 accelerator event.  Reader character keys,
+including =j/k=, =J/K=, the three zoom keys, and =y=, are relayed by the trusted
 renderer because WebView2 does not classify them as accelerators.  Both paths
 write unsolicited events without request IDs:
 

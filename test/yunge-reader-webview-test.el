@@ -585,6 +585,8 @@
       (yunge-reader-webview--navigate-view
        view "next-screen" #'ignore)
       (yunge-reader-webview--navigate-view
+       view "next-line" #'ignore)
+      (yunge-reader-webview--navigate-view
        view "go-to" #'ignore target)
       (yunge-reader-webview--set-native-view-style
        view style #'ignore)
@@ -597,14 +599,15 @@
                (nreverse sent)))
              (open (nth 0 requests))
              (next (nth 1 requests))
-             (go-to (nth 2 requests))
-             (styled (nth 3 requests))
-             (scroll-bars (nth 4 requests)))
+             (line (nth 2 requests))
+             (go-to (nth 3 requests))
+             (styled (nth 4 requests))
+             (scroll-bars (nth 5 requests)))
         (should
          (equal
           (mapcar (lambda (request) (alist-get 'op request)) requests)
           '("view-open-publication" "view-navigate" "view-navigate"
-            "view-style" "view-scroll-bars")))
+            "view-navigate" "view-style" "view-scroll-bars")))
         (should
          (equal (alist-get 'location (alist-get 'params open))
                 location))
@@ -617,6 +620,9 @@
         (should
          (equal (alist-get 'command (alist-get 'params next))
                 "next-screen"))
+        (should
+         (equal (alist-get 'command (alist-get 'params line))
+                "next-line"))
         (should
          (equal (alist-get 'location (alist-get 'params go-to))
                 target))
