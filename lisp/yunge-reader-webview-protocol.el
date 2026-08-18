@@ -58,6 +58,9 @@
 (defconst yunge-reader-webview--epub-fixed-scale-max 8.0
   "Maximum manual scale accepted for a fixed-layout EPUB.")
 
+(defconst yunge-reader-webview--epub-viewport-coordinate-max 1000000.0
+  "Maximum unscaled EPUB viewport coordinate accepted from the renderer.")
+
 (defconst yunge-reader-webview--epub-fixed-fit-modes
   '(fit-page fit-width)
   "Automatic fit modes accepted for a fixed-layout EPUB.")
@@ -118,11 +121,13 @@
    (listp location)
    (let ((cfi (alist-get 'cfi location))
          (href (alist-get 'href location))
-         (fraction (alist-get 'fraction location)))
+         (fraction (alist-get 'fraction location))
+         (x (alist-get 'x location))
+         (y (alist-get 'y location)))
      (and
       (cl-every
        (lambda (entry)
-         (memq (car-safe entry) '(cfi href fraction)))
+         (memq (car-safe entry) '(cfi href fraction x y)))
        location)
       (cl-every
        (lambda (value)
@@ -139,7 +144,17 @@
       (or (null fraction)
           (and (numberp fraction)
                (= fraction fraction)
-               (<= 0 fraction 1)))))))
+               (<= 0 fraction 1)))
+      (or
+       (and (null x) (null y))
+       (and
+        (numberp x)
+        (numberp y)
+        (= x x)
+        (= y y)
+        (<= 0 x yunge-reader-webview--epub-viewport-coordinate-max)
+        (<= 0 y
+            yunge-reader-webview--epub-viewport-coordinate-max)))))))
 
 (defun yunge-reader-webview--valid-target-href-p (href)
   "Return non-nil when HREF is a bounded internal EPUB target."

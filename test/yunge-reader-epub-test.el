@@ -5,12 +5,13 @@
 (require 'yunge-test-helper)
 (require 'yunge-reader-epub)
 
-(defun yunge-reader-epub-test--location (&optional fraction)
-  "Return one bounded EPUB locator with optional FRACTION."
+(defun yunge-reader-epub-test--location (&optional fraction x y)
+  "Return one bounded EPUB locator with optional FRACTION, X, and Y."
   (append
    '((cfi . "epubcfi(/6/4!/4/2)"))
    '((href . "OPS/chapter.xhtml"))
-   (when fraction `((fraction . ,fraction)))))
+   (when fraction `((fraction . ,fraction)))
+   (when (and x y) `((x . ,x) (y . ,y)))))
 
 (defun yunge-reader-epub-test--handle (&optional publication)
   "Return a live EPUB handle for PUBLICATION."
@@ -40,8 +41,8 @@
      ("k" . yunge-reader-epub-previous-line)
      ("C-d" . yunge-reader-epub-next-screen)
      ("C-u" . yunge-reader-epub-previous-screen)
-     ("J" . yunge-reader-epub-next-screen)
-     ("K" . yunge-reader-epub-previous-screen))))
+     ("J" . yunge-reader-epub-next-page)
+     ("K" . yunge-reader-epub-previous-page))))
 
 (ert-deftest yunge-reader-epub-keeps-layout-under-local-leader ()
   (should
@@ -77,8 +78,8 @@
        ("k" . yunge-reader-epub-previous-line)
        ("C-d" . yunge-reader-epub-next-screen)
        ("C-u" . yunge-reader-epub-previous-screen)
-       ("J" . yunge-reader-epub-next-screen)
-       ("K" . yunge-reader-epub-previous-screen)
+       ("J" . yunge-reader-epub-next-page)
+       ("K" . yunge-reader-epub-previous-page)
        ("+" . yunge-reader-zoom-in)
        ("-" . yunge-reader-zoom-out)
        ("=" . yunge-reader-zoom-reset)
@@ -655,7 +656,7 @@
       (yunge-reader-epub-view-mode 1)
       (setq yunge-reader-webview--buffer-view view)
       (cl-letf
-          (((symbol-function 'yunge-reader-epub-next-screen)
+          (((symbol-function 'yunge-reader-epub-next-page)
             (lambda (&optional count)
               (interactive "p")
               (setq called (list count (current-buffer))))))
@@ -708,16 +709,19 @@
     (should (eq (car navigated) view))
     (should (equal (cadr navigated) "next-screen"))))
 
-(ert-deftest yunge-reader-epub-maps-counted-line-movement ()
+(ert-deftest yunge-reader-epub-maps-counted-page-and-line-movement ()
   (let (navigations)
     (cl-letf (((symbol-function 'yunge-reader-epub--navigate)
                (lambda (command) (push command navigations))))
+      (yunge-reader-epub-next-page 2)
+      (yunge-reader-epub-previous-page -1)
       (yunge-reader-epub-next-line 3)
       (yunge-reader-epub-previous-line -2))
     (should
      (equal navigations
-            '("next-line" "next-line" "next-line"
-              "next-line" "next-line")))))
+             '("next-line" "next-line" "next-line"
+               "next-line" "next-line"
+               "next-page" "next-page" "next-page")))))
 
 (ert-deftest yunge-reader-epub-maps-native-selection-to-reader-state ()
   (let* ((buffer (generate-new-buffer " *EPUB selection owner*"))
@@ -1013,19 +1017,36 @@
     (should (equal (cadr warning) "publication remains in use"))))
 
 (ert-deftest yunge-reader-epub-keeps-locator-data-printable ()
-  (let* ((location (yunge-reader-epub-test--location 0.35))
+  (let* ((location
+          (yunge-reader-epub-test--location 0.35 12.5 30.0))
          (position
-          (yunge-reader-epub--locator-position location)))
+           (yunge-reader-epub--locator-position location)))
     (should (yunge-reader-position-p position))
     (should
-     (equal (yunge-reader-epub--position-locator position)
-            location))
+     (equal
+      (yunge-reader-epub--position-locator position)
+      '((cfi . "epubcfi(/6/4!/4/2)")
+        (href . "OPS/chapter.xhtml")
+        (x . 12.5)
+        (y . 30.0))))
     (should
      (equal (yunge-reader--position-data position)
             '(:unit "OPS/chapter.xhtml"
               :offset "epubcfi(/6/4!/4/2)"
-              :x 0.35
-              :y nil)))))
+               :x 12.5
+               :y 30.0)))))
+
+(ert-deftest yunge-reader-epub-does-not-store-reflow-fraction-as-x ()
+  (let ((position
+         (yunge-reader-epub--locator-position
+          (yunge-reader-epub-test--location 0.35))))
+    (should-not (yunge-reader-position-x position))
+    (should-not (yunge-reader-position-y position))
+    (should
+     (equal
+      (yunge-reader-epub--position-locator position)
+      '((cfi . "epubcfi(/6/4!/4/2)")
+        (href . "OPS/chapter.xhtml"))))))
 
 (ert-deftest yunge-reader-epub-maps-bounded-renderer-outlines ()
   (let* ((view
@@ -1065,7 +1086,8 @@
         (should-not (yunge-reader-position-offset position))))))
 
 (ert-deftest yunge-reader-epub-restores-before-or-after-surface-ready ()
-  (let* ((location (yunge-reader-epub-test--location 0.6))
+  (let* ((location
+          (yunge-reader-epub-test--location nil 18.0 24.0))
          (position
           (yunge-reader-epub--locator-position location))
          (view

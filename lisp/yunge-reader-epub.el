@@ -125,8 +125,8 @@ scrolling behavior."
     ("k" yunge-reader-epub-previous-line "previous line")
     ("C-d" yunge-reader-epub-next-screen "next screen")
     ("C-u" yunge-reader-epub-previous-screen "previous screen")
-    ("J" yunge-reader-epub-next-screen "next screen")
-    ("K" yunge-reader-epub-previous-screen "previous screen"))
+    ("J" yunge-reader-epub-next-page "next page")
+    ("K" yunge-reader-epub-previous-page "previous page"))
   "Normal-state bindings for EPUB views.")
 
 (defconst yunge-reader-epub-reflow-normal-bindings
@@ -138,8 +138,8 @@ scrolling behavior."
   "k" #'yunge-reader-epub-previous-line
   "C-d" #'yunge-reader-epub-next-screen
   "C-u" #'yunge-reader-epub-previous-screen
-  "J" #'yunge-reader-epub-next-screen
-  "K" #'yunge-reader-epub-previous-screen
+  "J" #'yunge-reader-epub-next-page
+  "K" #'yunge-reader-epub-previous-page
   "<next>" #'yunge-reader-epub-next-screen
   "<prior>" #'yunge-reader-epub-previous-screen)
 
@@ -748,7 +748,8 @@ VALUES is an alist containing complete, already bounded property values."
     (make-yunge-reader-position
      :unit (alist-get 'href location)
      :offset (alist-get 'cfi location)
-     :x (alist-get 'fraction location))))
+     :x (alist-get 'x location)
+     :y (alist-get 'y location))))
 
 (defun yunge-reader-epub--position-locator (position)
   "Return an EPUB locator represented by Reader POSITION."
@@ -758,10 +759,11 @@ VALUES is an alist containing complete, already bounded property values."
             (list
              (cons 'cfi (yunge-reader-position-offset position))
              (cons 'href (yunge-reader-position-unit position)))
-            (when (numberp (yunge-reader-position-x position))
+            (when (and (numberp (yunge-reader-position-x position))
+                       (numberp (yunge-reader-position-y position)))
               (list
-               (cons 'fraction
-                     (yunge-reader-position-x position)))))))
+               (cons 'x (yunge-reader-position-x position))
+               (cons 'y (yunge-reader-position-y position)))))))
       (and (yunge-reader-webview--valid-location-p location)
            location))))
 
@@ -1163,6 +1165,24 @@ VALUES is an alist containing complete, already bounded property values."
       (yunge-reader-epub-next-screen (- count))
     (dotimes (_ count)
       (yunge-reader-epub--navigate "previous-screen"))))
+
+(defun yunge-reader-epub-next-page (&optional count)
+  "Move forward COUNT logical EPUB pages."
+  (interactive "p")
+  (setq count (or count 1))
+  (if (< count 0)
+      (yunge-reader-epub-previous-page (- count))
+    (dotimes (_ count)
+      (yunge-reader-epub--navigate "next-page"))))
+
+(defun yunge-reader-epub-previous-page (&optional count)
+  "Move backward COUNT logical EPUB pages."
+  (interactive "p")
+  (setq count (or count 1))
+  (if (< count 0)
+      (yunge-reader-epub-next-page (- count))
+    (dotimes (_ count)
+      (yunge-reader-epub--navigate "previous-page"))))
 
 (defun yunge-reader-epub-next-line (&optional count)
   "Move forward COUNT rendered EPUB lines."

@@ -251,6 +251,13 @@ coalesced location followed direct wheel, pointer, or touch activity:
              "href":"OPS/chapter.xhtml","fraction":0.2}}
 #+end_src
 
+A locator always contains a bounded CFI and canonical spine href.  It may
+contain a whole-book =fraction=.  A pre-paginated view also reports =x= and
+=y= together as finite unscaled viewport coordinates from 0 through
+1,000,000.  Restoring that locator applies its fixed-page viewport after the
+spine target loads, so changing zoom or recreating a child surface does not
+discard the page-relative position.
+
 Foliate follows internal EPUB anchors itself.  An explicit click on an
 external anchor is canceled inside the child and becomes a semantic event
 containing its resolved absolute URI:
@@ -403,23 +410,27 @@ buffer's active keymaps; Reader then drives these bounded batches and updates
 the kill ring only after the complete selection succeeds.  Native =C-c= is
 not intercepted and remains available to WebView2.
 
-=view-navigate= accepts =previous-line=, =next-line=, =previous-screen=,
-=next-screen=, or =go-to=.  A =go-to= target may be a complete stable locator
-or a bounded href-only outline target.  Href-only targets are transient: the
-helper and Emacs do not promote them to a saved location.  A later =location=
-event supplies the complete CFI, canonical spine href, and fraction that the
-owning view may persist.
+=view-navigate= accepts =previous-page=, =next-page=, =previous-line=,
+=next-line=, =previous-screen=, =next-screen=, or =go-to=.  A =go-to= target
+may be a complete stable locator or a bounded href-only outline target.
+Href-only targets are transient: the helper and Emacs do not promote them to
+a saved location.  A later =location= event supplies the complete locator
+that the owning view may persist.
 
 The renderer runs at most one navigation operation and retains only the latest
 pending intent.  Repeated keys can therefore continue moving through the book
 without building an unbounded queue.  A newer direction or =go-to= target
 replaces older pending movement.  Line movement in a reflowable publication
-uses the loaded document's computed line height without animation.  In a
-pre-paginated publication, line commands move by one fixed page because it
-has no meaningful text line distance.  Screen movement within a loaded
-reflowable spine item uses Foliate's bounded 300 ms ease-out animation.  Either
-scale can cross a linear spine-item boundary, which may pause while the next
-item loads.
+uses the loaded document's computed line height without animation.  Its
+screen movement uses Foliate's bounded 300 ms ease-out animation.
+
+In a pre-paginated publication, line commands move the fixed viewport by 40
+screen pixels, screen commands move it by half the child height, and page
+commands move by one publisher page.  Reaching a vertical edge turns a page;
+backward movement enters the preceding page at its bottom.  These movements
+retain unscaled viewport coordinates across manual zoom and fit-mode resize.
+Repeated fixed and reflowable commands share the same bounded navigation
+queue.
 Moving beyond either end is a no-op, and unsuccessful movement releases the
 renderer lock for later navigation.
 

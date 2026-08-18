@@ -7,7 +7,8 @@ const SEARCH_PREFIX = 'foliate-search:'
 
 const isZip = async file => {
     const arr = new Uint8Array(await file.slice(0, 4).arrayBuffer())
-    return arr[0] === 0x50 && arr[1] === 0x4b && arr[2] === 0x03 && arr[3] === 0x04
+    return arr[0] === 0x50 && arr[1] === 0x4b
+        && arr[2] === 0x03 && arr[3] === 0x04
 }
 
 const isPDF = async file => {
@@ -239,7 +240,8 @@ export class View extends HTMLElement {
 
         if (book.splitTOCHref && book.getTOCFragment) {
             const ids = book.sections.map(s => s.id)
-            this.#sectionProgress = new SectionProgress(book.sections, 1500, 1600)
+            this.#sectionProgress = new SectionProgress(
+                book.sections, 1500, 1600)
             const splitHref = book.splitTOCHref.bind(book)
             const getFragment = book.getTOCFragment.bind(book)
             this.#tocProgress = new TOCProgress()
@@ -260,7 +262,8 @@ export class View extends HTMLElement {
         }
         this.renderer.setAttribute('exportparts', 'head,foot,filter')
         this.renderer.addEventListener('load', e => this.#onLoad(e.detail))
-        this.renderer.addEventListener('relocate', e => this.#onRelocate(e.detail))
+        this.renderer.addEventListener(
+            'relocate', e => this.#onRelocate(e.detail))
         this.renderer.addEventListener('create-overlayer', e =>
             e.detail.attach(this.#createOverlayer(e.detail)))
         this.renderer.open(book)
@@ -308,11 +311,13 @@ export class View extends HTMLElement {
     }
     goToTextStart() {
         return this.goTo(this.book.landmarks
-            ?.find(m => m.type.includes('bodymatter') || m.type.includes('text'))
+            ?.find(m => m.type.includes('bodymatter')
+                || m.type.includes('text'))
             ?.href ?? this.book.sections.findIndex(s => s.linear !== 'no'))
     }
     async init({ lastLocation, showTextStart }) {
-        const resolved = lastLocation ? this.resolveNavigation(lastLocation) : null
+        const resolved = lastLocation
+            ? this.resolveNavigation(lastLocation) : null
         if (resolved) {
             await this.renderer.goTo(resolved)
             this.history.pushState(lastLocation)
@@ -326,12 +331,15 @@ export class View extends HTMLElement {
     #emit(name, detail, cancelable) {
         return this.dispatchEvent(new CustomEvent(name, { detail, cancelable }))
     }
-    #onRelocate({ reason, range, index, fraction, size }) {
-        const progress = this.#sectionProgress?.getProgress(index, fraction, size) ?? {}
+    #onRelocate({ reason, range, index, fraction, size, x, y }) {
+        const progress = this.#sectionProgress
+            ?.getProgress(index, fraction, size) ?? {}
         const tocItem = this.#tocProgress?.getProgress(index, range)
         const pageItem = this.#pageProgress?.getProgress(index, range)
         const cfi = this.getCFI(index, range)
-        this.lastLocation = { ...progress, tocItem, pageItem, cfi, range }
+        this.lastLocation = {
+            ...progress, tocItem, pageItem, cfi, range, x, y,
+        }
         if (reason === 'snap' || reason === 'page' || reason === 'scroll')
             this.history.replaceState(cfi)
         this.#emit('relocate', this.lastLocation)
@@ -379,7 +387,9 @@ export class View extends HTMLElement {
                     return
                 }
                 const range = doc ? anchor(doc) : anchor
-                overlayer.add(value, range, this.#searchDraw, this.#searchDrawOptions)
+                overlayer.add(
+                    value, range, this.#searchDraw,
+                    this.#searchDrawOptions)
             }
             return
         }
@@ -390,7 +400,8 @@ export class View extends HTMLElement {
             overlayer.remove(value)
             if (!remove) {
                 const range = doc ? anchor(doc) : anchor
-                const draw = (func, opts) => overlayer.add(value, range, func, opts)
+                const draw = (func, opts) => overlayer.add(
+                    value, range, func, opts)
                 this.#emit('draw-annotation', { draw, annotation, doc, range })
             }
         }
@@ -430,7 +441,8 @@ export class View extends HTMLElement {
         }
     }
     getCFI(index, range) {
-        const baseCFI = this.book.sections[index].cfi ?? CFI.fake.fromIndex(index)
+        const baseCFI = this.book.sections[index].cfi
+            ?? CFI.fake.fromIndex(index)
         if (!range) return baseCFI
         return CFI.joinIndir(baseCFI, CFI.fromRange(range))
     }
@@ -448,7 +460,8 @@ export class View extends HTMLElement {
         try {
             if (typeof target === 'number') return { index: target }
             if (typeof target.fraction === 'number') {
-                const [index, anchor] = this.#sectionProgress.getSection(target.fraction)
+                const [index, anchor] = this.#sectionProgress
+                    .getSection(target.fraction)
                 return { index, anchor }
             }
             if (CFI.isCFI.test(target)) return this.resolveCFI(target)
@@ -512,10 +525,10 @@ export class View extends HTMLElement {
         }
     }
     async prev(distance, smooth) {
-        await this.renderer.prev(distance, smooth)
+        return this.renderer.prev(distance, smooth)
     }
     async next(distance, smooth) {
-        await this.renderer.next(distance, smooth)
+        return this.renderer.next(distance, smooth)
     }
     goLeft() {
         return this.book.dir === 'rtl' ? this.next() : this.prev()
@@ -533,8 +546,11 @@ export class View extends HTMLElement {
         for (const [index, { createDocument }] of sections.entries()) {
             if (!createDocument) continue
             const doc = await createDocument()
-            const subitems = Array.from(matcher(doc, query), ({ range, excerpt }) =>
-                ({ cfi: this.getCFI(index, range), excerpt }))
+            const subitems = Array.from(
+                matcher(doc, query), ({ range, excerpt }) => ({
+                    cfi: this.getCFI(index, range),
+                    excerpt,
+                }))
             const progress = (index + 1) / sections.length
             yield { progress }
             if (subitems.length) yield { index, subitems }
@@ -562,7 +578,8 @@ export class View extends HTMLElement {
                 this.#searchResults.set(result.index, list)
                 for (const item of list) this.addAnnotation(item)
                 yield {
-                    label: this.#tocProgress.getProgress(result.index)?.label ?? '',
+                    label: this.#tocProgress
+                        .getProgress(result.index)?.label ?? '',
                     subitems: result.subitems,
                 }
             }

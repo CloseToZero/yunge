@@ -173,7 +173,8 @@ STYLE and ZOOM are mutually exclusive.  Invoke CALLBACK when complete."
     (view command callback &optional location)
   "Ask native VIEW to run semantic COMMAND and invoke CALLBACK.
 LOCATION is required only for the go-to command."
-  (unless (member command '("previous-screen" "next-screen"
+  (unless (member command '("previous-page" "next-page"
+                            "previous-screen" "next-screen"
                             "previous-line" "next-line" "go-to"))
     (error "Unsupported EPUB navigation command: %S" command))
   (when (and (equal command "go-to") (null location))

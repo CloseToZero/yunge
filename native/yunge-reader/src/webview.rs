@@ -81,6 +81,7 @@ const MAX_EPUB_CONTENT_WIDTH: u32 = 1_600;
 const MAX_EPUB_SIDE_PADDING: f64 = 20.0;
 const MIN_EPUB_FIXED_SCALE: f64 = 0.25;
 const MAX_EPUB_FIXED_SCALE: f64 = 8.0;
+const MAX_EPUB_VIEWPORT_COORDINATE: f64 = 1_000_000.0;
 const MAX_RENDERER_MESSAGE_BYTES: usize = 1_024 * 1_024;
 const MAX_RENDERER_ERROR_BYTES: usize = 4 * 1_024;
 const MESSAGE_PUMP_INTERVAL: Duration = Duration::from_millis(8);
@@ -249,6 +250,10 @@ struct EpubLocator {
     href: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     fraction: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    x: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    y: Option<f64>,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
@@ -259,6 +264,10 @@ struct EpubNavigationTarget {
     href: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     fraction: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    x: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    y: Option<f64>,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
@@ -299,6 +308,8 @@ struct EpubSearchMatch {
 #[derive(Clone, Copy, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "kebab-case")]
 enum NavigationCommand {
+    PreviousPage,
+    NextPage,
     PreviousScreen,
     NextScreen,
     PreviousLine,
@@ -386,6 +397,20 @@ impl EpubLocator {
                 "invalid-epub-location",
                 "EPUB locator fraction must be between zero and one",
             ));
+        }
+        match (self.x, self.y) {
+            (None, None) => {}
+            (Some(x), Some(y))
+                if [x, y].into_iter().all(|value| {
+                    value.is_finite()
+                        && (0.0..=MAX_EPUB_VIEWPORT_COORDINATE).contains(&value)
+                }) => {}
+            _ => {
+                return Err(ServiceError::new(
+                    "invalid-epub-location",
+                    "EPUB viewport coordinates are invalid",
+                ));
+            }
         }
         Ok(self)
     }
@@ -480,6 +505,8 @@ impl EpubNavigationTarget {
                 cfi: cfi.clone(),
                 href: self.href.clone(),
                 fraction: self.fraction,
+                x: self.x,
+                y: self.y,
             }
             .validate()?;
             return Ok(self);
@@ -494,10 +521,10 @@ impl EpubNavigationTarget {
                 "EPUB navigation href is not a bounded internal target",
             ));
         }
-        if self.fraction.is_some() {
+        if self.fraction.is_some() || self.x.is_some() || self.y.is_some() {
             return Err(ServiceError::new(
                 "invalid-epub-target",
-                "EPUB href-only targets do not accept a fraction",
+                "EPUB href-only targets do not accept position data",
             ));
         }
         Ok(self)
@@ -553,12 +580,16 @@ impl EpubSelection {
             cfi: self.start,
             href: self.href,
             fraction: None,
+            x: None,
+            y: None,
         }
         .validate()?;
         let end = EpubLocator {
             cfi: self.end,
             href: start.href.clone(),
             fraction: None,
+            x: None,
+            y: None,
         }
         .validate()?;
         if start.cfi == end.cfi {
@@ -1619,8 +1650,12 @@ mod tests {
         assert!(adapter.contains("checkedRendererAccelerators"));
         assert!(adapter.contains("event.code === 'Space'"));
         assert!(adapter.contains("key === 'SPC' && event.repeat"));
+        assert!(adapter.contains("case 'previous-page':"));
+        assert!(adapter.contains("case 'next-page':"));
         assert!(adapter.contains("case 'previous-line':"));
         assert!(adapter.contains("lineDistance(session), false"));
+        assert!(adapter.contains("moveFixedViewport(session, -40)"));
+        assert!(adapter.contains("moveFixedViewport(session, 40)"));
         assert!(adapter.contains("post('external-link'"));
         assert!(adapter.contains("checkedExternalURI(event.detail?.href)"));
         assert!(adapter.contains("applyReadingStyle(view, style)"));
@@ -1688,6 +1723,11 @@ mod tests {
         .unwrap();
         assert!(fixed.contains("new CustomEvent('zoom'"));
         assert!(fixed.contains("detail: { scale }"));
+        assert!(fixed.contains("align-items: safe center"));
+        assert!(fixed.contains("async moveBy(distance, smooth = true)"));
+        assert!(fixed.contains("setViewport(x, y, end = false)"));
+        assert!(fixed.contains("x: this.scrollLeft / this.#scale"));
+        assert!(fixed.contains("y: this.scrollTop / this.#scale"));
         let paginator = std::str::from_utf8(
             app_asset("foliate-js/paginator.js").unwrap().1,
         )
@@ -1939,6 +1979,8 @@ mod tests {
                 cfi: "epubcfi(/6/4)".into(),
                 href: "OPS/chapter.xhtml".into(),
                 fraction: Some(0.25),
+                x: None,
+                y: None,
             })
         );
 
@@ -2302,6 +2344,8 @@ mod tests {
             cfi: "epubcfi(/6/4!/4/2)".into(),
             href: "OPS/chapter.xhtml".into(),
             fraction: Some(0.25),
+            x: Some(12.5),
+            y: Some(30.0),
         };
         let script = publication_open_script(
             4,
@@ -2315,6 +2359,8 @@ mod tests {
         assert!(script.contains(r#""view":4"#));
         assert!(script.contains(r#""resourceRoot":"https://"#));
         assert!(script.contains(r#""cfi":"epubcfi(/6/4!/4/2)"#));
+        assert!(script.contains(r#""x":12.5"#));
+        assert!(script.contains(r#""y":30.0"#));
         assert!(script.contains(r#""font-scale":1.0"#));
         assert!(script.contains(r#""line-height":1.6"#));
         assert!(script.contains(r#""content-width":720"#));
@@ -2363,6 +2409,8 @@ mod tests {
             cfi: Some(location.cfi.clone()),
             href: location.href.clone(),
             fraction: location.fraction,
+            x: location.x,
+            y: location.y,
         };
         let navigation = publication_navigation_script(
             4,
@@ -2373,6 +2421,8 @@ mod tests {
             navigation.starts_with("void globalThis.yungeReader.navigate(")
         );
         assert!(navigation.contains(r#""command":"go-to"#));
+        assert!(navigation.contains(r#""x":12.5"#));
+        assert!(navigation.contains(r#""y":30.0"#));
         assert!(!navigation.contains("eval"));
 
         let clear = publication_clear_selection_script(4);
@@ -2452,6 +2502,8 @@ mod tests {
             cfi: "epubcfi(/6/4!/4/2)".into(),
             href: "OPS/chapter.xhtml".into(),
             fraction: Some(1.0),
+            x: Some(MAX_EPUB_VIEWPORT_COORDINATE),
+            y: Some(0.0),
         };
         assert_eq!(valid.clone().validate().unwrap(), valid);
 
@@ -2460,21 +2512,43 @@ mod tests {
                 cfi: "bad".into(),
                 href: "OPS/chapter.xhtml".into(),
                 fraction: None,
+                x: None,
+                y: None,
             },
             EpubLocator {
                 cfi: "epubcfi(/6/4)".into(),
                 href: "../chapter.xhtml".into(),
                 fraction: None,
+                x: None,
+                y: None,
             },
             EpubLocator {
                 cfi: "epubcfi(/6/4)".into(),
                 href: "https:chapter.xhtml".into(),
                 fraction: None,
+                x: None,
+                y: None,
             },
             EpubLocator {
                 cfi: "epubcfi(/6/4)".into(),
                 href: "OPS/chapter.xhtml".into(),
                 fraction: Some(1.1),
+                x: None,
+                y: None,
+            },
+            EpubLocator {
+                cfi: "epubcfi(/6/4)".into(),
+                href: "OPS/chapter.xhtml".into(),
+                fraction: None,
+                x: Some(1.0),
+                y: None,
+            },
+            EpubLocator {
+                cfi: "epubcfi(/6/4)".into(),
+                href: "OPS/chapter.xhtml".into(),
+                fraction: None,
+                x: Some(MAX_EPUB_VIEWPORT_COORDINATE + 1.0),
+                y: Some(0.0),
             },
         ] {
             assert_eq!(
@@ -2563,6 +2637,8 @@ mod tests {
                     cfi: "epubcfi(/6/4!/4/2/1:7)".into(),
                     href: "OPS/chapter.xhtml".into(),
                     fraction: None,
+                    x: None,
+                    y: None,
                 }),
                 cursor: None,
                 match_limit: 1,
@@ -3025,6 +3101,8 @@ mod tests {
             cfi: None,
             href: "OPS/chapter.xhtml#section-2".into(),
             fraction: None,
+            x: None,
+            y: None,
         };
         assert_eq!(target.clone().validate().unwrap(), target);
 
@@ -3039,6 +3117,8 @@ mod tests {
                 cfi: None,
                 href: href.into(),
                 fraction: None,
+                x: None,
+                y: None,
             };
             assert_eq!(
                 invalid.validate().unwrap_err().code,
@@ -3048,8 +3128,10 @@ mod tests {
     }
 
     #[test]
-    fn epub_relative_navigation_accepts_line_and_screen_scales() {
+    fn epub_relative_navigation_accepts_page_line_and_screen_scales() {
         for command in [
+            "previous-page",
+            "next-page",
             "previous-line",
             "next-line",
             "previous-screen",

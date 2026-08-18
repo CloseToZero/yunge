@@ -48,6 +48,7 @@ const MAX_TOC_TOTAL_TEXT_BYTES = 384 * 1024
 const MAX_EXTERNAL_URI_BYTES = 4096
 const MIN_FIXED_SCALE = 0.25
 const MAX_FIXED_SCALE = 8.0
+const MAX_VIEWPORT_COORDINATE = 1000000
 const LOCATION_DELAY_MS = 75
 const USER_MOVEMENT_WINDOW_MS = 1000
 const READER_CHARACTER_KEYS = Object.freeze([
@@ -335,7 +336,9 @@ const checkedLocator = value => {
         throw new Error('Invalid EPUB locator')
     }
     const keys = Object.keys(value)
-    if (keys.some(key => !['cfi', 'href', 'fraction'].includes(key))) {
+    if (keys.some(key => ![
+        'cfi', 'href', 'fraction', 'x', 'y',
+    ].includes(key))) {
         throw new Error('Invalid EPUB locator field')
     }
     const cfi = checkedLocatorText(value.cfi, 'CFI')
@@ -354,6 +357,21 @@ const checkedLocator = value => {
             throw new Error('Invalid EPUB locator fraction')
         }
         result.fraction = value.fraction
+    }
+    const hasX = value.x !== undefined && value.x !== null
+    const hasY = value.y !== undefined && value.y !== null
+    if (hasX !== hasY) {
+        throw new Error('Incomplete EPUB viewport coordinate')
+    }
+    if (hasX) {
+        for (const coordinate of [value.x, value.y]) {
+            if (!Number.isFinite(coordinate) || coordinate < 0
+                || coordinate > MAX_VIEWPORT_COORDINATE) {
+                throw new Error('Invalid EPUB viewport coordinate')
+            }
+        }
+        result.x = value.x
+        result.y = value.y
     }
     return Object.freeze(result)
 }
@@ -788,6 +806,9 @@ const showLocation = async (view, location) => {
     for (const target of targets) {
         try {
             await showTarget(view, target)
+            if (view.isFixedLayout && location.x !== undefined) {
+                view.renderer.setViewport(location.x, location.y)
+            }
             return
         } catch (error) {
             console.warn(error)
@@ -804,6 +825,8 @@ const locatorFromRelocation = (book, relocation) => {
             ? collapseCFI(relocation.cfi) : relocation?.cfi,
         href,
         fraction: relocation?.fraction,
+        x: relocation?.x,
+        y: relocation?.y,
     }
     return checkedLocator(value)
 }
@@ -1382,24 +1405,58 @@ const lineDistance = session => {
         Number.isFinite(measured) && measured > 0 ? measured : fallback))
 }
 
+const turnFixedPage = async (session, direction, end = false) => {
+    const moved = direction > 0
+        ? await session.view.next() : await session.view.prev()
+    if (moved) session.view.renderer.setViewport(0, 0, end)
+    return moved
+}
+
+const moveFixedViewport = async (session, distance) => {
+    if (await session.view.renderer.moveBy(distance)) return true
+    return turnFixedPage(session, Math.sign(distance), distance < 0)
+}
+
 const runNavigation = async (session, navigation) => {
     if (current !== session) return
     const { command, location, selection, revision } = navigation
     session.commandNavigation = true
     try {
         switch (command) {
+        case 'previous-page':
+            if (session.view.isFixedLayout) {
+                await turnFixedPage(session, -1)
+            } else await session.view.prev()
+            break
+        case 'next-page':
+            if (session.view.isFixedLayout) {
+                await turnFixedPage(session, 1)
+            } else await session.view.next()
+            break
         case 'previous-screen':
-            await session.view.prev()
+            if (session.view.isFixedLayout) {
+                await moveFixedViewport(
+                    session,
+                    -Math.max(1, session.view.renderer.clientHeight / 2))
+            } else await session.view.prev()
             break
         case 'next-screen':
-            await session.view.next()
+            if (session.view.isFixedLayout) {
+                await moveFixedViewport(
+                    session,
+                    Math.max(1, session.view.renderer.clientHeight / 2))
+            } else await session.view.next()
             break
         case 'previous-line':
-            if (session.view.isFixedLayout) await session.view.prev()
+            if (session.view.isFixedLayout) {
+                await moveFixedViewport(session, -40)
+            }
             else await session.view.prev(lineDistance(session), false)
             break
         case 'next-line':
-            if (session.view.isFixedLayout) await session.view.next()
+            if (session.view.isFixedLayout) {
+                await moveFixedViewport(session, 40)
+            }
             else await session.view.next(lineDistance(session), false)
             break
         case 'go-to':

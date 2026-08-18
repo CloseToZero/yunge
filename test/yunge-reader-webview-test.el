@@ -78,12 +78,13 @@
          "view-scroll-bars" "view-status" "view-style"
          "view-visible" "view-zoom")))))
 
-(defun yunge-reader-webview-test--location (&optional fraction)
-  "Return one valid EPUB test locator with optional FRACTION."
+(defun yunge-reader-webview-test--location (&optional fraction x y)
+  "Return one valid EPUB test locator with optional FRACTION, X, and Y."
   (append
    '((cfi . "epubcfi(/6/4!/4/2)"))
    '((href . "OPS/chapter.xhtml"))
-   (when fraction `((fraction . ,fraction)))))
+   (when fraction `((fraction . ,fraction)))
+   (when (and x y) `((x . ,x) (y . ,y)))))
 
 (defun yunge-reader-webview-test--outline ()
   "Return one valid bounded EPUB test outline."
@@ -205,7 +206,8 @@
       "epub-limit-exceeded" "EPUB is too large"))))
 
 (ert-deftest yunge-reader-webview-validates-bounded-epub-locations ()
-  (let ((location (yunge-reader-webview-test--location 0.25)))
+  (let ((location
+         (yunge-reader-webview-test--location 0.25 12.5 30.0)))
     (should (yunge-reader-webview--valid-location-p location))
     (should (eq (yunge-reader-webview--check-location location)
                 location)))
@@ -217,7 +219,15 @@
          ((cfi . "epubcfi(/6/4)") (href . "../chapter.xhtml"))
          ((cfi . "epubcfi(/6/4)") (href . "https:chapter.xhtml"))
          ((cfi . "epubcfi(/6/4)")
-          (href . "OPS/chapter.xhtml") (fraction . 2))))
+          (href . "OPS/chapter.xhtml") (fraction . 2))
+         ((cfi . "epubcfi(/6/4)")
+          (href . "OPS/chapter.xhtml") (x . 1.0))
+         ((cfi . "epubcfi(/6/4)")
+          (href . "OPS/chapter.xhtml")
+          (x . -1.0) (y . 0.0))
+         ((cfi . "epubcfi(/6/4)")
+          (href . "OPS/chapter.xhtml")
+          (x . 1000001.0) (y . 0.0))))
     (should-not (yunge-reader-webview--valid-location-p location))))
 
 (ert-deftest yunge-reader-webview-requires-location-user-origin ()
@@ -646,13 +656,18 @@
      'fake-webview-process
      (yunge-reader-webview-test--ready-message))
     (let ((view (yunge-reader-webview--make-view :id 4))
-          (location (yunge-reader-webview-test--location 0.25))
+          (location
+           (yunge-reader-webview-test--location 0.25 12.5 30.0))
           (style (yunge-reader-webview-test--style))
           (target '((href . "OPS/chapter.xhtml#section"))))
       (yunge-reader-webview--open-view-publication
        view 7 #'ignore location style nil 'hidden)
       (yunge-reader-webview--navigate-view
        view "next-screen" #'ignore)
+      (yunge-reader-webview--navigate-view
+       view "next-page" #'ignore)
+      (yunge-reader-webview--navigate-view
+       view "previous-page" #'ignore)
       (yunge-reader-webview--navigate-view
        view "next-line" #'ignore)
       (yunge-reader-webview--navigate-view
@@ -668,19 +683,22 @@
                (lambda (line)
                  (json-parse-string line :object-type 'alist))
                (nreverse sent)))
-             (open (nth 0 requests))
-             (next (nth 1 requests))
-             (line (nth 2 requests))
-             (go-to (nth 3 requests))
-             (styled (nth 4 requests))
-             (zoomed (nth 5 requests))
-             (scroll-bars (nth 6 requests)))
+              (open (nth 0 requests))
+              (next (nth 1 requests))
+              (next-page (nth 2 requests))
+              (previous-page (nth 3 requests))
+              (line (nth 4 requests))
+              (go-to (nth 5 requests))
+              (styled (nth 6 requests))
+              (zoomed (nth 7 requests))
+              (scroll-bars (nth 8 requests)))
         (should
          (equal
           (mapcar (lambda (request) (alist-get 'op request)) requests)
-          '("view-open-publication" "view-navigate" "view-navigate"
-            "view-navigate" "view-style" "view-zoom"
-            "view-scroll-bars")))
+           '("view-open-publication" "view-navigate" "view-navigate"
+             "view-navigate" "view-navigate" "view-navigate"
+             "view-style" "view-zoom"
+             "view-scroll-bars")))
         (should
          (equal (alist-get 'location (alist-get 'params open))
                 location))
@@ -693,6 +711,13 @@
         (should
          (equal (alist-get 'command (alist-get 'params next))
                 "next-screen"))
+        (should
+         (equal (alist-get 'command (alist-get 'params next-page))
+                "next-page"))
+        (should
+         (equal
+          (alist-get 'command (alist-get 'params previous-page))
+          "previous-page"))
         (should
          (equal (alist-get 'command (alist-get 'params line))
                 "next-line"))

@@ -43,6 +43,8 @@ export class FixedLayout extends HTMLElement {
     #center
     #side
     #zoom
+    #scale = 1
+    #scrollTimer
     constructor() {
         super()
 
@@ -52,8 +54,8 @@ export class FixedLayout extends HTMLElement {
             width: 100%;
             height: 100%;
             display: flex;
-            justify-content: center;
-            align-items: center;
+            justify-content: safe center;
+            align-items: safe center;
             overflow: auto;
         }
         :host([scroll-bars="hidden"]) {
@@ -64,6 +66,13 @@ export class FixedLayout extends HTMLElement {
         }`)
 
         this.#observer.observe(this)
+        this.addEventListener('scroll', () => {
+            if (this.#scrollTimer) clearTimeout(this.#scrollTimer)
+            this.#scrollTimer = setTimeout(() => {
+                this.#scrollTimer = null
+                this.#reportLocation('scroll')
+            }, 100)
+        }, { passive: true })
     }
     attributeChangedCallback(name, _, value) {
         switch (name) {
@@ -96,7 +105,9 @@ export class FixedLayout extends HTMLElement {
         return new Promise(resolve => {
             iframe.addEventListener('load', () => {
                 const doc = iframe.contentDocument
-                this.dispatchEvent(new CustomEvent('load', { detail: { doc, index } }))
+                this.dispatchEvent(new CustomEvent('load', {
+                    detail: { doc, index },
+                }))
                 const { width, height } = getViewport(doc, this.defaultViewport)
                 resolve({
                     element, iframe,
@@ -110,6 +121,8 @@ export class FixedLayout extends HTMLElement {
     }
     #render(side = this.#side) {
         if (!side) return
+        const viewportX = this.scrollLeft / this.#scale
+        const viewportY = this.scrollTop / this.#scale
         const left = this.#left ?? {}
         const right = this.#center ?? this.#right ?? {}
         const target = side === 'left' ? left : right
@@ -125,17 +138,23 @@ export class FixedLayout extends HTMLElement {
             : (this.#zoom === 'fit-width'
                 ? (portrait || this.#center
                     ? width / (target.width ?? blankWidth)
-                    : width / ((left.width ?? blankWidth) + (right.width ?? blankWidth)))
+                    : width / (
+                        (left.width ?? blankWidth)
+                        + (right.width ?? blankWidth)))
                 : (portrait || this.#center
                     ? Math.min(
                         width / (target.width ?? blankWidth),
                         height / (target.height ?? blankHeight))
                     : Math.min(
-                        width / ((left.width ?? blankWidth) + (right.width ?? blankWidth)),
+                        width / (
+                            (left.width ?? blankWidth)
+                            + (right.width ?? blankWidth)),
                         height / Math.max(
                             left.height ?? blankHeight,
                             right.height ?? blankHeight)))
             ) || 1
+
+        this.#scale = scale
 
         this.dispatchEvent(new CustomEvent('zoom', {
             detail: { scale },
@@ -171,9 +190,14 @@ export class FixedLayout extends HTMLElement {
             transform(left)
             transform(right)
         }
+        this.scrollTo({
+            left: viewportX * scale,
+            top: viewportY * scale,
+        })
     }
     async #showSpread({ left, right, center, side }) {
         this.#root.replaceChildren()
+        this.scrollTo({ left: 0, top: 0 })
         this.#left = null
         this.#right = null
         this.#center = null
@@ -232,11 +256,13 @@ export class FixedLayout extends HTMLElement {
                 spread.center = section
             }
             else if (pageSpread === 'left') {
-                const spread = last.center || last.left || ltr && i ? newSpread() : last
+                const spread = last.center || last.left || ltr && i
+                    ? newSpread() : last
                 spread.left = section
             }
             else if (pageSpread === 'right') {
-                const spread = last.center || last.right || rtl && i ? newSpread() : last
+                const spread = last.center || last.right || rtl && i
+                    ? newSpread() : last
                 spread.right = section
             }
             else if (ltr) {
@@ -260,7 +286,15 @@ export class FixedLayout extends HTMLElement {
     }
     #reportLocation(reason) {
         this.dispatchEvent(new CustomEvent('relocate', { detail:
-            { reason, range: null, index: this.index, fraction: 0, size: 1 } }))
+            {
+                reason,
+                range: null,
+                index: this.index,
+                fraction: 0,
+                size: 1,
+                x: this.scrollLeft / this.#scale,
+                y: this.scrollTop / this.#scale,
+            } }))
     }
     getSpreadOf(section) {
         const spreads = this.#spreads
@@ -272,10 +306,13 @@ export class FixedLayout extends HTMLElement {
         }
     }
     async goToSpread(index, side, reason) {
-        if (index < 0 || index > this.#spreads.length - 1) return
+        if (index < 0 || index > this.#spreads.length - 1) return false
         if (index === this.#index) {
-            this.#render(side)
-            return
+            const changed = side && side !== this.#side
+            this.#side = side ?? this.#side
+            this.#render()
+            if (changed) this.#reportLocation(reason)
+            return Boolean(changed)
         }
         this.#index = index
         const spread = this.#spreads[index]
@@ -293,6 +330,7 @@ export class FixedLayout extends HTMLElement {
             await this.#showSpread({ left, right, side })
         }
         this.#reportLocation(reason)
+        return true
     }
     async select(target) {
         await this.goTo(target)
@@ -308,11 +346,47 @@ export class FixedLayout extends HTMLElement {
     }
     async next() {
         const s = this.rtl ? this.#goLeft() : this.#goRight()
-        if (!s) return this.goToSpread(this.#index + 1, this.rtl ? 'right' : 'left', 'page')
+        if (s) return true
+        return this.goToSpread(
+            this.#index + 1, this.rtl ? 'right' : 'left', 'page')
     }
     async prev() {
         const s = this.rtl ? this.#goRight() : this.#goLeft()
-        if (!s) return this.goToSpread(this.#index - 1, this.rtl ? 'left' : 'right', 'page')
+        if (s) return true
+        return this.goToSpread(
+            this.#index - 1, this.rtl ? 'left' : 'right', 'page')
+    }
+    async moveBy(distance, smooth = true) {
+        const start = this.scrollTop
+        const limit = Math.max(0, this.scrollHeight - this.clientHeight)
+        const target = Math.max(0, Math.min(limit, start + distance))
+        if (Math.abs(target - start) < 0.5) return false
+        if (!smooth) {
+            this.scrollTo({ top: target })
+        } else {
+            await new Promise(resolve => {
+                let timer
+                const complete = () => {
+                    clearTimeout(timer)
+                    this.removeEventListener('scrollend', complete)
+                    resolve()
+                }
+                this.addEventListener('scrollend', complete, { once: true })
+                timer = setTimeout(complete, 350)
+                this.scrollTo({ top: target, behavior: 'smooth' })
+            })
+        }
+        this.#reportLocation('scroll')
+        return true
+    }
+    setViewport(x, y, end = false) {
+        const scale = this.#scale
+        const left = x * scale
+        const top = end
+            ? Math.max(0, this.scrollHeight - this.clientHeight)
+            : y * scale
+        this.scrollTo({ left, top })
+        this.#reportLocation('navigation')
     }
     getContents() {
         return Array.from(this.#root.querySelectorAll('iframe'), frame => ({
@@ -321,6 +395,7 @@ export class FixedLayout extends HTMLElement {
         }))
     }
     destroy() {
+        if (this.#scrollTimer) clearTimeout(this.#scrollTimer)
         this.#observer.unobserve(this)
     }
 }

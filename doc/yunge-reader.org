@@ -101,11 +101,14 @@ publication handle and the logical view's lifetime remain independent of this
 surface state, so hiding or recreating a child cannot imply that its document
 resource or saved logical position has disappeared.
 
-EPUB locations store a bounded CFI, canonical spine href, and optional finite
-whole-book fraction as printable Reader place data.  Ordinary renderer
-relocations update only the primary view's durable place.  An additional view
-can move independently and becomes a durable-place owner only through
-=yunge-reader-make-primary=.
+Live EPUB locators contain a bounded CFI, canonical spine href, and optional
+finite whole-book fraction.  A fixed-layout locator may additionally contain
+a paired, unscaled =x/y= viewport.  Printable Reader places retain the stable
+CFI and href plus fixed viewport coordinates; a reflow fraction remains live
+progress feedback rather than masquerading as an =x= coordinate.  Ordinary
+renderer relocations update only the primary view's durable place.  An
+additional view can move independently and becomes a durable-place owner only
+through =yunge-reader-make-primary=.
 
 The renderer collapses each visible-range CFI to its start before emitting a
 durable locator.  The endpoint depends on window width, font metrics, and
@@ -113,12 +116,13 @@ reading style, so retaining the whole range would make an otherwise stable
 place change during reflow.  Previously saved range CFIs remain valid restore
 inputs.
 
-=j/k= move by one computed content line without screen animation.  =J= and
-=C-d= move to the next reflowed screen; =K= and =C-u= move to the previous
-screen.  Both movement scales cross linear spine-item boundaries.  Page Down
-and Page Up provide the same portable screen commands, including after a mouse
-click gives the child WebView native focus.  The same focused path forwards
-=+=, =-=, ===, and =y= through the active Emacs keymaps.
+In a reflowable view, =j/k= move by one computed content line without screen
+animation.  =C-d/C-u= and Page Down or Page Up move by reflowed screens, while
+=J/K= use semantic page commands that have the same reflowed presentation.
+All three scales cross linear spine-item boundaries.  The portable commands
+continue to work after a mouse click gives the child WebView native focus.
+The same focused path forwards =+=, =-=, ===, and =y= through the active Emacs
+keymaps.
 =GotFocus= selects the child surface's owning Emacs window.  Selecting another
 Emacs window asks any focused child to return keyboard focus to its parent, so
 ordinary Emacs bindings resume without an extra click.
@@ -131,7 +135,7 @@ same persistent per-view outline UI used by fixed-layout documents.
 
 EPUB navigation has one active operation and one latest pending intent.  This
 keeps a held key moving continuously, while releasing it leaves at most the
-latest requested screen instead of a long queue of stale repeat events.  A
+latest requested movement instead of a long queue of stale repeat events.  A
 new direction or an explicit outline target replaces older pending movement.
 Line movement uses the current document's computed line height and completes
 without an animation.  Screen movement within a loaded spine item uses
@@ -159,6 +163,14 @@ current effective scale to manual zoom, and === restores the configurable
 from manual zoom and includes the effective renderer percentage after it is
 known.  A resize may update that percentage without replacing the semantic
 fit mode.
+
+Fixed-layout =j/k= move the page viewport by 40 screen pixels, =C-d/C-u= and
+Page Down or Page Up move by half the child height, and =J/K= turn one logical
+publisher page.  Reaching a vertical edge turns a page; moving backward enters
+the preceding page at its bottom.  The view reports its viewport in unscaled
+page coordinates, restores it only after the spine target loads, and projects
+it through the current effective scale.  Manual zoom, fit-mode resize, and
+native-surface recreation therefore retain the same page-relative position.
 
 The desired zoom belongs to the logical view, not its disposable child
 surface.  Hiding and recreating a surface therefore restores the same mode,
