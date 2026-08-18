@@ -3086,9 +3086,11 @@ when non-nil, is a previously resolved start character position."
          (window (posn-window start-position)))
     (unless (windowp window)
       (user-error "The mouse event is outside a PDF window"))
+    (select-window window)
     (with-current-buffer (window-buffer window)
-      (let ((start-location
-             (yunge-reader-pdf--event-page-point start-position)))
+      (when-let* ((start-location
+                   (yunge-reader-pdf--event-page-point
+                    start-position t)))
         (track-mouse
           (yunge-reader-pdf--track-selection-events
            start-location start-position window))))))
