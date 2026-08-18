@@ -75,10 +75,10 @@ LOG-ENVIRONMENT-VARIABLE optionally names a diagnostic log file."
                 (make-process
                  :name (concat label " process")
                  :buffer buffer
-                 :stderr buffer
                  :command (cons program arguments)
                  :coding 'utf-8-unix
                  :connection-type 'pipe
+                 :sentinel #'ignore
                  :noquery t))
           (while (process-live-p process)
             (accept-process-output process 0.1))
