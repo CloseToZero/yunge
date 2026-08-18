@@ -93,11 +93,27 @@
           (plist-get (plist-get response :error) :message)))))))
 
 (ert-deftest yunge-mcp-server-dispatch-consumes-one-client-argument ()
-  (let ((server-eval-args-left
-         '("{\"operation\":\"list-tools\"}" "untouched"))
+  (let* ((request
+          (encode-coding-string
+           (concat
+            "{\"operation\":\"call-tool\","
+            "\"name\":\"echo\","
+            "\"arguments\":{\"value\":\"中文检索\"}}")
+           'utf-8))
+         (server-eval-args-left
+          (list (base64-encode-string request t) "untouched"))
         (yunge-mcp--tools (make-hash-table :test #'equal)))
     (cl-letf (((symbol-function 'yunge-mcp--load-tools) #'ignore))
-      (should (stringp (yunge-mcp-server-dispatch)))
+      (yunge-mcp-register-tool
+       "echo" "Echo" '(:type "object")
+       (lambda (arguments)
+         (list :value (plist-get arguments :value))))
+      (let ((response
+             (yunge-mcp-test--decode
+              (yunge-mcp-server-dispatch))))
+        (should
+         (equal (plist-get (plist-get response :value) :value)
+                "中文检索")))
       (should (equal server-eval-args-left '("untouched"))))))
 
 (ert-deftest yunge-mcp-registers-json-without-losing-other-settings ()

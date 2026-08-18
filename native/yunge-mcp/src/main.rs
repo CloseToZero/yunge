@@ -73,6 +73,14 @@ impl std::fmt::Display for BridgeError {
 impl Error for BridgeError {}
 
 impl EmacsBridge {
+    fn request_argument(
+        request: &BridgeRequest<'_>,
+    ) -> Result<String, BridgeError> {
+        let request_json = serde_json::to_vec(request)
+            .map_err(|error| BridgeError(error.to_string()))?;
+        Ok(STANDARD.encode(request_json))
+    }
+
     fn runtime_file() -> Option<PathBuf> {
         if let Some(file) = env::var_os("YUNGE_MCP_RUNTIME") {
             return Some(file.into());
@@ -143,14 +151,13 @@ impl EmacsBridge {
         &self,
         request: &BridgeRequest<'_>,
     ) -> Result<Value, BridgeError> {
-        let request_json = serde_json::to_string(request)
-            .map_err(|error| BridgeError(error.to_string()))?;
+        let request_argument = Self::request_argument(request)?;
         let mut command = Command::new(&self.program);
         command.args(&self.connection_arguments);
         let output = command
             .arg("--eval")
             .arg(DISPATCH_FORM)
-            .arg(request_json)
+            .arg(request_argument)
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -290,4 +297,27 @@ async fn main() -> Result<(), Box<dyn Error>> {
         .waiting()
         .await?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn request_arguments_are_ascii_and_preserve_unicode() {
+        let mut arguments = Map::new();
+        arguments.insert("query".into(), Value::String("中文检索".into()));
+        let request = BridgeRequest {
+            operation: "call-tool",
+            name: Some("fangcun_search_nodes"),
+            arguments: Some(&arguments),
+        };
+
+        let encoded = EmacsBridge::request_argument(&request).unwrap();
+        assert!(encoded.is_ascii());
+
+        let decoded = STANDARD.decode(encoded).unwrap();
+        let value: Value = serde_json::from_slice(&decoded).unwrap();
+        assert_eq!(value["arguments"]["query"], "中文检索");
+    }
 }

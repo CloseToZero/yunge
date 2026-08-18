@@ -108,10 +108,13 @@ receives its arguments as a plist.  ANNOTATIONS contains MCP tool hints."
      t)))
 
 (defun yunge-mcp-server-dispatch ()
-  "Dispatch the JSON argument supplied by an Emacs client process."
+  "Dispatch the Base64 request supplied by an Emacs client process."
   (unless server-eval-args-left
     (user-error "The Yunge MCP request argument is missing"))
-  (yunge-mcp-dispatch (pop server-eval-args-left)))
+  (yunge-mcp-dispatch
+   (decode-coding-string
+    (base64-decode-string (pop server-eval-args-left))
+    'utf-8)))
 
 (provide 'yunge-mcp)
 
