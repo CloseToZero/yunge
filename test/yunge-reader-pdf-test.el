@@ -125,7 +125,8 @@
 
 (ert-deftest yunge-reader-pdf-scrolls-half-windows-by-pixels ()
   (let (scrolls updates
-        (yunge-reader--search-navigation-intent 'next))
+        (yunge-reader-search-query "needle")
+        (yunge-reader--search-navigation-intent 'forward))
     (cl-letf (((symbol-function 'window-text-height)
                (lambda (&rest _arguments) 601))
               ((symbol-function 'selected-window)
@@ -148,7 +149,8 @@
      (equal (nreverse scrolls)
             '((up 300) (up 300) (down 300))))
     (should (equal updates '(window window)))
-    (should-not yunge-reader--search-navigation-intent)))
+    (should-not yunge-reader--search-navigation-intent)
+    (should yunge-reader--search-detached)))
 
 (ert-deftest yunge-reader-pdf-scrolls-screen-lines-by-pixels ()
   (let (scrolls updates)
@@ -1047,9 +1049,13 @@
       (yunge-reader-pdf--request
        document 'search
        (list
-        :query "Needle"
-        :case-sensitive t
-        :cursor (make-yunge-reader-position :unit 3 :offset 4)
+         :query "Needle"
+         :case-sensitive t
+         :direction 'backward
+         :origin nil
+         :cursor
+         (make-yunge-reader-search-cursor
+          :value '((page . 3) (offset . 4)))
         :match-limit 25
         :page-limit 6)
        #'ignore)
@@ -1069,6 +1075,7 @@
     (let ((search (nth 4 calls)))
       (should (equal (car search) "search"))
       (should (eq (cdr (assq 'case-sensitive (cdr search))) t))
+      (should (equal (cdr (assq 'direction (cdr search))) "backward"))
       (should (equal (cdr (assq 'cursor (cdr search)))
                      '((page . 3) (offset . 4))))
       (should (= (cdr (assq 'match-limit (cdr search))) 25))
@@ -1098,9 +1105,39 @@
                 (yunge-reader-search-result-end result))
                9))
     (should (equal (yunge-reader-search-result-text result) "Needle"))
-    (should (= (yunge-reader-position-unit
-                (yunge-reader-search-batch-cursor batch))
-               3))))
+    (should
+     (equal
+      (yunge-reader-search-cursor-value
+       (yunge-reader-search-batch-cursor batch))
+      '((page . 3) (offset . 0))))))
+
+(ert-deftest yunge-reader-pdf-resolves-search-origin-to-text-offset ()
+  (with-temp-buffer
+    (setq yunge-reader-pdf--text-cache
+          (make-hash-table :test #'eql))
+    (puthash
+     2
+     '((characters
+        . (((index . 4)
+            (text . "A")
+            (bounds . ((left . 30.0) (bottom . 90.0)
+                       (right . 40.0) (top . 100.0))))
+           ((index . 9)
+            (text . "B")
+            (bounds . ((left . 300.0) (bottom . 400.0)
+                       (right . 310.0) (top . 410.0)))))))
+     yunge-reader-pdf--text-cache)
+    (should
+     (equal
+      (yunge-reader-pdf--search-origin-value
+       (make-yunge-reader-position :unit 2 :x 35.0 :y 95.0))
+      '((page . 2) (offset . 4))))))
+
+(ert-deftest yunge-reader-pdf-rejects-invalid-search-cursors ()
+  (let ((cursor
+         (make-yunge-reader-search-cursor
+          :value '((page . 2) (offset . "four")))))
+    (should-not (yunge-reader-pdf--search-cursor-value cursor))))
 
 (ert-deftest yunge-reader-pdf-converts-native-outlines ()
   (let* ((document
@@ -2612,14 +2649,18 @@
       (cl-letf (((symbol-function 'yunge-reader-pdf--page-count)
                  (lambda () 1))
                 ((symbol-function 'yunge-reader-pdf--set-page)
-                 (lambda (page) (push page pages)))
+                 (lambda (page)
+                   (should yunge-reader-pdf--programmatic-scroll)
+                   (push page pages)))
                 ((symbol-function 'yunge-reader-pdf--request-text)
                  (lambda (page) (push page requests)))
                 ((symbol-function 'yunge-reader-pdf--paint-pages)
                  (lambda (_pages &optional _window) nil))
                 ((symbol-function
                   'yunge-reader-pdf--scroll-to-search-result)
-                 (lambda () (cl-incf scrolls)))
+                 (lambda ()
+                   (should yunge-reader-pdf--programmatic-scroll)
+                   (cl-incf scrolls)))
                 ((symbol-function 'yunge-reader-pdf--force-redisplay)
                  (lambda (&optional _window) (cl-incf redisplays))))
         (yunge-reader-pdf--search-result-changed)

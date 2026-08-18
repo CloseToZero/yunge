@@ -369,8 +369,9 @@ const checkedSearchCursor = value => {
     const href = checkedLocatorText(value.href, 'search href')
     const offset = value.offset
     if (!checkedOutlineHref(href) || href.includes('#')
-        || !Number.isSafeInteger(offset) || offset < 0
-        || offset > MAX_SEARCH_CURSOR_OFFSET) {
+        || (offset !== null
+            && (!Number.isSafeInteger(offset) || offset < 0
+                || offset > MAX_SEARCH_CURSOR_OFFSET))) {
         searchError(
             'invalid-search-cursor',
             'EPUB search cursor is invalid')
@@ -381,14 +382,23 @@ const checkedSearchCursor = value => {
 const checkedSearchRequest = value => {
     if (!value || typeof value !== 'object' || Array.isArray(value)
         || Object.keys(value).sort().join()
-            !== 'case-sensitive,cursor,match-limit,query,request,'
-                + 'section-limit,view') {
+            !== 'case-sensitive,cursor,direction,match-limit,origin,'
+                + 'query,request,section-limit,view') {
         searchError('search-unavailable', 'EPUB search request is invalid')
     }
     const viewID = checkedView(value.view)
     const request = value.request
     const query = value.query
     const caseSensitive = value['case-sensitive']
+    const direction = value.direction
+    let origin
+    try {
+        origin = value.origin === null ? null : checkedLocator(value.origin)
+    } catch (_) {
+        searchError(
+            'invalid-search-cursor',
+            'EPUB search origin is invalid')
+    }
     const cursor = checkedSearchCursor(value.cursor)
     const matchLimit = value['match-limit']
     const sectionLimit = value['section-limit']
@@ -397,6 +407,8 @@ const checkedSearchRequest = value => {
         || Array.from(query).length > MAX_SEARCH_QUERY_CHARACTERS
         || /[\p{Control}]/u.test(query)
         || typeof caseSensitive !== 'boolean'
+        || !['forward', 'backward'].includes(direction)
+        || (origin !== null && cursor !== null)
         || !Number.isSafeInteger(matchLimit) || matchLimit < 1
         || matchLimit > MAX_SEARCH_MATCH_LIMIT
         || !Number.isSafeInteger(sectionLimit) || sectionLimit < 1
@@ -404,8 +416,8 @@ const checkedSearchRequest = value => {
         searchError('search-unavailable', 'EPUB search request is invalid')
     }
     return {
-        request, viewID, query, caseSensitive, cursor, matchLimit,
-        sectionLimit,
+        request, viewID, query, caseSensitive, direction, origin,
+        cursor, matchLimit, sectionLimit,
     }
 }
 
@@ -944,6 +956,42 @@ const nextSearchSection = (sections, start) => {
     return null
 }
 
+const previousSearchSection = (sections, start) => {
+    for (let index = start; index >= 0; index--) {
+        const section = sections[index]
+        if (typeof section?.id === 'string'
+            && typeof section.createDocument === 'function') {
+            return { index, section }
+        }
+    }
+    return null
+}
+
+const directionalSearchSection = (sections, direction, start) =>
+    direction === 'backward'
+        ? previousSearchSection(sections, start)
+        : nextSearchSection(sections, start)
+
+const searchOriginRange = (session, origin, index, doc) => {
+    if (!origin) return null
+    const resolved = session.view.resolveCFI(origin.cfi)
+    if (!Number.isInteger(resolved?.index) || resolved.index !== index
+        || session.book.sections[index]?.id !== origin.href
+        || typeof resolved.anchor !== 'function') {
+        searchError(
+            'invalid-search-cursor',
+            'EPUB search origin is invalid')
+    }
+    const range = resolved.anchor(doc)
+    if (!range?.startContainer
+        || !Number.isSafeInteger(range.startOffset)) {
+        searchError(
+            'invalid-search-cursor',
+            'EPUB search origin is invalid')
+    }
+    return range
+}
+
 const searchBatch = (matches, cursor, done) => {
     const result = { matches, cursor, done }
     if (done) delete result.cursor
@@ -957,7 +1005,8 @@ const searchBatchFits = result => encoder.encode(JSON.stringify({
 const searchRequest = async request => {
     try {
         const {
-            viewID, query, caseSensitive, cursor, matchLimit, sectionLimit,
+            viewID, query, caseSensitive, direction, origin, cursor,
+            matchLimit, sectionLimit,
         } = checkedSearchRequest(request)
         if (!current || current.viewID !== viewID) {
             searchError('search-unavailable', 'EPUB view is not open')
@@ -977,9 +1026,23 @@ const searchRequest = async request => {
             }
             entry = { index, section: sections[index] }
             offset = cursor.offset
+        } else if (origin) {
+            const resolved = session.view.resolveCFI(origin.cfi)
+            const index = resolved?.index
+            if (!Number.isInteger(index)
+                || sections[index]?.id !== origin.href
+                || typeof sections[index]?.createDocument !== 'function') {
+                searchError(
+                    'invalid-search-cursor',
+                    'EPUB search origin is invalid')
+            }
+            entry = { index, section: sections[index] }
+            offset = null
         } else {
-            entry = nextSearchSection(sections, 0)
-            offset = 0
+            const start = direction === 'backward'
+                ? sections.length - 1 : 0
+            entry = directionalSearchSection(sections, direction, start)
+            offset = null
         }
         const matcher = searchMatcher(textWalker, {
             defaultLocale: session.book.metadata?.language,
@@ -997,9 +1060,27 @@ const searchRequest = async request => {
                     'search-unavailable',
                     'EPUB search was superseded')
             }
-            let ordinal = 0
-            for (const { range, excerpt } of matcher(doc, query)) {
-                if (ordinal++ < offset) continue
+            const originRange = origin && section.id === origin.href
+                ? searchOriginRange(session, origin, index, doc) : null
+            const found = Array.from(matcher(doc, query))
+            if (offset !== null && offset > found.length) {
+                searchError(
+                    'invalid-search-cursor',
+                    'EPUB search cursor is invalid')
+            }
+            const indexed = found.map((item, ordinal) => ({ item, ordinal }))
+            const eligible = indexed.filter(({ item: { range }, ordinal }) => {
+                if (offset !== null) {
+                    return direction === 'backward'
+                        ? ordinal < offset : ordinal >= offset
+                }
+                if (!originRange) return true
+                const relation = originRange.comparePoint(
+                    range.startContainer, range.startOffset)
+                return direction === 'backward' ? relation < 0 : relation > 0
+            })
+            if (direction === 'backward') eligible.reverse()
+            for (const { item: { range, excerpt }, ordinal } of eligible) {
                 const rangeCFI = session.view.getCFI(index, range)
                 const selection = checkedSelection({
                     href: section.id,
@@ -1014,9 +1095,9 @@ const searchRequest = async request => {
                 }
                 const nextCursor = {
                     href: section.id,
-                    offset: ordinal,
+                    offset: direction === 'backward' ? ordinal : ordinal + 1,
                 }
-                if (ordinal > MAX_SEARCH_CURSOR_OFFSET) {
+                if (nextCursor.offset > MAX_SEARCH_CURSOR_OFFSET) {
                     searchError(
                         'search-unavailable',
                         'EPUB search cursor exceeds its limit')
@@ -1033,7 +1114,11 @@ const searchRequest = async request => {
                         ok: true,
                         result: searchBatch(
                             matches,
-                            { href: section.id, offset: ordinal - 1 },
+                            {
+                                href: section.id,
+                                offset: direction === 'backward'
+                                    ? ordinal + 1 : ordinal,
+                            },
                             false),
                     }
                 }
@@ -1046,20 +1131,17 @@ const searchRequest = async request => {
                     }
                 }
             }
-            if (offset > ordinal) {
-                searchError(
-                    'invalid-search-cursor',
-                    'EPUB search cursor is invalid')
-            }
-            offset = 0
+            offset = null
             sectionsSearched++
-            entry = nextSearchSection(sections, index + 1)
+            entry = directionalSearchSection(
+                sections, direction,
+                direction === 'backward' ? index - 1 : index + 1)
         }
         return {
             ok: true,
             result: searchBatch(
                 matches,
-                entry ? { href: entry.section.id, offset: 0 } : null,
+                entry ? { href: entry.section.id, offset: null } : null,
                 !entry),
         }
     } catch (error) {

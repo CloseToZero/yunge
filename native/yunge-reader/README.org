@@ -284,7 +284,8 @@ for each match.  The asynchronous response keeps the original request ID.
 #+begin_src json
 {"id":5,"op":"view-search",
  "params":{"view":1,"query":"Chapter","case-sensitive":false,
-           "cursor":null,"match-limit":64,"section-limit":8}}
+           "direction":"forward","origin":null,"cursor":null,
+           "match-limit":64,"section-limit":8}}
 {"id":5,"ok":true,
  "result":{"matches":[
    {"href":"OPS/chapter.xhtml",
@@ -296,9 +297,12 @@ for each match.  The asynchronous response keeps the original request ID.
 #+end_src
 
 One request returns at most 200 matches and searches at most 64 searchable
-spine items.  Queries contain 1--256 Unicode characters.  The cursor href is
-canonical and its numeric offset is a transient match ordinal within that
-spine, not a durable EPUB position.  A completed batch omits =cursor=.
+spine items.  Queries contain 1--256 Unicode characters.  =direction= is
+=forward= or =backward=.  An optional durable =origin= uses href and CFI;
+=origin= and =cursor= are mutually exclusive.  The cursor href is canonical,
+and its nullable offset is a transient directional match boundary within that
+spine, not a durable EPUB position.  Results are nearest-first in the requested
+direction.  A completed batch omits =cursor=.
 The renderer caps its response at 384 KiB, while the native IPC boundary
 accepts at most 512 KiB.  Rust independently validates every field, CFI range,
 result count, cursor advance, error code, and byte bound.
@@ -330,9 +334,10 @@ Search paint is independent of the Chromium selection: ESC and C-g clear both
 transient layers while Reader keeps the query and discovered results, and n/N
 shows the current search range again before moving through those results.
 While discovery is outstanding, Reader retains one latest navigation intent
-instead of queuing repeat keys.  A direct reading movement or dismissal drops
-that intent; one in-flight bounded batch may still be cached, but cannot start
-another batch or reveal a result.
+instead of queuing repeat keys.  A direct reading movement detaches the old
+run; its one in-flight batch cannot reveal a result, and the next n/N starts
+from the new stable reading location.  A dismissal cancels only the delayed
+reveal and hides transient paint, retaining the current search run.
 
 Emacs maps the same href and CFI endpoints into Reader's logical selection.
 Focused =y= is a normalized renderer key event that reaches the owning
@@ -497,27 +502,31 @@ At singular absolute-axis angles such as 45 degrees, font ascent and descent
 constrain the otherwise ambiguous width and height.  Generated separators and
 unrecoverable geometry keep =quad= null without removing their text index.
 
-=search= performs a forward Unicode literal search.  It accepts =document=,
-nonempty =query=, optional =case-sensitive=, an optional stable =cursor=, and
-bounded =match-limit= and =page-limit= values.  The default limits are 64
-matches and eight pages; their maximums are 200 and 64.  A cursor is the first
-PDFium character index eligible to start a match.
+=search= performs a directional Unicode literal search.  It accepts
+=document=, nonempty =query=, optional =case-sensitive=, required =direction=,
+an optional stable =origin=, an optional transient =cursor=, and bounded
+=match-limit= and =page-limit= values.  Origin and cursor are mutually
+exclusive.  The default limits are 64 matches and eight pages; their maximums
+are 200 and 64.
 
 Each result contains inclusive stable =start= and =end= positions, exact
-matched =text=, and bounded =before= and =after= context.  =cursor= identifies
-the first unscanned position.  It is null exactly when =done= is true.  A
-client can therefore interleave search batches with rendering and stop
-requesting batches when a query becomes obsolete.
+matched =text=, and bounded =before= and =after= context.  Results are ordered
+nearest-first in the requested direction.  A cursor has a zero-based page and
+a nullable PDFium character boundary; null means the directional page edge.
+It is null exactly when =done= is true.  A client can therefore interleave
+search batches with rendering and stop when a run becomes obsolete.
 
 #+begin_src json
 {"id":6,"op":"search",
  "params":{"document":1,"query":"Introduction",
-           "case-sensitive":false,"match-limit":64,"page-limit":8}}
+           "case-sensitive":false,"direction":"forward",
+           "origin":{"page":0,"offset":2},
+           "match-limit":64,"page-limit":8}}
 {"id":6,"ok":true,
  "result":{"matches":[{
    "start":{"page":0,"offset":3},"end":{"page":0,"offset":14},
    "text":"Introduction","before":"1  ","after":" Overview"}],
-   "cursor":{"page":8,"offset":0},"done":false}}
+   "cursor":{"page":8,"offset":null},"done":false}}
 #+end_src
 
 Queries longer than 256 Unicode characters are rejected.  Search does not

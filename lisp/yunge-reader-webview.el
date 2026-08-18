@@ -468,8 +468,10 @@ returned batch, and COMPLETE receives the validated native result."
      (and
       (yunge-reader-webview--valid-target-href-p href)
       (not (string-match-p "#" href))
-      (natnump offset)
-      (<= offset yunge-reader-webview--max-search-cursor-offset)))))
+       (or (null offset)
+           (and (natnump offset)
+                (<= offset
+                    yunge-reader-webview--max-search-cursor-offset)))))))
 
 (defun yunge-reader-webview--valid-search-match-p (match)
   "Return non-nil when MATCH is one bounded native EPUB search match."
@@ -542,7 +544,8 @@ returned batch, and COMPLETE receives the validated native result."
            (format "Malformed EPUB search result: %S" result))))))
 
 (defun yunge-reader-webview--request-search
-    (view query case-sensitive cursor match-limit section-limit complete)
+    (view query case-sensitive direction origin cursor
+          match-limit section-limit complete)
   "Request one bounded native EPUB search batch from VIEW."
   (unless
       (and
@@ -553,9 +556,16 @@ returned batch, and COMPLETE receives the validated native result."
     (error "Invalid EPUB search query: %S" query))
   (unless (memq case-sensitive '(nil t))
     (error "Invalid EPUB search case flag: %S" case-sensitive))
+  (unless (memq direction '(forward backward))
+    (error "Invalid EPUB search direction: %S" direction))
+  (unless (or (null origin)
+              (yunge-reader-webview--valid-location-p origin))
+    (error "Invalid EPUB search origin: %S" origin))
   (unless (or (null cursor)
               (yunge-reader-webview--valid-search-cursor-p cursor))
     (error "Invalid EPUB search cursor: %S" cursor))
+  (when (and origin cursor)
+    (error "EPUB search origin and cursor are mutually exclusive"))
   (unless
       (and
        (integerp match-limit)
@@ -575,6 +585,8 @@ returned batch, and COMPLETE receives the validated native result."
    `((view . ,(yunge-reader-webview--view-id view))
      (query . ,query)
      (case-sensitive . ,(if case-sensitive t :false))
+     (direction . ,(symbol-name direction))
+     (origin . ,(copy-tree origin))
      (cursor . ,(copy-tree cursor))
      (match-limit . ,match-limit)
      (section-limit . ,section-limit))

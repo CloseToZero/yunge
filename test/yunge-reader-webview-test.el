@@ -315,7 +315,7 @@
      (yunge-reader-webview-test--ready-message))
     (let ((view (yunge-reader-webview--make-view :id 9)))
       (yunge-reader-webview--request-search
-       view "Chapter" t
+       view "Chapter" t 'forward nil
        '((href . "OPS/chapter.xhtml") (offset . 3))
        32 8 #'ignore)
       (let* ((request
@@ -325,18 +325,27 @@
         (should (= (alist-get 'view params) 9))
         (should (equal (alist-get 'query params) "Chapter"))
         (should (eq (alist-get 'case-sensitive params) t))
+        (should (equal (alist-get 'direction params) "forward"))
         (should (= (alist-get 'match-limit params) 32))
         (should (= (alist-get 'section-limit params) 8))
         (should (= (alist-get 'offset
                               (alist-get 'cursor params))
                    3)))
       (yunge-reader-webview--request-search
-       view "chapter" nil nil 16 4 #'ignore)
+       view "chapter" nil 'backward
+       '((cfi . "epubcfi(/6/4!/4/2/1:7)")
+         (href . "OPS/chapter.xhtml"))
+       nil 16 4 #'ignore)
       (let* ((request
               (json-parse-string (car sent) :object-type 'alist))
              (params (alist-get 'params request)))
         (should (equal (alist-get 'query params) "chapter"))
-        (should (eq (alist-get 'case-sensitive params) :false))))))
+        (should (eq (alist-get 'case-sensitive params) :false))
+        (should (equal (alist-get 'direction params) "backward"))
+        (should
+         (equal
+          (alist-get 'cfi (alist-get 'origin params))
+          "epubcfi(/6/4!/4/2/1:7)"))))))
 
 (ert-deftest yunge-reader-webview-rejects-malformed-search-results ()
   (let (result error-data)

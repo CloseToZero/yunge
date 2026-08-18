@@ -138,6 +138,9 @@
 (defvar-local yunge-reader-pdf--pending-resize nil
   "Latest PDF viewport resize waiting for redisplay to settle.")
 
+(defvar-local yunge-reader-pdf--programmatic-scroll nil
+  "Non-nil while Reader itself is changing the PDF viewport.")
+
 (defvar-local yunge-reader-pdf--text-cache nil
   "Page-indexed cache of canonical PDF text geometry.")
 
@@ -315,18 +318,61 @@
        :before (alist-get 'before value)
        :after (alist-get 'after value)))))
 
+(defun yunge-reader-pdf--native-search-position-p (value)
+  "Return non-nil when VALUE is a native PDF search position."
+  (and (proper-list-p value)
+       (= (length value) 2)
+       (cl-every (lambda (entry)
+                   (memq (car-safe entry) '(page offset)))
+                 value)
+       (assq 'page value)
+       (assq 'offset value)
+       (natnump (alist-get 'page value))
+       (let ((offset (alist-get 'offset value)))
+         (or (null offset) (natnump offset)))))
+
 (defun yunge-reader-pdf--native-search-batch (value)
   "Return a generic search batch represented by native VALUE."
   (let ((results
          (mapcar #'yunge-reader-pdf--native-search-result
                  (alist-get 'matches value)))
         (cursor-value (alist-get 'cursor value)))
-    (when (cl-every #'identity results)
+    (when (and (cl-every #'identity results)
+               (or (null cursor-value)
+                   (yunge-reader-pdf--native-search-position-p
+                    cursor-value)))
       (make-yunge-reader-search-batch
        :results results
        :cursor (and cursor-value
-                    (yunge-reader-pdf--native-position cursor-value))
+                    (make-yunge-reader-search-cursor
+                     :value (copy-tree cursor-value)))
        :done (eq (alist-get 'done value) t)))))
+
+(defun yunge-reader-pdf--search-cursor-value (cursor)
+  "Return native PDF value from generic search CURSOR, or nil."
+  (when cursor
+    (and (yunge-reader-search-cursor-p cursor)
+         (let ((value (yunge-reader-search-cursor-value cursor)))
+           (and (yunge-reader-pdf--native-search-position-p value)
+                (copy-tree value))))))
+
+(defun yunge-reader-pdf--search-origin-value (origin)
+  "Return native PDF value from stable Reader ORIGIN, or nil."
+  (when origin
+    (and (yunge-reader-position-p origin)
+         (let* ((page (yunge-reader-position-unit origin))
+                (offset
+                 (or (yunge-reader-position-offset origin)
+                     (when (and (numberp (yunge-reader-position-x origin))
+                                (numberp (yunge-reader-position-y origin)))
+                       (yunge-reader-pdf--nearest-text-offset
+                        page
+                        (yunge-reader-position-x origin)
+                        (yunge-reader-position-y origin))))))
+           (and (natnump (yunge-reader-position-unit origin))
+                (or (null offset) (natnump offset))
+                `((page . ,page)
+                  (offset . ,offset)))))))
 
 (defun yunge-reader-pdf--native-selection-batch (value)
   "Return a generic selection batch represented by native VALUE."
@@ -884,7 +930,21 @@ requests for the same document share one native open.  VIEW owns any prompt."
                     (plist-get arguments :cache-key)))
         complete))
       ('search
-       (let ((cursor (plist-get arguments :cursor)))
+       (let* ((direction (plist-get arguments :direction))
+              (cursor-value (plist-get arguments :cursor))
+              (cursor
+               (yunge-reader-pdf--search-cursor-value cursor-value))
+              (origin-value (plist-get arguments :origin))
+              (origin
+               (yunge-reader-pdf--search-origin-value origin-value)))
+         (when (and cursor-value (null cursor))
+           (error "Invalid generic PDF search cursor: %S" cursor-value))
+         (when (and origin-value (null origin))
+           (error "Invalid stable PDF search origin: %S" origin-value))
+         (unless (memq direction '(forward backward))
+           (error "Invalid PDF search direction: %S" direction))
+         (when (and origin cursor)
+           (error "PDF search origin and cursor are mutually exclusive"))
          (yunge-reader-native-request-in-session
           session
           "search"
@@ -894,16 +954,13 @@ requests for the same document share one native open.  VIEW owns any prompt."
             (cons 'query (plist-get arguments :query))
             (cons 'case-sensitive
                   (if (plist-get arguments :case-sensitive) t :false))
+            (cons 'direction (symbol-name direction))
             (cons 'match-limit (plist-get arguments :match-limit))
             (cons 'page-limit (plist-get arguments :page-limit)))
+           (when origin
+             (list (cons 'origin origin)))
            (when cursor
-             (list
-              (cons
-               'cursor
-               (list
-                (cons 'page (yunge-reader-position-unit cursor))
-                (cons 'offset
-                      (yunge-reader-position-offset cursor)))))))
+             (list (cons 'cursor cursor))))
           (lambda (result native-error)
             (funcall complete
                      (and result
@@ -1099,6 +1156,23 @@ When SUPPRESS-SCALE is non-nil, do not update the shared effective scale."
                 position 'yunge-reader-pdf-display-width)))
     (and (natnump width) (> width 0) width)))
 
+(defun yunge-reader-pdf--nearest-text-offset (page x y)
+  "Return PAGE character offset nearest canonical X and Y, or nil."
+  (when-let* ((text-layer
+               (and yunge-reader-pdf--text-cache
+                    (gethash page yunge-reader-pdf--text-cache))))
+    (let (best-offset best-distance)
+      (dolist (character (alist-get 'characters text-layer))
+        (when (yunge-reader-pdf--selectable-character-p character)
+          (when-let* ((distance
+                       (yunge-reader-pdf--character-distance
+                        x y character)))
+            (when (or (null best-distance)
+                      (< distance best-distance))
+              (setq best-offset (alist-get 'index character)
+                    best-distance distance)))))
+      best-offset)))
+
 (defun yunge-reader-pdf--location (_document window)
   "Return the stable PDF position visible at the top left of WINDOW."
   (when (and (window-live-p window)
@@ -1128,12 +1202,14 @@ When SUPPRESS-SCALE is non-nil, do not update the shared effective scale."
            (horizontal
             (max 0
                  (min pixel-width
-                      (* (window-hscroll window) column-width)))))
+                      (* (window-hscroll window) column-width))))
+           (x (* page-width (/ (float horizontal) pixel-width)))
+           (y (* page-height
+                 (- 1.0 (/ (float vertical) pixel-height)))))
       (make-yunge-reader-position
        :unit page
-       :x (* page-width (/ (float horizontal) pixel-width))
-       :y (* page-height
-             (- 1.0 (/ (float vertical) pixel-height)))))))
+       :x x
+       :y y))))
 
 (defun yunge-reader-pdf--apply-pending-location (window)
   "Apply a pending stable PDF location to live WINDOW."
@@ -1735,7 +1811,8 @@ Use the nearest cached render ENTRY while an exact render is unavailable."
     (let ((page
            (yunge-reader-position-unit
             (yunge-reader-search-result-start
-             yunge-reader-search-result))))
+             yunge-reader-search-result)))
+          (yunge-reader-pdf--programmatic-scroll t))
       (when (and (natnump page)
                  (< page (yunge-reader-pdf--page-count)))
         (yunge-reader-pdf--set-page page)
@@ -3126,12 +3203,14 @@ when non-nil, is a previously resolved start character position."
   "Update PDF virtualization after WINDOW scrolls."
   (when (and (window-live-p window)
              (eq (window-buffer window) (current-buffer)))
-    (yunge-reader--cancel-search-navigation)
+    (unless yunge-reader-pdf--programmatic-scroll
+      (yunge-reader--detach-search-navigation))
     (yunge-reader-pdf--update-visible-pages window)))
 
 (defun yunge-reader-pdf--set-page (page)
   "Display zero-based PDF PAGE."
-  (yunge-reader--cancel-search-navigation)
+  (unless yunge-reader-pdf--programmatic-scroll
+    (yunge-reader--detach-search-navigation))
   (let ((count (yunge-reader-pdf--page-count)))
     (unless (> count 0)
       (user-error "This PDF has no pages"))
@@ -3151,7 +3230,7 @@ when non-nil, is a previously resolved start character position."
 
 (defun yunge-reader-pdf--scroll-half-window (direction count)
   "Scroll in DIRECTION by half a window COUNT times."
-  (yunge-reader--cancel-search-navigation)
+  (yunge-reader--detach-search-navigation)
   (let ((function
          (if (eq direction 'up)
              #'pixel-scroll-precision-scroll-up-page
@@ -3178,7 +3257,7 @@ when non-nil, is a previously resolved start character position."
 
 (defun yunge-reader-pdf--scroll-line (direction count)
   "Scroll in DIRECTION by one screen line COUNT times."
-  (yunge-reader--cancel-search-navigation)
+  (yunge-reader--detach-search-navigation)
   (let ((function
          (if (eq direction 'up)
              #'pixel-scroll-precision-scroll-up-page

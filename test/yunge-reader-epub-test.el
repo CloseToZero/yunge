@@ -379,7 +379,8 @@
 
 (ert-deftest yunge-reader-epub-navigation-cancels-a-delayed-search-jump ()
   (let ((view (yunge-reader-webview--make-view))
-        (yunge-reader--search-navigation-intent 'next)
+        (yunge-reader-search-query "needle")
+        (yunge-reader--search-navigation-intent 'forward)
         navigated)
     (cl-letf
         (((symbol-function 'yunge-reader-webview--current-ready-view)
@@ -389,6 +390,7 @@
             (setq navigated (list actual command complete target)))))
       (yunge-reader-epub--navigate "next-screen"))
     (should-not yunge-reader--search-navigation-intent)
+    (should yunge-reader--search-detached)
     (should (eq (car navigated) view))
     (should (equal (cadr navigated) "next-screen"))))
 
@@ -564,8 +566,8 @@
 (ert-deftest yunge-reader-epub-maps-bounded-search-batches ()
   (let* ((document (yunge-reader-epub-test--document))
          (cursor
-          (make-yunge-reader-position
-           :unit "OPS/chapter.xhtml" :offset 2))
+          (make-yunge-reader-search-cursor
+           :value '((href . "OPS/chapter.xhtml") (offset . 2))))
          (view
           (yunge-reader-webview--make-view
            :id 9 :publication 7))
@@ -576,11 +578,12 @@
       (setq yunge-reader-webview--buffer-view view)
       (cl-letf
           (((symbol-function 'yunge-reader-webview--request-search)
-            (lambda (requested-view query case-sensitive native-cursor
-                                    match-limit section-limit complete)
+            (lambda (requested-view query case-sensitive direction
+                                    origin native-cursor match-limit
+                                    section-limit complete)
               (setq request
-                    (list requested-view query case-sensitive native-cursor
-                          match-limit section-limit))
+                    (list requested-view query case-sensitive direction
+                          origin native-cursor match-limit section-limit))
               (funcall
                complete
                '((matches
@@ -596,8 +599,8 @@
                nil))))
         (yunge-reader-epub--request
          document 'search
-         (list :query "Chapter" :case-sensitive t :cursor cursor
-               :match-limit 32 :page-limit 8)
+         (list :query "Chapter" :case-sensitive t :direction 'forward
+               :origin nil :cursor cursor :match-limit 32 :page-limit 8)
          (lambda (value error)
            (setq result value
                  error-data error)))))
@@ -605,8 +608,8 @@
     (should
      (equal
       request
-      (list view "Chapter" t
-            '((href . "OPS/chapter.xhtml") (offset . 2))
+       (list view "Chapter" t 'forward nil
+             '((href . "OPS/chapter.xhtml") (offset . 2))
             32 8)))
     (let ((match (car (yunge-reader-search-batch-results result))))
       (should (equal (yunge-reader-search-result-text match) "Chapter"))
@@ -618,16 +621,16 @@
          :offset "epubcfi(/6/4!/4/2/1:0)"))))
     (should-not (yunge-reader-search-batch-done result))
     (should
-     (equal
-      (yunge-reader-search-batch-cursor result)
-      (make-yunge-reader-position
-       :unit "OPS/chapter.xhtml" :offset 3)))))
+       (equal
+        (yunge-reader-search-batch-cursor result)
+        (make-yunge-reader-search-cursor
+         :value '((href . "OPS/chapter.xhtml") (offset . 3)))))))
 
 (ert-deftest yunge-reader-epub-rejects-invalid-search-cursors ()
   (let ((document (yunge-reader-epub-test--document))
         (cursor
-         (make-yunge-reader-position
-          :unit "../chapter.xhtml" :offset 0))
+         (make-yunge-reader-search-cursor
+          :value '((href . "../chapter.xhtml") (offset . 0))))
         requested
         error-data)
     (with-temp-buffer
@@ -639,8 +642,8 @@
             (lambda (&rest _arguments) (setq requested t))))
         (yunge-reader-epub--request
          document 'search
-         (list :query "Chapter" :case-sensitive nil :cursor cursor
-               :match-limit 32 :page-limit 8)
+         (list :query "Chapter" :case-sensitive nil :direction 'forward
+               :origin nil :cursor cursor :match-limit 32 :page-limit 8)
          (lambda (_value error) (setq error-data error)))))
     (should error-data)
     (should-not requested)))
@@ -830,11 +833,13 @@
           (yunge-reader-mode)
           (yunge-reader-epub-view-mode 1)
           (setq yunge-reader-webview--buffer-view view
-                yunge-reader--search-navigation-intent 'next)
+                yunge-reader-search-query "needle"
+                yunge-reader--search-navigation-intent 'forward)
           (cl-letf (((symbol-function 'yunge-reader-record-place)
                      #'ignore))
             (yunge-reader-epub--location-changed view t))
-          (should-not yunge-reader--search-navigation-intent))
+          (should-not yunge-reader--search-navigation-intent)
+          (should yunge-reader--search-detached))
       (kill-buffer buffer))))
 
 ;;; yunge-reader-epub-test.el ends here

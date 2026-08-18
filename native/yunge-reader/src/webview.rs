@@ -268,10 +268,20 @@ struct ViewSearchParams {
     view: u64,
     query: String,
     case_sensitive: bool,
+    direction: SearchDirection,
+    #[serde(default)]
+    origin: Option<EpubLocator>,
     #[serde(default)]
     cursor: Option<EpubSearchCursor>,
     match_limit: u32,
     section_limit: u32,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+enum SearchDirection {
+    Forward,
+    Backward,
 }
 
 #[derive(Debug, Deserialize)]
@@ -286,7 +296,8 @@ struct ViewSearchResultParams {
 #[serde(deny_unknown_fields)]
 struct EpubSearchCursor {
     href: String,
-    offset: u32,
+    #[serde(default)]
+    offset: Option<u32>,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Serialize)]
@@ -906,7 +917,9 @@ impl EpubSearchCursor {
         if !valid_epub_href(&self.href, false)
             || self.href.len() > MAX_EPUB_LOCATOR_TEXT_BYTES
             || self.href.chars().any(char::is_control)
-            || self.offset > MAX_EPUB_SEARCH_CURSOR_OFFSET
+            || self
+                .offset
+                .is_some_and(|value| value > MAX_EPUB_SEARCH_CURSOR_OFFSET)
         {
             return Err(ServiceError::new(
                 "invalid-search-cursor",
@@ -952,6 +965,13 @@ impl ViewSearchParams {
         }
         self.cursor =
             self.cursor.map(EpubSearchCursor::validate).transpose()?;
+        self.origin = self.origin.map(EpubLocator::validate).transpose()?;
+        if self.cursor.is_some() && self.origin.is_some() {
+            return Err(ServiceError::new(
+                "invalid-search-cursor",
+                "EPUB search origin and cursor are mutually exclusive",
+            ));
+        }
         Ok(self)
     }
 }
@@ -2316,7 +2336,20 @@ fn renderer_search_response(
             result.cursor.is_none()
         } else if let Some(cursor) = result.cursor.as_ref() {
             params.cursor.as_ref().is_none_or(|old| {
-                cursor.href != old.href || cursor.offset > old.offset
+                if cursor.href != old.href {
+                    return true;
+                }
+                match (params.direction, old.offset, cursor.offset) {
+                    (SearchDirection::Forward, None, Some(_)) => true,
+                    (SearchDirection::Forward, Some(old), Some(new)) => {
+                        new > old
+                    }
+                    (SearchDirection::Backward, None, Some(_)) => true,
+                    (SearchDirection::Backward, Some(old), Some(new)) => {
+                        new < old
+                    }
+                    _ => false,
+                }
             })
         } else {
             false
@@ -3455,6 +3488,8 @@ mod tests {
                 view: 4,
                 query: "Chapter".into(),
                 case_sensitive: false,
+                direction: SearchDirection::Forward,
+                origin: None,
                 cursor: None,
                 match_limit: 2,
                 section_limit: 1,
@@ -3574,9 +3609,11 @@ mod tests {
                 view: 4,
                 query: "Chapter".into(),
                 case_sensitive: true,
+                direction: SearchDirection::Forward,
+                origin: None,
                 cursor: Some(EpubSearchCursor {
                     href: "OPS/chapter.xhtml".into(),
-                    offset: 2,
+                    offset: Some(2),
                 }),
                 match_limit: 32,
                 section_limit: 8,
@@ -3719,6 +3756,24 @@ mod tests {
             character_limit: MAX_EPUB_SELECTION_CHARACTER_LIMIT,
         };
         assert_eq!(valid.validate().unwrap().view, 4);
+        assert!(
+            ViewSearchParams {
+                view: 4,
+                query: "Chapter".into(),
+                case_sensitive: false,
+                direction: SearchDirection::Backward,
+                origin: Some(EpubLocator {
+                    cfi: "epubcfi(/6/4!/4/2/1:7)".into(),
+                    href: "OPS/chapter.xhtml".into(),
+                    fraction: None,
+                }),
+                cursor: None,
+                match_limit: 1,
+                section_limit: 1,
+            }
+            .validate()
+            .is_ok()
+        );
 
         let invalid_limit = ViewSelectionTextParams {
             view: 4,
@@ -3815,9 +3870,11 @@ mod tests {
             view: 4,
             query: "Chapter".into(),
             case_sensitive: false,
+            direction: SearchDirection::Forward,
+            origin: None,
             cursor: Some(EpubSearchCursor {
                 href: "OPS/chapter.xhtml".into(),
-                offset: MAX_EPUB_SEARCH_CURSOR_OFFSET,
+                offset: Some(MAX_EPUB_SEARCH_CURSOR_OFFSET),
             }),
             match_limit: MAX_EPUB_SEARCH_MATCH_LIMIT,
             section_limit: MAX_EPUB_SEARCH_SECTION_LIMIT,
@@ -3829,6 +3886,8 @@ mod tests {
                 view: 4,
                 query: String::new(),
                 case_sensitive: false,
+                direction: SearchDirection::Forward,
+                origin: None,
                 cursor: None,
                 match_limit: 1,
                 section_limit: 1,
@@ -3837,6 +3896,8 @@ mod tests {
                 view: 4,
                 query: "Chapter".into(),
                 case_sensitive: false,
+                direction: SearchDirection::Forward,
+                origin: None,
                 cursor: None,
                 match_limit: 0,
                 section_limit: 1,
@@ -3845,6 +3906,8 @@ mod tests {
                 view: 4,
                 query: "Chapter".into(),
                 case_sensitive: false,
+                direction: SearchDirection::Forward,
+                origin: None,
                 cursor: None,
                 match_limit: 1,
                 section_limit: 0,
@@ -3855,7 +3918,7 @@ mod tests {
         assert!(
             EpubSearchCursor {
                 href: "../chapter.xhtml".into(),
-                offset: 0,
+                offset: Some(0),
             }
             .validate()
             .is_err()
@@ -3868,6 +3931,8 @@ mod tests {
             view: 4,
             query: "Chapter".into(),
             case_sensitive: false,
+            direction: SearchDirection::Forward,
+            origin: None,
             cursor: None,
             match_limit: 2,
             section_limit: 1,
@@ -3956,6 +4021,39 @@ mod tests {
         let unavailable =
             renderer_search_response(13, &params, &unavailable_value);
         assert_eq!(unavailable.error.unwrap().code, "search-unavailable");
+    }
+
+    #[test]
+    fn backward_renderer_search_cursors_decrease() {
+        let params = ViewSearchParams {
+            view: 4,
+            query: "Chapter".into(),
+            case_sensitive: false,
+            direction: SearchDirection::Backward,
+            origin: None,
+            cursor: Some(EpubSearchCursor {
+                href: "OPS/chapter.xhtml".into(),
+                offset: Some(5),
+            }),
+            match_limit: 2,
+            section_limit: 1,
+        };
+        let decreasing = json!({
+            "ok": true,
+            "result": {
+                "matches": [],
+                "cursor": {
+                    "href": "OPS/chapter.xhtml",
+                    "offset": 2,
+                },
+                "done": false,
+            },
+        })
+        .to_string();
+        assert!(renderer_search_response(20, &params, &decreasing).ok);
+
+        let increasing = decreasing.replace("\"offset\":2", "\"offset\":7");
+        assert!(!renderer_search_response(21, &params, &increasing).ok);
     }
 
     #[test]

@@ -188,12 +188,30 @@ struct SearchParams {
     query: String,
     #[serde(default, rename = "case-sensitive")]
     case_sensitive: bool,
+    direction: SearchDirection,
     #[serde(default)]
-    cursor: Option<SelectionPosition>,
+    origin: Option<SearchPosition>,
+    #[serde(default)]
+    cursor: Option<SearchPosition>,
     #[serde(default = "default_search_match_limit", rename = "match-limit")]
     match_limit: u32,
     #[serde(default = "default_search_page_limit", rename = "page-limit")]
     page_limit: u32,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "kebab-case")]
+enum SearchDirection {
+    Forward,
+    Backward,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+struct SearchPosition {
+    page: u32,
+    #[serde(default)]
+    offset: Option<u32>,
 }
 
 #[derive(Debug)]
@@ -508,7 +526,8 @@ fn search_page_text(
     text: &str,
     characters: &[SearchCharacter],
     pattern: &Regex,
-    minimum_offset: u32,
+    direction: SearchDirection,
+    boundary: Option<u32>,
     limit: usize,
 ) -> Vec<SearchMatch> {
     let mut matches = Vec::new();
@@ -518,7 +537,15 @@ fn search_page_text(
         else {
             continue;
         };
-        if characters[first].index < minimum_offset {
+        let start_offset = characters[first].index;
+        let outside = match (direction, boundary) {
+            (SearchDirection::Forward, Some(minimum)) => start_offset < minimum,
+            (SearchDirection::Backward, Some(maximum)) => {
+                start_offset >= maximum
+            }
+            _ => false,
+        };
+        if outside {
             continue;
         }
         let before_start = first.saturating_sub(SEARCH_CONTEXT_CHARACTERS);
@@ -544,9 +571,13 @@ fn search_page_text(
             before: search_context(&characters[before_start..first]),
             after: search_context(&characters[last + 1..after_end]),
         });
-        if matches.len() >= limit {
+        if direction == SearchDirection::Forward && matches.len() >= limit {
             break;
         }
+    }
+    if direction == SearchDirection::Backward {
+        matches.reverse();
+        matches.truncate(limit);
     }
     matches
 }
@@ -1377,6 +1408,12 @@ impl Service {
 
     fn search(&self, params: Value) -> Result<Value, ServiceError> {
         let params: SearchParams = Self::parse(params)?;
+        if params.origin.is_some() && params.cursor.is_some() {
+            return Err(ServiceError::new(
+                "invalid-search-cursor",
+                "search origin and cursor are mutually exclusive",
+            ));
+        }
         if !(1..=SEARCH_MAX_MATCHES).contains(&params.match_limit) {
             return Err(ServiceError::new(
                 "invalid-search-limit",
@@ -1398,19 +1435,37 @@ impl Service {
             compile_search_pattern(&params.query, params.case_sensitive)?;
         let document = self.document(params.document)?;
         let page_count = document.pages().len() as u32;
-        let mut page_number = params.cursor.map_or(0, |cursor| cursor.page);
-        let mut minimum_offset =
-            params.cursor.map_or(0, |cursor| cursor.offset);
-        if page_number >= page_count {
+        if page_count == 0 {
             return Ok(json!({
                 "matches": [],
                 "cursor": null,
                 "done": true,
             }));
         }
+        let initial = params.cursor.or(params.origin);
+        let mut page_number = initial.map_or_else(
+            || match params.direction {
+                SearchDirection::Forward => 0,
+                SearchDirection::Backward => page_count - 1,
+            },
+            |position| position.page,
+        );
+        if page_number >= page_count {
+            return Err(ServiceError::new(
+                "invalid-search-cursor",
+                "search position is outside the document",
+            ));
+        }
+        let mut boundary = initial.and_then(|position| position.offset);
+        if params.cursor.is_none()
+            && params.direction == SearchDirection::Forward
+        {
+            boundary = boundary.map(|offset| offset.saturating_add(1));
+        }
         let mut matches = Vec::new();
         let mut pages_scanned = 0;
-        while page_number < page_count && pages_scanned < params.page_limit {
+        let mut exhausted = false;
+        while pages_scanned < params.page_limit {
             let index = Self::page_index(document, page_number)?;
             let page = document.pages().get(index).map_err(|error| {
                 ServiceError::new(
@@ -1425,7 +1480,7 @@ impl Service {
                 )
             })?;
             let chars = page_text.chars();
-            if minimum_offset > chars.len() as u32 {
+            if boundary.is_some_and(|offset| offset > chars.len() as u32) {
                 return Err(ServiceError::new(
                     "invalid-search-cursor",
                     format!(
@@ -1433,7 +1488,7 @@ impl Service {
                             "search offset {} exceeds {} characters ",
                             "on page {}"
                         ),
-                        minimum_offset,
+                        boundary.expect("checked search boundary"),
                         chars.len(),
                         page_number
                     ),
@@ -1458,41 +1513,76 @@ impl Service {
                 &complete_text,
                 &characters,
                 &pattern,
-                minimum_offset,
+                params.direction,
+                boundary,
                 remaining,
             );
             matches.extend(page_matches);
             pages_scanned += 1;
             if matches.len() >= params.match_limit as usize {
                 let last = matches.last().expect("search limit is positive");
-                let next_offset = last.end.offset.saturating_add(1);
-                let (next_page, next_offset) =
-                    if next_offset < chars.len() as u32 {
-                        (page_number, next_offset)
-                    } else {
-                        (page_number + 1, 0)
-                    };
-                let done = next_page >= page_count;
+                let next = match params.direction {
+                    SearchDirection::Forward => {
+                        let offset = last.start.offset.saturating_add(1);
+                        if offset < chars.len() as u32 {
+                            Some(SearchPosition {
+                                page: page_number,
+                                offset: Some(offset),
+                            })
+                        } else if page_number + 1 < page_count {
+                            Some(SearchPosition {
+                                page: page_number + 1,
+                                offset: None,
+                            })
+                        } else {
+                            None
+                        }
+                    }
+                    SearchDirection::Backward => {
+                        let offset = last.start.offset;
+                        if offset > 0 {
+                            Some(SearchPosition {
+                                page: page_number,
+                                offset: Some(offset),
+                            })
+                        } else if page_number > 0 {
+                            Some(SearchPosition {
+                                page: page_number - 1,
+                                offset: None,
+                            })
+                        } else {
+                            None
+                        }
+                    }
+                };
                 return Ok(json!({
                     "matches": matches,
-                    "cursor": (!done).then_some(SelectionPosition {
-                        page: next_page,
-                        offset: next_offset,
-                    }),
-                    "done": done,
+                    "cursor": next,
+                    "done": next.is_none(),
                 }));
             }
-            page_number += 1;
-            minimum_offset = 0;
+            boundary = None;
+            match params.direction {
+                SearchDirection::Forward if page_number + 1 < page_count => {
+                    page_number += 1;
+                }
+                SearchDirection::Backward if page_number > 0 => {
+                    page_number -= 1;
+                }
+                _ => {
+                    exhausted = true;
+                    break;
+                }
+            }
         }
-        let done = page_number >= page_count;
+        let cursor = (!exhausted).then_some(SearchPosition {
+            page: page_number,
+            offset: None,
+        });
         Ok(json!({
             "matches": matches,
-            "cursor": (!done).then_some(SelectionPosition {
-                page: page_number,
-                offset: 0,
-            }),
-            "done": done,
+            "cursor": cursor,
+            "done": exhausted,
         }))
     }
 
@@ -2130,10 +2220,11 @@ mod tests {
             "\n",
             r#"{"id":3,"op":"ping","params":{"extra":true}}"#,
             "\n",
-            r#"{"id":4,"op":"search","params":{"document":1,"query":""}}"#,
+            r#"{"id":4,"op":"search","params":{"document":1,"#,
+            r#""query":"","direction":"forward"}}"#,
             "\n",
             r#"{"id":5,"op":"search","params":{"document":1,"#,
-            r#""query":"x","page-limit":0}}"#,
+            r#""query":"x","direction":"forward","page-limit":0}}"#,
             "\n",
             r#"{"id":6,"op":"cache-prune","params":{"#,
             r#""max-bytes":0,"target-bytes":0}}"#,
@@ -2516,7 +2607,15 @@ mod tests {
             (11, "."),
         ]);
         let pattern = compile_search_pattern("好ff", true).unwrap();
-        let matches = search_page_text(3, &text, &characters, &pattern, 0, 10);
+        let matches = search_page_text(
+            3,
+            &text,
+            &characters,
+            &pattern,
+            SearchDirection::Forward,
+            Some(0),
+            10,
+        );
         assert_eq!(matches.len(), 1);
         assert_eq!(matches[0].start, SelectionPosition { page: 3, offset: 9 });
         assert_eq!(
@@ -2530,8 +2629,15 @@ mod tests {
         assert_eq!(matches[0].before, "A你");
         assert_eq!(matches[0].after, ".");
         let ligature_pattern = compile_search_pattern("f", true).unwrap();
-        let ligature_matches =
-            search_page_text(3, &text, &characters, &ligature_pattern, 0, 10);
+        let ligature_matches = search_page_text(
+            3,
+            &text,
+            &characters,
+            &ligature_pattern,
+            SearchDirection::Forward,
+            Some(0),
+            10,
+        );
         assert_eq!(ligature_matches.len(), 1);
         assert_eq!(
             ligature_matches[0].start,
@@ -2555,12 +2661,26 @@ mod tests {
             (6, "*"),
         ]);
         let folded = compile_search_pattern("intro", false).unwrap();
-        let folded_matches =
-            search_page_text(0, &text, &characters, &folded, 0, 10);
+        let folded_matches = search_page_text(
+            0,
+            &text,
+            &characters,
+            &folded,
+            SearchDirection::Forward,
+            Some(0),
+            10,
+        );
         assert_eq!(folded_matches.len(), 1);
         let literal = compile_search_pattern(".*", true).unwrap();
-        let literal_matches =
-            search_page_text(0, &text, &characters, &literal, 0, 10);
+        let literal_matches = search_page_text(
+            0,
+            &text,
+            &characters,
+            &literal,
+            SearchDirection::Forward,
+            Some(0),
+            10,
+        );
         assert_eq!(literal_matches.len(), 1);
         assert_eq!(literal_matches[0].start.offset, 5);
         assert_eq!(literal_matches[0].end.offset, 6);
@@ -2576,9 +2696,29 @@ mod tests {
             (4, "a"),
         ]);
         let pattern = compile_search_pattern("a", true).unwrap();
-        let matches = search_page_text(0, &text, &characters, &pattern, 2, 1);
+        let matches = search_page_text(
+            0,
+            &text,
+            &characters,
+            &pattern,
+            SearchDirection::Forward,
+            Some(2),
+            1,
+        );
         assert_eq!(matches.len(), 1);
         assert_eq!(matches[0].start.offset, 2);
+        let previous = search_page_text(
+            0,
+            &text,
+            &characters,
+            &pattern,
+            SearchDirection::Backward,
+            Some(4),
+            2,
+        );
+        assert_eq!(previous.len(), 2);
+        assert_eq!(previous[0].start.offset, 2);
+        assert_eq!(previous[1].start.offset, 0);
     }
 
     #[test]

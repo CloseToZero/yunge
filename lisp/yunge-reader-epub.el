@@ -243,7 +243,7 @@ scrolling behavior."
       (when (and yunge-reader-epub-view-mode
                  (eq view yunge-reader-webview--buffer-view))
         (when user
-          (yunge-reader--cancel-search-navigation))
+          (yunge-reader--detach-search-navigation))
         (yunge-reader-record-place
          (yunge-reader-webview--view-window view))))))
 
@@ -585,16 +585,22 @@ scrolling behavior."
 (defun yunge-reader-epub--search-cursor (cursor)
   "Return CURSOR as a native EPUB search cursor, or nil."
   (when cursor
-    (and
-     (yunge-reader-position-p cursor)
-     (null (yunge-reader-position-x cursor))
-     (null (yunge-reader-position-y cursor))
-     (let ((native
-            `((href . ,(yunge-reader-position-unit cursor))
-              (offset . ,(yunge-reader-position-offset cursor)))))
-       (and
-        (yunge-reader-webview--valid-search-cursor-p native)
-        native)))))
+    (and (yunge-reader-search-cursor-p cursor)
+         (let ((native
+                (yunge-reader-search-cursor-value cursor)))
+           (and
+            (yunge-reader-webview--valid-search-cursor-p native)
+            (copy-tree native))))))
+
+(defun yunge-reader-epub--search-origin (origin)
+  "Return stable Reader ORIGIN as a native EPUB locator, or nil."
+  (when origin
+    (and (yunge-reader-position-p origin)
+         (let ((native
+                `((href . ,(yunge-reader-position-unit origin))
+                  (cfi . ,(yunge-reader-position-offset origin)))))
+           (and (yunge-reader-webview--valid-location-p native)
+                native)))))
 
 (defun yunge-reader-epub--native-search-match (match)
   "Return the generic Reader search result represented by MATCH."
@@ -631,9 +637,8 @@ scrolling behavior."
           :results matches
           :cursor
           (unless done
-            (make-yunge-reader-position
-             :unit (alist-get 'href cursor)
-             :offset (alist-get 'offset cursor)))
+            (make-yunge-reader-search-cursor
+             :value (copy-tree cursor)))
           :done done)
          nil)))))
 
@@ -642,6 +647,9 @@ scrolling behavior."
   "Request one generic search batch for EPUB DOCUMENT."
   (let* ((query (plist-get arguments :query))
          (case-sensitive (plist-get arguments :case-sensitive))
+         (direction (plist-get arguments :direction))
+         (origin-value (plist-get arguments :origin))
+         (origin (yunge-reader-epub--search-origin origin-value))
          (cursor-value (plist-get arguments :cursor))
          (cursor (yunge-reader-epub--search-cursor cursor-value))
          (match-limit (plist-get arguments :match-limit))
@@ -653,6 +661,11 @@ scrolling behavior."
        complete nil
        (yunge-reader-epub--native-error
         "EPUB search cursor must identify a spine and match ordinal")))
+     ((and origin-value (null origin))
+      (funcall
+       complete nil
+       (yunge-reader-epub--native-error
+        "EPUB search origin must identify a stable publication location")))
      ((not view)
       (funcall
        complete nil
@@ -660,7 +673,8 @@ scrolling behavior."
         "The current EPUB view cannot search its publication")))
      (t
       (yunge-reader-webview--request-search
-       view query case-sensitive cursor match-limit section-limit
+       view query case-sensitive direction origin cursor
+       match-limit section-limit
        (apply-partially
         #'yunge-reader-epub--search-complete complete))))))
 
@@ -768,7 +782,7 @@ scrolling behavior."
 
 (defun yunge-reader-epub--navigate (command)
   "Run semantic EPUB navigation COMMAND in the current view."
-  (yunge-reader--cancel-search-navigation)
+  (yunge-reader--detach-search-navigation)
   (yunge-reader-webview--navigate-view
    (yunge-reader-webview--current-ready-view)
    command #'yunge-reader-epub--restore-complete))

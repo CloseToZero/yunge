@@ -185,19 +185,41 @@
 (ert-deftest yunge-reader-search-starts-empty-and-uses-history ()
   (with-temp-buffer
     (yunge-reader-mode)
-    (setq yunge-reader-document 'document
-          yunge-reader-search-query "old query")
-    (cl-letf (((symbol-function 'read-string)
-               (lambda (prompt initial history &rest _arguments)
-                 (should (equal prompt "Search document: "))
-                 (should-not initial)
-                 (should (eq history 'yunge-reader-search-history))
-                 "new query"))
-              ((symbol-function 'yunge-reader--request-search-batch)
-               #'ignore))
-      (call-interactively #'yunge-reader-search))
-    (should (equal yunge-reader-search-query "new query"))
-    (should yunge-reader-search-highlight-visible)))
+    (let ((origin (make-yunge-reader-position :unit 7 :offset 3)))
+      (setq yunge-reader-document 'document
+            yunge-reader-search-query "old query")
+      (cl-letf (((symbol-function 'read-string)
+                 (lambda (prompt initial history &rest _arguments)
+                   (should (equal prompt "Search document: "))
+                   (should-not initial)
+                   (should (eq history 'yunge-reader-search-history))
+                  "new query"))
+               ((symbol-function 'yunge-reader--current-position)
+                (lambda (&optional _window) origin))
+               ((symbol-function 'yunge-reader--request-search-batch)
+                #'ignore))
+        (call-interactively #'yunge-reader-search))
+      (should (equal yunge-reader-search-query "new query"))
+      (should (eq yunge-reader--search-direction 'forward))
+      (should (eq yunge-reader--search-origin origin))
+      (should yunge-reader-search-highlight-visible))))
+
+(ert-deftest yunge-reader-validates-search-batch-completion-state ()
+  (let ((cursor (make-yunge-reader-search-cursor :value 'next)))
+    (should
+     (yunge-reader--search-batch-valid-p
+      (make-yunge-reader-search-batch :results nil :done t)))
+    (should
+     (yunge-reader--search-batch-valid-p
+      (make-yunge-reader-search-batch
+       :results nil :cursor cursor :done nil)))
+    (should-not
+     (yunge-reader--search-batch-valid-p
+      (make-yunge-reader-search-batch :results nil :done nil)))
+    (should-not
+     (yunge-reader--search-batch-valid-p
+      (make-yunge-reader-search-batch
+       :results nil :cursor cursor :done t)))))
 
 (ert-deftest yunge-reader-escape-hides-search-without-ending-it ()
   (with-temp-buffer
@@ -261,14 +283,11 @@
             yunge-reader-search-results (list first second)
             yunge-reader-search-result first
             yunge-reader-search-highlight-visible nil
-            yunge-reader--search-index 0)
+            yunge-reader--search-index 0
+            yunge-reader--search-direction 'forward)
       (yunge-reader-search-next)
       (should yunge-reader-search-highlight-visible)
-      (should (eq yunge-reader-search-result second))
-      (setq yunge-reader-search-highlight-visible nil)
-      (yunge-reader-search-previous)
-      (should yunge-reader-search-highlight-visible)
-      (should (eq yunge-reader-search-result first)))))
+      (should (eq yunge-reader-search-result second)))))
 
 (ert-deftest yunge-reader-opens-only-allowlisted-uri-actions ()
   (let* ((yunge-reader-uri-schemes '("https" "mailto"))
@@ -520,7 +539,9 @@
             (setq yunge-reader-document
                   (make-yunge-reader-document
                    :file file :driver driver :layout 'fixed)
-                  yunge-reader--place-recording-enabled t)
+                  yunge-reader--place-recording-enabled t
+                  yunge-reader-search-query "needle"
+                  yunge-reader--search-navigation-intent 'forward)
             (let ((item
                    (make-yunge-reader-outline-item
                     :title "Target"
@@ -536,6 +557,8 @@
                 (should
                  (yunge-reader--follow-outline-item item)))))
           (should (= (yunge-reader-position-unit current) 9))
+          (should yunge-reader--search-detached)
+          (should-not yunge-reader--search-navigation-intent)
           (should (eq yunge-reader-zoom-mode 'manual))
           (should (= yunge-reader-scale 2.0))
           (should
@@ -2207,18 +2230,18 @@
          (pop completions)
          (make-yunge-reader-search-batch
           :results nil
-          :cursor (make-yunge-reader-position :unit 8 :offset 0))
+          :cursor (make-yunge-reader-search-cursor :value 'batch-2))
          nil)
         (should (= (length requests) 2))
         (should
          (equal (plist-get (cadr requests) :cursor)
-                (make-yunge-reader-position :unit 8 :offset 0)))
+                 (make-yunge-reader-search-cursor :value 'batch-2)))
         (let ((inhibit-message t))
           (funcall
            (pop completions)
            (make-yunge-reader-search-batch
             :results (list first second)
-            :cursor (make-yunge-reader-position :unit 10 :offset 0))
+            :cursor (make-yunge-reader-search-cursor :value 'batch-3))
            nil))
         (should (eq yunge-reader-search-result first))
         (should (= yunge-reader--search-index 0))
@@ -2233,8 +2256,15 @@
            (pop completions)
            (make-yunge-reader-search-batch :results nil :done t)
            nil))
+        (should (= (length requests) 4))
+        (let ((inhibit-message t))
+          (funcall
+           (pop completions)
+           (make-yunge-reader-search-batch
+            :results (list first) :done t)
+           nil))
         (should (eq yunge-reader-search-result first))
-        (should (= hook-calls 4))))))
+        (should (= hook-calls 5))))))
 
 (ert-deftest yunge-reader-search-uses-smart-case-and-rejects-late-results ()
   (with-temp-buffer
@@ -2267,10 +2297,9 @@
       (let ((inhibit-message t))
         (yunge-reader-search "old")
         (yunge-reader-search "New"))
-      (should (plist-get (car requests) :case-sensitive))
-      (should-not (plist-get (cadr requests) :case-sensitive))
-      (let ((new-completion (car completions))
-            (old-completion (cadr completions))
+      (should (= (length requests) 1))
+      (should-not (plist-get (car requests) :case-sensitive))
+      (let ((old-completion (car completions))
             (inhibit-message t))
         (funcall
          old-completion
@@ -2278,18 +2307,21 @@
           :results (list late) :done t)
          nil)
         (should-not yunge-reader-search-result)
+        (should (= (length requests) 2))
+        (should (plist-get (car requests) :case-sensitive))
         (funcall
-         new-completion
+         (car completions)
          (make-yunge-reader-search-batch
           :results (list current) :done t)
          nil))
       (should (eq yunge-reader-search-result current)))))
 
-(ert-deftest yunge-reader-search-previous-finishes-before-wrapping ()
+(ert-deftest yunge-reader-search-switches-from-the-current-result ()
   (with-temp-buffer
     (yunge-reader-mode)
     (let* ((yunge-reader-drivers nil)
            completion
+           arguments
            (first
             (make-yunge-reader-search-result
              :start (make-yunge-reader-position :unit 0 :offset 0)
@@ -2303,8 +2335,9 @@
              'backward-search-test
              :match #'ignore :open #'ignore :close #'ignore
              :request
-             (lambda (_document _operation _arguments complete)
-               (setq completion complete)))))
+             (lambda (_document _operation actual complete)
+               (setq arguments actual
+                     completion complete)))))
       (setq yunge-reader-document
             (make-yunge-reader-document
              :file "search.pdf" :driver driver :handle 'handle
@@ -2314,10 +2347,13 @@
         (funcall
          completion
          (make-yunge-reader-search-batch
-          :results (list first)
-          :cursor (make-yunge-reader-position :unit 1 :offset 0))
+           :results (list first)
+           :cursor (make-yunge-reader-search-cursor :value 'forward-2))
          nil)
         (yunge-reader-search-previous)
+        (should (eq (plist-get arguments :direction) 'backward))
+        (should (eq (plist-get arguments :origin)
+                    (yunge-reader-search-result-start first)))
         (funcall
          completion
          (make-yunge-reader-search-batch
@@ -2329,7 +2365,8 @@
   (with-temp-buffer
     (yunge-reader-mode)
     (let* ((yunge-reader-drivers nil)
-           completion
+           completions
+           request-arguments
            (requests 0)
            (first
             (make-yunge-reader-search-result
@@ -2344,9 +2381,12 @@
              'coalesced-search-test
              :match #'ignore :open #'ignore :close #'ignore
              :request
-             (lambda (_document _operation _arguments complete)
+             (lambda (_document _operation arguments complete)
                (cl-incf requests)
-               (setq completion complete)))))
+               (setq request-arguments
+                     (append request-arguments (list arguments))
+                     completions
+                     (append completions (list complete)))))))
       (setq yunge-reader-document
             (make-yunge-reader-document
              :file "search.pdf" :driver driver :handle 'handle
@@ -2357,14 +2397,25 @@
         (yunge-reader-search-next)
         (yunge-reader-search-previous))
       (should (= requests 1))
-      (should (eq yunge-reader--search-navigation-intent 'previous))
+      (should (eq yunge-reader--search-navigation-intent 'backward))
+      (should (eq (plist-get (car request-arguments) :direction)
+                  'forward))
       (let ((inhibit-message t))
         (funcall
-         completion
+         (car completions)
          (make-yunge-reader-search-batch
-          :results (list first last) :done t)
+          :results (list first) :done t)
+         nil)
+        (should-not yunge-reader-search-result)
+        (should (= requests 2))
+        (should (eq (plist-get (cadr request-arguments) :direction)
+                    'backward))
+        (funcall
+         (cadr completions)
+         (make-yunge-reader-search-batch
+          :results (list last first) :done t)
          nil))
-      (should (= requests 1))
+      (should (= requests 2))
       (should (eq yunge-reader-search-result last))
       (should-not yunge-reader--search-navigation-intent))))
 
@@ -2401,7 +2452,7 @@
          completion
          (make-yunge-reader-search-batch
           :results (list result)
-          :cursor (make-yunge-reader-position :unit 2 :offset 0))
+          :cursor (make-yunge-reader-search-cursor :value 'batch-2))
          nil))
       (should (= requests 1))
       (should (equal yunge-reader-search-query "x"))
@@ -2411,5 +2462,62 @@
         (yunge-reader-search-next))
       (should (eq yunge-reader-search-result result))
       (should (= requests 1)))))
+
+(ert-deftest yunge-reader-search-reanchors-after-manual-movement ()
+  (with-temp-buffer
+    (yunge-reader-mode)
+    (let* ((yunge-reader-drivers nil)
+           (current (make-yunge-reader-position :unit 2 :offset 4))
+           requests
+           completions
+           (old-result
+            (make-yunge-reader-search-result
+             :start (make-yunge-reader-position :unit 3 :offset 1)
+             :end (make-yunge-reader-position :unit 3 :offset 6)))
+           (new-result
+            (make-yunge-reader-search-result
+             :start (make-yunge-reader-position :unit 9 :offset 8)
+             :end (make-yunge-reader-position :unit 9 :offset 13)))
+           (driver
+            (yunge-reader-register-driver
+             'reanchored-search-test
+             :match #'ignore :open #'ignore :close #'ignore
+             :request
+             (lambda (_document _operation arguments complete)
+               (setq requests (append requests (list arguments))
+                     completions (append completions (list complete)))))))
+      (setq yunge-reader-document
+            (make-yunge-reader-document
+             :file "search.pdf" :driver driver :handle 'handle
+             :layout 'fixed))
+      (cl-letf (((symbol-function 'yunge-reader--current-position)
+                 (lambda (&optional _window) current)))
+        (let ((inhibit-message t))
+          (yunge-reader-search "needle")
+          (yunge-reader--detach-search-navigation)
+          (setq current
+                (make-yunge-reader-position :unit 9 :offset 7))
+          (yunge-reader-search-next)))
+      (should (= (length requests) 1))
+      (should
+       (equal (plist-get (car requests) :origin)
+              (make-yunge-reader-position :unit 2 :offset 4)))
+      (let ((inhibit-message t))
+        (funcall
+         (car completions)
+         (make-yunge-reader-search-batch
+          :results (list old-result) :done t)
+         nil)
+        (should-not yunge-reader-search-result)
+        (should (= (length requests) 2))
+        (should
+         (equal (plist-get (cadr requests) :origin)
+                (make-yunge-reader-position :unit 9 :offset 7)))
+        (funcall
+         (cadr completions)
+         (make-yunge-reader-search-batch
+          :results (list new-result) :done t)
+         nil))
+      (should (eq yunge-reader-search-result new-result)))))
 
 ;;; yunge-reader-test.el ends here

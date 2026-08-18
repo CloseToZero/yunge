@@ -62,10 +62,10 @@ dismiss, the keys retain their ordinary quit or force-normal behavior.
 
 Search discovery never blocks the Emacs command loop.  If the next needed
 batch is still loading, repeated =n/N= stores only the latest direction rather
-than queuing key events.  =C-g=, =ESC=, or an explicit reading movement cancels
-that delayed jump while retaining the query and every result already found.
-The current native batch may finish and enter the cache, but it cannot continue
-scanning or move the view after cancellation.
+than queuing key events.  =C-g= and =ESC= cancel the delayed jump and hide its
+paint without ending the search.  Explicit reading movement instead detaches
+the old run.  Its one native batch may finish, but it cannot move the view; the
+next =n/N= starts in that direction from the new stable reading position.
 
 =M-x yunge-reader-new-view= creates an independent buffer at the current
 stable location and zoom while sharing the open document resource.  It refuses
@@ -195,7 +195,8 @@ and return focus to that view's Emacs window.
 EPUB literal search follows Reader's bounded batch contract.  Each native
 request scans at most a configured number of spine items and returns stable
 href and CFI ranges with compact context.  Its cursor is a transient match
-ordinal within one spine; it is never saved as a reading place.
+boundary within one spine; it is never saved as a reading place.  Forward and
+backward runs return their nearest match first and accept a stable CFI origin.
 
 Discovery itself creates no annotations.  Reader sends only its current match
 back to the renderer, which verifies the same-spine endpoints, navigates via
@@ -206,8 +207,8 @@ place already restored for that view.
 Chromium selection remains a separate transient layer: ESC and C-g hide both
 without ending the search, while n/N restores and moves the search highlight.
 Direct wheel, pointer, and touch relocation is reported as user activity, so
-it also cancels a delayed search jump before the completed batch can replace
-the user's new reading position.
+it detaches a delayed search jump before the completed batch can replace the
+user's new reading position.  The next n/N reanchors at that reported locator.
 Interactive width and line-height controls remain later work.
 
 * Library boundary
@@ -523,16 +524,18 @@ remains independent of ephemeral selection paint.
 
 Document search is cooperatively paged.  One native request scans at most a
 configured number of document units and returns a bounded match list plus the
-first unscanned stable position.  Emacs stops after the first useful batch and
-requests another only for repeat navigation.  An obsolete query generation
-cannot publish results, and each native batch is short enough to let render
-requests run between batches.  The search prompt starts empty instead of
-preselecting the active query; ordinary minibuffer history still recalls
-earlier queries.
+driver's opaque continuation cursor.  Durable reading positions and transient
+scan cursors are distinct types.  Emacs stops after the first useful batch and
+requests another only for repeat navigation.  An obsolete run cannot publish
+results, and each native batch is short enough to let render requests run
+between batches.  The search prompt starts empty instead of preselecting the
+active query; ordinary minibuffer history still recalls earlier queries.
 
 Repeat navigation is a one-slot intent rather than an input queue.  While a
-batch is outstanding, the last =n= or =N= wins.  Reader stays responsive, and
-manual navigation or transient-highlight dismissal drops the pending jump.
+batch is outstanding, the last =n= or =N= wins, and only one physical search
+request remains in flight across obsolete generations.  Reader stays
+responsive.  Manual navigation detaches the old run; the next repeat captures
+the current stable position and starts a new directional run from there.
 
 The PDF adapter requests text geometry only for ordinary visible prefetch or a
 target search page.  It projects the first drawable match character into
