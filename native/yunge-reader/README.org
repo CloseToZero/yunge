@@ -703,3 +703,11 @@ spike.  Every package declares =pre-paginated= layout and no synthetic spreads.
 The =rtl= variant changes spine progression and document direction.  The
 =vertical-rl= variant additionally uses Japanese language metadata and CSS
 vertical writing without depending on a copyrighted book.
+
+On graphical Windows, the isolated smoke launcher builds the release helper,
+generates all three variants under a system temporary directory, opens each
+through ordinary Reader file registration, and removes the fixtures afterward:
+
+#+begin_src shell
+pwsh -File script/yunge-reader-fixed-epub-smoke.ps1
+#+end_src
