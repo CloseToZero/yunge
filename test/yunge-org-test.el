@@ -42,6 +42,20 @@
         (should (= (yunge-avy-projection-end projection) 9))
         (should (= (yunge-avy-projection-target projection) 9))))))
 
+(ert-deftest yunge-org-keeps-table-navigation-without-realignment ()
+  (yunge-org-test--load-config)
+  (should-not org-table-automatic-realign)
+  (with-temp-buffer
+    (org-mode)
+    (insert "| a|b |\n| longer|c |\n")
+    (goto-char (point-min))
+    (search-forward "a")
+    (let ((contents (buffer-string))
+          (org-table-may-need-update t))
+      (org-table-next-field)
+      (should (equal (buffer-string) contents))
+      (should (= (org-table-current-column) 2)))))
+
 (ert-deftest yunge-org-configures-structural-evil-bindings ()
   (yunge-org-test--load-config)
   (with-temp-buffer

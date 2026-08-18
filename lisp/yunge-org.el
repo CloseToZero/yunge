@@ -53,6 +53,7 @@
 (defvar org-link-plain-re)
 (defvar org-mode-map)
 (defvar org-src-mode-map)
+(defvar org-table-automatic-realign)
 (defvar evil-move-beyond-eol)
 (defvar evil-respect-visual-line-mode)
 (defvar yunge-avy-candidate-project-functions)
@@ -80,7 +81,8 @@
 (add-hook 'org-mode-hook #'shuying-org-mode)
 
 (setq org-id-link-consider-parent-id t
-      org-id-link-to-org-use-id 'create-if-interactive)
+      org-id-link-to-org-use-id 'create-if-interactive
+      org-table-automatic-realign nil)
 
 (defconst yunge-org-command-bindings
   '(("p" shuying-org-preview "preview LaTeX")
