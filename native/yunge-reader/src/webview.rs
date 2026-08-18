@@ -7,48 +7,31 @@ use serde_json::{Value, json};
 use std::borrow::Cow;
 use std::collections::HashMap;
 use std::io::{self, BufRead, Write};
-use std::num::NonZeroIsize;
-use std::panic::{AssertUnwindSafe, catch_unwind};
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
-use webview2_com::Microsoft::Web::WebView2::Win32::{
-    COREWEBVIEW2_KEY_EVENT_KIND, COREWEBVIEW2_KEY_EVENT_KIND_KEY_DOWN,
-    COREWEBVIEW2_KEY_EVENT_KIND_SYSTEM_KEY_DOWN,
-};
-use webview2_com::{
-    AcceleratorKeyPressedEventHandler, FocusChangedEventHandler,
-};
-use windows::Win32::Foundation::HWND;
-use windows::Win32::UI::Input::KeyboardAndMouse::{
-    GetKeyState, VIRTUAL_KEY, VK_CONTROL, VK_MENU, VK_NEXT, VK_PRIOR, VK_SHIFT,
-    VK_SPACE,
-};
 use windows::Win32::UI::WindowsAndMessaging::{
-    DispatchMessageW, IsWindow, MSG, PM_REMOVE, PeekMessageW, TranslateMessage,
+    DispatchMessageW, MSG, PM_REMOVE, PeekMessageW, TranslateMessage,
 };
-use wry::dpi::{PhysicalPosition, PhysicalSize};
 use wry::http::{Method, Request as HttpRequest, Response as HttpResponse};
-use wry::raw_window_handle::{
-    HandleError, HasWindowHandle, RawWindowHandle, Win32WindowHandle,
-    WindowHandle,
-};
 use wry::{
-    NewWindowResponse, PageLoadEvent, PermissionResponse, Rect, WebView,
-    WebViewBuilder, WebViewBuilderExtWindows, WebViewExtWindows,
+    NewWindowResponse, PermissionResponse, WebViewBuilder,
+    WebViewBuilderExtWindows,
 };
 use yunge_reader::epub::{EpubError, Publication};
 
 use super::{BUILD_ID, Error};
 
 mod protocol;
+mod surface;
 
 use protocol::{
     CAPABILITIES, Control, Operation, Outgoing, PROTOCOL_VERSION, Request,
     Response, ServiceError, response,
 };
+use surface::{Bounds, NativeSurface, ParentWindow, SurfaceEvent};
 
 const APP_PROTOCOL: &str = "yunge-reader-app";
 const APP_URL: &str = "yunge-reader-app://localhost/index.html";
@@ -111,9 +94,7 @@ const RESOURCE_CSP: &str = concat!(
     "base-uri 'none'; ",
     "form-action 'none'"
 );
-const MAX_VIEW_EXTENT: u32 = 32_768;
 const MESSAGE_PUMP_INTERVAL: Duration = Duration::from_millis(8);
-const ESCAPE_VIRTUAL_KEY: u32 = 0x1b;
 
 #[derive(Debug, Serialize)]
 struct ViewEvent {
@@ -132,15 +113,6 @@ struct ViewEvent {
     key: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     user: Option<bool>,
-}
-
-#[derive(Clone, Copy, Debug, Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
-struct Bounds {
-    x: i32,
-    y: i32,
-    width: u32,
-    height: u32,
 }
 
 #[derive(Debug, Deserialize)]
@@ -452,16 +424,8 @@ struct RendererSearchCallback {
     response: Value,
 }
 
-struct ParentWindow(NonZeroIsize);
-
 struct NativeView {
-    webview: WebView,
-    accelerator_token: i64,
-    got_focus_token: i64,
-    lost_focus_token: i64,
-    loaded: Arc<AtomicBool>,
-    bounds: Bounds,
-    visible: bool,
+    surface: NativeSurface,
     publication: Option<u64>,
 }
 
@@ -479,31 +443,6 @@ struct PublicationStore {
 type SharedPublications = Arc<Mutex<PublicationStore>>;
 
 struct ResourcePermit(Arc<AtomicUsize>);
-
-impl Drop for NativeView {
-    fn drop(&mut self) {
-        // SAFETY: The token was registered on this controller, and all
-        // WebView operations run on the service's single UI thread.
-        unsafe {
-            let controller = self.webview.controller();
-            let _ =
-                controller.remove_AcceleratorKeyPressed(self.accelerator_token);
-            let _ = controller.remove_GotFocus(self.got_focus_token);
-            let _ = controller.remove_LostFocus(self.lost_focus_token);
-        }
-    }
-}
-
-impl HasWindowHandle for ParentWindow {
-    fn window_handle(&self) -> Result<WindowHandle<'_>, HandleError> {
-        let handle = Win32WindowHandle::new(self.0);
-        let raw = RawWindowHandle::Win32(handle);
-        // SAFETY: `create_view' checks that the HWND names a live window.
-        // Pinned Wry copies only the HWND on its Windows child path; this
-        // private adapter is not exposed to other raw-handle consumers.
-        Ok(unsafe { WindowHandle::borrow_raw(raw) })
-    }
-}
 
 impl PublicationStore {
     fn insert(
@@ -578,39 +517,6 @@ struct Service {
     outgoing_sender: Sender<Outgoing>,
     incoming_sender: Sender<Incoming>,
     pending_searches: HashMap<u64, ViewSearchParams>,
-}
-
-impl Bounds {
-    fn validate(self) -> Result<Self, ServiceError> {
-        if self.x < 0 || self.y < 0 {
-            return Err(ServiceError::new(
-                "invalid-view-bounds",
-                "view position must be non-negative",
-            ));
-        }
-        if self.width == 0 || self.height == 0 {
-            return Err(ServiceError::new(
-                "invalid-view-bounds",
-                "view width and height must be positive",
-            ));
-        }
-        if self.width > MAX_VIEW_EXTENT || self.height > MAX_VIEW_EXTENT {
-            return Err(ServiceError::new(
-                "invalid-view-bounds",
-                format!(
-                    "view width and height must not exceed {MAX_VIEW_EXTENT}"
-                ),
-            ));
-        }
-        Ok(self)
-    }
-
-    fn rect(self) -> Rect {
-        Rect {
-            position: PhysicalPosition::new(self.x, self.y).into(),
-            size: PhysicalSize::new(self.width, self.height).into(),
-        }
-    }
 }
 
 impl EpubLocator {
@@ -1039,120 +945,71 @@ impl Service {
                 dependency_message(message),
             ));
         }
-        let parent_value = isize::try_from(params.parent).map_err(|_| {
-            ServiceError::new(
-                "invalid-parent-window",
-                "parent window handle does not fit this process",
-            )
-        })?;
-        let parent_value =
-            NonZeroIsize::new(parent_value).ok_or_else(|| {
-                ServiceError::new(
-                    "invalid-parent-window",
-                    "parent window handle must be nonzero",
-                )
-            })?;
-        let parent_hwnd = HWND(parent_value.get() as _);
-        if !unsafe { IsWindow(Some(parent_hwnd)) }.as_bool() {
-            return Err(ServiceError::new(
-                "invalid-parent-window",
-                "parent window handle does not name a live window",
-            ));
-        }
-        let bounds = params.bounds.validate()?;
-        let parent = ParentWindow(parent_value);
-        let loaded = Arc::new(AtomicBool::new(false));
-        let load_state = Arc::clone(&loaded);
+        let parent = ParentWindow::new(params.parent)?;
         let publications = Arc::clone(&self.publications);
         let resource_requests = Arc::clone(&self.resource_requests);
         let renderer_events = self.outgoing_sender.clone();
         let renderer_callbacks = self.incoming_sender.clone();
         let view_id = params.view;
-        let build = || {
-            WebViewBuilder::new()
-                .with_bounds(bounds.rect())
-                .with_focused(false)
-                .with_visible(params.visible)
-                .with_custom_protocol(
-                    APP_PROTOCOL.into(),
-                    move |_webview_id, request| app_response(request),
-                )
-                .with_asynchronous_custom_protocol(
-                    BOOK_PROTOCOL.into(),
-                    move |_webview_id, request, responder| {
-                        let Some(permit) = ResourcePermit::acquire(Arc::clone(
-                            &resource_requests,
-                        )) else {
-                            responder.respond(resource_error_response(
-                                503,
-                                "too many EPUB resource requests",
-                            ));
-                            return;
-                        };
-                        let publications = Arc::clone(&publications);
-                        thread::spawn(move || {
-                            let response =
-                                resource_response(&publications, request);
-                            responder.respond(response);
-                            drop(permit);
-                        });
-                    },
-                )
-                .with_https_scheme(true)
-                .with_url(APP_URL)
-                .with_navigation_handler(app_navigation_allowed)
-                .with_on_page_load_handler(move |event, _url| {
-                    if matches!(event, PageLoadEvent::Finished) {
-                        load_state.store(true, Ordering::Release);
-                    }
-                })
-                .with_ipc_handler(move |request| {
-                    if let Some(callback) =
-                        renderer_search_callback(view_id, &request)
-                    {
-                        let _ = renderer_callbacks
-                            .send(Incoming::RendererSearch(callback));
-                    } else if let Some(event) =
-                        renderer_event(view_id, &request)
-                    {
-                        let _ = renderer_events.send(Outgoing::Event(event));
-                    }
-                })
-                .with_permission_handler(|_| PermissionResponse::Deny)
-                .with_new_window_req_handler(|_, _| NewWindowResponse::Deny)
-                .with_download_started_handler(|_, _| false)
-                .build_as_child(&parent)
-        };
-        let view = catch_unwind(AssertUnwindSafe(build))
-            .map_err(|_| {
-                ServiceError::new(
-                    "view-create-failed",
-                    "WebView creation panicked for the supplied parent window",
-                )
-            })?
-            .map_err(|error| {
-                ServiceError::new("view-create-failed", error.to_string())
-            })?;
-        let accelerator_token = install_accelerator_handler(
-            &view,
+        let builder = WebViewBuilder::new()
+            .with_custom_protocol(
+                APP_PROTOCOL.into(),
+                move |_webview_id, request| app_response(request),
+            )
+            .with_asynchronous_custom_protocol(
+                BOOK_PROTOCOL.into(),
+                move |_webview_id, request, responder| {
+                    let Some(permit) =
+                        ResourcePermit::acquire(Arc::clone(&resource_requests))
+                    else {
+                        responder.respond(resource_error_response(
+                            503,
+                            "too many EPUB resource requests",
+                        ));
+                        return;
+                    };
+                    let publications = Arc::clone(&publications);
+                    thread::spawn(move || {
+                        let response =
+                            resource_response(&publications, request);
+                        responder.respond(response);
+                        drop(permit);
+                    });
+                },
+            )
+            .with_https_scheme(true)
+            .with_url(APP_URL)
+            .with_navigation_handler(app_navigation_allowed)
+            .with_ipc_handler(move |request| {
+                if let Some(callback) =
+                    renderer_search_callback(view_id, &request)
+                {
+                    let _ = renderer_callbacks
+                        .send(Incoming::RendererSearch(callback));
+                } else if let Some(event) = renderer_event(view_id, &request) {
+                    let _ = renderer_events.send(Outgoing::Event(event));
+                }
+            })
+            .with_permission_handler(|_| PermissionResponse::Deny)
+            .with_new_window_req_handler(|_, _| NewWindowResponse::Deny)
+            .with_download_started_handler(|_, _| false);
+        let surface_events = self.outgoing_sender.clone();
+        let surface = NativeSurface::create(
+            builder,
+            &parent,
             params.view,
-            self.outgoing_sender.clone(),
+            params.bounds,
+            params.visible,
+            move |event| {
+                let _ = surface_events
+                    .send(Outgoing::Event(surface_view_event(event)));
+            },
         )?;
-        let (got_focus_token, lost_focus_token) = install_focus_handlers(
-            &view,
-            params.view,
-            self.outgoing_sender.clone(),
-        )?;
+        let bounds = surface.bounds();
         self.views.insert(
             params.view,
             NativeView {
-                webview: view,
-                accelerator_token,
-                got_focus_token,
-                lost_focus_token,
-                loaded,
-                bounds,
-                visible: params.visible,
+                surface,
                 publication: None,
             },
         );
@@ -1165,41 +1022,30 @@ impl Service {
 
     fn set_bounds(&mut self, params: Value) -> Result<Value, ServiceError> {
         let params: BoundsParams = Self::parse(params)?;
-        let bounds = params.bounds.validate()?;
-        let view = self.view_mut(params.view)?;
-        view.webview.set_bounds(bounds.rect()).map_err(|error| {
-            ServiceError::new("view-update-failed", error.to_string())
-        })?;
-        view.bounds = bounds;
+        let bounds = self
+            .view_mut(params.view)?
+            .surface
+            .set_bounds(params.bounds)?;
         Ok(json!({ "view": params.view, "bounds": bounds }))
     }
 
     fn set_visible(&mut self, params: Value) -> Result<Value, ServiceError> {
         let params: VisibleParams = Self::parse(params)?;
-        let view = self.view_mut(params.view)?;
-        view.webview.set_visible(params.visible).map_err(|error| {
-            ServiceError::new("view-update-failed", error.to_string())
-        })?;
-        view.visible = params.visible;
+        self.view_mut(params.view)?
+            .surface
+            .set_visible(params.visible)?;
         Ok(json!({ "view": params.view, "visible": params.visible }))
     }
 
     fn focus(&mut self, params: Value) -> Result<Value, ServiceError> {
         let params: ViewParams = Self::parse(params)?;
-        self.view(params.view)?.webview.focus().map_err(|error| {
-            ServiceError::new("view-focus-failed", error.to_string())
-        })?;
+        self.view(params.view)?.surface.focus()?;
         Ok(json!({ "view": params.view, "focused": true }))
     }
 
     fn focus_parent(&mut self, params: Value) -> Result<Value, ServiceError> {
         let params: ViewParams = Self::parse(params)?;
-        self.view(params.view)?
-            .webview
-            .focus_parent()
-            .map_err(|error| {
-                ServiceError::new("view-focus-failed", error.to_string())
-            })?;
+        self.view(params.view)?.surface.focus_parent()?;
         Ok(json!({ "view": params.view, "focused": false }))
     }
 
@@ -1210,7 +1056,8 @@ impl Service {
         let params: ViewParams = Self::parse(params)?;
         let script = publication_clear_selection_script(params.view);
         self.view(params.view)?
-            .webview
+            .surface
+            .webview()
             .evaluate_script(&script)
             .map_err(|error| {
                 ServiceError::new("view-update-failed", error.to_string())
@@ -1236,7 +1083,8 @@ impl Service {
         let character_limit = params.character_limit;
         let script = publication_selection_text_script(&params);
         let sender = self.outgoing_sender.clone();
-        view.webview
+        view.surface
+            .webview()
             .evaluate_script_with_callback(&script, move |value| {
                 let response = renderer_selection_text_response(
                     id,
@@ -1270,7 +1118,11 @@ impl Service {
         let view_id = params.view;
         let script = publication_search_script(id, &params);
         self.pending_searches.insert(id, params);
-        if let Err(error) = self.view(view_id)?.webview.evaluate_script(&script)
+        if let Err(error) = self
+            .view(view_id)?
+            .surface
+            .webview()
+            .evaluate_script(&script)
         {
             self.pending_searches.remove(&id);
             return Err(ServiceError::new("search-failed", error.to_string()));
@@ -1300,9 +1152,12 @@ impl Service {
             selection.as_ref(),
             params.reveal,
         );
-        view.webview.evaluate_script(&script).map_err(|error| {
-            ServiceError::new("view-update-failed", error.to_string())
-        })?;
+        view.surface
+            .webview()
+            .evaluate_script(&script)
+            .map_err(|error| {
+                ServiceError::new("view-update-failed", error.to_string())
+            })?;
         Ok(json!({
             "view": params.view,
             "selection": selection.is_some(),
@@ -1331,7 +1186,7 @@ impl Service {
             params.location.map(EpubLocator::validate).transpose()?;
         let style = params.style.validate()?;
         let view = self.view(params.view)?;
-        if !view.loaded.load(Ordering::Acquire) {
+        if !view.surface.loaded() {
             return Err(ServiceError::new(
                 "view-not-ready",
                 format!("view {} has not finished loading", params.view),
@@ -1353,7 +1208,8 @@ impl Service {
             params.scroll_bars,
         );
         self.view(params.view)?
-            .webview
+            .surface
+            .webview()
             .evaluate_script(&script)
             .map_err(|error| {
                 ServiceError::new(
@@ -1403,9 +1259,12 @@ impl Service {
             params.command,
             location.as_ref(),
         );
-        view.webview.evaluate_script(&script).map_err(|error| {
-            ServiceError::new("view-update-failed", error.to_string())
-        })?;
+        view.surface
+            .webview()
+            .evaluate_script(&script)
+            .map_err(|error| {
+                ServiceError::new("view-update-failed", error.to_string())
+            })?;
         Ok(json!({
             "view": params.view,
             "command": params.command,
@@ -1424,9 +1283,12 @@ impl Service {
             ));
         }
         let script = publication_style_script(params.view, &style);
-        view.webview.evaluate_script(&script).map_err(|error| {
-            ServiceError::new("view-update-failed", error.to_string())
-        })?;
+        view.surface
+            .webview()
+            .evaluate_script(&script)
+            .map_err(|error| {
+                ServiceError::new("view-update-failed", error.to_string())
+            })?;
         Ok(json!({
             "view": params.view,
             "style": style,
@@ -1447,9 +1309,12 @@ impl Service {
         }
         let script =
             publication_scroll_bars_script(params.view, params.visible);
-        view.webview.evaluate_script(&script).map_err(|error| {
-            ServiceError::new("view-update-failed", error.to_string())
-        })?;
+        view.surface
+            .webview()
+            .evaluate_script(&script)
+            .map_err(|error| {
+                ServiceError::new("view-update-failed", error.to_string())
+            })?;
         Ok(json!({
             "view": params.view,
             "visible": params.visible,
@@ -1486,9 +1351,9 @@ impl Service {
         let view = self.view(params.view)?;
         Ok(json!({
             "view": params.view,
-            "loaded": view.loaded.load(Ordering::Acquire),
-            "bounds": view.bounds,
-            "visible": view.visible,
+            "loaded": view.surface.loaded(),
+            "bounds": view.surface.bounds(),
+            "visible": view.surface.visible(),
             "publication": view.publication,
         }))
     }
@@ -1938,101 +1803,14 @@ impl From<EpubError> for ServiceError {
     }
 }
 
-fn routed_key(
-    kind: COREWEBVIEW2_KEY_EVENT_KIND,
-    key: u32,
-    control: bool,
-    alt: bool,
-    shift: bool,
-) -> Option<&'static str> {
-    if kind != COREWEBVIEW2_KEY_EVENT_KIND_KEY_DOWN
-        && kind != COREWEBVIEW2_KEY_EVENT_KIND_SYSTEM_KEY_DOWN
-    {
-        return None;
-    }
-    if key == ESCAPE_VIRTUAL_KEY {
-        return Some("<escape>");
-    }
-    if shift {
-        return None;
-    }
-    if alt {
-        return (!control && key == u32::from(b'M')).then_some("M-m");
-    }
-    match (key, control) {
-        (key, false) if key == u32::from(VK_SPACE.0) => Some("SPC"),
-        (key, true) if key == u32::from(b'G') => Some("C-g"),
-        (key, true) if key == u32::from(b'D') => Some("C-d"),
-        (key, true) if key == u32::from(b'U') => Some("C-u"),
-        (key, false) if key == u32::from(VK_NEXT.0) => Some("<next>"),
-        (key, false) if key == u32::from(VK_PRIOR.0) => Some("<prior>"),
-        _ => None,
-    }
-}
-
-fn key_state(key: VIRTUAL_KEY) -> bool {
-    // SAFETY: `GetKeyState' accepts every Win32 virtual-key value and has no
-    // pointer or lifetime requirements.
-    unsafe { GetKeyState(i32::from(key.0)) < 0 }
-}
-
-fn install_accelerator_handler(
-    webview: &WebView,
-    view: u64,
-    outgoing_sender: Sender<Outgoing>,
-) -> Result<i64, ServiceError> {
-    let handler = AcceleratorKeyPressedEventHandler::create(Box::new(
-        move |_controller, args| {
-            let Some(args) = args else {
-                return Ok(());
-            };
-            let mut kind = COREWEBVIEW2_KEY_EVENT_KIND::default();
-            let mut key = 0;
-            // SAFETY: WebView2 owns the callback arguments for the duration
-            // of this callback and initializes both out parameters.
-            unsafe {
-                args.KeyEventKind(&mut kind)?;
-                args.VirtualKey(&mut key)?;
-                let routed = routed_key(
-                    kind,
-                    key,
-                    key_state(VK_CONTROL),
-                    key_state(VK_MENU),
-                    key_state(VK_SHIFT),
-                );
-                if let Some(key) = routed {
-                    args.SetHandled(true)?;
-                    let _ = outgoing_sender.send(Outgoing::Event(ViewEvent {
-                        kind: "event",
-                        event: "accelerator",
-                        view,
-                        message: None,
-                        location: None,
-                        outline: None,
-                        selection: None,
-                        key: Some(key.to_owned()),
-                        user: None,
-                    }));
-                }
-            }
-            Ok(())
-        },
-    ));
-    let mut token = 0;
-    // SAFETY: The callback remains owned by the controller until its token
-    // is removed when `NativeView' is dropped.
-    unsafe {
-        webview
-            .controller()
-            .add_AcceleratorKeyPressed(&handler, &mut token)
-            .map_err(|error| {
-                ServiceError::new("view-create-failed", error.to_string())
-            })?;
-    }
-    Ok(token)
-}
-
-fn focus_event(view: u64, event: &'static str) -> ViewEvent {
+fn surface_view_event(surface: SurfaceEvent) -> ViewEvent {
+    let (event, view, key) = match surface {
+        SurfaceEvent::Accelerator { view, key } => {
+            ("accelerator", view, Some(key.to_owned()))
+        }
+        SurfaceEvent::FocusGained { view } => ("focus-gained", view, None),
+        SurfaceEvent::FocusLost { view } => ("focus-lost", view, None),
+    };
     ViewEvent {
         kind: "event",
         event,
@@ -2041,53 +1819,9 @@ fn focus_event(view: u64, event: &'static str) -> ViewEvent {
         location: None,
         outline: None,
         selection: None,
-        key: None,
+        key,
         user: None,
     }
-}
-
-fn install_focus_handlers(
-    webview: &WebView,
-    view: u64,
-    outgoing_sender: Sender<Outgoing>,
-) -> Result<(i64, i64), ServiceError> {
-    let got_sender = outgoing_sender.clone();
-    let got_handler = FocusChangedEventHandler::create(Box::new(
-        move |_controller, _args| {
-            let _ = got_sender
-                .send(Outgoing::Event(focus_event(view, "focus-gained")));
-            Ok(())
-        },
-    ));
-    let lost_handler = FocusChangedEventHandler::create(Box::new(
-        move |_controller, _args| {
-            let _ = outgoing_sender
-                .send(Outgoing::Event(focus_event(view, "focus-lost")));
-            Ok(())
-        },
-    ));
-    let controller = webview.controller();
-    let mut got_token = 0;
-    let mut lost_token = 0;
-    // SAFETY: The controller owns both callbacks until their returned tokens
-    // are removed when `NativeView' is dropped.
-    unsafe {
-        controller
-            .add_GotFocus(&got_handler, &mut got_token)
-            .map_err(|error| {
-                ServiceError::new("view-create-failed", error.to_string())
-            })?;
-        if let Err(error) =
-            controller.add_LostFocus(&lost_handler, &mut lost_token)
-        {
-            let _ = controller.remove_GotFocus(got_token);
-            return Err(ServiceError::new(
-                "view-create-failed",
-                error.to_string(),
-            ));
-        }
-    }
-    Ok((got_token, lost_token))
 }
 
 fn invalid_renderer_selection_result(
@@ -2733,7 +2467,6 @@ mod tests {
     use std::io::Write;
     use std::path::PathBuf;
     use std::sync::atomic::AtomicU64;
-    use webview2_com::Microsoft::Web::WebView2::Win32 as WebView2;
     use zip::write::SimpleFileOptions;
     use zip::{CompressionMethod, ZipWriter};
 
@@ -2809,32 +2542,6 @@ mod tests {
             response.expect("operation returns an immediate response"),
             control,
         )
-    }
-
-    #[test]
-    fn bounds_reject_empty_negative_and_extreme_rectangles() {
-        for bounds in [
-            Bounds {
-                x: -1,
-                y: 0,
-                width: 1,
-                height: 1,
-            },
-            Bounds {
-                x: 0,
-                y: 0,
-                width: 0,
-                height: 1,
-            },
-            Bounds {
-                x: 0,
-                y: 0,
-                width: MAX_VIEW_EXTENT + 1,
-                height: 1,
-            },
-        ] {
-            assert!(bounds.validate().is_err());
-        }
     }
 
     #[test]
@@ -3986,17 +3693,12 @@ mod tests {
         assert_eq!(response["ok"], true);
         assert!(response.get("kind").is_none());
 
-        let event = serde_json::to_value(Outgoing::Event(ViewEvent {
-            kind: "event",
-            event: "accelerator",
-            view: 4,
-            message: None,
-            location: None,
-            outline: None,
-            selection: None,
-            key: Some("<escape>".into()),
-            user: None,
-        }))
+        let event = serde_json::to_value(Outgoing::Event(surface_view_event(
+            SurfaceEvent::Accelerator {
+                view: 4,
+                key: "<escape>",
+            },
+        )))
         .unwrap();
         assert_eq!(event["kind"], "event");
         assert_eq!(event["event"], "accelerator");
@@ -4004,9 +3706,8 @@ mod tests {
         assert_eq!(event["key"], "<escape>");
         assert!(event.get("id").is_none());
 
-        let focus = serde_json::to_value(Outgoing::Event(focus_event(
-            4,
-            "focus-gained",
+        let focus = serde_json::to_value(Outgoing::Event(surface_view_event(
+            SurfaceEvent::FocusGained { view: 4 },
         )))
         .unwrap();
         assert_eq!(focus["kind"], "event");
@@ -4173,119 +3874,5 @@ mod tests {
         assert!(ResourcePermit::acquire(Arc::clone(&active)).is_none());
         drop(permits);
         assert!(ResourcePermit::acquire(active).is_some());
-    }
-
-    #[test]
-    fn native_reader_control_and_leader_keys_are_normalized() {
-        assert_eq!(
-            routed_key(
-                COREWEBVIEW2_KEY_EVENT_KIND_KEY_DOWN,
-                ESCAPE_VIRTUAL_KEY,
-                false,
-                false,
-                false,
-            ),
-            Some("<escape>")
-        );
-        assert_eq!(
-            routed_key(
-                COREWEBVIEW2_KEY_EVENT_KIND_KEY_DOWN,
-                u32::from(b'G'),
-                true,
-                false,
-                false,
-            ),
-            Some("C-g")
-        );
-        assert_eq!(
-            routed_key(
-                COREWEBVIEW2_KEY_EVENT_KIND_KEY_DOWN,
-                u32::from(b'D'),
-                true,
-                false,
-                false,
-            ),
-            Some("C-d")
-        );
-        assert_eq!(
-            routed_key(
-                COREWEBVIEW2_KEY_EVENT_KIND_KEY_DOWN,
-                u32::from(b'U'),
-                true,
-                false,
-                false,
-            ),
-            Some("C-u")
-        );
-        assert_eq!(
-            routed_key(
-                COREWEBVIEW2_KEY_EVENT_KIND_KEY_DOWN,
-                u32::from(VK_SPACE.0),
-                false,
-                false,
-                false,
-            ),
-            Some("SPC")
-        );
-        assert_eq!(
-            routed_key(
-                COREWEBVIEW2_KEY_EVENT_KIND_SYSTEM_KEY_DOWN,
-                u32::from(b'M'),
-                false,
-                true,
-                false,
-            ),
-            Some("M-m")
-        );
-        assert_eq!(
-            routed_key(
-                COREWEBVIEW2_KEY_EVENT_KIND_KEY_DOWN,
-                u32::from(VK_NEXT.0),
-                false,
-                false,
-                false,
-            ),
-            Some("<next>")
-        );
-        assert_eq!(
-            routed_key(
-                COREWEBVIEW2_KEY_EVENT_KIND_KEY_DOWN,
-                u32::from(VK_PRIOR.0),
-                false,
-                false,
-                false,
-            ),
-            Some("<prior>")
-        );
-        assert_eq!(
-            routed_key(
-                WebView2::COREWEBVIEW2_KEY_EVENT_KIND_KEY_UP,
-                ESCAPE_VIRTUAL_KEY,
-                false,
-                false,
-                false,
-            ),
-            None
-        );
-        assert_eq!(
-            routed_key(
-                COREWEBVIEW2_KEY_EVENT_KIND_KEY_DOWN,
-                u32::from(b'J'),
-                false,
-                false,
-                true,
-            ),
-            None
-        );
-        assert_eq!(
-            routed_key(
-                COREWEBVIEW2_KEY_EVENT_KIND_SYSTEM_KEY_DOWN,
-                u32::from(b'D'),
-                true,
-                true,
-                false,
-            ),
-            None
-        );
     }
 }

@@ -260,6 +260,13 @@ all publication, renderer, and WebView2 state.  Unsupported operations are
 therefore rejected at the protocol boundary before they can reach native
 resources.
 
+=src/webview/surface.rs= owns the validated parent-window adapter, child
+WebView construction, bounds, visibility, load state, focus, routed
+accelerators, and controller event tokens.  It emits semantic surface events
+that the service maps onto protocol events.  It stores no publication handle,
+resource token, EPUB locator, or renderer search state, so dropping a native
+surface cannot implicitly destroy its persistent logical view or publication.
+
 PDF selection and search geometry uses one compound SVG path per page and
 highlight kind.  Overlapping glyph bounds therefore share one opacity pass
 instead of producing darker intersections.  Adjacent axis-aligned glyphs
