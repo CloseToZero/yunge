@@ -171,6 +171,10 @@ the preceding page at its bottom.  The view reports its viewport in unscaled
 page coordinates, restores it only after the spine target loads, and projects
 it through the current effective scale.  Manual zoom, fit-mode resize, and
 native-surface recreation therefore retain the same page-relative position.
+Wheel input scrolls natively inside an overflowing fixed page.  Continued
+input at its top or bottom turns one page and consumes the remainder of that
+gesture, so touchpad momentum cannot skip through fitting pages or drag the
+newly opened page away from its entry position.
 
 The desired zoom belongs to the logical view, not its disposable child
 surface.  Hiding and recreating a surface therefore restores the same mode,

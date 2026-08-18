@@ -1352,6 +1352,11 @@ const open = async ({
                 reason: event.detail.reason,
             })
         })
+        view.renderer.addEventListener('boundary-scroll', event => {
+            const command = event.detail?.direction > 0
+                ? 'next-screen' : 'previous-screen'
+            scheduleNavigation(session, { command })
+        })
         status.hidden = true
         if (location) {
             try {
@@ -1500,6 +1505,12 @@ const drainNavigation = async session => {
     }
 }
 
+const scheduleNavigation = (session, navigation) => {
+    if (current !== session) return
+    session.pendingNavigation = navigation
+    void drainNavigation(session)
+}
+
 const navigate = ({ view: viewID, command, location }) => {
     try {
         viewID = checkedView(viewID)
@@ -1512,8 +1523,7 @@ const navigate = ({ view: viewID, command, location }) => {
         location = command === 'go-to'
             ? checkedNavigationTarget(location) : null
         const session = current
-        session.pendingNavigation = { command, location }
-        void drainNavigation(session)
+        scheduleNavigation(session, { command, location })
     } catch (error) {
         post('navigation-error', { message: error?.message ?? error })
     }

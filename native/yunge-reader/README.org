@@ -431,6 +431,11 @@ backward movement enters the preceding page at its bottom.  These movements
 retain unscaled viewport coordinates across manual zoom and fit-mode resize.
 Repeated fixed and reflowable commands share the same bounded navigation
 queue.
+Native wheel movement remains inside an overflowing fixed page.  Wheel input
+that continues at its vertical boundary schedules the corresponding screen
+command, while a gesture latch suppresses momentum from turning or entering
+another page.  Direct wheel activity still marks the resulting locator as
+user movement.
 Moving beyond either end is a no-op, and unsuccessful movement releases the
 renderer lock for later navigation.
 

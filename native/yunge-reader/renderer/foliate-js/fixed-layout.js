@@ -45,6 +45,8 @@ export class FixedLayout extends HTMLElement {
     #zoom
     #scale = 1
     #scrollTimer
+    #wheelTimer
+    #wheelLatched = false
     constructor() {
         super()
 
@@ -73,6 +75,31 @@ export class FixedLayout extends HTMLElement {
                 this.#reportLocation('scroll')
             }, 100)
         }, { passive: true })
+        this.addEventListener('wheel', event => {
+            if (!Number.isFinite(event.deltaY)
+                || Math.abs(event.deltaY) <= Math.abs(event.deltaX)) return
+            if (this.#wheelTimer) clearTimeout(this.#wheelTimer)
+            this.#wheelTimer = setTimeout(() => {
+                this.#wheelTimer = null
+                this.#wheelLatched = false
+            }, 180)
+            if (this.#wheelLatched) {
+                event.preventDefault()
+                return
+            }
+            const limit = Math.max(
+                0, this.scrollHeight - this.clientHeight)
+            const direction = Math.sign(event.deltaY)
+            const boundary = direction < 0
+                ? this.scrollTop <= 0.5
+                : this.scrollTop >= limit - 0.5
+            if (!boundary) return
+            event.preventDefault()
+            this.#wheelLatched = true
+            this.dispatchEvent(new CustomEvent('boundary-scroll', {
+                detail: { direction },
+            }))
+        }, { passive: false })
     }
     attributeChangedCallback(name, _, value) {
         switch (name) {
@@ -396,6 +423,7 @@ export class FixedLayout extends HTMLElement {
     }
     destroy() {
         if (this.#scrollTimer) clearTimeout(this.#scrollTimer)
+        if (this.#wheelTimer) clearTimeout(this.#wheelTimer)
         this.#observer.unobserve(this)
     }
 }

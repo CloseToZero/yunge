@@ -1665,9 +1665,11 @@ mod tests {
         assert!(adapter.contains("view.renderer.setAttribute('animated', '')"));
         assert!(adapter.contains("pendingNavigation"));
         assert!(adapter.contains("navigationRunning"));
+        assert!(adapter.contains("'boundary-scroll', event =>"));
+        assert!(adapter.contains("scheduleNavigation(session, { command })"));
         assert!(
             adapter
-                .contains("session.pendingNavigation = { command, location }")
+                .contains("scheduleNavigation(session, { command, location })")
         );
         assert!(!adapter.contains("session.navigation = session.navigation"));
         assert!(adapter.contains("if (session.opening) return"));
@@ -1724,6 +1726,8 @@ mod tests {
         assert!(fixed.contains("new CustomEvent('zoom'"));
         assert!(fixed.contains("detail: { scale }"));
         assert!(fixed.contains("align-items: safe center"));
+        assert!(fixed.contains("new CustomEvent('boundary-scroll'"));
+        assert!(fixed.contains("if (this.#wheelLatched)"));
         assert!(fixed.contains("async moveBy(distance, smooth = true)"));
         assert!(fixed.contains("setViewport(x, y, end = false)"));
         assert!(fixed.contains("x: this.scrollLeft / this.#scale"));
