@@ -937,6 +937,10 @@ page one to page two and back through logical page commands, changes to manual
 scale, and moves to a nonzero viewport y coordinate.  Hiding the owning buffer
 destroys its native surface; displaying it again creates a distinct surface
 and restores the exact href, x, and y without Reader warnings.
+The same smoke narrows and shortens the live window independently.  Fit-width
+and fit-page recompute their effective scales without replacing the native
+surface.  Manual zoom remains unchanged, and a subsequent line movement
+proves that resize retained the page-relative viewport before recreation.
 
 The integration path installs the pinned Windows library through the public
 setup command, runs its =pdfium-info= smoke test, opens a five-page A4 fixture,
