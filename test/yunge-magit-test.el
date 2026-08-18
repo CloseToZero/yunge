@@ -46,6 +46,7 @@
 (defvar transient-map)
 (defvar transient-popup-navigation-map)
 (defvar transient-sticky-map)
+(defvar with-editor-show-usage)
 
 (defconst yunge-magit-test-repository-bindings
   '(("A" . magit-cherry-pick)
@@ -128,6 +129,11 @@
     (evil-normal-state)
     (funcall mode 1)
     (yunge-test-evil-keys 'normal bindings)))
+
+(defun yunge-magit-test--git-rebase-mode ()
+  "Start Git Rebase mode without scheduling a usage message."
+  (let ((with-editor-show-usage nil))
+    (git-rebase-mode)))
 
 (defun yunge-magit-test--transient-command (prefix key)
   "Return the command bound to KEY in transient PREFIX."
@@ -461,7 +467,7 @@
   (require 'git-rebase)
 
   (yunge-test-evil-normal-keys
-   'git-rebase-mode
+   'yunge-magit-test--git-rebase-mode
    (append
     '(("RET" . git-rebase-show-commit)
       ("gf" . git-rebase-show-or-scroll-up)
@@ -479,7 +485,7 @@
       ("ZQ" . with-editor-cancel))
     yunge-magit-test-horizontal-bindings))
   (yunge-test-evil-visual-keys
-   'git-rebase-mode
+   'yunge-magit-test--git-rebase-mode
    '(("M-j" . git-rebase-move-line-down)
      ("M-k" . git-rebase-move-line-up)
      ("p" . git-rebase-pick)
@@ -549,7 +555,7 @@
 
   (with-temp-buffer
     (insert "pick 1111111 one\npick 2222222 two\npick 3333333 three\n")
-    (git-rebase-mode)
+    (yunge-magit-test--git-rebase-mode)
     (goto-char (point-min))
     (evil-normal-state)
     (save-window-excursion
