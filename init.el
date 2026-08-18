@@ -18,6 +18,7 @@
 (require 'yunge-editorconfig)
 (require 'yunge-theme)
 (require 'yunge-evil)
+(require 'yunge-pair)
 (require 'yunge-eglot)
 (require 'yunge-xref)
 (require 'yunge-grep)

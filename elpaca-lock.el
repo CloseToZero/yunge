@@ -69,6 +69,15 @@
    :files (:defaults "extensions/corfu-*.el")
    :fetcher github
    :ref "f6306d8c5ba540e75c208c8069b3b677de48a183"))
+ (dash
+  :source "elpaca-menu-lock-file"
+  :recipe
+  (:package "dash"
+   :repo "magnars/dash.el"
+   :fetcher github
+   :files ("dash.el" "dash.texi")
+   :source "MELPA"
+   :ref "d746dd9edcb67a108818beb0cdc78dc1cb466832"))
  (eldoc-box
   :source "elpaca-menu-lock-file"
   :recipe
@@ -249,6 +258,15 @@
     (:exclude "contrib/test" "contrib/Makefile"))
    :source "MELPA"
    :ref "957f61d8b8b57c1f463b56620a274eb77a09bc16"))
+ (smartparens
+  :source "elpaca-menu-lock-file"
+  :recipe
+  (:package "smartparens"
+   :repo "Fuco1/smartparens"
+   :fetcher github
+   :files (:defaults)
+   :source "MELPA"
+   :ref "82d2cf084a19b0c2c3812e0550721f8a61996056"))
  (tempel
   :source "elpaca-menu-lock-file"
   :recipe
