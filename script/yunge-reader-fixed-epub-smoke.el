@@ -2,8 +2,7 @@
 ;; SPDX-FileCopyrightText: 2026 Chen Zhexuan
 ;; SPDX-License-Identifier: MIT
 
-(setq native-comp-jit-compilation nil
-      native-comp-deferred-compilation nil)
+(setq native-comp-jit-compilation nil)
 
 (require 'cl-lib)
 (require 'subr-x)
@@ -45,6 +44,11 @@
   (error
    (delete-directory yunge-reader-fixed-smoke--temporary-root t)
    (signal (car error-data) (cdr error-data))))
+
+(declare-function yunge-reader-epub-next-line "yunge-reader-epub")
+(declare-function yunge-reader-epub-next-page "yunge-reader-epub")
+(declare-function yunge-reader-epub-next-screen "yunge-reader-epub")
+(declare-function yunge-reader-epub-previous-page "yunge-reader-epub")
 
 (defun yunge-reader-native-program ()
   "Use the release helper built by this isolated smoke."

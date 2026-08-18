@@ -942,6 +942,14 @@ and fit-page recompute their effective scales without replacing the native
 surface.  Manual zoom remains unchanged, and a subsequent line movement
 proves that resize retained the page-relative viewport before recreation.
 
+A generated graphical PDF smoke opens a three-page A4 fixture through ordinary
+file registration and waits for its real PDFium render to become an Emacs
+image.  It requires centered display geometry, changes the live window in
+fit-width and fit-page modes, and retains the same stable page position while
+both effective scales change.  Manual scale and a nonzero page-relative
+viewport remain unchanged across a third resize.  The Reader buffer stays
+unmodified, kills without a save query, and leaves no fixture or render cache.
+
 The integration path installs the pinned Windows library through the public
 setup command, runs its =pdfium-info= smoke test, opens a five-page A4 fixture,
 checks all page geometries, renders neighboring pages, closes the handle, and

@@ -713,3 +713,18 @@ manual modes, stops the helper between variants, and removes the fixtures:
 #+begin_src shell
 emacs -Q --load script/yunge-reader-fixed-epub-smoke.el
 #+end_src
+
+* Graphical PDF smoke
+
+After =M-x yunge-reader-native-setup= has installed the pinned PDFium library,
+the isolated graphical smoke builds the release helper and generates a
+three-page A4 PDF under a system temporary directory.  It opens the file
+through ordinary Reader registration, requires a centered real image, and
+resizes fit-width, fit-page, and manual presentations while retaining their
+stable page position.  It also requires the Reader buffer to remain
+unmodified and kill without a save query, then removes its fixture and render
+cache:
+
+#+begin_src shell
+emacs -Q --load script/yunge-reader-pdf-smoke.el
+#+end_src
