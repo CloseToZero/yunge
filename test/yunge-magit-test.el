@@ -34,6 +34,8 @@
 (declare-function transient-get-suffix "transient" (prefix loc))
 (declare-function yunge-magit--enter-insert-state-for-blank-commit-message
                   "yunge-magit")
+(declare-function yunge-magit--deactivate-empty-mouse-region
+                  "yunge-magit" (&rest arguments))
 
 (defvar evil-state)
 (defvar git-commit-setup-hook)
@@ -546,6 +548,32 @@
         ("q" . quit-window)
         ("u" . magit-repolist-unmark))
       yunge-magit-test-horizontal-bindings))))
+
+(ert-deftest yunge-magit-plain-click-does-not-enter-visual-state ()
+  (yunge-test-enable-evil)
+  (require 'magit-autoloads)
+  (yunge-test-load-package-config 'yunge-magit)
+  (require 'magit)
+
+  (should
+   (advice-member-p #'yunge-magit--deactivate-empty-mouse-region
+                    'evil-mouse-drag-track))
+  (with-temp-buffer
+    (magit-status-mode)
+    (let ((inhibit-read-only t))
+      (insert "ab"))
+    (goto-char (point-min))
+    (evil-normal-state)
+    (evil-visual-state)
+    (yunge-magit--deactivate-empty-mouse-region)
+    (should (eq evil-state 'normal))
+    (should-not mark-active)
+
+    (evil-visual-state)
+    (forward-char)
+    (yunge-magit--deactivate-empty-mouse-region)
+    (should (eq evil-state 'visual))
+    (should mark-active)))
 
 (ert-deftest yunge-magit-rebase-visual-action-excludes-the-next-line ()
   (yunge-test-enable-evil)

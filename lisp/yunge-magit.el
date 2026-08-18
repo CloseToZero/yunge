@@ -6,6 +6,8 @@
 (require 'yunge-evil)
 
 (declare-function evil-add-command-properties "evil-common")
+(declare-function evil-exit-visual-state "evil-states"
+                  (&optional later buffer))
 (declare-function evil-insert-state "evil-states")
 (declare-function transient-bind-q-to-quit "transient")
 (declare-function transient-suffix-put "transient"
@@ -13,6 +15,7 @@
 
 (defvar git-commit-setup-hook)
 (defvar git-rebase-mode-map)
+(defvar evil-state)
 (defvar magit-define-global-key-bindings)
 (defvar magit-cherry-mode-map)
 (defvar magit-diff-mode-map)
@@ -188,6 +191,16 @@
              (eolp))
     (evil-insert-state)))
 
+(defun yunge-magit--deactivate-empty-mouse-region (&rest _arguments)
+  "Deactivate an empty Evil mouse region in a Magit buffer."
+  (when (and (derived-mode-p 'magit-mode)
+             (bound-and-true-p evil-local-mode)
+             mark-active
+             (= (point) (mark)))
+    (if (eq evil-state 'visual)
+        (evil-exit-visual-state)
+      (deactivate-mark))))
+
 (elpaca magit
   (yunge-key-define yunge-file-map yunge-magit-file-bindings)
   (yunge-key-define yunge-go-map yunge-magit-go-bindings)
@@ -253,6 +266,11 @@
     (keymap-unset magit-diff-section-map "C-j" t))
   (with-eval-after-load 'magit-submodule
     (keymap-unset magit-module-section-map "C-j" t))
+  (with-eval-after-load 'evil-commands
+    ;; Magit's mouse-set-point remap makes Evil retain an empty mouse
+    ;; selection after a plain click.
+    (advice-add 'evil-mouse-drag-track :after
+                #'yunge-magit--deactivate-empty-mouse-region))
   (with-eval-after-load 'git-commit
     (add-hook 'git-commit-setup-hook
               #'yunge-magit--enter-insert-state-for-blank-commit-message))
