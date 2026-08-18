@@ -1894,7 +1894,7 @@ mod tests {
         assert!(event.selection.is_none());
         assert!(event.key.is_none());
 
-        for key in ["J", "K", "+", "-", "=", "y", "SPC"] {
+        for key in ["J", "K", "j", "k", "+", "-", "=", "y", "SPC"] {
             let payload = json!({
                 "protocol": 1,
                 "event": "accelerator",
@@ -1930,12 +1930,6 @@ mod tests {
             HttpRequest::builder()
                 .uri(APP_URL)
                 .body(r#"{"protocol":1,"event":"publication-ready"}"#.into())
-                .unwrap(),
-            HttpRequest::builder()
-                .uri(APP_URL)
-                .body(
-                    r#"{"protocol":1,"event":"accelerator","key":"j"}"#.into(),
-                )
                 .unwrap(),
             HttpRequest::builder()
                 .uri(APP_URL)

@@ -426,7 +426,7 @@ pub(super) fn event(
             let key = message.key.filter(|key| {
                 matches!(
                     key.as_str(),
-                    "J" | "K" | "+" | "-" | "=" | "y" | "SPC"
+                    "J" | "K" | "j" | "k" | "+" | "-" | "=" | "y" | "SPC"
                 )
             })?;
             ("accelerator", None, None, None, None, Some(key))
