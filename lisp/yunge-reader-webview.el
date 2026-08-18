@@ -7,6 +7,7 @@
 (require 'yunge-reader)
 (require 'yunge-reader-native)
 (require 'yunge-reader-webview-protocol)
+(require 'yunge-reader-webview-view)
 (require 'yunge-reader-webview-renderer)
 (require 'yunge-reader-transport)
 
@@ -20,10 +21,6 @@
   :type 'number
   :group 'yunge-reader)
 
-
-(defconst yunge-reader-webview--surface-states
-  '(detached creating native-ready opening ready failed)
-  "Lifecycle states for one logical view's current native surface.")
 
 (defconst yunge-reader-webview--passive-buffer-message
   (concat "This EPUB view is active in another window.\n\n"
@@ -41,75 +38,8 @@
 (defvar yunge-reader-webview--transport nil
   "NDJSON transport bound to the current WebView helper process.")
 
-(defvar yunge-reader-webview--next-view-id 0
-  "Last logical WebView identifier allocated by Emacs.")
-
-(defvar yunge-reader-webview--views (make-hash-table :test #'eql)
-  "Native WebView surfaces indexed by their current identifier.")
-
-(defvar yunge-reader-webview--logical-views
-  (make-hash-table :test #'eq)
-  "Live logical WebView records, including temporarily hidden views.")
-
 (defvar yunge-reader-webview--force-stop-timer nil
   "Timer enforcing the graceful WebView shutdown deadline.")
-
-(defvar-local yunge-reader-webview--buffer-view nil
-  "WebView record owned by the current spike buffer.")
-
-(cl-defstruct (yunge-reader-webview--view
-               (:constructor yunge-reader-webview--make-view))
-  "One native child WebView attached to an Emacs window."
-  id
-  window
-  buffer
-  (surface-state 'detached)
-  native-focused
-  focus-release-pending
-  destroyed
-  persistent
-  owns-publication
-  bounds
-  requested-bounds
-  bounds-pending
-  publication
-  style
-  surface-style
-  scroll-bar-mode
-  surface-scroll-bar-mode
-  location
-  pending-target
-  outline
-  outline-ready
-  outline-error
-  outline-waiters
-  selection
-  search-result
-  path
-  open-deadline
-  open-timer
-  pending-destroys
-  destroy-waiters
-  destroy-finished
-  location-changed-function
-  selection-changed-function
-  accelerator-function
-  scroll-bar-function)
-
-(defun yunge-reader-webview--set-surface-state (view state)
-  "Set VIEW's surface STATE after validating the lifecycle value."
-  (unless (memq state yunge-reader-webview--surface-states)
-    (error "Invalid EPUB surface state: %S" state))
-  (setf (yunge-reader-webview--view-surface-state view) state))
-
-(defun yunge-reader-webview--surface-created-p (view)
-  "Return whether VIEW has a native surface that accepts requests."
-  (memq (yunge-reader-webview--view-surface-state view)
-        '(native-ready opening ready failed)))
-
-(defun yunge-reader-webview--surface-ready-p (view)
-  "Return whether VIEW's native surface has loaded its publication."
-  (eq (yunge-reader-webview--view-surface-state view) 'ready))
 
 (define-derived-mode yunge-reader-webview-spike-mode special-mode
   "Yunge-WebView"

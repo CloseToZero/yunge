@@ -3,14 +3,11 @@
 ;; SPDX-License-Identifier: MIT
 
 (require 'yunge-reader-webview-protocol)
+(require 'yunge-reader-webview-view)
 
 (declare-function yunge-reader-webview--request
                   "yunge-reader-webview"
                   (operation parameters complete))
-(declare-function yunge-reader-webview--view-id
-                  "yunge-reader-webview"
-                  (view))
-
 (defun yunge-reader-webview--open-publication (path callback)
   "Open the local EPUB at PATH and invoke CALLBACK with its result."
   (unless (and (stringp path)
