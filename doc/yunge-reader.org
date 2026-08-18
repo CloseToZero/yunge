@@ -222,7 +222,7 @@ Interactive width and line-height controls remain later work.
 
 * Library boundary
 
-The implementation is divided into seven pieces:
+The implementation is divided into eight pieces:
 
 - =yunge-reader.el= owns drivers, documents, stable positions, logical
   selections, outlines, bounded search state, reader buffers, and zoom state.
@@ -235,7 +235,9 @@ The implementation is divided into seven pieces:
   operation-private installation transaction.
 - =yunge-reader-pdf.el= maps the format-independent interface onto PDFium,
   virtualizes a continuous page roll, and paints visible selections.
-- =yunge-reader-webview.el= owns the native child-surface protocol and keeps
+- =yunge-reader-webview-protocol.el= owns the WebView handshake and bounded
+  validation of renderer locations, selections, outlines, search, and styles.
+- =yunge-reader-webview.el= owns the native child-surface lifecycle and keeps
   persistent logical views separate from disposable window surfaces.
 - =yunge-reader-epub.el= maps shared EPUB publications and reflowable
   locations onto the Reader driver interface.
