@@ -6,13 +6,13 @@ use serde_json::{Value, json};
 use wry::http::Request as HttpRequest;
 
 use super::protocol::{PROTOCOL_VERSION, Response};
+use super::resources::{APP_BROWSER_URL, APP_URL};
 use super::{
-    APP_BROWSER_URL, APP_URL, EpubLocator, EpubNavigationTarget, EpubOutline,
-    EpubSearchCursor, EpubSearchMatch, EpubSelection, EpubStyle,
-    MAX_EPUB_SEARCH_RESULT_BYTES, MAX_EPUB_SELECTION_CHARACTERS,
-    MAX_EPUB_SELECTION_RESULT_BYTES, MAX_RENDERER_ERROR_BYTES,
-    MAX_RENDERER_MESSAGE_BYTES, NavigationCommand, SearchDirection, ViewEvent,
-    ViewSearchParams, ViewSelectionTextParams,
+    EpubLocator, EpubNavigationTarget, EpubOutline, EpubSearchCursor,
+    EpubSearchMatch, EpubSelection, EpubStyle, MAX_EPUB_SEARCH_RESULT_BYTES,
+    MAX_EPUB_SELECTION_CHARACTERS, MAX_EPUB_SELECTION_RESULT_BYTES,
+    MAX_RENDERER_ERROR_BYTES, MAX_RENDERER_MESSAGE_BYTES, NavigationCommand,
+    SearchDirection, ViewEvent, ViewSearchParams, ViewSelectionTextParams,
 };
 
 #[derive(Debug, Deserialize)]

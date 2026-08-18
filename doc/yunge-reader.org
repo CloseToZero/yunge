@@ -255,10 +255,10 @@ The implementation is divided into thirteen pieces:
 
 The native WebView helper keeps request decoding, stable operation names,
 response envelopes, and protocol errors in =src/webview/protocol.rs=.  The
-service remains responsible for executing those typed operations and owning
-all publication, renderer, and WebView2 state.  Unsupported operations are
-therefore rejected at the protocol boundary before they can reach native
-resources.
+service remains responsible for executing those typed operations and
+coordinating the publication, renderer, resource, and surface components.
+Unsupported operations are therefore rejected at the protocol boundary before
+they can reach native resources.
 
 =src/webview/surface.rs= owns the validated parent-window adapter, child
 WebView construction, bounds, visibility, load state, focus, routed
@@ -273,6 +273,13 @@ every JavaScript command sent to the renderer.  The service owns pending
 request identities and decides when to execute those commands.  The renderer
 bridge has no child-window handles, publication store, filesystem access, or
 EPUB resource-serving authority.
+
+=src/webview/resources.rs= owns embedded renderer assets, both private
+origins and their content-security policy, opaque publication tokens, the
+token-to-publication store, bounded concurrent resource requests, normalized
+EPUB paths, and HTTP response construction.  The service retains publication
+IDs and live-view close ordering, but cannot inspect the resource store or its
+locks and counters.
 
 PDF selection and search geometry uses one compound SVG path per page and
 highlight kind.  Overlapping glyph bounds therefore share one opacity pass
