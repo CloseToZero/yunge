@@ -97,6 +97,72 @@
     (yunge-reader-mode)
     (should-not buffer-auto-save-file-name)))
 
+(ert-deftest yunge-reader-keeps-one-active-window-per-logical-view ()
+  (let ((buffer (generate-new-buffer " *reader-presentations*"))
+        (other (generate-new-buffer " *reader-other*")))
+    (unwind-protect
+        (save-window-excursion
+          (switch-to-buffer buffer)
+          (yunge-reader-mode)
+          (let* ((first (selected-window))
+                 (second (split-window-right)))
+            (set-window-buffer second buffer)
+            (should (eq (yunge-reader--presentation-window) first))
+            (select-window second)
+            (yunge-reader--note-view-activity)
+            (should (eq yunge-reader--active-presentation second))
+            (set-window-buffer second other)
+            (should (eq (yunge-reader--presentation-window) first))))
+      (when (buffer-live-p buffer)
+        (kill-buffer buffer))
+      (when (buffer-live-p other)
+        (kill-buffer other)))))
+
+(ert-deftest yunge-reader-records-only-the-active-presentation ()
+  (let ((buffer (generate-new-buffer " *reader-active-place*"))
+        (yunge-reader-drivers nil)
+        (yunge-reader-saved-places nil))
+    (unwind-protect
+        (save-window-excursion
+          (switch-to-buffer buffer)
+          (yunge-reader-mode)
+          (let* ((first (selected-window))
+                 (second (split-window-right))
+                 (driver
+                  (yunge-reader-register-driver
+                   'test
+                   :match #'ignore :open #'ignore :close #'ignore
+                   :request #'ignore
+                   :location
+                   (lambda (_document window)
+                     (make-yunge-reader-position
+                      :unit (if (eq window first) 1 2)))
+                   :restore #'ignore)))
+            (set-window-buffer second buffer)
+            (setq yunge-reader-document
+                  (make-yunge-reader-document
+                   :file "active.pdf" :driver driver :layout 'fixed)
+                  yunge-reader--place-recording-enabled t)
+            (yunge-reader-record-place second)
+            (should-not yunge-reader-saved-places)
+            (yunge-reader-record-place first)
+            (should
+             (= (plist-get
+                 (plist-get
+                  (cdar yunge-reader-saved-places) :position)
+                 :unit)
+                1))
+            (select-window second)
+            (yunge-reader-record-place second)
+            (should
+             (= (plist-get
+                 (plist-get
+                  (cdar yunge-reader-saved-places) :position)
+                 :unit)
+                2))))
+      (when (buffer-live-p buffer)
+        (kill-buffer buffer)))))
+
 (ert-deftest yunge-reader-evil-escape-clears-transient-highlights ()
   (yunge-test-enable-evil)
   (with-temp-buffer

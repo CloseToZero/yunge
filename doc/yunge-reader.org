@@ -257,6 +257,15 @@ or deleting a window only hides that view; displaying its buffer attaches the
 same view state to a live window again.  Killing the view buffer performs the
 actual detach and may release the shared document when no views remain.
 
+One window is the active presentation of that buffer-owned view.  Selecting a
+window which displays the buffer makes that window active; hiding it falls
+back to another live presentation without changing the view's primary or
+additional role.  An explicit window may still be inspected for rendering,
+but only the primary view's active presentation can replace the durable place.
+For PDF, passive duplicate windows may remain visible, while their scrolling
+and resizing cannot change the shared current page, fit geometry, search
+anchor, or saved location.
+
 Opening a document declares one of two layouts:
 
 - =fixed= documents have stable spatial units, normally pages.  PDF, DjVu,

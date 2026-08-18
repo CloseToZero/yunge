@@ -1554,6 +1554,9 @@
                  (lambda (_window) t))
                 ((symbol-function 'window-buffer)
                  (lambda (_window) buffer))
+                ((symbol-function
+                  'yunge-reader--active-presentation-p)
+                 (lambda (_window) t))
                 ((symbol-function 'window-body-width)
                  (lambda (_window pixelwise)
                    (and pixelwise width)))
@@ -1645,11 +1648,91 @@
                 ((symbol-function 'window-buffer)
                  (lambda (_window) buffer))
                 ((symbol-function
+                  'yunge-reader--active-presentation-p)
+                 (lambda (_window) t))
+                ((symbol-function
                   'yunge-reader-pdf--update-visible-pages)
                  (lambda (&optional window)
                    (setq updated window))))
         (yunge-reader-pdf--finish-resize buffer)
         (should (eq updated 'window))))))
+
+(ert-deftest yunge-reader-pdf-ignores-an-inactive-window-resize ()
+  (with-temp-buffer
+    (yunge-reader-mode)
+    (yunge-reader-pdf-view-mode 1)
+    (let ((buffer (current-buffer)))
+      (setq yunge-reader-document
+            (yunge-reader-pdf-test--document))
+      (cl-letf (((symbol-function 'window-live-p)
+                 (lambda (_window) t))
+                ((symbol-function 'window-buffer)
+                 (lambda (_window) buffer))
+                ((symbol-function
+                  'yunge-reader--active-presentation-p)
+                 (lambda (_window) nil))
+                ((symbol-function 'run-with-idle-timer)
+                 (lambda (&rest _arguments)
+                   (ert-fail "Inactive resize scheduled work"))))
+        (yunge-reader-pdf--window-size-change 'inactive)
+        (should-not yunge-reader-pdf--pending-resize)))))
+
+(ert-deftest yunge-reader-pdf-uses-active-presentation-geometry ()
+  (with-temp-buffer
+    (yunge-reader-mode)
+    (yunge-reader-pdf-view-mode 1)
+    (setq yunge-reader-document
+          (yunge-reader-pdf-test--document)
+          yunge-reader-pdf--page-infos
+          [((width . 100.0) (height . 200.0))]
+          yunge-reader-pdf--page-positions [1])
+    (let (painted recorded synchronized)
+      (cl-letf (((symbol-function 'yunge-reader--presentation-window)
+                 (lambda () 'active))
+                ((symbol-function
+                  'yunge-reader-pdf--apply-pending-location)
+                 (lambda (_window) nil))
+                ((symbol-function 'yunge-reader-pdf--sync-current-page)
+                 (lambda (window) (setq synchronized window)))
+                ((symbol-function 'yunge-reader-pdf--target-width)
+                 (lambda (_page-info window)
+                   (should (eq window 'active))))
+                ((symbol-function 'yunge-reader-pdf--visible-pages)
+                 (lambda () '(0)))
+                ((symbol-function 'yunge-reader-pdf--paint-pages)
+                 (lambda (_pages window) (setq painted window)))
+                ((symbol-function 'yunge-reader-pdf--queue-pages)
+                 #'ignore)
+                ((symbol-function 'yunge-reader-pdf--update-header)
+                 #'ignore)
+                ((symbol-function 'yunge-reader-record-place)
+                 (lambda (window) (setq recorded window))))
+        (yunge-reader-pdf--update-visible-pages 'inactive)
+        (should (eq synchronized 'active))
+        (should (eq painted 'active))
+        (should (eq recorded 'inactive))))))
+
+(ert-deftest yunge-reader-pdf-passive-scroll-keeps-search-anchor ()
+  (with-temp-buffer
+    (let ((buffer (current-buffer))
+          detached
+          updated)
+      (cl-letf (((symbol-function 'window-live-p)
+                 (lambda (_window) t))
+                ((symbol-function 'window-buffer)
+                 (lambda (_window) buffer))
+                ((symbol-function
+                  'yunge-reader--active-presentation-p)
+                 (lambda (_window) nil))
+                ((symbol-function
+                  'yunge-reader--detach-search-navigation)
+                 (lambda () (setq detached t)))
+                ((symbol-function
+                  'yunge-reader-pdf--update-visible-pages)
+                 (lambda (window) (setq updated window))))
+        (yunge-reader-pdf--window-scrolled 'passive nil)
+        (should-not detached)
+        (should (eq updated 'passive))))))
 
 (ert-deftest yunge-reader-pdf-ignores-a-stale-resize-window ()
   (with-temp-buffer

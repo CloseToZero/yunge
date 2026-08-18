@@ -2357,7 +2357,7 @@ Use the nearest cached render ENTRY while an exact render is unavailable."
 (defun yunge-reader-pdf--sync-current-page (&optional window)
   "Update the current page from WINDOW's topmost roll slot."
   (let* ((window
-          (or window (get-buffer-window (current-buffer) t)))
+          (or window (yunge-reader--place-window)))
          (page
           (and window
                (yunge-reader-pdf--page-at-position
@@ -2366,14 +2366,16 @@ Use the nearest cached render ENTRY while an exact render is unavailable."
       (setq yunge-reader-pdf-page page))))
 
 (defun yunge-reader-pdf--update-visible-pages (&optional window)
-  "Virtualize the PDF roll and queue pages visible around WINDOW."
+  "Virtualize the PDF roll around the active presentation.
+WINDOW identifies the presentation which triggered this update."
   (when (and yunge-reader-pdf-view-mode
              yunge-reader-document
              yunge-reader-pdf--page-positions
              (not yunge-reader-pdf--updating-visible))
-    (let ((yunge-reader-pdf--updating-visible t)
-          (window
-           (or window (get-buffer-window (current-buffer) t))))
+    (let* ((yunge-reader-pdf--updating-visible t)
+           (source-window window)
+           (window (or (yunge-reader--presentation-window)
+                       (yunge-reader--place-window source-window))))
       (unless (yunge-reader-pdf--apply-pending-location window)
         (yunge-reader-pdf--sync-current-page window))
       (yunge-reader-pdf--target-width
@@ -2384,7 +2386,7 @@ Use the nearest cached render ENTRY while an exact render is unavailable."
         (yunge-reader-pdf--queue-pages
          (yunge-reader-pdf--prefetch-range visible) window))
       (yunge-reader-pdf--update-header)
-      (yunge-reader-record-place window))))
+      (yunge-reader-record-place source-window))))
 
 (defun yunge-reader-pdf--refresh (&optional window location)
   "Refresh the PDF roll in WINDOW, then restore stable LOCATION."
@@ -2393,7 +2395,7 @@ Use the nearest cached render ENTRY while an exact render is unavailable."
           (or (and (window-live-p window)
                    (eq (window-buffer window) (current-buffer))
                    window)
-              (get-buffer-window (current-buffer) t)))
+              (yunge-reader--place-window)))
     (cl-incf yunge-reader-pdf--generation)
     (unless yunge-reader-pdf--page-infos
       (yunge-reader-pdf--load-page-infos))
@@ -3166,7 +3168,8 @@ when non-nil, is a previously resolved start character position."
         (when (and yunge-reader-pdf-view-mode
                    (eq document yunge-reader-document)
                    (window-live-p window)
-                   (eq (window-buffer window) buffer))
+                   (eq (window-buffer window) buffer)
+                   (yunge-reader--active-presentation-p window))
           (if (memq yunge-reader-zoom-mode '(fit-width fit-page))
               (yunge-reader-pdf--refresh window location)
             (yunge-reader-pdf--update-visible-pages window)))))))
@@ -3175,7 +3178,8 @@ when non-nil, is a previously resolved start character position."
   "Schedule viewport work after WINDOW changes its body size."
   (when (and yunge-reader-document
              (window-live-p window)
-             (eq (window-buffer window) (current-buffer)))
+             (eq (window-buffer window) (current-buffer))
+             (yunge-reader--active-presentation-p window))
     (let* ((former yunge-reader-pdf--pending-resize)
            (same-view
             (and (eq (plist-get former :document)
@@ -3203,7 +3207,8 @@ when non-nil, is a previously resolved start character position."
   "Update PDF virtualization after WINDOW scrolls."
   (when (and (window-live-p window)
              (eq (window-buffer window) (current-buffer)))
-    (unless yunge-reader-pdf--programmatic-scroll
+    (unless (or yunge-reader-pdf--programmatic-scroll
+                (not (yunge-reader--active-presentation-p window)))
       (yunge-reader--detach-search-navigation))
     (yunge-reader-pdf--update-visible-pages window)))
 
@@ -3219,7 +3224,7 @@ when non-nil, is a previously resolved start character position."
           (max 0 (min (1- count) page)))
     (let ((position
            (yunge-reader-pdf--page-position yunge-reader-pdf-page))
-          (window (get-buffer-window (current-buffer) t)))
+          (window (yunge-reader--place-window)))
       (when position
         (goto-char position)
         (when (window-live-p window)

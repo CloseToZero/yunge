@@ -251,6 +251,9 @@ Each entry maps a canonical file name to versioned, printable place data.")
 (defvar-local yunge-reader--restoring-place nil
   "Whether the current view is restoring a durable place.")
 
+(defvar-local yunge-reader--active-presentation nil
+  "Live window currently presenting this logical Reader view.")
+
 (defvar-local yunge-reader-zoom-mode 'fit-width
   "Current zoom mode: `manual', `fit-width', or `fit-page'.")
 
@@ -413,6 +416,7 @@ document contents.")
   (setq-local yunge-reader-scale yunge-reader-default-scale)
   (setq-local yunge-reader--document-entry nil)
   (setq-local yunge-reader--view-attached nil)
+  (setq-local yunge-reader--active-presentation nil)
   (setq-local yunge-reader--outline-buffer nil)
   (setq-local yunge-reader--copy-generation 0)
   (setq-local yunge-reader--copy-pending nil)
@@ -632,7 +636,8 @@ The possible roles are `primary' and `additional'."
       'additional)))
 
 (defun yunge-reader--note-view-activity ()
-  "Remember the current buffer as its document's active view."
+  "Remember the current presentation and document view as active."
+  (yunge-reader--activate-presentation)
   (when (and yunge-reader-document
              yunge-reader--document-entry
              (yunge-reader--entry-current-p
@@ -755,17 +760,39 @@ The possible roles are `primary' and `additional'."
                       yunge-reader-saved-places)
               nil))))
 
+(defun yunge-reader--presentation-window-p (window)
+  "Return whether WINDOW presents the current Reader buffer."
+  (and (window-live-p window)
+       (eq (window-buffer window) (current-buffer))))
+
+(defun yunge-reader--activate-presentation (&optional window)
+  "Make WINDOW the current logical view's active presentation.
+WINDOW defaults to the selected window.  Return the accepted window, or
+nil when it does not display the current Reader buffer."
+  (let ((window (or window (selected-window))))
+    (when (yunge-reader--presentation-window-p window)
+      (setq yunge-reader--active-presentation window))))
+
+(defun yunge-reader--presentation-window ()
+  "Return and retain the active window for this logical Reader view."
+  (or (yunge-reader--activate-presentation)
+      (and (yunge-reader--presentation-window-p
+            yunge-reader--active-presentation)
+           yunge-reader--active-presentation)
+      (when-let* ((window (get-buffer-window (current-buffer) t)))
+        (setq yunge-reader--active-presentation window))))
+
+(defun yunge-reader--active-presentation-p (window)
+  "Return whether WINDOW is the current view's active presentation."
+  (and window (eq window (yunge-reader--presentation-window))))
+
 (defun yunge-reader--place-window (&optional window)
-  "Return a live WINDOW displaying the current Reader buffer."
-  (let ((window
-         (or window
-             (and (eq (window-buffer (selected-window))
-                      (current-buffer))
-                  (selected-window))
-             (get-buffer-window (current-buffer) t))))
-    (and (window-live-p window)
-         (eq (window-buffer window) (current-buffer))
-         window)))
+  "Return a live presentation WINDOW for the current Reader buffer.
+An explicit WINDOW may be an inactive presentation.  Without one, return
+the active presentation."
+  (if window
+      (and (yunge-reader--presentation-window-p window) window)
+    (yunge-reader--presentation-window)))
 
 (defun yunge-reader--current-place (&optional window)
   "Return the current Reader place viewed in WINDOW, or nil."
@@ -796,22 +823,26 @@ The possible roles are `primary' and `additional'."
 
 (defun yunge-reader-record-place (&optional window)
   "Record the current durable Reader place as viewed in WINDOW.
-Do nothing until document opening and any prior place restoration commit."
-  (when (and yunge-reader--place-recording-enabled
-             (not yunge-reader--restoring-place)
-             (yunge-reader--primary-view-p)
-             yunge-reader-document)
-    (condition-case error-data
-        (when-let* ((place (yunge-reader--current-place window)))
-          (yunge-reader--store-place
-           (yunge-reader-document-file yunge-reader-document)
-           place))
-      (error
-       (display-warning
-        'yunge-reader
-        (format "Could not remember Reader place: %s"
-                (error-message-string error-data))
-        :warning)))))
+Do nothing until document opening and any prior place restoration commit.
+Only the primary view's active presentation may replace the durable place."
+  (let ((window (yunge-reader--place-window window)))
+    (when (and window
+               (yunge-reader--active-presentation-p window)
+               yunge-reader--place-recording-enabled
+               (not yunge-reader--restoring-place)
+               (yunge-reader--primary-view-p)
+               yunge-reader-document)
+      (condition-case error-data
+          (when-let* ((place (yunge-reader--current-place window)))
+            (yunge-reader--store-place
+             (yunge-reader-document-file yunge-reader-document)
+             place))
+        (error
+         (display-warning
+          'yunge-reader
+          (format "Could not remember Reader place: %s"
+                  (error-message-string error-data))
+          :warning))))))
 
 (defun yunge-reader--restore-view-state (place)
   "Restore generic zoom state from durable PLACE."
