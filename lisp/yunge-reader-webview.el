@@ -67,6 +67,12 @@
 (defconst yunge-reader-webview--scroll-bar-modes '(hidden visible)
   "Resolved display modes for an EPUB spine-item scroll bar.")
 
+(defconst yunge-reader-webview--passive-buffer-message
+  (concat "This EPUB view is active in another window.\n\n"
+          "Select this window to move the EPUB view here.\n"
+          "Use SPC m v for an independent Additional view.")
+  "Message visible behind an active EPUB surface in passive windows.")
+
 (defconst yunge-reader-webview--log-buffer-name
   "*Yunge Reader WebView log*"
   "Name of the WebView helper diagnostic buffer.")
@@ -1098,10 +1104,7 @@ When REVEAL is non-nil, navigate to the result before painting it."
          (yunge-reader-webview--store-view-outline view message)
          (yunge-reader-webview--dispatch-pending-target view)
          (yunge-reader-webview--set-buffer-message
-          view
-          (format "EPUB renderer ready: %s"
-                  (or (yunge-reader-webview--view-path view)
-                      "publication")))))
+          view yunge-reader-webview--passive-buffer-message)))
       ("location"
        (when-let* ((view (gethash id yunge-reader-webview--views)))
          (yunge-reader-webview--store-view-location view message)))

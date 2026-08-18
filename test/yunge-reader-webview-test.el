@@ -865,6 +865,10 @@
           (should
            (yunge-reader-webview--view-publication-ready view))
           (should
+           (equal
+            (with-current-buffer buffer (buffer-string))
+            (concat yunge-reader-webview--passive-buffer-message "\n")))
+          (should
            (equal (yunge-reader-webview--view-location view)
                   (yunge-reader-webview-test--location 0.25)))
           (should (zerop location-notifications))

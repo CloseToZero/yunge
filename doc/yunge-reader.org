@@ -71,7 +71,10 @@ next =n/N= starts in that direction from the new stable reading position.
 stable location and zoom while sharing the open document resource.  It refuses
 to create a view before the current location is stable, so an incomplete view
 cannot silently fall back to page zero or an older saved place.  The existing
-primary view is unchanged.  Run =M-x yunge-reader-make-primary= to transfer
+primary view is unchanged.  The Additional buffer replaces the active
+presentation window deterministically; display the source buffer in another
+window first when both views should remain visible.  Run
+=M-x yunge-reader-make-primary= to transfer
 durable place ownership after saving the current view's stable location.
 PDF and EPUB headers identify each buffer as =Primary= or =Additional=.
 In Evil Normal state, =SPC m v= creates a view and =SPC m p= makes the
@@ -269,7 +272,9 @@ anchor, or saved location.
 An embedded EPUB surface follows the active presentation.  Moving it between
 windows on one frame updates the native child bounds without reopening the
 publication.  A move across frames recreates the surface because its native
-parent changes, while the buffer-owned view retains its logical state.
+parent changes, while the buffer-owned view retains its logical state.  A
+passive duplicate window explains that selecting it moves the surface and
+points to the explicit Additional-view command.
 
 Opening a document declares one of two layouts:
 

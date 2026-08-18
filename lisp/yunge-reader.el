@@ -1424,18 +1424,25 @@ asynchronously."
         buffer))))
 
 (defun yunge-reader-new-view ()
-  "Display another Reader view of the current document.
+  "Display another Reader view in the active presentation window.
 The new buffer starts from the current stable location and zoom state.  It
 shares the driver-owned document resource while keeping its view state
-independent.  The document's existing primary view is unchanged."
+independent.  The document's existing primary view is unchanged.  Display
+the current buffer in another window first to keep it visible alongside the
+new Additional view."
   (interactive)
   (let ((entry (yunge-reader--ready-view-entry)))
     (unless entry
       (user-error "This Reader view has no ready document"))
-    (let ((place (yunge-reader--stable-place)))
+    (let ((place (yunge-reader--stable-place))
+          (source (current-buffer))
+          (window (yunge-reader--presentation-window)))
       (unless place
         (user-error "This Reader view has no stable location yet"))
-      (let* ((document
+      (unless window
+        (user-error "This Reader view has no active presentation"))
+      (let* ((origin-state (yunge-reader--window-state window))
+             (document
               (yunge-reader--document-entry-document entry))
              (file (yunge-reader-document-file document))
              (driver (yunge-reader-document-driver document))
@@ -1447,10 +1454,17 @@ independent.  The document's existing primary view is unchanged."
             (progn
               (with-current-buffer buffer
                 (yunge-reader-mode))
-              (pop-to-buffer buffer)
+              (select-window window)
+              (switch-to-buffer buffer)
               (yunge-reader--begin-open buffer driver file place)
               buffer)
           (error
+           (when (and (window-live-p window)
+                      (eq (window-buffer window) buffer)
+                      (buffer-live-p source))
+             (yunge-reader--restore-window-state window origin-state)
+             (when (eq window (selected-window))
+               (set-buffer source)))
            (when (buffer-live-p buffer)
              (kill-buffer buffer))
            (signal (car error-data) (cdr error-data))))))))

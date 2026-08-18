@@ -1264,7 +1264,9 @@
         (opens 0)
         attached
         first
-        second)
+        second
+        primary-window
+        additional-window)
     (unwind-protect
         (save-window-excursion
           (let ((driver
@@ -1303,6 +1305,10 @@
             (puthash first 3 positions)
             (switch-to-buffer first)
             (yunge-reader--begin-open first driver file)
+            (setq primary-window (selected-window)
+                  additional-window (split-window-right))
+            (set-window-buffer additional-window first)
+            (select-window additional-window)
             (let ((document yunge-reader-document)
                   (key (yunge-reader--place-file-key file)))
               (setq yunge-reader-zoom-mode 'manual
@@ -1312,6 +1318,9 @@
               (puthash first 23 positions)
               (setq second (yunge-reader-new-view))
               (should (eq (current-buffer) second))
+              (should (eq (selected-window) additional-window))
+              (should (eq (window-buffer primary-window) first))
+              (should (eq (window-buffer additional-window) second))
               (should (= opens 1))
               (should (equal (reverse attached) (list first second)))
               (with-current-buffer first
@@ -1384,6 +1393,38 @@
               (should (equal yunge-reader-saved-places saved)))))
       (when (buffer-live-p first)
         (kill-buffer first)))))
+
+(ert-deftest yunge-reader-new-view-restores-a-synchronous-failure ()
+  (let* ((source
+          (yunge-reader-test--buffer " *reader-new-view-failure*"))
+         (file (expand-file-name "new-view-failure.pdf"))
+         (document
+          (make-yunge-reader-document :file file :driver 'test-driver))
+         (entry
+          (yunge-reader--make-document-entry :document document))
+         (make-buffer (symbol-function 'generate-new-buffer))
+         created)
+    (unwind-protect
+        (save-window-excursion
+          (switch-to-buffer source)
+          (cl-letf
+              (((symbol-function 'yunge-reader--ready-view-entry)
+                (lambda () entry))
+               ((symbol-function 'yunge-reader--stable-place)
+                (lambda () '(:position (:unit 4))))
+               ((symbol-function 'generate-new-buffer)
+                (lambda (name)
+                  (setq created (funcall make-buffer name))))
+               ((symbol-function 'yunge-reader--begin-open)
+                (lambda (&rest _arguments) (error "attach failed"))))
+            (should-error (yunge-reader-new-view) :type 'error)
+            (should (eq (current-buffer) source))
+            (should (eq (window-buffer) source))
+            (should-not (buffer-live-p created))))
+      (when (buffer-live-p created)
+        (kill-buffer created))
+      (when (buffer-live-p source)
+        (kill-buffer source)))))
 
 (ert-deftest yunge-reader-make-primary-saves-the-current-view ()
   (let ((yunge-reader--document-registry
