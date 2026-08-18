@@ -45,6 +45,7 @@
 
 (ert-deftest yunge-configuration-byte-compiles-without-warnings ()
   (yunge-test-run-emacs
+   "-L" (expand-file-name "script" yunge-test-root)
    "-L" (expand-file-name "test" yunge-test-root)
    "-l" "yunge-test-helper"
    "-l" "yunge-byte-compile-test"

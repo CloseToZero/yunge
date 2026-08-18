@@ -12,49 +12,33 @@
    (or load-file-name
        (error "PDF smoke must be loaded from a file"))))
 
-(defconst yunge-reader-pdf-smoke--root
-  (file-name-as-directory
-   (expand-file-name ".." yunge-reader-pdf-smoke--script-directory)))
+(add-to-list 'load-path yunge-reader-pdf-smoke--script-directory)
+(require 'yunge-reader-graphical-smoke)
 
-(defconst yunge-reader-pdf-smoke--manifest
-  (expand-file-name
-   "native/yunge-reader/Cargo.toml" yunge-reader-pdf-smoke--root))
-
-(defconst yunge-reader-pdf-smoke--helper
-  (expand-file-name
-   (concat
-    "native/yunge-reader/target/release/yunge-reader"
-    (if (eq system-type 'windows-nt) ".exe" ""))
-   yunge-reader-pdf-smoke--root))
-
-(defvar yunge-reader-pdf-smoke--temporary-root
-  (make-temp-file "yunge-reader-pdf-" t))
-
-(defvar yunge-reader-pdf-smoke--log-file
-  (getenv "YUNGE_READER_PDF_LOG"))
+(defconst yunge-reader-pdf-smoke--context
+  (yunge-reader-graphical-smoke-create
+   yunge-reader-pdf-smoke--script-directory
+   "PDF graphical smoke"
+   "yunge-reader-pdf-"
+   "YUNGE_READER_PDF_LOG"))
 
 (defun yunge-reader-pdf-smoke--log (format-string &rest arguments)
   "Write FORMAT-STRING with ARGUMENTS to stdout and the optional log."
-  (let ((text (apply #'format format-string arguments)))
-    (princ text)
-    (when yunge-reader-pdf-smoke--log-file
-      (write-region
-       text nil yunge-reader-pdf-smoke--log-file 'append 'silent))))
+  (apply
+   #'yunge-reader-graphical-smoke-log
+   yunge-reader-pdf-smoke--context
+   format-string arguments))
 
 (condition-case error-data
     (progn
-      (setq user-emacs-directory yunge-reader-pdf-smoke--root)
-      (startup-redirect-eln-cache
-       (expand-file-name
-        "eln-cache" yunge-reader-pdf-smoke--temporary-root))
-      (add-to-list
-       'load-path
-       (expand-file-name "lisp" user-emacs-directory))
+      (yunge-reader-graphical-smoke-initialize
+       yunge-reader-pdf-smoke--context)
       (require 'yunge-reader-pdf))
   (error
    (yunge-reader-pdf-smoke--log
     "PDF smoke load failed: %S\n" error-data)
-   (delete-directory yunge-reader-pdf-smoke--temporary-root t)
+   (yunge-reader-graphical-smoke-cleanup
+    yunge-reader-pdf-smoke--context)
    (signal (car error-data) (cdr error-data))))
 
 (defvar yunge-reader-pdf--page-positions)
@@ -72,15 +56,18 @@
 
 (defun yunge-reader-native-program ()
   "Use the release helper built by this isolated smoke."
-  yunge-reader-pdf-smoke--helper)
+  (yunge-reader-graphical-smoke-context-helper
+   yunge-reader-pdf-smoke--context))
 
 (defun yunge-reader-native-cache-directory ()
   "Use the disposable render cache owned by this smoke."
-  (expand-file-name "render-cache" yunge-reader-pdf-smoke--temporary-root))
+  (expand-file-name
+   "render-cache"
+   (yunge-reader-graphical-smoke-context-temporary-root
+    yunge-reader-pdf-smoke--context)))
 
 (defvar yunge-reader-pdf-smoke--file nil)
 (defvar yunge-reader-pdf-smoke--buffer nil)
-(defvar yunge-reader-pdf-smoke--cargo nil)
 (defvar yunge-reader-pdf-smoke--deadline nil)
 (defvar yunge-reader-pdf-smoke--phase 'opening)
 (defvar yunge-reader-pdf-smoke--not-before nil)
@@ -97,34 +84,6 @@
   (when (eq type 'yunge-reader)
     (push message yunge-reader-pdf-smoke--warnings))
   (apply original type message arguments))
-
-(defun yunge-reader-pdf-smoke--run-process (program arguments)
-  "Run PROGRAM with ARGUMENTS or signal with its captured output."
-  (let ((buffer (generate-new-buffer " *PDF smoke process*"))
-        process)
-    (unwind-protect
-        (progn
-          (setq process
-                (make-process
-                 :name "PDF smoke process"
-                 :buffer buffer
-                 :stderr buffer
-                 :command (cons program arguments)
-                 :coding 'utf-8-unix
-                 :connection-type 'pipe
-                 :noquery t))
-          (while (process-live-p process)
-            (accept-process-output process 0.1))
-          (let ((status (process-exit-status process))
-                (output
-                 (with-current-buffer buffer
-                   (string-trim (buffer-string)))))
-            (unless (string-empty-p output)
-              (yunge-reader-pdf-smoke--log "%s\n" output))
-            (unless (zerop status)
-              (error "%s failed with status %d" program status))))
-      (when (buffer-live-p buffer)
-        (kill-buffer buffer)))))
 
 (defun yunge-reader-pdf-smoke--page-stream (page)
   "Return the PDF content stream for one-based fixture PAGE."
@@ -201,14 +160,8 @@
 
 (defun yunge-reader-pdf-smoke--cleanup-temporary-root ()
   "Remove the temporary directory owned by this smoke."
-  (when yunge-reader-pdf-smoke--temporary-root
-    (unless (file-in-directory-p
-             yunge-reader-pdf-smoke--temporary-root
-             temporary-file-directory)
-      (error "PDF smoke directory escaped system temporary files"))
-    (when (file-directory-p yunge-reader-pdf-smoke--temporary-root)
-      (delete-directory yunge-reader-pdf-smoke--temporary-root t))
-    (setq yunge-reader-pdf-smoke--temporary-root nil)))
+  (yunge-reader-graphical-smoke-cleanup
+   yunge-reader-pdf-smoke--context))
 
 (defun yunge-reader-pdf-smoke--window ()
   "Return the live fixture window, or nil."
@@ -544,23 +497,15 @@
       (progn
         (unless (display-graphic-p)
           (error "PDF smoke requires a graphical Emacs"))
-        (setq yunge-reader-pdf-smoke--cargo
-              (or (executable-find "cargo")
-                  (error "cargo is not available")))
-        (yunge-reader-pdf-smoke--run-process
-         yunge-reader-pdf-smoke--cargo
-         (list
-          "build" "--release" "--manifest-path"
-          yunge-reader-pdf-smoke--manifest))
-        (unless (file-executable-p yunge-reader-pdf-smoke--helper)
-          (error "Native helper was not built: %s"
-                 yunge-reader-pdf-smoke--helper))
+        (yunge-reader-graphical-smoke-build-helper
+         yunge-reader-pdf-smoke--context)
         (unless (file-regular-p (yunge-reader-native-pdfium-library))
           (error "Run M-x yunge-reader-native-setup before the PDF smoke"))
         (setq yunge-reader-pdf-smoke--file
               (expand-file-name
                "graphical-fixture.pdf"
-               yunge-reader-pdf-smoke--temporary-root)
+               (yunge-reader-graphical-smoke-context-temporary-root
+                yunge-reader-pdf-smoke--context))
               yunge-reader-pdf-smoke--deadline (+ (float-time) 45))
         (yunge-reader-pdf-smoke--write-fixture
          yunge-reader-pdf-smoke--file)
