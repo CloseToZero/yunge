@@ -267,6 +267,13 @@ that the service maps onto protocol events.  It stores no publication handle,
 resource token, EPUB locator, or renderer search state, so dropping a native
 surface cannot implicitly destroy its persistent logical view or publication.
 
+=src/webview/renderer.rs= owns the browser IPC envelopes, bounded renderer
+result validation, semantic renderer-event conversion, and serialization of
+every JavaScript command sent to the renderer.  The service owns pending
+request identities and decides when to execute those commands.  The renderer
+bridge has no child-window handles, publication store, filesystem access, or
+EPUB resource-serving authority.
+
 PDF selection and search geometry uses one compound SVG path per page and
 highlight kind.  Overlapping glyph bounds therefore share one opacity pass
 instead of producing darker intersections.  Adjacent axis-aligned glyphs
