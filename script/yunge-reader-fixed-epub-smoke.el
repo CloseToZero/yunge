@@ -4,7 +4,6 @@
 
 (setq native-comp-jit-compilation nil)
 
-(require 'cl-lib)
 (require 'subr-x)
 
 (defconst yunge-reader-fixed-smoke--script-directory
@@ -12,37 +11,24 @@
    (or load-file-name
        (error "Fixed EPUB smoke must be loaded from a file"))))
 
-(defconst yunge-reader-fixed-smoke--root
-  (file-name-as-directory
-   (expand-file-name ".." yunge-reader-fixed-smoke--script-directory)))
+(add-to-list 'load-path yunge-reader-fixed-smoke--script-directory)
+(require 'yunge-reader-graphical-smoke)
 
-(defconst yunge-reader-fixed-smoke--manifest
-  (expand-file-name
-   "native/yunge-reader/Cargo.toml"
-   yunge-reader-fixed-smoke--root))
-
-(defconst yunge-reader-fixed-smoke--helper
-  (expand-file-name
-   (concat
-    "native/yunge-reader/target/release/yunge-reader"
-    (if (eq system-type 'windows-nt) ".exe" ""))
-   yunge-reader-fixed-smoke--root))
-
-(defvar yunge-reader-fixed-smoke--temporary-root
-  (make-temp-file "yunge-reader-fixed-" t))
+(defconst yunge-reader-fixed-smoke--context
+  (yunge-reader-graphical-smoke-create
+   yunge-reader-fixed-smoke--script-directory
+   "Fixed EPUB graphical smoke"
+   "yunge-reader-fixed-"
+   "YUNGE_READER_FIXED_LOG"))
 
 (condition-case error-data
     (progn
-      (setq user-emacs-directory yunge-reader-fixed-smoke--root)
-      (startup-redirect-eln-cache
-       (expand-file-name
-        "eln-cache" yunge-reader-fixed-smoke--temporary-root))
-      (add-to-list
-       'load-path
-       (expand-file-name "lisp" user-emacs-directory))
+      (yunge-reader-graphical-smoke-initialize
+       yunge-reader-fixed-smoke--context)
       (require 'yunge-reader-epub))
   (error
-   (delete-directory yunge-reader-fixed-smoke--temporary-root t)
+   (yunge-reader-graphical-smoke-cleanup
+    yunge-reader-fixed-smoke--context)
    (signal (car error-data) (cdr error-data))))
 
 (declare-function yunge-reader-epub-next-line "yunge-reader-epub")
@@ -52,7 +38,8 @@
 
 (defun yunge-reader-native-program ()
   "Use the release helper built by this isolated smoke."
-  yunge-reader-fixed-smoke--helper)
+  (yunge-reader-graphical-smoke-context-helper
+   yunge-reader-fixed-smoke--context))
 
 (defconst yunge-reader-fixed-smoke--variants
   '("ltr" "rtl" "vertical-rl"))
@@ -62,8 +49,6 @@
 (defvar yunge-reader-fixed-smoke--variant nil)
 (defvar yunge-reader-fixed-smoke--file nil)
 (defvar yunge-reader-fixed-smoke--cargo nil)
-(defvar yunge-reader-fixed-smoke--log-file
-  (getenv "YUNGE_READER_FIXED_LOG"))
 (defvar yunge-reader-fixed-smoke--next-action nil)
 (defvar yunge-reader-fixed-smoke--stop-deadline nil)
 (defvar yunge-reader-fixed-smoke--exit-status 0)
@@ -83,11 +68,10 @@
 
 (defun yunge-reader-fixed-smoke--log (format-string &rest arguments)
   "Write FORMAT-STRING with ARGUMENTS to stdout and the optional log."
-  (let ((text (apply #'format format-string arguments)))
-    (princ text)
-    (when yunge-reader-fixed-smoke--log-file
-      (write-region
-       text nil yunge-reader-fixed-smoke--log-file 'append 'silent))))
+  (apply
+   #'yunge-reader-graphical-smoke-log
+   yunge-reader-fixed-smoke--context
+   format-string arguments))
 
 (defun yunge-reader-fixed-smoke--warning
     (original type message &rest arguments)
@@ -151,44 +135,10 @@
        (numberp right)
        (> (abs (- left right)) 0.01)))
 
-(defun yunge-reader-fixed-smoke--run-process (program arguments)
-  "Run PROGRAM with ARGUMENTS synchronously or signal with its output."
-  (let ((buffer (generate-new-buffer " *fixed EPUB smoke process*"))
-        process)
-    (unwind-protect
-        (progn
-          (setq process
-                (make-process
-                 :name "fixed EPUB smoke process"
-                 :buffer buffer
-                 :stderr buffer
-                 :command (cons program arguments)
-                 :coding 'utf-8-unix
-                 :connection-type 'pipe
-                 :noquery t))
-          (while (process-live-p process)
-            (accept-process-output process 0.1))
-          (let ((output
-                 (with-current-buffer buffer
-                   (string-trim (buffer-string))))
-                (status (process-exit-status process)))
-            (unless (string-empty-p output)
-              (yunge-reader-fixed-smoke--log "%s\n" output))
-            (unless (zerop status)
-              (error "%s failed with status %d" program status))))
-      (when (buffer-live-p buffer)
-        (kill-buffer buffer)))))
-
 (defun yunge-reader-fixed-smoke--cleanup-temporary-root ()
   "Remove the temporary directory owned by this smoke."
-  (when yunge-reader-fixed-smoke--temporary-root
-    (unless (file-in-directory-p
-             yunge-reader-fixed-smoke--temporary-root
-             temporary-file-directory)
-      (error "Fixed EPUB smoke directory escaped system temporary files"))
-    (when (file-directory-p yunge-reader-fixed-smoke--temporary-root)
-      (delete-directory yunge-reader-fixed-smoke--temporary-root t))
-    (setq yunge-reader-fixed-smoke--temporary-root nil)))
+  (yunge-reader-graphical-smoke-cleanup
+   yunge-reader-fixed-smoke--context))
 
 (defun yunge-reader-fixed-smoke--complete-run ()
   "Clean the smoke resources and exit with the recorded status."
@@ -569,7 +519,8 @@
               yunge-reader-fixed-smoke--file
               (expand-file-name
                (concat yunge-reader-fixed-smoke--variant ".epub")
-               yunge-reader-fixed-smoke--temporary-root)
+               (yunge-reader-graphical-smoke-context-temporary-root
+                yunge-reader-fixed-smoke--context))
               yunge-reader-fixed-smoke--buffer nil
               yunge-reader-fixed-smoke--deadline (+ (float-time) 30)
               yunge-reader-fixed-smoke--phase 'ready
@@ -582,13 +533,15 @@
               yunge-reader-fixed-smoke--resize-bounds nil
               yunge-reader-fixed-smoke--resize-not-before nil
               yunge-reader-fixed-smoke--scrolled nil)
-        (yunge-reader-fixed-smoke--run-process
+        (yunge-reader-graphical-smoke-run-process
+         yunge-reader-fixed-smoke--context
          yunge-reader-fixed-smoke--cargo
          (list
           "run"
           "--quiet"
           "--manifest-path"
-          yunge-reader-fixed-smoke--manifest
+          (yunge-reader-graphical-smoke-context-manifest
+           yunge-reader-fixed-smoke--context)
           "--example"
           "fixed_epub_fixture"
           "--"
@@ -615,18 +568,8 @@
         (unless (display-graphic-p)
           (error "Fixed EPUB smoke requires a graphical Emacs"))
         (setq yunge-reader-fixed-smoke--cargo
-              (or (executable-find "cargo")
-                  (error "cargo is not available")))
-        (yunge-reader-fixed-smoke--run-process
-         yunge-reader-fixed-smoke--cargo
-         (list
-          "build"
-          "--release"
-          "--manifest-path"
-          yunge-reader-fixed-smoke--manifest))
-        (unless (file-executable-p yunge-reader-fixed-smoke--helper)
-          (error "Native helper was not built: %s"
-                 yunge-reader-fixed-smoke--helper))
+              (yunge-reader-graphical-smoke-build-helper
+               yunge-reader-fixed-smoke--context))
         (advice-add 'display-warning :around
                     #'yunge-reader-fixed-smoke--warning)
         (setq yunge-reader-fixed-smoke--remaining
