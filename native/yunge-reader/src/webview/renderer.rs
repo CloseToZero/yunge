@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use wry::http::Request as HttpRequest;
 
-use super::protocol::{PROTOCOL_VERSION, Response};
+use super::protocol::{PROTOCOL_VERSION, RENDERER_ACCELERATORS, Response};
 use super::resources::{APP_BROWSER_URL, APP_URL};
 use super::{
     EpubLocator, EpubNavigationTarget, EpubOutline, EpubSearchCursor,
@@ -446,12 +446,9 @@ pub(super) fn event(
             {
                 return None;
             }
-            let key = message.key.filter(|key| {
-                matches!(
-                    key.as_str(),
-                    "J" | "K" | "j" | "k" | "+" | "-" | "=" | "y" | "SPC"
-                )
-            })?;
+            let key = message
+                .key
+                .filter(|key| RENDERER_ACCELERATORS.contains(&key.as_str()))?;
             ("accelerator", None, None, None, None, Some(key), None)
         }
         RendererEvent::ExternalLink => {
@@ -614,6 +611,7 @@ pub(super) fn open_script(
         "location": location,
         "style": style,
         "scrollBars": scroll_bars,
+        "rendererAccelerators": RENDERER_ACCELERATORS,
     }))
     .expect("publication open payload is serializable");
     format!("void globalThis.yungeReader.open({payload});")

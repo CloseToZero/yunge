@@ -90,11 +90,7 @@
     (pcase event
       ("accelerator"
        (let ((key (alist-get 'key message)))
-         (unless (member key
-                         '("J" "K" "j" "k" "+" "-" "=" "y"
-                           "SPC" "M-m"
-                           "C-d" "C-u" "C-g" "<escape>"
-                           "<next>" "<prior>"))
+         (unless (member key yunge-reader-webview--accelerators)
            (error "Malformed WebView accelerator event: %S" message))
          (when-let* ((view (gethash id yunge-reader-webview--views))
                      (buffer (yunge-reader-webview--view-buffer view))

@@ -26,7 +26,7 @@ use wry::raw_window_handle::{
 };
 use wry::{PageLoadEvent, Rect, WebView, WebViewBuilder, WebViewExtWindows};
 
-use super::protocol::ServiceError;
+use super::protocol::{ACCELERATORS, ServiceError};
 
 const ESCAPE_VIRTUAL_KEY: u32 = 0x1b;
 const MAX_VIEW_EXTENT: u32 = 32_768;
@@ -258,24 +258,25 @@ fn routed_key(
     {
         return None;
     }
-    if key == ESCAPE_VIRTUAL_KEY {
-        return Some("<escape>");
-    }
-    if shift {
-        return None;
-    }
-    if alt {
-        return (!control && key == u32::from(b'M')).then_some("M-m");
-    }
-    match (key, control) {
-        (key, false) if key == u32::from(VK_SPACE.0) => Some("SPC"),
-        (key, true) if key == u32::from(b'G') => Some("C-g"),
-        (key, true) if key == u32::from(b'D') => Some("C-d"),
-        (key, true) if key == u32::from(b'U') => Some("C-u"),
-        (key, false) if key == u32::from(VK_NEXT.0) => Some("<next>"),
-        (key, false) if key == u32::from(VK_PRIOR.0) => Some("<prior>"),
-        _ => None,
-    }
+    let routed = if key == ESCAPE_VIRTUAL_KEY {
+        Some("<escape>")
+    } else if shift {
+        None
+    } else if alt {
+        (!control && key == u32::from(b'M')).then_some("M-m")
+    } else {
+        match (key, control) {
+            (key, false) if key == u32::from(VK_SPACE.0) => Some("SPC"),
+            (key, true) if key == u32::from(b'G') => Some("C-g"),
+            (key, true) if key == u32::from(b'D') => Some("C-d"),
+            (key, true) if key == u32::from(b'U') => Some("C-u"),
+            (key, false) if key == u32::from(VK_NEXT.0) => Some("<next>"),
+            (key, false) if key == u32::from(VK_PRIOR.0) => Some("<prior>"),
+            _ => None,
+        }
+    };
+    debug_assert!(routed.is_none_or(|key| ACCELERATORS.contains(&key)));
+    routed
 }
 
 fn key_state(key: VIRTUAL_KEY) -> bool {

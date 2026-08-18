@@ -48,6 +48,9 @@ const MAX_TOC_TOTAL_TEXT_BYTES = 384 * 1024
 const MAX_EXTERNAL_URI_BYTES = 4096
 const LOCATION_DELAY_MS = 75
 const USER_MOVEMENT_WINDOW_MS = 1000
+const READER_CHARACTER_KEYS = Object.freeze([
+    '+', '-', '=', 'J', 'K', 'SPC', 'j', 'k', 'y',
+])
 const SELECTION_TEXT_ERROR_MESSAGES = Object.freeze({
     'invalid-selection-offset':
         'EPUB selection offset lies outside the selection',
@@ -96,6 +99,16 @@ const checkedExternalURI = value => {
     return value
 }
 
+const checkedRendererAccelerators = value => {
+    if (!Array.isArray(value)
+        || value.length !== READER_CHARACTER_KEYS.length
+        || value.some((key, index) =>
+            key !== READER_CHARACTER_KEYS[index])) {
+        throw new Error('Incompatible EPUB renderer accelerator contract')
+    }
+    return value
+}
+
 const postSearchResult = (request, response) => {
     window.ipc.postMessage(JSON.stringify({
         protocol: 1,
@@ -114,7 +127,7 @@ const readerCharacterKey = event => {
         return null
     }
     if (event.code === 'Space') return 'SPC'
-    return ['J', 'K', 'j', 'k', '+', '-', '=', 'y'].includes(event.key)
+    return READER_CHARACTER_KEYS.includes(event.key)
         ? event.key : null
 }
 
@@ -1178,6 +1191,7 @@ const search = request => {
 
 const open = async ({
     view: viewID, resourceRoot, location, style, scrollBars,
+    rendererAccelerators,
 }) => {
     const mine = ++generation
     closeCurrent()
@@ -1188,6 +1202,7 @@ const open = async ({
         location = location ? checkedLocator(location) : null
         style = checkedStyle(style)
         scrollBars = checkedScrollBars(scrollBars)
+        checkedRendererAccelerators(rendererAccelerators)
         const root = checkedRoot(resourceRoot)
         const loader = await makeLoader(root)
         const book = await new EPUB(loader).init()

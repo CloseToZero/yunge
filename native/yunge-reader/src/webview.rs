@@ -24,9 +24,11 @@ mod renderer;
 mod resources;
 mod surface;
 
+#[cfg(test)]
+use protocol::RENDERER_ACCELERATORS;
 use protocol::{
-    CAPABILITIES, Control, Operation, Outgoing, PROTOCOL_VERSION, Request,
-    Response, ServiceError, response,
+    ACCELERATORS, CAPABILITIES, Control, Operation, Outgoing, PROTOCOL_VERSION,
+    Request, Response, ServiceError, response,
 };
 use renderer::{
     RendererSearchCallback, app_navigation_allowed,
@@ -1284,6 +1286,7 @@ fn ready_message(version: &Result<String, String>) -> Value {
     object.insert("protocol".into(), json!(PROTOCOL_VERSION));
     object.insert("build-id".into(), json!(BUILD_ID));
     object.insert("capabilities".into(), json!(CAPABILITIES));
+    object.insert("accelerators".into(), json!(ACCELERATORS));
     ready
 }
 
@@ -1491,10 +1494,8 @@ mod tests {
             std::str::from_utf8(app_asset("yunge-reader.js").unwrap().1)
                 .unwrap();
         assert!(adapter.contains("post('accelerator', { key })"));
-        assert!(adapter.contains(
-            "['J', 'K', 'j', 'k', '+', '-', '=', 'y']\
-                     .includes(event.key)"
-        ));
+        assert!(adapter.contains("const READER_CHARACTER_KEYS"));
+        assert!(adapter.contains("checkedRendererAccelerators"));
         assert!(adapter.contains("event.code === 'Space'"));
         assert!(adapter.contains("key === 'SPC' && event.repeat"));
         assert!(adapter.contains("case 'previous-line':"));
@@ -1570,6 +1571,12 @@ mod tests {
         assert!(
             paginator.contains("finally {\n            this.#locked = false")
         );
+    }
+
+    #[test]
+    fn ready_reports_the_exact_accelerator_contract() {
+        let message = ready_message(&Ok("test-version".into()));
+        assert_eq!(message["accelerators"], json!(ACCELERATORS));
     }
 
     #[test]
@@ -1920,7 +1927,7 @@ mod tests {
         assert!(event.selection.is_none());
         assert!(event.key.is_none());
 
-        for key in ["J", "K", "j", "k", "+", "-", "=", "y", "SPC"] {
+        for key in RENDERER_ACCELERATORS {
             let payload = json!({
                 "protocol": 1,
                 "event": "accelerator",
@@ -2136,6 +2143,7 @@ mod tests {
         assert!(script.contains(r#""content-width":720"#));
         assert!(script.contains(r#""side-padding":7.0"#));
         assert!(script.contains(r#""scrollBars":false"#));
+        assert!(script.contains(r#""rendererAccelerators":["+","-","=""#));
         assert!(!script.contains("eval"));
 
         let style_script = publication_style_script(4, &EpubStyle::default());

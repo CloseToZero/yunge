@@ -55,6 +55,11 @@
 (defconst yunge-reader-webview--scroll-bar-modes '(hidden visible)
   "Resolved display modes for an EPUB spine-item scroll bar.")
 
+(defconst yunge-reader-webview--accelerators
+  '("+" "-" "=" "<escape>" "<next>" "<prior>" "C-d" "C-g" "C-u"
+    "J" "K" "M-m" "SPC" "j" "k" "y")
+  "Normalized keys accepted from the WebView helper.")
+
 (defun yunge-reader-webview--validate-ready (message)
   "Validate WebView helper ready MESSAGE."
   (let ((expected (yunge-reader-native--build-id)))
@@ -68,6 +73,8 @@
          (equal (alist-get 'build-id message) expected)
          (equal (alist-get 'platform message) "windows")
          (equal (alist-get 'engine message) "webview2")
+         (equal (alist-get 'accelerators message)
+                yunge-reader-webview--accelerators)
          (cl-every
           (lambda (capability)
             (member capability (alist-get 'capabilities message)))

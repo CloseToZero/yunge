@@ -95,7 +95,9 @@ installing or downloading it:
                  "view-search-result",
                  "view-selection-text",
                  "view-scroll-bars","view-status","view-style",
-                 "view-visible"],
+                  "view-visible"],
+ "accelerators":["+","-","=","<escape>","<next>","<prior>",
+                 "C-d","C-g","C-u","J","K","M-m","SPC","j","k","y"],
  "engine":"webview2","kind":"webview-ready","platform":"windows",
  "protocol":1,"version":"151.0.4129.86"}
 #+end_src
@@ -402,6 +404,11 @@ interprets them as commands.  Emacs resolves reading keys through the owning
 EPUB buffer's active maps.  Leader keys return focus and re-enter Emacs's input
 loop; after =<escape>= or =C-g=, the child also returns focus to its owning
 Emacs window.
+
+The ready handshake carries that exact normalized accelerator list.  Rust also
+passes the renderer-owned subset to JavaScript when opening a publication.
+Lisp, Rust, and JavaScript keep independent allowlists and reject contract
+drift before routing a key.
 
 View IDs are independent, so multiple Reader views do not share layout or
 scroll state.  Positions must be nonnegative; dimensions must be positive and

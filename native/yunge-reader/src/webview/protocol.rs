@@ -7,6 +7,12 @@ use serde_json::Value;
 use super::ViewEvent;
 
 pub(super) const PROTOCOL_VERSION: u32 = 1;
+pub(super) const RENDERER_ACCELERATORS: [&str; 9] =
+    ["+", "-", "=", "J", "K", "SPC", "j", "k", "y"];
+pub(super) const ACCELERATORS: [&str; 16] = [
+    "+", "-", "=", "<escape>", "<next>", "<prior>", "C-d", "C-g", "C-u", "J",
+    "K", "M-m", "SPC", "j", "k", "y",
+];
 pub(super) const CAPABILITIES: [&str; 21] = [
     "publication-close",
     "publication-info",
@@ -187,7 +193,16 @@ pub(super) fn response(
 mod tests {
     use serde_json::json;
 
-    use super::{Operation, Request};
+    use super::{ACCELERATORS, Operation, RENDERER_ACCELERATORS, Request};
+
+    #[test]
+    fn renderer_accelerators_are_in_the_public_contract() {
+        assert!(
+            RENDERER_ACCELERATORS
+                .iter()
+                .all(|key| ACCELERATORS.contains(key))
+        );
+    }
 
     #[test]
     fn requests_decode_and_classify_operations() {

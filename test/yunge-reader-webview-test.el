@@ -62,6 +62,9 @@
      (engine . "webview2")
      (available . t)
      (version . "test-version")
+     (accelerators
+      . ("+" "-" "=" "<escape>" "<next>" "<prior>"
+         "C-d" "C-g" "C-u" "J" "K" "M-m" "SPC" "j" "k" "y"))
      (capabilities
       . ("publication-close" "publication-info" "publication-open"
          "publication-resources" "view-bounds"
@@ -176,6 +179,17 @@
     (let ((message (yunge-reader-webview-test--ready-message)))
       (setf (alist-get 'capabilities message)
             '("view-create" "view-destroy"))
+      (should-error
+       (yunge-reader-webview--validate-ready message)
+       :type 'error))))
+
+(ert-deftest yunge-reader-webview-rejects-accelerator-contract-drift ()
+  (dolist (accelerators
+           '(nil
+             ("+" "-" "=" "<escape>" "<next>" "<prior>"
+              "C-d" "C-g" "C-u" "J" "K" "M-m" "SPC" "j" "k")))
+    (let ((message (yunge-reader-webview-test--ready-message)))
+      (setf (alist-get 'accelerators message) accelerators)
       (should-error
        (yunge-reader-webview--validate-ready message)
        :type 'error))))
