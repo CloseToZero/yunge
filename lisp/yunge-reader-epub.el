@@ -39,6 +39,11 @@ scrolling behavior."
   :type 'number
   :group 'yunge-reader)
 
+(defcustom yunge-reader-epub-default-fixed-scale 1.0
+  "Manual scale restored by reset in fixed-layout EPUB views."
+  :type 'number
+  :group 'yunge-reader)
+
 (defcustom yunge-reader-epub-default-line-height 1.6
   "Default unitless line height for reflowable EPUB views."
   :type 'number
@@ -310,14 +315,28 @@ scrolling behavior."
           (and yunge-reader-document
                (yunge-reader-document-layout
                 yunge-reader-document)))
-         (font-percent
-          (and
-           (eq layout 'reflow)
-           (round
-            (* 100
-               (or yunge-reader-effective-scale
-                   yunge-reader-scale
-                   yunge-reader-epub-default-font-scale)))))
+         (scale-percent
+          (round
+           (* 100
+              (or yunge-reader-effective-scale
+                  yunge-reader-scale
+                  1.0))))
+         (zoom-label
+          (pcase layout
+            ('reflow (format "Font %d%%" scale-percent))
+            ('fixed
+             (pcase yunge-reader-zoom-mode
+               ('manual (format "Zoom %d%%" scale-percent))
+               ('fit-width
+                (if yunge-reader-effective-scale
+                    (format "Fit Width %d%%" scale-percent)
+                  "Fit Width"))
+               ('fit-page
+                (if yunge-reader-effective-scale
+                    (format "Fit Page %d%%" scale-percent)
+                  "Fit Page"))
+               (_ "Fixed")))
+            (_ "EPUB")))
          (location
           (and yunge-reader-webview--buffer-view
                (yunge-reader-webview--view-location
@@ -332,9 +351,7 @@ scrolling behavior."
           (format " %s  EPUB%s  %s  %s "
                   role
                   (if progress (format "  %d%%" progress) "")
-                  (if font-percent
-                      (format "Font %d%%" font-percent)
-                    "Fixed")
+                  zoom-label
                   title))))
 
 (defun yunge-reader-epub--location-changed (view user)
@@ -415,6 +432,13 @@ USER is non-nil when direct reader movement produced the location."
   (max yunge-reader-epub-minimum-font-scale
        (min yunge-reader-epub-maximum-font-scale scale)))
 
+(defun yunge-reader-epub--fixed-scale (scale)
+  "Return fixed-layout EPUB SCALE restricted to renderer bounds."
+  (unless (and (numberp scale) (= scale scale))
+    (error "Invalid EPUB fixed-layout scale: %S" scale))
+  (max yunge-reader-webview--epub-fixed-scale-min
+       (min yunge-reader-webview--epub-fixed-scale-max scale)))
+
 (defun yunge-reader-epub--initial-font-scale ()
   "Return the font scale to use before the EPUB surface opens."
   (yunge-reader-epub--font-scale
@@ -429,21 +453,54 @@ USER is non-nil when direct reader movement produced the location."
       "EPUB place has an unsupported zoom mode: %S"
       (plist-get yunge-reader--pending-place :zoom-mode))))))
 
-(defun yunge-reader-epub--configure-zoom ()
-  "Configure Reader zoom state for one EPUB view and return its scale."
-  (let ((default
-         (yunge-reader-epub--font-scale
-          yunge-reader-epub-default-font-scale))
-        (scale (yunge-reader-epub--initial-font-scale)))
-    (setq-local yunge-reader-default-scale default)
-    (setq-local yunge-reader-minimum-scale
-                yunge-reader-epub-minimum-font-scale)
-    (setq-local yunge-reader-maximum-scale
-                yunge-reader-epub-maximum-font-scale)
-    (setq yunge-reader-zoom-mode 'manual
-          yunge-reader-scale scale
-          yunge-reader-effective-scale scale)
-    scale))
+(defun yunge-reader-epub--initial-fixed-zoom-state ()
+  "Return initial fixed-layout zoom mode and retained manual scale."
+  (if (null yunge-reader--pending-place)
+      (cons
+       'fit-page
+       (yunge-reader-epub--fixed-scale
+        yunge-reader-epub-default-fixed-scale))
+    (let ((mode (plist-get yunge-reader--pending-place :zoom-mode))
+          (scale
+           (yunge-reader-epub--fixed-scale
+            (plist-get yunge-reader--pending-place :scale))))
+      (unless (memq mode '(manual fit-width fit-page))
+        (error "EPUB place has an unsupported zoom mode: %S" mode))
+      (cons mode scale))))
+
+(defun yunge-reader-epub--configure-zoom (layout)
+  "Configure Reader zoom state for EPUB LAYOUT and return renderer zoom."
+  (pcase layout
+    ('reflow
+     (let ((default
+            (yunge-reader-epub--font-scale
+             yunge-reader-epub-default-font-scale))
+           (scale (yunge-reader-epub--initial-font-scale)))
+       (setq-local yunge-reader-default-scale default)
+       (setq-local yunge-reader-minimum-scale
+                   yunge-reader-epub-minimum-font-scale)
+       (setq-local yunge-reader-maximum-scale
+                   yunge-reader-epub-maximum-font-scale)
+       (setq yunge-reader-zoom-mode 'manual
+             yunge-reader-scale scale
+             yunge-reader-effective-scale scale)
+       scale))
+    ('fixed
+     (pcase-let* ((`(,mode . ,scale)
+                   (yunge-reader-epub--initial-fixed-zoom-state)))
+       (setq-local yunge-reader-default-scale
+                   (yunge-reader-epub--fixed-scale
+                    yunge-reader-epub-default-fixed-scale))
+       (setq-local yunge-reader-minimum-scale
+                   yunge-reader-webview--epub-fixed-scale-min)
+       (setq-local yunge-reader-maximum-scale
+                   yunge-reader-webview--epub-fixed-scale-max)
+       (setq yunge-reader-zoom-mode mode
+             yunge-reader-scale scale
+             yunge-reader-effective-scale
+             (and (eq mode 'manual) scale))
+       (if (eq mode 'manual) scale mode)))
+    (_ (error "Invalid EPUB zoom layout: %S" layout))))
 
 (defun yunge-reader-epub--default-style (&optional font-scale)
   "Return a fresh EPUB style using optional FONT-SCALE."
@@ -483,6 +540,31 @@ USER is non-nil when direct reader movement produced the location."
   (yunge-reader-record-place
    (yunge-reader-webview--view-window view))
   style)
+
+(defun yunge-reader-epub--fixed-zoom ()
+  "Return the renderer zoom represented by the current Reader state."
+  (pcase yunge-reader-zoom-mode
+    ('manual
+     (setq yunge-reader-scale
+           (yunge-reader-epub--fixed-scale yunge-reader-scale)))
+    ((or 'fit-width 'fit-page) yunge-reader-zoom-mode)
+    (_
+     (error "Invalid fixed-layout EPUB zoom mode: %S"
+            yunge-reader-zoom-mode))))
+
+(defun yunge-reader-epub--zoom-changed (view scale)
+  "Record effective fixed-layout SCALE reported by EPUB VIEW."
+  (when-let* ((buffer (yunge-reader-webview--view-buffer view))
+              ((buffer-live-p buffer)))
+    (with-current-buffer buffer
+      (when (and yunge-reader-epub-view-mode
+                 (eq view yunge-reader-webview--buffer-view)
+                 yunge-reader-document
+                 (eq (yunge-reader-document-layout
+                      yunge-reader-document)
+                     'fixed))
+        (yunge-reader-set-effective-scale scale)
+        (yunge-reader-epub--update-header)))))
 
 (defun yunge-reader-epub--apply-layout-values (view style values)
   "Apply bounded layout VALUES through complete STYLE to EPUB VIEW."
@@ -617,9 +699,9 @@ VALUES is an alist containing complete, already bounded property values."
       (error "EPUB document has no live publication"))
     (unless (memq layout '(fixed reflow))
       (error "EPUB document has invalid layout: %S" layout))
-    (let* ((font-scale
-            (and (eq layout 'reflow)
-                 (yunge-reader-epub--configure-zoom)))
+    (let* ((zoom (yunge-reader-epub--configure-zoom layout))
+           (font-scale
+            (and (eq layout 'reflow) zoom))
            (style
             (and font-scale
                  (yunge-reader-epub--default-style font-scale))))
@@ -630,12 +712,17 @@ VALUES is an alist containing complete, already bounded property values."
       (yunge-reader-webview--attach-shared-publication
        (yunge-reader-epub-handle-publication handle)
        layout
-       nil #'yunge-reader-epub--location-changed
+       :location-changed-function
+       #'yunge-reader-epub--location-changed
+       :selection-changed-function
        #'yunge-reader-epub--selection-changed
-       #'yunge-reader-epub--accelerator
-       style
-       #'yunge-reader-epub--scroll-bar-mode
-       #'yunge-reader-epub--external-link))))
+       :accelerator-function #'yunge-reader-epub--accelerator
+       :style style
+       :zoom (and (eq layout 'fixed) zoom)
+       :zoom-changed-function
+       (and (eq layout 'fixed) #'yunge-reader-epub--zoom-changed)
+       :scroll-bar-function #'yunge-reader-epub--scroll-bar-mode
+       :external-link-function #'yunge-reader-epub--external-link))))
 
 (defun yunge-reader-epub--detach-complete (handle)
   "Finish one native view detach belonging to HANDLE."
@@ -769,7 +856,13 @@ VALUES is an alist containing complete, already bounded property values."
               ((not (yunge-reader-webview--view-destroyed view))))
     (if (eq (yunge-reader-document-layout yunge-reader-document)
             'fixed)
-        (yunge-reader-webview--sync-view view)
+        (progn
+          (yunge-reader-webview--set-view-zoom
+           view (yunge-reader-epub--fixed-zoom))
+          (yunge-reader-webview--sync-view view)
+          (yunge-reader-epub--update-header)
+          (yunge-reader-record-place
+           (yunge-reader-webview--view-window view)))
       (unless (eq yunge-reader-zoom-mode 'manual)
         (error "Reflowable EPUB views require manual zoom mode"))
       (let* ((scale

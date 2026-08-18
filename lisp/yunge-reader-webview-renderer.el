@@ -141,10 +141,15 @@ returned batch, and COMPLETE receives the validated native result."
    (apply-partially
     #'yunge-reader-webview--search-complete match-limit complete)))
 
+(defun yunge-reader-webview--fixed-zoom-value (zoom)
+  "Return protocol data for validated fixed-layout ZOOM."
+  (let ((value (yunge-reader-webview--check-fixed-zoom zoom)))
+    (if (symbolp value) (symbol-name value) value)))
+
 (defun yunge-reader-webview--open-view-publication
-    (view publication callback location style bar-mode)
-  "Open PUBLICATION in native VIEW with LOCATION, STYLE, and scroll bars.
-Invoke CALLBACK when the native request completes."
+    (view publication callback location style zoom bar-mode)
+  "Open PUBLICATION in native VIEW with LOCATION and presentation state.
+STYLE and ZOOM are mutually exclusive.  Invoke CALLBACK when complete."
   (yunge-reader-webview--request
    "view-open-publication"
    (append
@@ -154,6 +159,8 @@ Invoke CALLBACK when the native request completes."
       `((location . ,(yunge-reader-webview--check-location location))))
     (when style
       `((style . ,(yunge-reader-webview--check-style style))))
+    (when zoom
+      `((zoom . ,(yunge-reader-webview--fixed-zoom-value zoom))))
     `((scroll-bars
        . ,(if (eq (yunge-reader-webview--check-scroll-bar-mode
                    bar-mode)
@@ -194,14 +201,11 @@ LOCATION is required only for the go-to command."
 (defun yunge-reader-webview--set-native-view-zoom
     (view zoom callback)
   "Apply fixed-layout ZOOM to native VIEW, then invoke CALLBACK."
-  (let ((value (yunge-reader-webview--check-fixed-zoom zoom)))
-    (yunge-reader-webview--request
-     "view-zoom"
-     `((view . ,(yunge-reader-webview--view-id view))
-       (zoom . ,(if (symbolp value)
-                    (symbol-name value)
-                  value)))
-     callback)))
+  (yunge-reader-webview--request
+   "view-zoom"
+   `((view . ,(yunge-reader-webview--view-id view))
+     (zoom . ,(yunge-reader-webview--fixed-zoom-value zoom)))
+   callback))
 
 (defun yunge-reader-webview--set-native-scroll-bar-mode
     (view mode callback)

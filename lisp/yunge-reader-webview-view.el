@@ -40,6 +40,8 @@
   publication
   style
   surface-style
+  zoom
+  surface-zoom
   scroll-bar-mode
   surface-scroll-bar-mode
   location
@@ -59,6 +61,7 @@
   location-changed-function
   selection-changed-function
   accelerator-function
+  zoom-changed-function
   scroll-bar-function
   external-link-function)
 

@@ -30,6 +30,8 @@
                   "yunge-reader-webview" (view &optional reveal))
 (declare-function yunge-reader-webview--sync-view-style
                   "yunge-reader-webview" (view))
+(declare-function yunge-reader-webview--sync-view-zoom
+                  "yunge-reader-webview" (view))
 (declare-function yunge-reader--uri-valid-p "yunge-reader" (uri))
 
 (defvar yunge-reader-webview--process)
@@ -125,6 +127,7 @@
          (yunge-reader-webview--set-surface-state view 'ready)
          (yunge-reader-webview--set-view-selection view nil)
          (yunge-reader-webview--sync-view-style view)
+         (yunge-reader-webview--sync-view-zoom view)
          (yunge-reader-webview--sync-view-scroll-bars view)
          (yunge-reader-webview--sync-view-search-result view)
          (yunge-reader-webview--store-view-outline view message)
@@ -171,11 +174,25 @@
       ("zoom-changed"
        (let ((scale (alist-get 'scale message)))
          (unless (and (numberp scale) (> scale 0))
-           (error "Malformed EPUB zoom event: %S" message))))
+           (error "Malformed EPUB zoom event: %S" message))
+         (when-let* ((view (gethash id yunge-reader-webview--views))
+                     (function
+                      (yunge-reader-webview--view-zoom-changed-function
+                       view)))
+           (condition-case error-data
+               (funcall function view scale)
+             (error
+              (display-warning
+               'yunge-reader
+               (format "Could not update EPUB zoom: %s"
+                       (error-message-string error-data))
+               :warning))))))
       ("zoom-error"
        (let ((detail (alist-get 'message message)))
          (unless (stringp detail)
            (error "Malformed EPUB zoom error: %S" message))
+         (when-let* ((view (gethash id yunge-reader-webview--views)))
+           (setf (yunge-reader-webview--view-surface-zoom view) nil))
          (display-warning 'yunge-reader detail :warning)))
       ("scroll-bars-error"
        (let ((detail (alist-get 'message message)))
@@ -193,6 +210,7 @@
          (when-let* ((view (gethash id yunge-reader-webview--views)))
            (yunge-reader-webview--set-surface-state view 'failed)
            (setf (yunge-reader-webview--view-surface-style view) nil
+                 (yunge-reader-webview--view-surface-zoom view) nil
                  (yunge-reader-webview--view-surface-scroll-bar-mode view)
                  nil
                  (yunge-reader-webview--view-pending-target view) nil

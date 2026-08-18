@@ -1,7 +1,7 @@
 #+title: Yunge Reader
 
 Yunge Reader is an extensible Emacs document reader.  PDF is the first full
-backend, and EPUB now has a bounded reflowable driver.  The core models
+backend, and EPUB now has a bounded WebView driver.  The core models
 ownership, location, selection, and view state without assuming that every
 document consists of immutable pages.
 
@@ -151,6 +151,21 @@ before its first navigation.  Hiding and recreating a surface therefore keeps
 that view's style, while another view may later diverge independently.
 Fixed-layout EPUBs retain their publisher geometry.
 
+Each fixed-layout logical view owns an independent semantic zoom.  It starts
+in =fit-page=, also supports =fit-width=, and accepts manual scales from 0.25
+through 8.0.  =W/P= select the fit modes, =+/-= switch from the renderer's
+current effective scale to manual zoom, and === restores the configurable
+=yunge-reader-epub-default-fixed-scale=.  The header distinguishes fit modes
+from manual zoom and includes the effective renderer percentage after it is
+known.  A resize may update that percentage without replacing the semantic
+fit mode.
+
+The desired zoom belongs to the logical view, not its disposable child
+surface.  Hiding and recreating a surface therefore restores the same mode,
+while Primary and Additional buffers may diverge independently.  Durable
+places retain the fit mode and the last manual scale; renderer feedback alone
+does not create a new place.
+
 The visual spine-item scroll bar follows the owning Emacs frame by default.
 =yunge-reader-epub-scroll-bar-mode= can instead force it to =hidden= or
 =visible=.  Following Emacs reads the frame's actual vertical scroll bar state
@@ -177,9 +192,9 @@ complete style in place; reset uses =yunge-reader-epub-default-font-scale=.
 The header reports the effective font percentage.  A user-requested change
 records the new scale with the current stable CFI, while an additional view
 cannot replace the primary durable place.  A copied view starts with the source
-view's manual scale before its surface opens.  EPUB places using a fit mode are
-rejected rather than migrated.  Fit-width and fit-page are also
-rejected for reflowable documents until they gain distinct layout semantics.
+view's manual scale before its surface opens.  Reflowable EPUB places using a
+fit mode are rejected rather than migrated, and fit-width and fit-page remain
+unavailable for reflowable documents.
 
 A =publication-ready= locator updates only the logical view.  Readiness means
 that an initial target or retained location finished restoring; it is not user

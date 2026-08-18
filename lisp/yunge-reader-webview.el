@@ -63,6 +63,46 @@
     (yunge-reader-webview--sync-view-style view)
     style))
 
+(defun yunge-reader-webview--zoom-complete
+    (view id zoom _result error-data)
+  "Finish applying ZOOM to VIEW surface ID."
+  (when (and error-data
+             (yunge-reader-webview--surface-current-p view id))
+    (when (equal zoom
+                 (yunge-reader-webview--view-surface-zoom view))
+      (setf (yunge-reader-webview--view-surface-zoom view) nil))
+    (display-warning
+     'yunge-reader (error-message-string error-data) :warning)))
+
+(defun yunge-reader-webview--sync-view-zoom (view)
+  "Send VIEW's desired fixed zoom to its ready native surface."
+  (let ((zoom (yunge-reader-webview--view-zoom view)))
+    (when (and zoom
+               (yunge-reader-webview--surface-ready-p view)
+               (yunge-reader-webview--surface-current-p
+                view (yunge-reader-webview--view-id view))
+               (not
+                (equal zoom
+                       (yunge-reader-webview--view-surface-zoom view))))
+      (let ((id (yunge-reader-webview--view-id view)))
+        (setf (yunge-reader-webview--view-surface-zoom view) zoom)
+        (yunge-reader-webview--set-native-view-zoom
+         view zoom
+         (apply-partially
+          #'yunge-reader-webview--zoom-complete view id zoom))))))
+
+(defun yunge-reader-webview--set-view-zoom (view zoom)
+  "Set logical VIEW's desired fixed-layout ZOOM and synchronize it."
+  (when (or (null view)
+            (yunge-reader-webview--view-destroyed view))
+    (error "Cannot zoom a dead EPUB view"))
+  (unless (eq (yunge-reader-webview--view-layout view) 'fixed)
+    (error "Cannot apply fixed zoom to a reflowable EPUB view"))
+  (setq zoom (yunge-reader-webview--check-fixed-zoom zoom))
+  (setf (yunge-reader-webview--view-zoom view) zoom)
+  (yunge-reader-webview--sync-view-zoom view)
+  zoom)
+
 (defun yunge-reader-webview--scroll-bar-complete
     (view id mode _result error-data)
   "Finish applying scroll bar MODE to VIEW surface ID."
@@ -506,6 +546,7 @@ When REVEAL is non-nil, navigate to the result before painting it."
             (yunge-reader-webview--view-focus-release-pending view) nil
             (yunge-reader-webview--view-destroyed view) t
             (yunge-reader-webview--view-surface-style view) nil
+            (yunge-reader-webview--view-surface-zoom view) nil
             (yunge-reader-webview--view-surface-scroll-bar-mode view) nil
             (yunge-reader-webview--view-pending-destroys view) nil)
       (yunge-reader-webview--set-view-selection view nil)
@@ -532,16 +573,18 @@ When REVEAL is non-nil, navigate to the result before painting it."
       (user-error "The current buffer has no ready EPUB view"))
     view))
 
-(defun yunge-reader-webview--attach-shared-publication
-    (publication layout &optional location location-changed-function
-                 selection-changed-function accelerator-function style
-                 scroll-bar-function external-link-function)
+(cl-defun yunge-reader-webview--attach-shared-publication
+    (publication layout
+     &key location location-changed-function selection-changed-function
+     accelerator-function style zoom zoom-changed-function
+     scroll-bar-function external-link-function)
   "Attach shared PUBLICATION with Reader LAYOUT to the current buffer.
 Restore bounded LOCATION when supplied.  Invoke LOCATION-CHANGED-FUNCTION
 with the logical view whenever its renderer reports a stable location.
 Invoke SELECTION-CHANGED-FUNCTION whenever its logical selection changes.
 Invoke ACCELERATOR-FUNCTION with the view and a normalized key when the
-focused native child forwards one.  STYLE is copied into the logical view.
+focused native child forwards one.  STYLE or ZOOM is copied into the view.
+Invoke ZOOM-CHANGED-FUNCTION with the view and its effective fixed scale.
 SCROLL-BAR-FUNCTION resolves its mode for the owning Emacs window.
 Invoke EXTERNAL-LINK-FUNCTION with the view and a validated absolute URI."
   (unless (and (integerp publication) (> publication 0))
@@ -550,6 +593,14 @@ Invoke EXTERNAL-LINK-FUNCTION with the view and a validated absolute URI."
     (error "Invalid EPUB publication layout: %S" layout))
   (when (and (eq layout 'fixed) style)
     (error "Fixed-layout EPUB views do not accept reflow style"))
+  (when (and (eq layout 'reflow) zoom)
+    (error "Reflowable EPUB views do not accept fixed zoom"))
+  (when (and (eq layout 'reflow) zoom-changed-function)
+    (error "Reflowable EPUB views do not report fixed zoom"))
+  (when (eq layout 'fixed)
+    (setq zoom
+          (yunge-reader-webview--check-fixed-zoom
+           (or zoom 'fit-page))))
   (when location
     (yunge-reader-webview--check-location location))
   (when style
@@ -566,6 +617,10 @@ Invoke EXTERNAL-LINK-FUNCTION with the view and a validated absolute URI."
              (not (functionp accelerator-function)))
     (error "Invalid EPUB accelerator callback: %S"
            accelerator-function))
+  (when (and zoom-changed-function
+             (not (functionp zoom-changed-function)))
+    (error "Invalid EPUB zoom callback: %S"
+           zoom-changed-function))
   (when (and scroll-bar-function
              (not (functionp scroll-bar-function)))
     (error "Invalid EPUB scroll bar callback: %S"
@@ -585,10 +640,12 @@ Invoke EXTERNAL-LINK-FUNCTION with the view and a validated absolute URI."
           :publication publication
           :layout layout
           :style (and style (copy-tree style))
+          :zoom zoom
           :location (and location (copy-tree location))
           :location-changed-function location-changed-function
           :selection-changed-function selection-changed-function
           :accelerator-function accelerator-function
+          :zoom-changed-function zoom-changed-function
           :scroll-bar-function scroll-bar-function
           :external-link-function external-link-function)))
     (setq yunge-reader-webview--buffer-view view)
