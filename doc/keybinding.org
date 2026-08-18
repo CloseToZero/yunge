@@ -346,6 +346,8 @@ Reader view administration remains under the mode-local leader:
 
 - ~SPC m v~ creates an additional view from the current stable place.
 - ~SPC m p~ makes the current view primary.
+- In reflowable EPUB views, ~SPC m l +/-~ changes line height,
+  ~SPC m l </>~ changes content width, and ~SPC m l =~ resets both.
 
 These commands execute once and do not enter a persistent Reader control map.
 

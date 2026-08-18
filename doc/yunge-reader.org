@@ -218,7 +218,15 @@ without ending the search, while n/N restores and moves the search highlight.
 Direct wheel, pointer, and touch relocation is reported as user activity, so
 it detaches a delayed search jump before the completed batch can replace the
 user's new reading position.  The next n/N reanchors at that reported locator.
-Interactive width and line-height controls remain later work.
+
+Reflowable EPUB text layout is available below =SPC m l=.  =+/-= changes line
+height in configurable =yunge-reader-epub-line-height-step= increments,
+=</>= changes the CSS-pixel content width in configurable
+=yunge-reader-epub-content-width-step= increments, and === restores both
+defaults.  Renderer bounds clamp repeated commands.  Each update replaces the
+complete style of only the current logical view, so hidden surfaces and
+Additional views retain independent choices.  The normal primary-only rule
+continues to govern durable place recording after reflow.
 
 * Library boundary
 

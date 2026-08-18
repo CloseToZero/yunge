@@ -54,20 +54,68 @@ scrolling behavior."
   :type 'number
   :group 'yunge-reader)
 
+(defcustom yunge-reader-epub-line-height-step 0.1
+  "Unitless amount changed by one EPUB line-height step."
+  :type 'number
+  :group 'yunge-reader)
+
+(defcustom yunge-reader-epub-content-width-step 40
+  "CSS pixels changed by one EPUB content-width step."
+  :type 'integer
+  :group 'yunge-reader)
+
 (defconst yunge-reader-epub-minimum-font-scale 0.5
   "Smallest font scale accepted by the EPUB renderer.")
 
 (defconst yunge-reader-epub-maximum-font-scale 3.0
   "Largest font scale accepted by the EPUB renderer.")
 
+(defconst yunge-reader-epub-minimum-line-height 1.0
+  "Smallest line height accepted by the EPUB renderer.")
+
+(defconst yunge-reader-epub-maximum-line-height 3.0
+  "Largest line height accepted by the EPUB renderer.")
+
+(defconst yunge-reader-epub-minimum-content-width 320
+  "Smallest content width accepted by the EPUB renderer.")
+
+(defconst yunge-reader-epub-maximum-content-width 1600
+  "Largest content width accepted by the EPUB renderer.")
+
 (defvar-local yunge-reader-epub--native-selection-sync nil
   "Whether native selection state is being mapped into Reader state.")
 
+(defconst yunge-reader-epub-layout-bindings
+  '(("+" yunge-reader-epub-increase-line-height
+     "increase line height")
+    ("-" yunge-reader-epub-decrease-line-height
+     "decrease line height")
+    (">" yunge-reader-epub-widen-content "widen content")
+    ("<" yunge-reader-epub-narrow-content "narrow content")
+    ("=" yunge-reader-epub-reset-text-layout "reset text layout")))
+
+(defvar-keymap yunge-reader-epub-layout-map
+  :doc "Keymap for reflowable EPUB text layout commands.")
+
+(yunge-key-define yunge-reader-epub-layout-map
+                  yunge-reader-epub-layout-bindings)
+
+(defconst yunge-reader-epub-command-bindings
+  `(("l" ,yunge-reader-epub-layout-map "layout")))
+
+(defvar-keymap yunge-reader-epub-command-map
+  :doc "Keymap for reflowable EPUB view commands."
+  :parent yunge-reader-command-map)
+
+(yunge-key-define yunge-reader-epub-command-map
+                  yunge-reader-epub-command-bindings)
+
 (defconst yunge-reader-epub-normal-bindings
-  '(("C-d" yunge-reader-epub-next-screen "next screen")
+  `(("C-d" yunge-reader-epub-next-screen "next screen")
     ("C-u" yunge-reader-epub-previous-screen "previous screen")
     ("J" yunge-reader-epub-next-screen "next screen")
-    ("K" yunge-reader-epub-previous-screen "previous screen"))
+    ("K" yunge-reader-epub-previous-screen "previous screen")
+    ([localleader] ,yunge-reader-epub-command-map nil))
   "Normal-state bindings for reflowable EPUB views.")
 
 (defvar-keymap yunge-reader-epub-view-mode-map
@@ -110,6 +158,14 @@ scrolling behavior."
   (yunge-key-evil-define-minor-mode
    'normal 'yunge-reader-epub-view-mode
    yunge-reader-epub-normal-bindings))
+
+(with-eval-after-load 'which-key
+  (yunge-key-add-which-key-descriptions
+   yunge-reader-epub-command-map
+   yunge-reader-epub-command-bindings)
+  (yunge-key-add-which-key-descriptions
+   yunge-reader-epub-layout-map
+   yunge-reader-epub-layout-bindings))
 
 (defun yunge-reader-epub--match-p (file)
   "Return whether FILE has an EPUB extension."
@@ -350,6 +406,135 @@ scrolling behavior."
      (content-width . ,yunge-reader-epub-default-content-width)
      (side-padding . ,yunge-reader-epub-default-side-padding))))
 
+(defun yunge-reader-epub--layout-context ()
+  "Return the current live EPUB view and a fresh copy of its style."
+  (unless yunge-reader-epub-view-mode
+    (user-error "The current buffer is not an EPUB view"))
+  (let ((view yunge-reader-webview--buffer-view))
+    (when (or (null view)
+              (yunge-reader-webview--view-destroyed view))
+      (user-error "The current EPUB view is no longer live"))
+    (list
+     view
+     (copy-tree
+      (or (yunge-reader-webview--view-style view)
+          (yunge-reader-epub--default-style))))))
+
+(defun yunge-reader-epub--apply-style (view style)
+  "Apply complete STYLE to logical EPUB VIEW."
+  (yunge-reader-webview--set-view-style view style)
+  (yunge-reader-webview--sync-view view)
+  (yunge-reader-epub--update-header)
+  (yunge-reader-record-place
+   (yunge-reader-webview--view-window view))
+  style)
+
+(defun yunge-reader-epub--apply-layout-values (view style values)
+  "Apply bounded layout VALUES through complete STYLE to EPUB VIEW."
+  (dolist (entry values)
+    (setcdr (or (assq (car entry) style)
+                (error "Missing EPUB style property: %S"
+                       (car entry)))
+            (cdr entry)))
+  (yunge-reader-epub--apply-style view style))
+
+(defun yunge-reader-epub--set-layout-values (values)
+  "Set current EPUB layout VALUES and return the resulting style.
+VALUES is an alist containing complete, already bounded property values."
+  (pcase-let ((`(,view ,style)
+               (yunge-reader-epub--layout-context)))
+    (yunge-reader-epub--apply-layout-values view style values)))
+
+(defun yunge-reader-epub--line-height (value)
+  "Return EPUB line-height VALUE restricted to renderer bounds."
+  (unless (and (numberp value) (= value value))
+    (error "Invalid EPUB line height: %S" value))
+  (max yunge-reader-epub-minimum-line-height
+       (min yunge-reader-epub-maximum-line-height value)))
+
+(defun yunge-reader-epub--content-width (value)
+  "Return EPUB content-width VALUE restricted to renderer bounds."
+  (unless (integerp value)
+    (error "Invalid EPUB content width: %S" value))
+  (max yunge-reader-epub-minimum-content-width
+       (min yunge-reader-epub-maximum-content-width value)))
+
+(defun yunge-reader-epub--change-line-height (count)
+  "Change the current EPUB line height by COUNT steps."
+  (unless (and (numberp yunge-reader-epub-line-height-step)
+               (> yunge-reader-epub-line-height-step 0))
+    (error "Invalid EPUB line-height step: %S"
+           yunge-reader-epub-line-height-step))
+  (pcase-let* ((`(,view ,style)
+                (yunge-reader-epub--layout-context))
+               (current (alist-get 'line-height style))
+               (value
+                (yunge-reader-epub--line-height
+                 (+ current
+                    (* count yunge-reader-epub-line-height-step)))))
+    (yunge-reader-epub--apply-layout-values
+     view style `((line-height . ,value)))
+    value))
+
+(defun yunge-reader-epub-increase-line-height (&optional count)
+  "Increase the current EPUB line height by COUNT steps."
+  (interactive "p")
+  (let ((value
+         (yunge-reader-epub--change-line-height (or count 1))))
+    (message "EPUB line height %.2f" value)
+    value))
+
+(defun yunge-reader-epub-decrease-line-height (&optional count)
+  "Decrease the current EPUB line height by COUNT steps."
+  (interactive "p")
+  (yunge-reader-epub-increase-line-height (- (or count 1))))
+
+(defun yunge-reader-epub--change-content-width (count)
+  "Change the current EPUB content width by COUNT steps."
+  (unless (and (integerp yunge-reader-epub-content-width-step)
+               (> yunge-reader-epub-content-width-step 0))
+    (error "Invalid EPUB content-width step: %S"
+           yunge-reader-epub-content-width-step))
+  (pcase-let* ((`(,view ,style)
+                (yunge-reader-epub--layout-context))
+               (current (alist-get 'content-width style))
+               (value
+                (yunge-reader-epub--content-width
+                 (+ current
+                    (* count yunge-reader-epub-content-width-step)))))
+    (yunge-reader-epub--apply-layout-values
+     view style `((content-width . ,value)))
+    value))
+
+(defun yunge-reader-epub-widen-content (&optional count)
+  "Widen the current EPUB content column by COUNT steps."
+  (interactive "p")
+  (let ((value
+         (yunge-reader-epub--change-content-width (or count 1))))
+    (message "EPUB content width %d px" value)
+    value))
+
+(defun yunge-reader-epub-narrow-content (&optional count)
+  "Narrow the current EPUB content column by COUNT steps."
+  (interactive "p")
+  (yunge-reader-epub-widen-content (- (or count 1))))
+
+(defun yunge-reader-epub-reset-text-layout ()
+  "Restore the default EPUB line height and content width."
+  (interactive)
+  (let* ((line-height
+          (yunge-reader-epub--line-height
+           yunge-reader-epub-default-line-height))
+         (content-width
+          (yunge-reader-epub--content-width
+           yunge-reader-epub-default-content-width)))
+    (yunge-reader-epub--set-layout-values
+     `((line-height . ,line-height)
+       (content-width . ,content-width)))
+    (message "EPUB layout reset: line height %.2f, width %d px"
+             line-height content-width)
+    (list line-height content-width)))
+
 (defun yunge-reader-epub--scroll-bar-mode (window)
   "Return the resolved EPUB scroll bar mode for WINDOW."
   (pcase yunge-reader-epub-scroll-bar-mode
@@ -521,11 +706,7 @@ scrolling behavior."
       (setq yunge-reader-scale scale
             yunge-reader-effective-scale scale)
       (setcdr (assq 'font-scale style) scale)
-      (yunge-reader-webview--set-view-style view style)
-      (yunge-reader-webview--sync-view view)
-      (yunge-reader-epub--update-header)
-      (yunge-reader-record-place
-       (yunge-reader-webview--view-window view)))))
+      (yunge-reader-epub--apply-style view style))))
 
 (defun yunge-reader-epub--outline-complete
     (complete value error-data)

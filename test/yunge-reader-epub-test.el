@@ -45,11 +45,33 @@
   (should-not
    (lookup-key yunge-reader-epub-view-mode-map (kbd "k"))))
 
+(ert-deftest yunge-reader-epub-keeps-layout-under-local-leader ()
+  (should
+   (eq (lookup-key yunge-reader-epub-command-map (kbd "l"))
+       yunge-reader-epub-layout-map))
+  (should
+   (eq (lookup-key yunge-reader-epub-command-map (kbd "p"))
+       #'yunge-reader-make-primary))
+  (yunge-test-keymap-keys
+   yunge-reader-epub-layout-map
+   '(("+" . yunge-reader-epub-increase-line-height)
+     ("-" . yunge-reader-epub-decrease-line-height)
+     (">" . yunge-reader-epub-widen-content)
+     ("<" . yunge-reader-epub-narrow-content)
+     ("=" . yunge-reader-epub-reset-text-layout))))
+
 (ert-deftest yunge-reader-epub-integrates-screen-bindings-with-evil ()
   (yunge-test-enable-evil)
   (with-temp-buffer
     (yunge-reader-mode)
     (yunge-reader-epub-view-mode 1)
+    (let ((local-map (key-binding [localleader])))
+      (should
+       (eq (lookup-key local-map (kbd "l"))
+           yunge-reader-epub-layout-map))
+      (should
+       (eq (lookup-key local-map (kbd "p"))
+           #'yunge-reader-make-primary)))
     (yunge-test-evil-keys
      'normal
      '(("C-d" . yunge-reader-epub-next-screen)
@@ -249,6 +271,49 @@
           (should (string-match-p "Font 125%" header-line-format))
           (should (= syncs 4))
           (should (= records 4)))))))
+
+(ert-deftest yunge-reader-epub-adjusts-view-local-text-layout ()
+  (let ((yunge-reader-epub-default-line-height 1.6)
+        (yunge-reader-epub-default-content-width 720)
+        (yunge-reader-epub-line-height-step 0.1)
+        (yunge-reader-epub-content-width-step 40)
+        (other-view
+         (yunge-reader-webview--make-view
+          :style (yunge-reader-epub--default-style)))
+        (syncs 0)
+        (records 0))
+    (with-temp-buffer
+      (yunge-reader-mode)
+      (let ((view
+             (yunge-reader-webview--make-view
+              :style (yunge-reader-epub--default-style))))
+        (setq yunge-reader-webview--buffer-view view)
+        (yunge-reader-epub--configure-zoom)
+        (yunge-reader-epub-view-mode 1)
+        (cl-letf
+            (((symbol-function 'yunge-reader-webview--sync-view)
+              (lambda (_view) (cl-incf syncs)))
+             ((symbol-function 'yunge-reader-record-place)
+              (lambda (&optional _window) (cl-incf records))))
+          (should
+           (= (yunge-reader-epub-increase-line-height 2) 1.8))
+          (should
+           (= (yunge-reader-epub-decrease-line-height 20) 1.0))
+          (should (= (yunge-reader-epub-widen-content 2) 800))
+          (should (= (yunge-reader-epub-narrow-content 20) 320))
+          (should
+           (equal (yunge-reader-epub-reset-text-layout)
+                  '(1.6 720)))
+          (let ((style (yunge-reader-webview--view-style view)))
+            (should (= (alist-get 'font-scale style) 1.0))
+            (should (= (alist-get 'line-height style) 1.6))
+            (should (= (alist-get 'content-width style) 720))
+            (should (= (alist-get 'side-padding style) 7.0)))
+          (should (= syncs 5))
+          (should (= records 5))
+          (should
+           (equal (yunge-reader-webview--view-style other-view)
+                  (yunge-reader-epub--default-style))))))))
 
 (ert-deftest yunge-reader-epub-rejects-unsupported-hosts-before-open ()
   (let (completed opened)
