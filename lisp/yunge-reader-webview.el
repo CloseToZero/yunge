@@ -534,14 +534,15 @@ When REVEAL is non-nil, navigate to the result before painting it."
 (defun yunge-reader-webview--attach-shared-publication
     (publication &optional location location-changed-function
                  selection-changed-function accelerator-function style
-                 scroll-bar-function)
+                 scroll-bar-function external-link-function)
   "Attach shared PUBLICATION to the current Reader buffer.
 Restore bounded LOCATION when supplied.  Invoke LOCATION-CHANGED-FUNCTION
 with the logical view whenever its renderer reports a stable location.
 Invoke SELECTION-CHANGED-FUNCTION whenever its logical selection changes.
 Invoke ACCELERATOR-FUNCTION with the view and a normalized key when the
 focused native child forwards one.  STYLE is copied into the logical view.
-SCROLL-BAR-FUNCTION resolves its mode for the owning Emacs window."
+SCROLL-BAR-FUNCTION resolves its mode for the owning Emacs window.
+Invoke EXTERNAL-LINK-FUNCTION with the view and a validated absolute URI."
   (unless (and (integerp publication) (> publication 0))
     (error "Invalid EPUB publication ID: %S" publication))
   (when location
@@ -564,6 +565,10 @@ SCROLL-BAR-FUNCTION resolves its mode for the owning Emacs window."
              (not (functionp scroll-bar-function)))
     (error "Invalid EPUB scroll bar callback: %S"
            scroll-bar-function))
+  (when (and external-link-function
+             (not (functionp external-link-function)))
+    (error "Invalid EPUB external-link callback: %S"
+           external-link-function))
   (when (and yunge-reader-webview--buffer-view
              (not (yunge-reader-webview--view-destroyed
                    yunge-reader-webview--buffer-view)))
@@ -578,7 +583,8 @@ SCROLL-BAR-FUNCTION resolves its mode for the owning Emacs window."
           :location-changed-function location-changed-function
           :selection-changed-function selection-changed-function
           :accelerator-function accelerator-function
-          :scroll-bar-function scroll-bar-function)))
+          :scroll-bar-function scroll-bar-function
+          :external-link-function external-link-function)))
     (setq yunge-reader-webview--buffer-view view)
     (yunge-reader-webview--register-view view)
     view))

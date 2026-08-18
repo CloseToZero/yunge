@@ -460,6 +460,13 @@ If a hidden view's native surface is still being recreated, its logical view
 retains only the latest bounded href and dispatches it after publication ready;
 a publication error discards that transient target.
 
+EPUB internal links remain inside Foliate and produce an ordinary stable
+relocation.  Clicking an external link instead sends its resolved absolute URI
+to Emacs as a semantic event; the child never opens a native window itself.
+JavaScript, Rust, and Lisp independently require a bounded explicit URI, and
+Reader applies =yunge-reader-uri-schemes= before calling =browse-url=.  The
+explicit link click may open the URI but cannot update the saved book place.
+
 PDF page links carry format-independent tagged actions, but their source
 rectangles remain disposable PDF adapter state.  Local destinations reuse the
 same location actions as outlines; external links carry bounded URI actions.

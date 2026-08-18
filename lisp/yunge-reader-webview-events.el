@@ -30,6 +30,7 @@
                   "yunge-reader-webview" (view &optional reveal))
 (declare-function yunge-reader-webview--sync-view-style
                   "yunge-reader-webview" (view))
+(declare-function yunge-reader--uri-valid-p "yunge-reader" (uri))
 
 (defvar yunge-reader-webview--process)
 
@@ -70,6 +71,13 @@
                 (yunge-reader-webview--valid-selection-p selection))
       (error "Malformed EPUB selection event: %S" message))
     (and selection (copy-tree selection))))
+
+(defun yunge-reader-webview--event-external-uri (message)
+  "Return the validated external URI carried by event MESSAGE."
+  (let ((uri (alist-get 'uri message)))
+    (unless (yunge-reader--uri-valid-p uri)
+      (error "Malformed EPUB external-link event: %S" message))
+    uri))
 
 (defun yunge-reader-webview--handle-event (process message)
   "Validate and route one asynchronous WebView MESSAGE from PROCESS."
@@ -134,6 +142,24 @@
        (when-let* ((view (gethash id yunge-reader-webview--views)))
          (yunge-reader-webview--set-view-selection
           view (yunge-reader-webview--event-selection message))))
+      ("external-link"
+       (let ((uri (yunge-reader-webview--event-external-uri message)))
+         (when-let* ((view (gethash id yunge-reader-webview--views))
+                     (buffer (yunge-reader-webview--view-buffer view))
+                     ((buffer-live-p buffer))
+                     (function
+                      (yunge-reader-webview--view-external-link-function
+                       view)))
+           (with-current-buffer buffer
+             (condition-case error-data
+                 (funcall function view uri)
+               (quit nil)
+               (error
+                (display-warning
+                 'yunge-reader
+                 (format "Could not open EPUB link: %s"
+                         (error-message-string error-data))
+                 :warning)))))))
       ("navigation-error"
        (let ((detail (alist-get 'message message)))
          (unless (stringp detail)

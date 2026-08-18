@@ -9,10 +9,11 @@ use super::protocol::{PROTOCOL_VERSION, Response};
 use super::resources::{APP_BROWSER_URL, APP_URL};
 use super::{
     EpubLocator, EpubNavigationTarget, EpubOutline, EpubSearchCursor,
-    EpubSearchMatch, EpubSelection, EpubStyle, MAX_EPUB_SEARCH_RESULT_BYTES,
-    MAX_EPUB_SELECTION_CHARACTERS, MAX_EPUB_SELECTION_RESULT_BYTES,
-    MAX_RENDERER_ERROR_BYTES, MAX_RENDERER_MESSAGE_BYTES, NavigationCommand,
-    SearchDirection, ViewEvent, ViewSearchParams, ViewSelectionTextParams,
+    EpubSearchMatch, EpubSelection, EpubStyle, MAX_EPUB_EXTERNAL_URI_BYTES,
+    MAX_EPUB_SEARCH_RESULT_BYTES, MAX_EPUB_SELECTION_CHARACTERS,
+    MAX_EPUB_SELECTION_RESULT_BYTES, MAX_RENDERER_ERROR_BYTES,
+    MAX_RENDERER_MESSAGE_BYTES, NavigationCommand, SearchDirection, ViewEvent,
+    ViewSearchParams, ViewSelectionTextParams,
 };
 
 #[derive(Debug, Deserialize)]
@@ -86,6 +87,8 @@ struct RendererMessage {
     #[serde(default)]
     key: Option<String>,
     #[serde(default)]
+    uri: Option<String>,
+    #[serde(default)]
     user: Option<bool>,
 }
 
@@ -93,6 +96,7 @@ struct RendererMessage {
 #[serde(rename_all = "kebab-case")]
 enum RendererEvent {
     Accelerator,
+    ExternalLink,
     Location,
     NavigationError,
     PublicationError,
@@ -100,6 +104,23 @@ enum RendererEvent {
     ScrollBarsError,
     Selection,
     StyleError,
+}
+
+fn valid_external_uri(value: &str) -> bool {
+    let Some((scheme, _rest)) = value.split_once(':') else {
+        return false;
+    };
+    !value.is_empty()
+        && value.len() <= MAX_EPUB_EXTERNAL_URI_BYTES
+        && !value.chars().any(|character| {
+            character.is_whitespace() || character.is_control()
+        })
+        && !scheme.is_empty()
+        && scheme.bytes().enumerate().all(|(index, byte)| match byte {
+            b'A'..=b'Z' | b'a'..=b'z' => true,
+            b'0'..=b'9' | b'+' | b'.' | b'-' => index > 0,
+            _ => false,
+        })
 }
 
 #[derive(Debug)]
@@ -413,13 +434,15 @@ pub(super) fn event(
             None
         }
     };
-    let (event, detail, location, outline, selection, key) = match message.event
+    let (event, detail, location, outline, selection, key, uri) = match message
+        .event
     {
         RendererEvent::Accelerator => {
             if message.message.is_some()
                 || message.location.is_some()
                 || message.outline.is_some()
                 || message.selection.is_some()
+                || message.uri.is_some()
             {
                 return None;
             }
@@ -429,34 +452,57 @@ pub(super) fn event(
                     "J" | "K" | "j" | "k" | "+" | "-" | "=" | "y" | "SPC"
                 )
             })?;
-            ("accelerator", None, None, None, None, Some(key))
+            ("accelerator", None, None, None, None, Some(key), None)
+        }
+        RendererEvent::ExternalLink => {
+            if message.message.is_some()
+                || message.location.is_some()
+                || message.outline.is_some()
+                || message.selection.is_some()
+                || message.key.is_some()
+            {
+                return None;
+            }
+            let uri = message.uri.filter(|value| valid_external_uri(value))?;
+            ("external-link", None, None, None, None, None, Some(uri))
         }
         RendererEvent::Location => {
             if message.message.is_some()
                 || message.outline.is_some()
                 || message.selection.is_some()
                 || message.key.is_some()
+                || message.uri.is_some()
             {
                 return None;
             }
             let location = message.location?.validate().ok()?;
-            ("location", None, Some(location), None, None, None)
+            ("location", None, Some(location), None, None, None, None)
         }
         RendererEvent::NavigationError => {
             if message.location.is_some()
                 || message.outline.is_some()
                 || message.selection.is_some()
                 || message.key.is_some()
+                || message.uri.is_some()
             {
                 return None;
             }
             let detail = message.message.filter(|value| !value.is_empty())?;
-            ("navigation-error", Some(detail), None, None, None, None)
+            (
+                "navigation-error",
+                Some(detail),
+                None,
+                None,
+                None,
+                None,
+                None,
+            )
         }
         RendererEvent::PublicationReady => {
             if message.message.is_some()
                 || message.selection.is_some()
                 || message.key.is_some()
+                || message.uri.is_some()
             {
                 return None;
             }
@@ -469,6 +515,7 @@ pub(super) fn event(
                 Some(outline),
                 None,
                 None,
+                None,
             )
         }
         RendererEvent::PublicationError => {
@@ -476,17 +523,27 @@ pub(super) fn event(
                 || message.outline.is_some()
                 || message.selection.is_some()
                 || message.key.is_some()
+                || message.uri.is_some()
             {
                 return None;
             }
             let detail = message.message.filter(|value| !value.is_empty())?;
-            ("publication-error", Some(detail), None, None, None, None)
+            (
+                "publication-error",
+                Some(detail),
+                None,
+                None,
+                None,
+                None,
+                None,
+            )
         }
         RendererEvent::Selection => {
             if message.message.is_some()
                 || message.location.is_some()
                 || message.outline.is_some()
                 || message.key.is_some()
+                || message.uri.is_some()
             {
                 return None;
             }
@@ -495,29 +552,39 @@ pub(super) fn event(
                 .map(EpubSelection::validate)
                 .transpose()
                 .ok()?;
-            ("selection", None, None, None, Some(selection), None)
+            ("selection", None, None, None, Some(selection), None, None)
         }
         RendererEvent::ScrollBarsError => {
             if message.location.is_some()
                 || message.outline.is_some()
                 || message.selection.is_some()
                 || message.key.is_some()
+                || message.uri.is_some()
             {
                 return None;
             }
             let detail = message.message.filter(|value| !value.is_empty())?;
-            ("scroll-bars-error", Some(detail), None, None, None, None)
+            (
+                "scroll-bars-error",
+                Some(detail),
+                None,
+                None,
+                None,
+                None,
+                None,
+            )
         }
         RendererEvent::StyleError => {
             if message.location.is_some()
                 || message.outline.is_some()
                 || message.selection.is_some()
                 || message.key.is_some()
+                || message.uri.is_some()
             {
                 return None;
             }
             let detail = message.message.filter(|value| !value.is_empty())?;
-            ("style-error", Some(detail), None, None, None, None)
+            ("style-error", Some(detail), None, None, None, None, None)
         }
     };
     Some(ViewEvent {
@@ -529,6 +596,7 @@ pub(super) fn event(
         outline,
         selection,
         key,
+        uri,
         user,
     })
 }

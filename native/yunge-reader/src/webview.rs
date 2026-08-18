@@ -68,6 +68,7 @@ const MAX_EPUB_SEARCH_CURSOR_OFFSET: u32 = 1_048_576;
 const MAX_EPUB_SEARCH_RESULT_BYTES: usize = 512 * 1_024;
 const MAX_EPUB_SEARCH_MATCH_TEXT_BYTES: usize = 16 * 1_024;
 const MAX_EPUB_SEARCH_CONTEXT_BYTES: usize = 4 * 1_024;
+const MAX_EPUB_EXTERNAL_URI_BYTES: usize = 4_096;
 const MIN_EPUB_FONT_SCALE: f64 = 0.5;
 const MAX_EPUB_FONT_SCALE: f64 = 3.0;
 const MIN_EPUB_LINE_HEIGHT: f64 = 1.0;
@@ -94,6 +95,8 @@ struct ViewEvent {
     selection: Option<Option<EpubSelection>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     key: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    uri: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     user: Option<bool>,
 }
@@ -1242,6 +1245,7 @@ fn surface_view_event(surface: SurfaceEvent) -> ViewEvent {
         outline: None,
         selection: None,
         key,
+        uri: None,
         user: None,
     }
 }
@@ -1495,6 +1499,8 @@ mod tests {
         assert!(adapter.contains("key === 'SPC' && event.repeat"));
         assert!(adapter.contains("case 'previous-line':"));
         assert!(adapter.contains("lineDistance(session), false"));
+        assert!(adapter.contains("post('external-link'"));
+        assert!(adapter.contains("checkedExternalURI(event.detail?.href)"));
         assert!(adapter.contains("applyReadingStyle(view, style)"));
         assert!(adapter.contains("if (view.isFixedLayout) return"));
         assert!(adapter.contains("collapseCFI(relocation.cfi)"));
@@ -1536,6 +1542,10 @@ mod tests {
         .unwrap();
         assert!(paginator.contains("prev(distance, smooth = true)"));
         assert!(paginator.contains("#scrollPrev(distance, smooth = true)"));
+        let view =
+            std::str::from_utf8(app_asset("foliate-js/view.js").unwrap().1)
+                .unwrap();
+        assert!(view.contains("'external-link', { a, href, href_ }, true"));
         let cfi_asset = app_asset("foliate-js/epubcfi.js").unwrap().1;
         let cfi = std::str::from_utf8(cfi_asset).unwrap();
         assert!(cfi.contains("export const fromRangeEndpoints"));
@@ -1775,6 +1785,7 @@ mod tests {
         assert!(event.message.is_none());
         assert!(event.selection.is_none());
         assert!(event.key.is_none());
+        assert!(event.uri.is_none());
         assert_eq!(
             event.outline,
             Some(EpubOutline {
@@ -1812,6 +1823,21 @@ mod tests {
         assert_eq!(event.user, Some(true));
         assert_eq!(event.location.unwrap().fraction, None);
         assert!(event.outline.is_none());
+        assert!(event.selection.is_none());
+        assert!(event.uri.is_none());
+
+        let external_link = HttpRequest::builder()
+            .uri(APP_URL)
+            .body(
+                r#"{"protocol":1,"event":"external-link",
+                    "uri":"https://example.com/reference"}"#
+                    .into(),
+            )
+            .unwrap();
+        let event = renderer_event(7, &external_link).unwrap();
+        assert_eq!(event.event, "external-link");
+        assert_eq!(event.uri.as_deref(), Some("https://example.com/reference"));
+        assert!(event.location.is_none());
         assert!(event.selection.is_none());
 
         let selection = HttpRequest::builder()
@@ -1966,6 +1992,22 @@ mod tests {
             HttpRequest::builder()
                 .uri(APP_URL)
                 .body(
+                    r#"{"protocol":1,"event":"external-link",
+                        "uri":"relative/path"}"#
+                        .into(),
+                )
+                .unwrap(),
+            HttpRequest::builder()
+                .uri(APP_URL)
+                .body(
+                    r#"{"protocol":1,"event":"external-link",
+                        "uri":"https://bad uri"}"#
+                        .into(),
+                )
+                .unwrap(),
+            HttpRequest::builder()
+                .uri(APP_URL)
+                .body(
                     concat!(
                         r#"{"protocol":1,"event":"selection","#,
                         r#""selection":{"href":"OPS/chapter.xhtml","#,
@@ -1990,6 +2032,22 @@ mod tests {
         ] {
             assert!(renderer_event(9, &request).is_none());
         }
+
+        let oversized_link = HttpRequest::builder()
+            .uri(APP_URL)
+            .body(
+                json!({
+                    "protocol": 1,
+                    "event": "external-link",
+                    "uri": format!(
+                        "https:{}",
+                        "a".repeat(MAX_EPUB_EXTERNAL_URI_BYTES)
+                    ),
+                })
+                .to_string(),
+            )
+            .unwrap();
+        assert!(renderer_event(9, &oversized_link).is_none());
     }
 
     #[test]

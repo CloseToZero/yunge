@@ -213,7 +213,7 @@
              'yunge-reader-webview--attach-shared-publication)
             (lambda (_publication _location _location-function
                      _selection-function _accelerator-function style
-                     _scroll-bar-function)
+                     _scroll-bar-function _external-link-function)
               (setq attached-style style))))
         (yunge-reader-epub--attach document))
       (should yunge-reader-epub-view-mode)
@@ -342,7 +342,8 @@
             (lambda (publication _location location-function
                                  selection-function
                                  accelerator-function style
-                                 scroll-bar-function)
+                                 scroll-bar-function
+                                 external-link-function)
               (setq yunge-reader-webview--buffer-view
                     (yunge-reader-webview--make-view
                      :buffer (current-buffer)
@@ -352,7 +353,8 @@
                      :location-changed-function location-function
                      :selection-changed-function selection-function
                      :accelerator-function accelerator-function
-                     :scroll-bar-function scroll-bar-function))))
+                     :scroll-bar-function scroll-bar-function
+                     :external-link-function external-link-function))))
            ((symbol-function
              'yunge-reader-webview--detach-shared-publication)
             (lambda (complete)
@@ -383,6 +385,10 @@
               yunge-reader-webview--buffer-view)
              #'yunge-reader-epub--scroll-bar-mode))
         (should
+         (eq (yunge-reader-webview--view-external-link-function
+              yunge-reader-webview--buffer-view)
+             #'yunge-reader-epub--external-link))
+        (should
          (equal
           (yunge-reader-webview--view-style
            yunge-reader-webview--buffer-view)
@@ -403,6 +409,27 @@
          (yunge-reader-epub-handle-closed handle))
         (funcall close-complete '((closed . t)) nil)
         (should (yunge-reader-epub-handle-closed handle))))))
+
+(ert-deftest yunge-reader-epub-opens-only-allowlisted-external-links ()
+  (let ((yunge-reader-uri-schemes '("https"))
+        opened)
+    (require 'browse-url)
+    (cl-letf (((symbol-function 'browse-url)
+               (lambda (uri &rest _arguments)
+                 (setq opened uri))))
+      (let ((inhibit-message t))
+        (should
+         (yunge-reader-epub--external-link
+          (yunge-reader-webview--make-view)
+          "https://example.com/reference")))
+      (should (equal opened "https://example.com/reference"))
+      (setq opened nil)
+      (should-error
+       (yunge-reader-epub--external-link
+        (yunge-reader-webview--make-view)
+        "javascript:alert(1)")
+       :type 'user-error)
+      (should-not opened))))
 
 (ert-deftest yunge-reader-epub-resolves-forwarded-keys-in-emacs ()
   (let ((view (yunge-reader-webview--make-view))

@@ -45,6 +45,7 @@ const MAX_TOC_DEPTH = 256
 const MAX_TOC_HREF_BYTES = 3072
 const MAX_TOC_TITLE_BYTES = 1024
 const MAX_TOC_TOTAL_TEXT_BYTES = 384 * 1024
+const MAX_EXTERNAL_URI_BYTES = 4096
 const LOCATION_DELAY_MS = 75
 const USER_MOVEMENT_WINDOW_MS = 1000
 const SELECTION_TEXT_ERROR_MESSAGES = Object.freeze({
@@ -72,7 +73,7 @@ let generation = 0
 let current = null
 
 const post = (event, {
-    message, location, outline, selection, key, user,
+    message, location, outline, selection, key, uri, user,
 } = {}) => {
     const payload = { protocol: 1, event }
     if (message) payload.message = String(message).slice(0, 4096)
@@ -80,8 +81,19 @@ const post = (event, {
     if (outline) payload.outline = outline
     if (selection !== undefined) payload.selection = selection
     if (key) payload.key = key
+    if (uri) payload.uri = uri
     if (typeof user === 'boolean') payload.user = user
     window.ipc.postMessage(JSON.stringify(payload))
+}
+
+const checkedExternalURI = value => {
+    if (typeof value !== 'string' || !value
+        || encoder.encode(value).length > MAX_EXTERNAL_URI_BYTES
+        || /[\s\p{Cc}]/u.test(value)
+        || !/^[A-Za-z][A-Za-z0-9+.-]*:/u.test(value)) {
+        throw new Error('Invalid EPUB external URI')
+    }
+    return value
 }
 
 const postSearchResult = (request, response) => {
@@ -1190,6 +1202,13 @@ const open = async ({
         })
         view.addEventListener('external-link', event => {
             event.preventDefault()
+            try {
+                post('external-link', {
+                    uri: checkedExternalURI(event.detail?.href),
+                })
+            } catch (error) {
+                console.warn(error)
+            }
         })
         await view.open(book)
         view.renderer.setAttribute('flow', 'scrolled')

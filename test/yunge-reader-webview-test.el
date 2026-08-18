@@ -797,6 +797,41 @@
             (should (equal routed (list view key buffer)))))
       (kill-buffer buffer))))
 
+(ert-deftest yunge-reader-webview-routes-external-links-to-owning-buffer ()
+  (let* (routed
+         (buffer (generate-new-buffer " *webview link owner*"))
+         (view
+          (yunge-reader-webview--make-view
+           :id 12
+           :buffer buffer
+           :external-link-function
+           (lambda (value uri)
+             (setq routed (list value uri (current-buffer))))))
+         (yunge-reader-webview--process 'fake-webview-process)
+         (yunge-reader-webview--views
+          (make-hash-table :test #'eql)))
+    (unwind-protect
+        (progn
+          (puthash 12 view yunge-reader-webview--views)
+          (yunge-reader-webview--handle-event
+           'fake-webview-process
+           '((kind . "event")
+             (event . "external-link")
+             (view . 12)
+             (uri . "https://example.com/reference")))
+          (should
+           (equal routed
+                  (list view "https://example.com/reference" buffer)))
+          (dolist (uri '(nil "relative/path" "https://bad uri"))
+            (should-error
+             (yunge-reader-webview--handle-event
+              'fake-webview-process
+              `((kind . "event")
+                (event . "external-link")
+                (view . 12)
+                (uri . ,uri))))))
+      (kill-buffer buffer))))
+
 (ert-deftest yunge-reader-webview-relays-leaders-after-returning-focus ()
   (let* ((buffer (generate-new-buffer " *webview leader owner*"))
          (view
@@ -1419,12 +1454,13 @@
 
 (ert-deftest yunge-reader-webview-copies-attached-reading-style ()
   (let ((style (yunge-reader-webview-test--style))
+        (link-function (lambda (_view _uri)))
         (yunge-reader-webview--logical-views
          (make-hash-table :test #'eq)))
     (with-temp-buffer
       (let ((view
              (yunge-reader-webview--attach-shared-publication
-              8 nil nil nil nil style)))
+              8 nil nil nil nil style nil link-function)))
         (should
          (equal (yunge-reader-webview--view-style view) style))
         (should-not (eq (yunge-reader-webview--view-style view) style))
@@ -1432,7 +1468,10 @@
         (should
          (= (alist-get 'font-scale
                        (yunge-reader-webview--view-style view))
-            1.25))))))
+            1.25))
+        (should
+         (eq (yunge-reader-webview--view-external-link-function view)
+             link-function))))))
 
 (ert-deftest yunge-reader-webview-waits-for-every-obsolete-surface ()
   (let* ((view

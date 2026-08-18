@@ -58,7 +58,8 @@
   location-changed-function
   selection-changed-function
   accelerator-function
-  scroll-bar-function)
+  scroll-bar-function
+  external-link-function)
 
 (defun yunge-reader-webview--set-surface-state (view state)
   "Set VIEW's surface STATE after validating the lifecycle value."

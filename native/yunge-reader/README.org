@@ -207,6 +207,20 @@ coalesced location followed direct wheel, pointer, or touch activity:
              "href":"OPS/chapter.xhtml","fraction":0.2}}
 #+end_src
 
+Foliate follows internal EPUB anchors itself.  An explicit click on an
+external anchor is canceled inside the child and becomes a semantic event
+containing its resolved absolute URI:
+
+#+begin_src json
+{"kind":"event","event":"external-link","view":1,
+ "uri":"https://example.com/reference"}
+#+end_src
+
+The URI must have an explicit scheme, contain no spaces or controls, and fit
+within 4,096 UTF-8 bytes.  JavaScript, Rust, and Emacs validate it
+independently.  WebView2 new windows remain denied; only Emacs may pass an
+allowlisted scheme to =browse-url=.
+
 =view-create= accepts a logical =view= ID, a live Emacs frame HWND as
 =parent=, a physical-pixel =bounds= object, and optional =visible=.  The
 current spike loads only its built-in local HTML page.
@@ -372,6 +386,7 @@ write unsolicited events without request IDs:
 {"kind":"event","event":"accelerator","key":"<escape>","view":1}
 {"kind":"event","event":"accelerator","key":"C-g","view":1}
 {"kind":"event","event":"accelerator","key":"C-d","view":1}
+{"kind":"event","event":"accelerator","key":"j","view":1}
 {"kind":"event","event":"accelerator","key":"J","view":1}
 {"kind":"event","event":"accelerator","key":"+","view":1}
 {"kind":"event","event":"accelerator","key":"y","view":1}
@@ -381,11 +396,12 @@ write unsolicited events without request IDs:
 {"kind":"event","event":"focus-lost","view":1}
 #+end_src
 
-The helper accepts only =J=, =K=, =+=, =-=, ===, =y=, =SPC=, =M-m=, =C-d=,
-=C-u=, =C-g=, =<escape>=, =<next>=, and =<prior>=.  It never interprets them
-as commands.  Emacs resolves reading keys through the owning EPUB buffer's
-active maps.  Leader keys return focus and re-enter Emacs's input loop; after
-=<escape>= or =C-g=, the child also returns focus to its owning Emacs window.
+The helper accepts only =j=, =k=, =J=, =K=, =+=, =-=, ===, =y=, =SPC=,
+=M-m=, =C-d=, =C-u=, =C-g=, =<escape>=, =<next>=, and =<prior>=.  It never
+interprets them as commands.  Emacs resolves reading keys through the owning
+EPUB buffer's active maps.  Leader keys return focus and re-enter Emacs's input
+loop; after =<escape>= or =C-g=, the child also returns focus to its owning
+Emacs window.
 
 View IDs are independent, so multiple Reader views do not share layout or
 scroll state.  Positions must be nonnegative; dimensions must be positive and

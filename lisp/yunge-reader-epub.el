@@ -552,6 +552,11 @@ VALUES is an alist containing complete, already bounded property values."
      (error "Invalid EPUB scroll bar mode: %S"
             yunge-reader-epub-scroll-bar-mode))))
 
+(defun yunge-reader-epub--external-link (_view uri)
+  "Open validated external URI from the current EPUB view."
+  (yunge-reader--follow-action
+   (make-yunge-reader-action :type 'uri :uri uri)))
+
 (defun yunge-reader-epub--attach (document)
   "Attach a persistent EPUB WebView for DOCUMENT."
   (let ((handle (yunge-reader-document-handle document)))
@@ -567,7 +572,8 @@ VALUES is an alist containing complete, already bounded property values."
        #'yunge-reader-epub--selection-changed
        #'yunge-reader-epub--accelerator
        (yunge-reader-epub--default-style font-scale)
-       #'yunge-reader-epub--scroll-bar-mode))))
+       #'yunge-reader-epub--scroll-bar-mode
+       #'yunge-reader-epub--external-link))))
 
 (defun yunge-reader-epub--detach-complete (handle)
   "Finish one native view detach belonging to HANDLE."

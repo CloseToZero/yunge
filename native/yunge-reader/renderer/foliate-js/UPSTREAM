@@ -19,6 +19,8 @@ Local adjustments remain source-level and reviewable:
 - epubcfi.js exports same-document range construction from two endpoints;
 - paginators release navigation locks, avoid absent boundary sections, and
   let line-scale callers opt out of screen animation;
+- external-link events include the resolved absolute href for trusted host
+  policy without changing Foliate's default fallback;
 - view.js exposes one current search result through its SVG overlayer; and
 - search.js follows the local width style and corrects upstream cross-node and
   terminal-boundary index arithmetic.
