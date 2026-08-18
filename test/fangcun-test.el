@@ -119,15 +119,23 @@
 
 (ert-deftest fangcun-validates-new-file-boundaries ()
   (fangcun-test-with-notes
+    (let ((note-directory (expand-file-name "note" personal-root)))
+      (should-not
+       (fangcun--new-file-name-error
+        (expand-file-name "逻辑.org" note-directory)
+        personal-root)))
     (should-not
-     (fangcun--new-file-name-error "new.org" personal-root))
+     (fangcun--new-file-name-error
+      (expand-file-name "new.org" personal-root)
+      personal-root))
     (dolist (name
              '("theorems.org"
                "new.txt"
-               "missing/new.org"
                "../outside.org"))
       (should
-       (fangcun--new-file-name-error name personal-root)))))
+       (fangcun--new-file-name-error
+        (expand-file-name name personal-root)
+        personal-root)))))
 
 (ert-deftest fangcun-creates-an-unsaved-file-node ()
   (fangcun-test-with-notes
@@ -147,11 +155,13 @@
               (cl-incf configured-calls)
               (funcall configured-function)))
            ((symbol-function 'read-string)
-            (lambda (prompt &optional initial &rest _arguments)
-              (if (string-prefix-p "Node title" prompt)
-                  "C/C++"
-                (setq prompted-initial initial)
-                "c-cpp.org")))
+            (lambda (&rest _arguments) "C/C++"))
+           ((symbol-function 'read-file-name)
+            (lambda (_prompt directory &optional _default _mustmatch
+                             initial &rest _arguments)
+              (should (equal directory personal-root))
+              (setq prompted-initial initial)
+              "c-cpp.org"))
            ((symbol-function 'completing-read)
             (lambda (&rest _arguments)
               (ert-fail "Current yiyu should be selected automatically")))
@@ -183,8 +193,10 @@
 
 (ert-deftest fangcun-create-selects-yiyu-and-reprompts-invalid-name ()
   (fangcun-test-with-notes
-    (let ((target (expand-file-name "status.org" work-root))
-          (answers '("status.txt" "status.org"))
+    (let ((target (expand-file-name "note/status.org" work-root))
+          (answers
+           (list (expand-file-name "status.txt" work-root)
+                 "note/status.org"))
           (org-id-locations nil)
           prompts initials created-buffer)
       (with-temp-buffer
@@ -194,12 +206,14 @@
                 (should (assoc "Work" collection))
                 "Work"))
              ((symbol-function 'read-string)
-              (lambda (prompt &optional initial &rest _arguments)
-                (if (string-prefix-p "Node title" prompt)
-                    "Status"
-                  (push prompt prompts)
-                  (push initial initials)
-                  (pop answers))))
+              (lambda (&rest _arguments) "Status"))
+             ((symbol-function 'read-file-name)
+              (lambda (prompt directory &optional _default _mustmatch
+                              initial &rest _arguments)
+                (should (equal directory work-root))
+                (push prompt prompts)
+                (push initial initials)
+                (pop answers)))
              ((symbol-function 'org-id-new)
               (lambda (&optional _prefix) "work-status"))
              ((symbol-function 'org-id-locations-load)
@@ -215,6 +229,7 @@
                        (car prompts)))
       (should
        (equal (buffer-file-name created-buffer) target))
+      (should (file-directory-p (file-name-directory target)))
       (should-not (file-exists-p target)))))
 
 (ert-deftest fangcun-resolves-org-ids-through-its-database ()
@@ -1965,15 +1980,21 @@
 (ert-deftest fangcun-mcp-creates-and-indexes-file-nodes ()
   (fangcun-test-with-notes
     (fangcun-db-sync)
+    (should-error
+     (fangcun-mcp--create-file-node
+      '(:yiyu "personal"
+        :directory "note"
+        :file "legacy.org"))
+     :type 'user-error)
     (cl-letf (((symbol-function 'org-id-new)
                (lambda (&optional _prefix) "mcp-created")))
       (let* ((result
               (fangcun-mcp--create-file-node
                '(:yiyu "personal"
-                 :file "created.org"
-                 :title "Created note"
-                 :content "Initial content.")))
-             (file (expand-file-name "created.org" personal-root)))
+                  :file "note/created.org"
+                  :title "Created note"
+                  :content "Initial content.")))
+             (file (expand-file-name "note/created.org" personal-root)))
         (should (equal (plist-get result :id) "mcp-created"))
         (should (file-exists-p file))
         (should (fangcun-node-from-id "mcp-created"))

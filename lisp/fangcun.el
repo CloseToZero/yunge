@@ -343,28 +343,31 @@ directory or any notes below it."
        (downcase name))
       (format "File name %S is reserved on Windows" name)))))
 
-(defun fangcun--new-file-name-error (name directory)
-  "Return why NAME cannot name a new file in DIRECTORY, or nil."
-  (let ((file (expand-file-name name directory)))
+(defun fangcun--new-file-name-error (file root)
+  "Return why FILE cannot name a new file below ROOT, or nil."
+  (setq file (expand-file-name file))
+  (let ((directory (file-name-directory file))
+        (name (file-name-nondirectory file)))
     (cond
+     ((file-remote-p file)
+      "Fangcun files must be local")
+     ((not (file-in-directory-p file root))
+      (format "Fangcun files must stay below %s" root))
      ((fangcun--portable-file-name-error name))
      ((not (string-suffix-p ".org" name))
       "Fangcun file names must end with .org")
-     ((not (file-directory-p directory))
-      (format "Fangcun directory does not exist: %s" directory))
      ((file-exists-p file)
       (format "File already exists: %s" file))
      ((find-buffer-visiting file)
       (format "A buffer is already visiting: %s" file))
-     ((let* ((name (file-name-nondirectory file))
-             (conflict
-              (seq-find
-               (lambda (entry)
-                 (and (not (equal entry name))
-                      (string-equal (downcase entry)
-                                    (downcase name))))
-               (directory-files directory nil nil t))))
-        (when conflict
+     ((when (file-directory-p directory)
+        (when-let* ((conflict
+                     (seq-find
+                      (lambda (entry)
+                        (and (not (equal entry name))
+                             (string-equal (downcase entry)
+                                           (downcase name))))
+                      (directory-files directory nil nil t))))
           (format
            "File name differs only by case from existing %S"
            conflict)))))))
@@ -2017,24 +2020,31 @@ When one source contains several links, retain its first occurrence."
     (org-fold-show-context 'link-search)
     node))
 
-(defun fangcun--read-new-file (title directory)
-  "Read a new file name suggested by TITLE in DIRECTORY."
+(defun fangcun--read-new-file (title directory root)
+  "Read a new file below ROOT, starting in DIRECTORY.
+Suggest a file name from TITLE when it is non-empty."
   (let ((initial
          (unless (string-empty-p title)
            (concat title ".org")))
-        (prompt "New Fangcun file name: ")
-        name error)
+        (prompt "New Fangcun file: ")
+        file error)
     (while
         (progn
-          (setq name (read-string prompt initial)
+          (setq file
+                (expand-file-name
+                 (read-file-name prompt directory nil nil initial)
+                 directory)
                 error
-                (fangcun--new-file-name-error name directory))
+                (fangcun--new-file-name-error file root))
           (when error
             (setq prompt
-                  (format "New Fangcun file name [%s]: " error)
-                  initial name))
+                  (format "New Fangcun file [%s]: " error)
+                  initial
+                  (if (file-remote-p file)
+                      file
+                    (file-relative-name file directory))))
           error))
-    (expand-file-name name directory)))
+    file))
 
 ;;;###autoload
 (defun fangcun-file-node-create ()
@@ -2069,7 +2079,8 @@ When one source contains several links, retain its first occurrence."
         (user-error "Fangcun yiyu does not exist: %s" root))
       (let* ((title (read-string "Node title (empty to omit): "))
              (file
-              (fangcun--read-new-file title directory)))
+              (fangcun--read-new-file title directory root)))
+        (make-directory (file-name-directory file) t)
         (find-file file)
         (goto-char (point-min))
         (unless (string-empty-p title)

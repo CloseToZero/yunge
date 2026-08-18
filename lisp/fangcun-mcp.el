@@ -487,32 +487,26 @@ KEY-PREDICATE returns non-nil for a valid decoded sort key."
   "Create and index a Fangcun file node from MCP ARGUMENTS."
   (let* ((yiyu-id
           (fangcun-mcp--required-string arguments :yiyu))
-         (file-name
+         (relative-file
           (fangcun-mcp--required-string arguments :file))
          (title (or (plist-get arguments :title) ""))
-         (content (or (plist-get arguments :content) ""))
-         (relative-directory
-          (or (plist-get arguments :directory) ".")))
-    (unless (and (stringp title) (stringp content)
-                 (stringp relative-directory))
-      (user-error ":title, :content, and :directory must be strings"))
-    (when (file-name-absolute-p relative-directory)
-      (user-error ":directory must be relative to the yiyu root"))
+         (content (or (plist-get arguments :content) "")))
+    (unless (and (stringp title) (stringp content))
+      (user-error ":title and :content must be strings"))
+    (when (plist-member arguments :directory)
+      (user-error
+       ":directory is unsupported; include its path in :file"))
+    (when (file-name-absolute-p relative-file)
+      (user-error ":file must be relative to the yiyu root"))
     (let* ((yiyus (fangcun--ensure-session))
            (yiyu (fangcun-mcp--yiyu-by-id yiyu-id yiyus))
            (root (fangcun-yiyu-root yiyu))
-           (directory
-            (file-name-as-directory
-             (expand-file-name relative-directory root)))
-           (file (expand-file-name file-name directory)))
-      (unless (file-in-directory-p directory root)
-        (user-error "Fangcun directory is outside yiyu %s: %s"
-                    yiyu-id relative-directory))
-      (unless (equal file-name (file-name-nondirectory file-name))
-        (user-error ":file must be a file name without a directory"))
+           (file (expand-file-name relative-file root))
+           (directory (file-name-directory file)))
       (when-let* ((reason
-                   (fangcun--new-file-name-error file-name directory)))
+                   (fangcun--new-file-name-error file root)))
         (user-error "%s" reason))
+      (make-directory directory t)
       (let ((id (org-id-new)))
         (with-temp-buffer
           (setq default-directory directory
@@ -608,14 +602,12 @@ KEY-PREDICATE returns non-nil for a valid decoded sort key."
   "note node in a configured 一隅（yiyu）.")
  '(:type "object"
    :properties
-   (:yiyu
-    (:type "string" :description "Configured 一隅（yiyu） ID")
-    :directory
-    (:type "string"
-     :description "Existing directory relative to the 一隅（yiyu） root"
-     :default ".")
-    :file (:type "string" :description "Portable .org file name")
-    :title (:type "string" :description "Optional Org title")
+    (:yiyu
+     (:type "string" :description "Configured 一隅（yiyu） ID")
+     :file
+     (:type "string"
+      :description "Portable .org path relative to the 一隅（yiyu） root")
+     :title (:type "string" :description "Optional Org title")
     :content (:type "string" :description "Optional initial Org content"))
    :required ["yiyu" "file"]
    :additionalProperties :false)
