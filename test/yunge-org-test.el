@@ -42,6 +42,11 @@
         (should (= (yunge-avy-projection-end projection) 9))
         (should (= (yunge-avy-projection-target projection) 9))))))
 
+(ert-deftest yunge-org-uses-text-first-alignment-settings ()
+  (yunge-org-test--load-config)
+  (should-not org-auto-align-tags)
+  (should (zerop org-tags-column)))
+
 (ert-deftest yunge-org-keeps-table-navigation-without-realignment ()
   (yunge-org-test--load-config)
   (should-not org-table-automatic-realign)

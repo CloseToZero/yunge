@@ -48,11 +48,13 @@
 
 (defvar org-id-link-consider-parent-id)
 (defvar org-id-link-to-org-use-id)
+(defvar org-auto-align-tags)
 (defvar org-link-angle-re)
 (defvar org-link-bracket-re)
 (defvar org-link-plain-re)
 (defvar org-mode-map)
 (defvar org-src-mode-map)
+(defvar org-tags-column)
 (defvar org-table-automatic-realign)
 (defvar evil-move-beyond-eol)
 (defvar evil-respect-visual-line-mode)
@@ -82,6 +84,8 @@
 
 (setq org-id-link-consider-parent-id t
       org-id-link-to-org-use-id 'create-if-interactive
+      org-auto-align-tags nil
+      org-tags-column 0
       org-table-automatic-realign nil)
 
 (defconst yunge-org-command-bindings
