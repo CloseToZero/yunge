@@ -3,6 +3,7 @@
 
 use std::env;
 use std::error::Error;
+use std::ffi::OsString;
 use std::fs::OpenOptions;
 use std::io::{Cursor, Seek, Write};
 use std::path::Path;
@@ -21,13 +22,13 @@ const CONTAINER: &str = r#"<?xml version="1.0" encoding="UTF-8"?>
 </container>
 "#;
 
-const PACKAGE: &str = r#"<?xml version="1.0" encoding="UTF-8"?>
+const PACKAGE_TEMPLATE: &str = r#"<?xml version="1.0" encoding="UTF-8"?>
 <package xmlns="http://www.idpf.org/2007/opf"
          unique-identifier="book-id" version="3.0">
   <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
     <dc:identifier id="book-id">urn:yunge-reader:fixed-fixture</dc:identifier>
     <dc:title>Yunge Reader Fixed Layout Fixture</dc:title>
-    <dc:language>en</dc:language>
+    <dc:language>{{LANGUAGE}}</dc:language>
     <meta property="dcterms:modified">2026-01-01T00:00:00Z</meta>
     <meta property="rendition:layout">pre-paginated</meta>
     <meta property="rendition:spread">none</meta>
@@ -42,7 +43,7 @@ const PACKAGE: &str = r#"<?xml version="1.0" encoding="UTF-8"?>
     <item id="page-3" href="page-3.xhtml"
           media-type="application/xhtml+xml"/>
   </manifest>
-  <spine page-progression-direction="ltr">
+  <spine page-progression-direction="{{PROGRESSION}}">
     <itemref idref="page-1"/>
     <itemref idref="page-2"/>
     <itemref idref="page-3"/>
@@ -67,6 +68,83 @@ const NAVIGATION: &str = r#"<?xml version="1.0" encoding="UTF-8"?>
 </body>
 </html>
 "#;
+
+const USAGE: &str = concat!(
+    "usage: fixed_epub_fixture ",
+    "[--variant ltr|rtl|vertical-rl] OUTPUT.epub"
+);
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum Variant {
+    Ltr,
+    Rtl,
+    VerticalRl,
+}
+
+impl Variant {
+    #[cfg(test)]
+    const ALL: [Self; 3] = [Self::Ltr, Self::Rtl, Self::VerticalRl];
+
+    fn parse(value: &OsString) -> Result<Self, Box<dyn Error>> {
+        match value.to_str() {
+            Some("ltr") => Ok(Self::Ltr),
+            Some("rtl") => Ok(Self::Rtl),
+            Some("vertical-rl") => Ok(Self::VerticalRl),
+            _ => Err(USAGE.into()),
+        }
+    }
+
+    fn slug(self) -> &'static str {
+        match self {
+            Self::Ltr => "ltr",
+            Self::Rtl => "rtl",
+            Self::VerticalRl => "vertical-rl",
+        }
+    }
+
+    fn language(self) -> &'static str {
+        match self {
+            Self::Rtl => "he",
+            Self::VerticalRl => "ja",
+            Self::Ltr => "en",
+        }
+    }
+
+    fn progression(self) -> &'static str {
+        match self {
+            Self::Ltr => "ltr",
+            Self::Rtl | Self::VerticalRl => "rtl",
+        }
+    }
+
+    fn content_direction(self) -> &'static str {
+        match self {
+            Self::Rtl => "rtl",
+            Self::Ltr | Self::VerticalRl => "ltr",
+        }
+    }
+
+    fn writing_mode(self) -> &'static str {
+        match self {
+            Self::VerticalRl => "vertical-rl",
+            Self::Ltr | Self::Rtl => "horizontal-tb",
+        }
+    }
+
+    fn sample(self) -> &'static str {
+        match self {
+            Self::Ltr => "FIRST · SECOND · THIRD",
+            Self::Rtl => "ראשון · שני · שלישי",
+            Self::VerticalRl => "天地玄黃　宇宙洪荒",
+        }
+    }
+}
+
+fn package_document(variant: Variant) -> String {
+    PACKAGE_TEMPLATE
+        .replace("{{LANGUAGE}}", variant.language())
+        .replace("{{PROGRESSION}}", variant.progression())
+}
 
 struct FixturePage {
     number: u8,
@@ -96,11 +174,12 @@ const PAGES: [FixturePage; 3] = [
     },
 ];
 
-fn page_xhtml(page: &FixturePage) -> String {
+fn page_xhtml(page: &FixturePage, variant: Variant) -> String {
     format!(
         r#"<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE html>
-<html xmlns="http://www.w3.org/1999/xhtml">
+<html xmlns="http://www.w3.org/1999/xhtml" lang="{language}"
+      dir="{direction}">
 <head>
   <title>{name} page</title>
   <meta name="viewport" content="width=800, height=1200"/>
@@ -117,6 +196,10 @@ fn page_xhtml(page: &FixturePage) -> String {
     .axis-y {{ position: absolute; top: 40px; bottom: 40px; left: 400px;
                border-left: 2px dashed currentColor; }}
     .mark {{ position: absolute; font: bold 28px monospace; }}
+    .direction {{ position: absolute; inset: 760px 180px 180px;
+                  display: flex; align-items: center; justify-content: center;
+                  border: 3px dotted currentColor; font-size: 38px;
+                  writing-mode: {writing_mode}; direction: {direction}; }}
     .tl {{ left: 58px; top: 58px; }}
     .tr {{ right: 58px; top: 58px; }}
     .bl {{ left: 58px; bottom: 58px; }}
@@ -131,6 +214,7 @@ fn page_xhtml(page: &FixturePage) -> String {
   <div class="mark bl">0,1200</div>
   <div class="mark br">800,1200</div>
   <div class="title">PAGE {number} · {name}</div>
+  <div class="direction">{sample}</div>
 </body>
 </html>
 "#,
@@ -138,6 +222,10 @@ fn page_xhtml(page: &FixturePage) -> String {
         name = page.name,
         background = page.background,
         foreground = page.foreground,
+        language = variant.language(),
+        direction = variant.content_direction(),
+        writing_mode = variant.writing_mode(),
+        sample = variant.sample(),
     )
 }
 
@@ -156,7 +244,7 @@ where
     Ok(())
 }
 
-fn build_fixture() -> Result<Vec<u8>, Box<dyn Error>> {
+fn build_fixture(variant: Variant) -> Result<Vec<u8>, Box<dyn Error>> {
     let mut archive = ZipWriter::new(Cursor::new(Vec::new()));
     add_entry(
         &mut archive,
@@ -165,9 +253,9 @@ fn build_fixture() -> Result<Vec<u8>, Box<dyn Error>> {
         CompressionMethod::Stored,
     )?;
     for (name, contents) in [
-        ("META-INF/container.xml", CONTAINER),
-        ("OPS/package.opf", PACKAGE),
-        ("OPS/nav.xhtml", NAVIGATION),
+        ("META-INF/container.xml", CONTAINER.to_owned()),
+        ("OPS/package.opf", package_document(variant)),
+        ("OPS/nav.xhtml", NAVIGATION.to_owned()),
     ] {
         add_entry(
             &mut archive,
@@ -180,15 +268,15 @@ fn build_fixture() -> Result<Vec<u8>, Box<dyn Error>> {
         add_entry(
             &mut archive,
             &format!("OPS/page-{}.xhtml", page.number),
-            page_xhtml(page).as_bytes(),
+            page_xhtml(page, variant).as_bytes(),
             CompressionMethod::Deflated,
         )?;
     }
     Ok(archive.finish()?.into_inner())
 }
 
-fn write_fixture(path: &Path) -> Result<(), Box<dyn Error>> {
-    let bytes = build_fixture()?;
+fn write_fixture(path: &Path, variant: Variant) -> Result<(), Box<dyn Error>> {
+    let bytes = build_fixture(variant)?;
     let mut output =
         OpenOptions::new().write(true).create_new(true).open(path)?;
     output.write_all(&bytes)?;
@@ -196,16 +284,30 @@ fn write_fixture(path: &Path) -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-fn main() -> Result<(), Box<dyn Error>> {
+fn parse_arguments() -> Result<(Variant, OsString), Box<dyn Error>> {
     let mut arguments = env::args_os().skip(1);
-    let output = arguments
-        .next()
-        .ok_or("usage: fixed_epub_fixture OUTPUT.epub")?;
+    let first = arguments.next().ok_or(USAGE)?;
+    let (variant, output) = if first == "--variant" {
+        let variant = arguments.next().ok_or(USAGE)?;
+        let output = arguments.next().ok_or(USAGE)?;
+        (Variant::parse(&variant)?, output)
+    } else {
+        (Variant::Ltr, first)
+    };
     if arguments.next().is_some() {
-        return Err("usage: fixed_epub_fixture OUTPUT.epub".into());
+        return Err(USAGE.into());
     }
-    write_fixture(Path::new(&output))?;
-    println!("Wrote {}", Path::new(&output).display());
+    Ok((variant, output))
+}
+
+fn main() -> Result<(), Box<dyn Error>> {
+    let (variant, output) = parse_arguments()?;
+    write_fixture(Path::new(&output), variant)?;
+    println!(
+        "Wrote {} ({})",
+        Path::new(&output).display(),
+        variant.slug()
+    );
     Ok(())
 }
 
@@ -220,8 +322,8 @@ mod tests {
 
     #[test]
     fn fixture_has_fixed_layout_structure_and_geometry() {
-        let bytes = build_fixture().unwrap();
-        assert_eq!(bytes, build_fixture().unwrap());
+        let bytes = build_fixture(Variant::Ltr).unwrap();
+        assert_eq!(bytes, build_fixture(Variant::Ltr).unwrap());
         let mut archive = ZipArchive::new(Cursor::new(bytes)).unwrap();
         assert_eq!(archive.len(), 7);
 
@@ -254,23 +356,66 @@ mod tests {
     }
 
     #[test]
-    fn fixture_opens_as_a_fixed_publication() {
-        let nonce = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_nanos();
-        let path = env::temp_dir().join(format!(
-            "yunge-reader-fixed-fixture-{}-{nonce}.epub",
-            std::process::id()
-        ));
-        write_fixture(&path).unwrap();
-        let publication = Publication::open(&path).unwrap();
-        assert_eq!(
-            publication.metadata().layout,
-            PublicationLayout::PrePaginated
-        );
-        assert_eq!(publication.entry_count(), 7);
-        drop(publication);
-        fs::remove_file(path).unwrap();
+    fn fixture_variants_encode_progression_and_writing_mode() {
+        for variant in Variant::ALL {
+            let bytes = build_fixture(variant).unwrap();
+            let mut archive = ZipArchive::new(Cursor::new(bytes)).unwrap();
+            let mut package = String::new();
+            archive
+                .by_name("OPS/package.opf")
+                .unwrap()
+                .read_to_string(&mut package)
+                .unwrap();
+            assert!(package.contains(&format!(
+                "page-progression-direction=\"{}\"",
+                variant.progression()
+            )));
+            assert!(package.contains(&format!(
+                "<dc:language>{}</dc:language>",
+                variant.language()
+            )));
+
+            let mut page = String::new();
+            archive
+                .by_name("OPS/page-1.xhtml")
+                .unwrap()
+                .read_to_string(&mut page)
+                .unwrap();
+            assert!(page.contains(&format!(
+                "writing-mode: {}",
+                variant.writing_mode()
+            )));
+            assert!(
+                page.contains(&format!(
+                    "dir=\"{}\"",
+                    variant.content_direction()
+                ))
+            );
+            assert!(page.contains(variant.sample()));
+        }
+    }
+
+    #[test]
+    fn fixture_variants_open_as_fixed_publications() {
+        for variant in Variant::ALL {
+            let nonce = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos();
+            let path = env::temp_dir().join(format!(
+                "yunge-reader-fixed-{}-{}-{nonce}.epub",
+                variant.slug(),
+                std::process::id()
+            ));
+            write_fixture(&path, variant).unwrap();
+            let publication = Publication::open(&path).unwrap();
+            assert_eq!(
+                publication.metadata().layout,
+                PublicationLayout::PrePaginated
+            );
+            assert_eq!(publication.entry_count(), 7);
+            drop(publication);
+            fs::remove_file(path).unwrap();
+        }
     }
 }

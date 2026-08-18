@@ -679,17 +679,27 @@ the operating system reclaims it at process exit.
 
 * Fixed-layout test fixture
 
-The =fixed_epub_fixture= example generates a three-page, left-to-right EPUB 3
-publication for graphical tests.  Every 800 by 1200 page has distinct colors,
-corner coordinates, center axes, and a page number.  These marks make page
-turns, clipped edges, manual zoom, and restored viewport positions visible.
-The command refuses to replace an existing output file:
+The =fixed_epub_fixture= example generates a three-page EPUB 3 publication for
+graphical tests.  Every 800 by 1200 page has distinct colors, corner
+coordinates, center axes, a page number, and a directional text sample.  These
+marks make page turns, clipped edges, manual zoom, restored viewport positions,
+and writing direction visible.  The command refuses to replace an existing
+output file.  Its default variant is left-to-right:
 
 #+begin_src shell
 cargo run --example fixed_epub_fixture -- D:/tmp/yunge-fixed.epub
 #+end_src
 
+The other variants isolate right-to-left spine progression from vertical page
+content:
+
+#+begin_src shell
+cargo run --example fixed_epub_fixture -- --variant rtl rtl.epub
+cargo run --example fixed_epub_fixture -- --variant vertical-rl vertical.epub
+#+end_src
+
 Open the result through the ordinary Reader command rather than the WebView
-spike.  The package declares =pre-paginated= layout, no synthetic spreads, and
-left-to-right progression.  Later directional fixtures can vary those package
-properties without depending on a copyrighted book.
+spike.  Every package declares =pre-paginated= layout and no synthetic spreads.
+The =rtl= variant changes spine progression and document direction.  The
+=vertical-rl= variant additionally uses Japanese language metadata and CSS
+vertical writing without depending on a copyrighted book.
