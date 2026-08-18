@@ -95,6 +95,12 @@ surface and restores the latest CFI without reopening the shared publication.
 The last buffer waits for every obsolete surface to finish destruction before
 invalidating the publication resource token.
 
+The Lisp adapter represents a surface as exactly one of =detached=,
+=creating=, =native-ready=, =opening=, =ready=, or =failed=.  The shared
+publication handle and the logical view's lifetime remain independent of this
+surface state, so hiding or recreating a child cannot imply that its document
+resource or saved logical position has disappeared.
+
 EPUB locations store a bounded CFI, canonical spine href, and optional finite
 whole-book fraction as printable Reader place data.  Ordinary renderer
 relocations update only the primary view's durable place.  An additional view

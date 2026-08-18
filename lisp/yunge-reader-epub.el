@@ -485,7 +485,7 @@ scrolling behavior."
     (let ((stable
            (yunge-reader-webview--valid-location-p target))
           (ready
-           (yunge-reader-webview--view-publication-ready view)))
+           (yunge-reader-webview--surface-ready-p view)))
       (cond
        (stable
         (setf (yunge-reader-webview--view-location view)

@@ -760,7 +760,7 @@
         (should
          (equal (yunge-reader-webview--view-location view)
                 location))
-        (setf (yunge-reader-webview--view-publication-ready view) t)
+        (setf (yunge-reader-webview--view-surface-state view) 'ready)
         (should
          (yunge-reader-epub--restore-location nil position nil))
         (should
@@ -790,7 +790,7 @@
         (should
          (equal (yunge-reader-webview--view-pending-target view)
                 '((href . "OPS/chapter.xhtml#section"))))
-        (setf (yunge-reader-webview--view-publication-ready view) t)
+        (setf (yunge-reader-webview--view-surface-state view) 'ready)
         (yunge-reader-webview--dispatch-pending-target view)))
     (should
      (equal navigation
