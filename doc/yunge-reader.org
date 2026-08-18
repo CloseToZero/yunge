@@ -222,11 +222,13 @@ Interactive width and line-height controls remain later work.
 
 * Library boundary
 
-The implementation is divided into six pieces:
+The implementation is divided into seven pieces:
 
 - =yunge-reader.el= owns drivers, documents, stable positions, logical
   selections, outlines, bounded search state, reader buffers, and zoom state.
-- =yunge-reader-native.el= owns subprocess requests, build identity,
+- =yunge-reader-transport.el= owns NDJSON framing, handshake queues, request
+  identifiers, response callbacks, and session failure.
+- =yunge-reader-native.el= owns the PDF helper process, build identity,
   reference counting, cache policy, idle shutdown, and explicit lifecycle
   commands.
 - =yunge-reader-setup.el= owns the pinned engine manifest and verified,
@@ -601,6 +603,13 @@ validates all four.  Request IDs match asynchronous responses to callbacks.  A
 crash fails all outstanding callbacks with a native-session error and permits
 at most one automatic restart while a component retains the service.
 
+The PDF and WebView helpers share one transport implementation for NDJSON
+framing, handshake queues, request identifiers, response routing, and pending
+callback failure.  Each helper still owns its handshake validation, error
+mapping, events, readiness metadata, and process lifetime policy.  A transport
+session is bound to the process that created it, so stale output cannot consume
+callbacks belonging to a replacement process.
+
 Each helper start receives an opaque Emacs-side session identity.  A PDF
 document handle pairs that identity with its process-local numeric handle.
 Document requests require the same live session, so an old handle cannot alias
@@ -807,6 +816,9 @@ empty parameters, native Reader-key filtering, embedded renderer assets,
 strict renderer IPC, bounded EPUB locators, bounded EPUB outlines, internal
 href targets, bounded semantic EPUB styles, and bounded EPUB resource
 catalogs.
+Transport ERT tests cover FIFO handshake flushing, fragmented NDJSON,
+asynchronous events and responses, invalid output, and isolated session
+failure.
 WebView ERT tests cover the separate handshake, strict capability validation,
 asynchronous renderer event routing, per-view EPUB locations, owning-window
 focus recovery, owning-buffer key dispatch, frame handle parsing, coalesced

@@ -4,9 +4,9 @@
 
 (require 'cl-lib)
 (require 'compile)
-(require 'json)
 (require 'subr-x)
 (require 'yunge-reader)
+(require 'yunge-reader-transport)
 (require 'yunge-state)
 
 (declare-function yunge-reader-setup "yunge-reader-setup" ())
@@ -84,14 +84,8 @@ This must not exceed `yunge-reader-cache-max-bytes'."
 (defvar yunge-reader-native--build-process nil
   "Process currently building the native helper, or nil.")
 
-(defvar yunge-reader-native--callbacks (make-hash-table :test #'eql)
-  "Pending response callbacks indexed by request identifier.")
-
-(defvar yunge-reader-native--outbound-queue nil
-  "Protocol lines waiting for the native ready handshake.")
-
-(defvar yunge-reader-native--next-id 0
-  "Last native request identifier allocated by Emacs.")
+(defvar yunge-reader-native--transport nil
+  "NDJSON transport bound to the current native helper process.")
 
 (defvar yunge-reader-native--session-counter 0
   "Last opaque native helper session allocated by Emacs.")
@@ -201,16 +195,6 @@ This must not exceed `yunge-reader-cache-max-bytes'."
        "Incompatible Yunge Reader helper: expected protocol %d build %s, got %S"
        yunge-reader-native-protocol-version expected message))))
 
-(defun yunge-reader-native--send-line (process line)
-  "Send one protocol LINE to native PROCESS."
-  (process-send-string process (concat line "\n")))
-
-(defun yunge-reader-native--flush-outbound (process)
-  "Send queued protocol messages to ready PROCESS in FIFO order."
-  (dolist (entry (nreverse yunge-reader-native--outbound-queue))
-    (yunge-reader-native--send-line process (cdr entry)))
-  (setq yunge-reader-native--outbound-queue nil))
-
 (defun yunge-reader-native--response-error (message)
   "Return an Emacs error value represented by response MESSAGE."
   (let* ((error-object (alist-get 'error message))
@@ -222,70 +206,35 @@ This must not exceed `yunge-reader-cache-max-bytes'."
        (or (alist-get 'message error-object)
            "The Yunge Reader native helper failed")))))
 
+(defun yunge-reader-native--invalid-output (process _error-data)
+  "Stop current native PROCESS after invalid protocol output."
+  (when (eq process yunge-reader-native--process)
+    (yunge-reader-native-stop t)))
+
+(defun yunge-reader-native--make-transport ()
+  "Return a fresh transport for one native helper process."
+  (yunge-reader-transport--make-session
+   :label "Yunge Reader native"
+   :validate-ready #'yunge-reader-native--validate-ready
+   :response-error-function #'yunge-reader-native--response-error
+   :invalid-output-function #'yunge-reader-native--invalid-output))
+
 (defun yunge-reader-native--handle-message (process message)
   "Handle one parsed native MESSAGE from PROCESS."
-  (if (not (process-get process 'yunge-reader-ready))
-      (progn
-        (yunge-reader-native--validate-ready message)
-        (process-put process 'yunge-reader-ready t)
-        (yunge-reader-native--flush-outbound process))
-    (let* ((id (alist-get 'id message))
-           (callback (and (integerp id)
-                          (gethash id yunge-reader-native--callbacks))))
-      (unless callback
-        (error "Unexpected Yunge Reader native response: %S" message))
-      (remhash id yunge-reader-native--callbacks)
-      (if (alist-get 'ok message)
-          (funcall callback (alist-get 'result message) nil)
-        (funcall callback nil
-                 (yunge-reader-native--response-error message))))))
-
-(defun yunge-reader-native--filter (process output)
-  "Collect and handle complete NDJSON messages in PROCESS OUTPUT."
-  (let ((pending (concat (or (process-get process 'yunge-reader-output) "")
-                         output))
-        newline)
-    (while (setq newline (string-match "\n" pending))
-      (let ((line (string-trim-right (substring pending 0 newline) "\r")))
-        (setq pending (substring pending (1+ newline)))
-        (unless (string-empty-p line)
-          (condition-case error-data
-              (yunge-reader-native--handle-message
-               process
-               (json-parse-string
-                line
-                :object-type 'alist
-                :array-type 'list
-                :null-object nil
-                :false-object nil))
-            (error
-             (display-warning
-              'yunge-reader
-              (format "Invalid Yunge Reader native output: %s"
-                      (error-message-string error-data))
-              :warning)
-             (when (eq process yunge-reader-native--process)
-               (yunge-reader-native-stop t)))))))
-    (process-put process 'yunge-reader-output pending)))
+  (yunge-reader-transport--handle-message
+   yunge-reader-native--transport process message))
 
 (defun yunge-reader-native--fail-callbacks (reason &optional stopped)
   "Complete pending callbacks after session loss REASON.
 When STOPPED is non-nil, report an intentional service stop."
-  (let (callbacks)
-    (maphash
-     (lambda (_id callback)
-       (push callback callbacks))
-     yunge-reader-native--callbacks)
-    (clrhash yunge-reader-native--callbacks)
-    (setq yunge-reader-native--outbound-queue nil)
-    (dolist (callback callbacks)
-      (funcall
-       callback nil
-       (list
-        (if stopped
-            'yunge-reader-native-session-stopped
-          'yunge-reader-native-session-lost)
-        reason)))))
+  (when yunge-reader-native--transport
+    (yunge-reader-transport--fail
+     yunge-reader-native--transport
+     (list
+      (if stopped
+          'yunge-reader-native-session-stopped
+        'yunge-reader-native-session-lost)
+      reason))))
 
 (defun yunge-reader-native--start-after-crash ()
   "Restart the helper once after an unexpected exit."
@@ -352,7 +301,8 @@ When STOPPED is non-nil, report an intentional service stop."
       (with-current-buffer log
         (let ((inhibit-read-only t))
           (erase-buffer)))
-      (setq yunge-reader-native--outbound-queue nil)
+      (setq yunge-reader-native--transport
+            (yunge-reader-native--make-transport))
       (make-directory (yunge-reader-native-cache-directory) t)
       (let* ((process-environment
               (cons
@@ -372,11 +322,11 @@ When STOPPED is non-nil, report an intentional service stop."
                :coding 'utf-8-unix
                :noquery t
                :stderr log
-               :filter #'yunge-reader-native--filter
+               :filter #'yunge-reader-transport--filter
                :sentinel #'yunge-reader-native--sentinel))
              (session (cl-incf yunge-reader-native--session-counter)))
-        (process-put process 'yunge-reader-output "")
-        (process-put process 'yunge-reader-ready nil)
+        (yunge-reader-transport--bind
+         yunge-reader-native--transport process)
         (process-put process 'yunge-reader-intentional-stop nil)
         (process-put process 'yunge-reader-session session)
         (setq yunge-reader-native--process process)
@@ -402,20 +352,9 @@ COMPLETE receives a result and nil, or nil and an Emacs error value."
     (error "Native reader operation must be a string: %S" operation))
   (unless (functionp complete)
     (error "Native reader completion must be a function: %S" complete))
-  (let* ((process (yunge-reader-native-start))
-         (id (cl-incf yunge-reader-native--next-id))
-         (request
-          (append
-           (list (cons 'id id) (cons 'op operation))
-           (when parameters
-             (list (cons 'params parameters)))))
-         (line
-          (json-serialize request :null-object nil :false-object :false)))
-    (puthash id complete yunge-reader-native--callbacks)
-    (if (process-get process 'yunge-reader-ready)
-        (yunge-reader-native--send-line process line)
-      (push (cons id line) yunge-reader-native--outbound-queue))
-    id))
+  (let ((process (yunge-reader-native-start)))
+    (yunge-reader-transport--request
+     yunge-reader-native--transport process operation parameters complete)))
 
 (defun yunge-reader-native-request-in-session
     (session operation parameters complete)
@@ -502,7 +441,9 @@ FORCE."
            ((process-get yunge-reader-native--process
                          'yunge-reader-intentional-stop)
             'stopping)
-           ((process-get yunge-reader-native--process 'yunge-reader-ready)
+           ((yunge-reader-transport--ready-p
+             yunge-reader-native--transport
+             yunge-reader-native--process)
             'ready)
            (t 'starting))
           :clients yunge-reader-native--client-count
@@ -741,13 +682,12 @@ Normal document opening never downloads or compiles dependencies implicitly."
   (when (process-live-p yunge-reader-native--process)
     (let ((process yunge-reader-native--process))
       (process-put process 'yunge-reader-intentional-stop t)
-      (when (process-get process 'yunge-reader-ready)
+      (when (yunge-reader-transport--ready-p
+             yunge-reader-native--transport process)
         (condition-case nil
-            (let* ((id (cl-incf yunge-reader-native--next-id))
-                   (line
-                    (json-serialize
-                     (list (cons 'id id) (cons 'op "shutdown")))))
-              (yunge-reader-native--send-line process line))
+            (yunge-reader-transport--request
+             yunge-reader-native--transport process
+             "shutdown" nil #'ignore)
           (error nil)))))
   (when (process-live-p yunge-reader-native--build-process)
     (set-process-sentinel yunge-reader-native--build-process #'ignore)

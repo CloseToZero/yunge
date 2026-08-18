@@ -10,10 +10,7 @@
   (declare (indent 0) (debug t))
   `(let ((system-type 'windows-nt)
          (yunge-reader-webview--process nil)
-         (yunge-reader-webview--callbacks
-          (make-hash-table :test #'eql))
-         (yunge-reader-webview--outbound-queue nil)
-         (yunge-reader-webview--next-request-id 0)
+         (yunge-reader-webview--transport nil)
          (yunge-reader-webview--next-view-id 0)
          (yunge-reader-webview--views
           (make-hash-table :test #'eql))
@@ -810,7 +807,8 @@
 (ert-deftest yunge-reader-webview-events-do-not-consume-callbacks ()
   (yunge-reader-webview-test--with-fake-process
     (yunge-reader-webview-start)
-    (process-put 'fake-webview-process 'yunge-reader-webview-ready t)
+    (yunge-reader-transport--mark-ready
+     yunge-reader-webview--transport 'fake-webview-process)
     (let (handled)
       (cl-letf (((symbol-function 'yunge-reader-webview--handle-event)
                  (lambda (process message)
@@ -829,7 +827,8 @@
                         (key . "C-g")))))
       (should (zerop
                (hash-table-count
-                yunge-reader-webview--callbacks))))))
+                (yunge-reader-transport--session-callbacks
+                 yunge-reader-webview--transport)))))))
 
 (ert-deftest yunge-reader-webview-records-renderer-publication-events ()
   (let* ((buffer (generate-new-buffer " *webview EPUB event*"))

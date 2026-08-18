@@ -3,10 +3,10 @@
 ;; SPDX-License-Identifier: MIT
 
 (require 'cl-lib)
-(require 'json)
 (require 'subr-x)
 (require 'yunge-reader)
 (require 'yunge-reader-native)
+(require 'yunge-reader-transport)
 
 (define-error 'yunge-reader-webview-native-error
   "The Yunge Reader WebView helper reported an error")
@@ -84,14 +84,8 @@
 (defvar yunge-reader-webview--process nil
   "Running WebView helper process, or nil.")
 
-(defvar yunge-reader-webview--callbacks (make-hash-table :test #'eql)
-  "Pending WebView callbacks indexed by request identifier.")
-
-(defvar yunge-reader-webview--outbound-queue nil
-  "Protocol lines waiting for the WebView ready handshake.")
-
-(defvar yunge-reader-webview--next-request-id 0
-  "Last WebView request identifier allocated by Emacs.")
+(defvar yunge-reader-webview--transport nil
+  "NDJSON transport bound to the current WebView helper process.")
 
 (defvar yunge-reader-webview--next-view-id 0
   "Last logical WebView identifier allocated by Emacs.")
@@ -211,16 +205,6 @@
       (error
        "Incompatible Yunge Reader WebView helper: %S"
        message))))
-
-(defun yunge-reader-webview--send-line (process line)
-  "Send one protocol LINE to WebView PROCESS."
-  (process-send-string process (concat line "\n")))
-
-(defun yunge-reader-webview--flush-outbound (process)
-  "Send queued WebView messages to ready PROCESS in FIFO order."
-  (dolist (entry (nreverse yunge-reader-webview--outbound-queue))
-    (yunge-reader-webview--send-line process (cdr entry)))
-  (setq yunge-reader-webview--outbound-queue nil))
 
 (defun yunge-reader-webview--response-error (message)
   "Return an Emacs error value represented by response MESSAGE."
@@ -1169,76 +1153,40 @@ When REVEAL is non-nil, navigate to the result before painting it."
       (_
        (error "Unsupported Yunge Reader WebView event: %s" event)))))
 
+(defun yunge-reader-webview--record-ready (process message)
+  "Record WebView readiness metadata from MESSAGE on PROCESS."
+  (process-put process 'yunge-reader-webview-available
+               (alist-get 'available message))
+  (process-put process 'yunge-reader-webview-version
+               (alist-get 'version message))
+  (process-put process 'yunge-reader-webview-message
+               (alist-get 'message message)))
+
+(defun yunge-reader-webview--invalid-output (process _error-data)
+  "Stop current WebView PROCESS after invalid protocol output."
+  (when (eq process yunge-reader-webview--process)
+    (yunge-reader-webview-stop t)))
+
+(defun yunge-reader-webview--make-transport ()
+  "Return a fresh transport for one WebView helper process."
+  (yunge-reader-transport--make-session
+   :label "Yunge Reader WebView"
+   :validate-ready #'yunge-reader-webview--validate-ready
+   :ready-function #'yunge-reader-webview--record-ready
+   :event-function #'yunge-reader-webview--handle-event
+   :response-error-function #'yunge-reader-webview--response-error
+   :invalid-output-function #'yunge-reader-webview--invalid-output))
+
 (defun yunge-reader-webview--handle-message (process message)
   "Handle one parsed WebView MESSAGE from PROCESS."
-  (cond
-   ((not (process-get process 'yunge-reader-webview-ready))
-    (yunge-reader-webview--validate-ready message)
-    (process-put process 'yunge-reader-webview-ready t)
-    (process-put process 'yunge-reader-webview-available
-                 (alist-get 'available message))
-    (process-put process 'yunge-reader-webview-version
-                 (alist-get 'version message))
-    (process-put process 'yunge-reader-webview-message
-                 (alist-get 'message message))
-    (yunge-reader-webview--flush-outbound process))
-   ((equal (alist-get 'kind message) "event")
-    (yunge-reader-webview--handle-event process message))
-   (t
-    (let* ((id (alist-get 'id message))
-           (callback
-            (and (integerp id)
-                 (gethash id yunge-reader-webview--callbacks))))
-      (unless callback
-        (error "Unexpected Yunge Reader WebView response: %S" message))
-      (remhash id yunge-reader-webview--callbacks)
-      (if (alist-get 'ok message)
-          (funcall callback (alist-get 'result message) nil)
-        (funcall callback nil
-                 (yunge-reader-webview--response-error message)))))))
-
-(defun yunge-reader-webview--filter (process output)
-  "Collect and handle complete NDJSON messages in PROCESS OUTPUT."
-  (let ((pending
-         (concat
-          (or (process-get process 'yunge-reader-webview-output) "")
-          output))
-        newline)
-    (while (setq newline (string-match "\n" pending))
-      (let ((line
-             (string-trim-right (substring pending 0 newline) "\r")))
-        (setq pending (substring pending (1+ newline)))
-        (unless (string-empty-p line)
-          (condition-case error-data
-              (yunge-reader-webview--handle-message
-               process
-               (json-parse-string
-                line
-                :object-type 'alist
-                :array-type 'list
-                :null-object nil
-                :false-object nil))
-            (error
-             (display-warning
-              'yunge-reader
-              (format "Invalid Yunge Reader WebView output: %s"
-                      (error-message-string error-data))
-              :warning)
-             (when (eq process yunge-reader-webview--process)
-               (yunge-reader-webview-stop t)))))))
-    (process-put process 'yunge-reader-webview-output pending)))
+  (yunge-reader-transport--handle-message
+   yunge-reader-webview--transport process message))
 
 (defun yunge-reader-webview--fail-callbacks (reason)
   "Complete all pending WebView callbacks with REASON."
-  (let (callbacks)
-    (maphash
-     (lambda (_id callback)
-       (push callback callbacks))
-     yunge-reader-webview--callbacks)
-    (clrhash yunge-reader-webview--callbacks)
-    (setq yunge-reader-webview--outbound-queue nil)
-    (dolist (callback callbacks)
-      (funcall callback nil (list 'error reason)))))
+  (when yunge-reader-webview--transport
+    (yunge-reader-transport--fail
+     yunge-reader-webview--transport (list 'error reason))))
 
 (defun yunge-reader-webview--sentinel (process _event)
   "Finalize WebView PROCESS after it exits."
@@ -1277,7 +1225,8 @@ When REVEAL is non-nil, navigate to the result before painting it."
       (with-current-buffer log
         (let ((inhibit-read-only t))
           (erase-buffer)))
-      (setq yunge-reader-webview--outbound-queue nil)
+      (setq yunge-reader-webview--transport
+            (yunge-reader-webview--make-transport))
       (let ((process
              (make-process
               :name "yunge-reader-webview"
@@ -1286,10 +1235,10 @@ When REVEAL is non-nil, navigate to the result before painting it."
               :coding 'utf-8-unix
               :noquery t
               :stderr log
-              :filter #'yunge-reader-webview--filter
+              :filter #'yunge-reader-transport--filter
               :sentinel #'yunge-reader-webview--sentinel)))
-        (process-put process 'yunge-reader-webview-output "")
-        (process-put process 'yunge-reader-webview-ready nil)
+        (yunge-reader-transport--bind
+         yunge-reader-webview--transport process)
         (process-put process 'yunge-reader-webview-intentional-stop nil)
         (setq yunge-reader-webview--process process)
         (when (called-interactively-p 'interactive)
@@ -1302,20 +1251,9 @@ When REVEAL is non-nil, navigate to the result before painting it."
     (error "WebView operation must be a string: %S" operation))
   (unless (functionp complete)
     (error "WebView completion must be a function: %S" complete))
-  (let* ((process (yunge-reader-webview-start))
-         (id (cl-incf yunge-reader-webview--next-request-id))
-         (request
-          (append
-           (list (cons 'id id) (cons 'op operation))
-           (when parameters
-             (list (cons 'params parameters)))))
-         (line
-          (json-serialize request :null-object nil :false-object :false)))
-    (puthash id complete yunge-reader-webview--callbacks)
-    (if (process-get process 'yunge-reader-webview-ready)
-        (yunge-reader-webview--send-line process line)
-      (push (cons id line) yunge-reader-webview--outbound-queue))
-    id))
+  (let ((process (yunge-reader-webview-start)))
+    (yunge-reader-transport--request
+     yunge-reader-webview--transport process operation parameters complete)))
 
 ;;;###autoload
 (defun yunge-reader-webview-stop (&optional force)
