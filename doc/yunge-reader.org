@@ -222,7 +222,7 @@ Interactive width and line-height controls remain later work.
 
 * Library boundary
 
-The implementation is divided into eleven pieces:
+The implementation is divided into twelve pieces:
 
 - =yunge-reader.el= owns drivers, documents, stable positions, logical
   selections, outlines, bounded search state, reader buffers, and zoom state.
@@ -243,6 +243,8 @@ The implementation is divided into eleven pieces:
   WebView helper requests and checks their bounded asynchronous results.
 - =yunge-reader-webview-events.el= validates asynchronous renderer events and
   routes them to logical view state and the owning Emacs presentation.
+- =yunge-reader-webview-service.el= owns the helper process, transport,
+  diagnostics, shutdown deadline, and stopped-service notification.
 - =yunge-reader-webview.el= owns the native child-surface lifecycle and keeps
   persistent logical views separate from disposable window surfaces.
 - =yunge-reader-epub.el= maps shared EPUB publications and reflowable

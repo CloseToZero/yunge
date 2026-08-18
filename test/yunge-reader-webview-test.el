@@ -142,6 +142,35 @@
          (result . ((available . t)))))
       (should (alist-get 'available result)))))
 
+(ert-deftest yunge-reader-webview-forgets-views-after-service-exit ()
+  (yunge-reader-webview-test--with-fake-process
+    (let* ((buffer (generate-new-buffer " *stopped EPUB view*"))
+           (view
+            (yunge-reader-webview--make-view
+             :id 7 :buffer buffer :surface-state 'ready)))
+      (unwind-protect
+          (progn
+            (yunge-reader-webview-start)
+            (puthash 7 view yunge-reader-webview--views)
+            (puthash view t yunge-reader-webview--logical-views)
+            (setq live nil)
+            (cl-letf (((symbol-function 'display-warning) #'ignore))
+              (yunge-reader-webview--sentinel
+               'fake-webview-process "finished"))
+            (should-not yunge-reader-webview--process)
+            (should (yunge-reader-webview--view-destroyed view))
+            (should
+             (yunge-reader-webview--view-destroy-finished view))
+            (should-not (yunge-reader-webview--view-id view))
+            (should
+             (zerop
+              (hash-table-count yunge-reader-webview--views)))
+            (should
+             (zerop
+              (hash-table-count
+               yunge-reader-webview--logical-views))))
+        (kill-buffer buffer)))))
+
 (ert-deftest yunge-reader-webview-rejects-incomplete-handshakes ()
   (yunge-reader-webview-test--with-fake-process
     (let ((message (yunge-reader-webview-test--ready-message)))

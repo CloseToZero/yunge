@@ -6,7 +6,7 @@
 (require 'yunge-reader-webview-view)
 
 (declare-function yunge-reader-webview--request
-                  "yunge-reader-webview"
+                  "yunge-reader-webview-service"
                   (operation parameters complete))
 (defun yunge-reader-webview--open-publication (path callback)
   "Open the local EPUB at PATH and invoke CALLBACK with its result."
