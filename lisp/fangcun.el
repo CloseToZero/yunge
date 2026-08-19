@@ -968,31 +968,45 @@ When NO-MESSAGE is non-nil, do not report the indexed counts."
              (fangcun--parse-file
               (fangcun-file-state-yiyu state)
               (fangcun-file-state-absolute-file state))))
-          states)))
-    (when (file-exists-p fangcun-database-file)
-      (delete-file fangcun-database-file))
-    (let ((result
-           (fangcun--call-with-database
-            (lambda (database)
-              (with-sqlite-transaction database
-                (dolist (yiyu yiyus)
-                  (fangcun--insert-yiyu database yiyu))
-                (dolist (entry parsed)
-                  (fangcun--insert-file database (car entry))
-                  (fangcun--insert-file-data database (cdr entry)))
-                (fangcun--database-counts database))))))
-      (unless no-message
-        (message
-         (concat
-          "Fangcun indexed %d nodes, %d aliases, %d tags, and %d links "
-          "from %d files in %d yiyu roots")
-         (plist-get result :nodes)
-         (plist-get result :aliases)
-         (plist-get result :tags)
-         (plist-get result :links)
-         (plist-get result :files)
-         (plist-get result :yiyus)))
-      result)))
+          states))
+        (database-file fangcun-database-file)
+        (directory (file-name-directory fangcun-database-file))
+        replacement-file)
+    (make-directory directory t)
+    (setq replacement-file
+          (make-temp-file
+           (expand-file-name ".fangcun-rebuild-" directory)
+           nil ".sqlite"))
+    ;; `fangcun--call-with-database' initializes only a nonexistent file.
+    ;; MAKE-TEMP-FILE reserves a unique same-directory name first.
+    (delete-file replacement-file)
+    (unwind-protect
+        (let ((result
+               (let ((fangcun-database-file replacement-file))
+                 (fangcun--call-with-database
+                  (lambda (database)
+                    (with-sqlite-transaction database
+                      (dolist (yiyu yiyus)
+                        (fangcun--insert-yiyu database yiyu))
+                      (dolist (entry parsed)
+                        (fangcun--insert-file database (car entry))
+                        (fangcun--insert-file-data database (cdr entry)))
+                      (fangcun--database-counts database)))))))
+          (rename-file replacement-file database-file t)
+          (unless no-message
+            (message
+             (concat
+              "Fangcun indexed %d nodes, %d aliases, %d tags, and %d links "
+              "from %d files in %d yiyu roots")
+             (plist-get result :nodes)
+             (plist-get result :aliases)
+             (plist-get result :tags)
+             (plist-get result :links)
+             (plist-get result :files)
+             (plist-get result :yiyus)))
+          result)
+      (when (file-exists-p replacement-file)
+        (delete-file replacement-file)))))
 
 (defun fangcun--sync-database (states &optional no-message)
   "Synchronize an existing Fangcun database with file STATES.

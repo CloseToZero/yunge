@@ -842,6 +842,30 @@
      (equal (mapcar #'fangcun-node-id (fangcun-node-list))
             '("work-file")))))
 
+(ert-deftest fangcun-rebuild-preserves-a-valid-database-on-failure ()
+  (fangcun-test-with-notes
+    (fangcun-db-sync)
+    (fangcun-test--write-file
+     personal-file
+     (concat
+      ":PROPERTIES:\n"
+      ":ID: personal-file\n"
+      ":END:\n"
+      "* Duplicate\n"
+      ":PROPERTIES:\n"
+      ":ID: work-file\n"
+      ":END:\n"))
+    (should-error (fangcun-db-rebuild))
+    (should
+     (equal
+      (sort (mapcar #'fangcun-node-id (fangcun-node-list))
+            #'string-lessp)
+      '("personal-file" "theorem" "untitled-heading" "work-file")))
+    (should-not
+     (directory-files
+      (file-name-directory fangcun-database-file)
+      nil "\\`.fangcun-rebuild-"))))
+
 (ert-deftest fangcun-sync-skips-unchanged-files ()
   (fangcun-test-with-notes
     (fangcun-db-sync)
