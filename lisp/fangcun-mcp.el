@@ -493,9 +493,6 @@ KEY-PREDICATE returns non-nil for a valid decoded sort key."
          (content (or (plist-get arguments :content) "")))
     (unless (and (stringp title) (stringp content))
       (user-error ":title and :content must be strings"))
-    (when (plist-member arguments :directory)
-      (user-error
-       ":directory is unsupported; include its path in :file"))
     (when (file-name-absolute-p relative-file)
       (user-error ":file must be relative to the yiyu root"))
     (let* ((yiyus (fangcun--ensure-session))

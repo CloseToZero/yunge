@@ -2051,12 +2051,6 @@
 (ert-deftest fangcun-mcp-creates-and-indexes-file-nodes ()
   (fangcun-test-with-notes
     (fangcun-db-sync)
-    (should-error
-     (fangcun-mcp--create-file-node
-      '(:yiyu "personal"
-        :directory "note"
-        :file "legacy.org"))
-     :type 'user-error)
     (cl-letf (((symbol-function 'org-id-new)
                (lambda (&optional _prefix) "mcp-created")))
       (let* ((result

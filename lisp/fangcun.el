@@ -1621,33 +1621,29 @@ When NO-MESSAGE is non-nil, do not report the indexed counts."
    :file (elt row 4)
    :title (elt row 5)))
 
-(defun fangcun--attach-aliases (nodes rows)
-  "Attach aliases from SQLite ROWS to NODES and return NODES.
-Each row contains a node ID followed by one alias."
+(defun fangcun--attach-node-values (nodes rows slot)
+  "Attach values from SQLite ROWS to SLOT of NODES and return NODES.
+Each row contains a node ID followed by one value."
   (let ((nodes-by-id (make-hash-table :test #'equal)))
     (dolist (node nodes)
       (push node (gethash (fangcun-node-id node) nodes-by-id)))
     (dolist (row rows)
       (dolist (node (gethash (elt row 0) nodes-by-id))
-        (push (elt row 1) (fangcun-node-aliases node))))
+        (push (elt row 1)
+              (cl-struct-slot-value 'fangcun-node slot node))))
     (dolist (node nodes)
-      (setf (fangcun-node-aliases node)
-            (nreverse (fangcun-node-aliases node))))
+      (setf (cl-struct-slot-value 'fangcun-node slot node)
+            (nreverse
+             (cl-struct-slot-value 'fangcun-node slot node))))
     nodes))
 
+(defun fangcun--attach-aliases (nodes rows)
+  "Attach aliases from SQLite ROWS to NODES and return NODES."
+  (fangcun--attach-node-values nodes rows 'aliases))
+
 (defun fangcun--attach-tags (nodes rows)
-  "Attach tags from SQLite ROWS to NODES and return NODES.
-Each row contains a node ID followed by one tag."
-  (let ((nodes-by-id (make-hash-table :test #'equal)))
-    (dolist (node nodes)
-      (push node (gethash (fangcun-node-id node) nodes-by-id)))
-    (dolist (row rows)
-      (dolist (node (gethash (elt row 0) nodes-by-id))
-        (push (elt row 1) (fangcun-node-tags node))))
-    (dolist (node nodes)
-      (setf (fangcun-node-tags node)
-            (nreverse (fangcun-node-tags node))))
-    nodes))
+  "Attach tags from SQLite ROWS to NODES and return NODES."
+  (fangcun--attach-node-values nodes rows 'tags))
 
 (defun fangcun-node-from-id (id)
   "Return the Fangcun node named ID, or nil when it is not indexed."
