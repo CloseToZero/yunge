@@ -319,9 +319,15 @@ When LEFT is non-nil, also move the hline segment to the left."
     ("zO" org-fold-show-subtree "open child folds")
     ([localleader] ,yunge-org-command-map nil)))
 
-(defconst yunge-org-note-bindings
-  '(("l" org-insert-link "insert link")
+(defvar-keymap yunge-org-link-map
+  :doc "Org link commands.")
+
+(defconst yunge-org-link-bindings
+  '(("i" org-insert-link "insert link")
     ("s" org-store-link "store link")))
+
+(defconst yunge-org-note-bindings
+  `(("l" ,yunge-org-link-map "link")))
 
 (defun yunge-org-beginning-of-line ()
   "Move to the Org content start.
@@ -470,11 +476,14 @@ Keep point unchanged when FUNCTION is editing a region or existing link."
     (org-fold-show-entry)
     (org-fold-show-children)))
 
+(yunge-key-define yunge-org-link-map yunge-org-link-bindings)
 (yunge-key-define yunge-note-map yunge-org-note-bindings)
 
 (with-eval-after-load 'which-key
   (yunge-key-add-which-key-descriptions
-   yunge-note-map yunge-org-note-bindings))
+   yunge-note-map yunge-org-note-bindings)
+  (yunge-key-add-which-key-descriptions
+   yunge-org-link-map yunge-org-link-bindings))
 
 (with-eval-after-load 'evil
   (with-eval-after-load 'org

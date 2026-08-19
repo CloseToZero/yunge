@@ -302,7 +302,7 @@ select inside or around the structure:
 - ~ic/ac~ select the enclosing container.
 - ~ih/ah~ select the enclosing subtree.
 
-Use ~SPC n l~ to insert an Org link and ~SPC n s~ to store one.
+Use ~SPC n l i~ to insert an Org link and ~SPC n l s~ to store one.
 Use ~SPC m t~ to change the current heading's TODO state.
 
 * List buffers

@@ -520,11 +520,14 @@
   (should (eq org-id-link-to-org-use-id 'create-if-interactive))
   (yunge-test-evil-normal-keys
    'fundamental-mode
-   '(("SPC n l" . org-insert-link)
-     ("SPC n s" . org-store-link)))
+   '(("SPC n l i" . org-insert-link)
+     ("SPC n l s" . org-store-link)))
   (yunge-test-which-key-prefix-bindings
    'fundamental-mode "SPC n"
-   '(("l" nil "insert link")
+   '(("l" nil "+link")))
+  (yunge-test-which-key-prefix-bindings
+   'fundamental-mode "SPC n l"
+   '(("i" nil "insert link")
      ("s" nil "store link")))
   (should
    (advice-member-p #'yunge-org--insert-link-at-normal-state-eol

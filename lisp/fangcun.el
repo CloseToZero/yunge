@@ -2066,6 +2066,13 @@ Suggest a file name from TITLE when it is non-empty."
           error))
     file))
 
+(defun fangcun--node-id-get-create ()
+  "Return the current Org entry's local ID, creating one if needed."
+  (or (org-id-get)
+      (let ((id (org-id-new)))
+        (org-entry-put (point) "ID" id)
+        id)))
+
 ;;;###autoload
 (defun fangcun-file-node-create ()
   "Visit a new unsaved Org file with a Fangcun file node."
@@ -2107,11 +2114,43 @@ Suggest a file name from TITLE when it is non-empty."
           (insert "#+title: " title "\n"))
         (insert "\n")
         (goto-char (point-min))
-        (let ((id (org-id-new)))
-          (org-entry-put (point) "ID" id)
+        (let ((id (fangcun--node-id-get-create)))
           (org-cycle-set-startup-visibility)
           (goto-char (point-max))
           id)))))
+
+;;;###autoload
+(defun fangcun-heading-node-create ()
+  "Give the current Org heading its own Fangcun node ID.
+Return an existing local ID without replacing it.  Saving the file makes a
+new ID available through the Fangcun index."
+  (interactive)
+  (unless (derived-mode-p 'org-mode)
+    (user-error "Fangcun heading nodes require an Org buffer"))
+  (let ((heading
+         (save-excursion
+           (save-restriction
+             (widen)
+             (org-back-to-heading t)
+             (point))))
+        (yiyus (fangcun--configured-yiyus)))
+    (unless (and buffer-file-name
+                 (fangcun--yiyu-containing-file buffer-file-name yiyus))
+      (user-error "Current Org file does not belong to a Fangcun yiyu"))
+    (fangcun--ensure-session yiyus)
+    (let (created id)
+      (save-excursion
+        (save-restriction
+          (widen)
+          (goto-char heading)
+          (setq id (org-id-get))
+          (unless id
+            (setq created t
+                  id (fangcun--node-id-get-create)))))
+      (when (called-interactively-p 'interactive)
+        (message "%s Fangcun heading node %s"
+                 (if created "Created" "Found") id))
+      id)))
 
 ;;;###autoload
 (defun fangcun-node-find ()

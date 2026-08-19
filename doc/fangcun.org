@@ -22,6 +22,10 @@ selects a configured yiyu.  The file prompt can navigate to an existing
 subdirectory or name a new one below that yiyu.  An optional title is used
 verbatim as the suggested file name, which is always shown for confirmation.
 
+=M-x fangcun-heading-node-create= gives the current heading its own local ID.
+It returns an existing heading ID without replacing it.  Save the file to make
+a newly created heading node available through the Fangcun index.
+
 Every new relative path component is checked for characters and reserved names
 that cannot be shared across the supported platforms.  Invalid input remains in
 the prompt for editing; Fangcun does not rewrite it.  The path must stay inside
@@ -120,12 +124,13 @@ source line as a preview.  =RET= visits the link, =gr= refreshes the buffer, and
 
 The note map provides the frequent Fangcun commands under the global leader:
 
-- =SPC n n= creates a file node.
+- =SPC n c= creates a node from the current heading.
 - =SPC n f= finds a node.
 - =SPC n i= inserts a node link.
+- =SPC n n= creates a file node.
 - =SPC n t= sets the current node's local tags.
-- =SPC n b= finds a backlink to the current node.
-- =SPC n v= displays backlinks to the current node.
+- =SPC n b f= finds a backlink to the current node.
+- =SPC n b v= displays backlinks to the current node.
 
 The database defaults to =var/fangcun/fangcun.sqlite= below
 =user-emacs-directory=.

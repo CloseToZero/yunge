@@ -193,6 +193,43 @@
         (should (equal (fangcun-node-title node) "C/C++"))
         (should (equal (fangcun-node-file node) "c-cpp.org"))))))
 
+(ert-deftest fangcun-creates-a-local-heading-node ()
+  (fangcun-test-with-notes
+    (fangcun-db-sync)
+    (with-current-buffer (find-file-noselect personal-file)
+      (goto-char (point-min))
+      (re-search-forward "^\\* $")
+      (beginning-of-line)
+      (insert "** Child\nChild body\n\n")
+      (search-backward "Child body")
+      (save-excursion
+        (org-back-to-heading t)
+        (should-not (org-id-get))
+        (should (equal (org-entry-get nil "ID" t) "theorem")))
+      (let ((new-id-calls 0))
+        (cl-letf
+            (((symbol-function 'org-id-new)
+              (lambda (&optional _prefix)
+                (cl-incf new-id-calls)
+                "child-node"))
+             ((symbol-function 'org-id-locations-load)
+              (lambda ()
+                (ert-fail
+                 "Creating a node should not load Org ID state"))))
+          (should
+           (equal (fangcun-heading-node-create) "child-node"))
+          (should (looking-at "Child body"))
+          (should
+           (equal (fangcun-heading-node-create) "child-node"))
+          (should (= new-id-calls 1))))
+      (save-excursion
+        (org-back-to-heading t)
+        (should (equal (org-id-get) "child-node")))
+      (save-buffer)
+      (let ((node (fangcun-node-from-id "child-node")))
+        (should node)
+        (should (equal (fangcun-node-title node) "Child"))))))
+
 (ert-deftest fangcun-create-selects-yiyu-and-reprompts-invalid-name ()
   (fangcun-test-with-notes
     (let ((target (expand-file-name "note/status.org" work-root))

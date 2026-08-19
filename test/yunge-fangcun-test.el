@@ -67,19 +67,24 @@
 
   (yunge-test-evil-normal-keys
    'fundamental-mode
-   '(("SPC n b" . fangcun-backlink-find)
+   '(("SPC n b f" . fangcun-backlink-find)
+     ("SPC n b v" . fangcun-backlinks)
+     ("SPC n c" . fangcun-heading-node-create)
      ("SPC n f" . fangcun-node-find)
      ("SPC n i" . fangcun-node-insert)
      ("SPC n n" . fangcun-file-node-create)
-     ("SPC n t" . fangcun-node-set-tags)
-     ("SPC n v" . fangcun-backlinks)))
+     ("SPC n t" . fangcun-node-set-tags)))
   (yunge-test-which-key-prefix-bindings
    'fundamental-mode "SPC n"
-   '(("b" nil "find backlink")
+   '(("b" nil "+backlink")
+     ("c" nil "create heading node")
      ("f" nil "find node")
      ("i" nil "insert node link")
      ("n" nil "new file node")
-     ("t" nil "set node tags")
+     ("t" nil "set node tags")))
+  (yunge-test-which-key-prefix-bindings
+   'fundamental-mode "SPC n b"
+   '(("f" nil "find backlink")
      ("v" nil "view backlinks"))))
 
 (ert-deftest yunge-fangcun-integrates-the-backlinks-buffer-with-evil ()
