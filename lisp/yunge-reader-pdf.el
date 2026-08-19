@@ -3,7 +3,9 @@
 ;; SPDX-License-Identifier: MIT
 
 (require 'cl-lib)
+(require 'mwheel)
 (require 'password-cache)
+(require 'pixel-scroll)
 (require 'seq)
 (require 'svg)
 (require 'subr-x)
@@ -18,6 +20,11 @@
 
 (defcustom yunge-reader-pdf-page-gap 16
   "Vertical pixel gap between pages in the continuous PDF roll."
+  :type 'natnum
+  :group 'yunge-reader)
+
+(defcustom yunge-reader-pdf-wheel-fallback-lines 3
+  "Screen-line heights used when a PDF wheel event has no pixel delta."
   :type 'natnum
   :group 'yunge-reader)
 
@@ -205,7 +212,11 @@
   "g p" #'yunge-reader-pdf-goto-page
   "g r" #'yunge-reader-refresh
   "j" #'yunge-reader-pdf-scroll-down-line
-  "k" #'yunge-reader-pdf-scroll-up-line)
+  "k" #'yunge-reader-pdf-scroll-up-line
+  "<mouse-4>" #'yunge-reader-pdf-scroll-wheel
+  "<mouse-5>" #'yunge-reader-pdf-scroll-wheel
+  "<wheel-down>" #'yunge-reader-pdf-scroll-wheel
+  "<wheel-up>" #'yunge-reader-pdf-scroll-wheel)
 
 (define-minor-mode yunge-reader-pdf-view-mode
   "Display a fixed-layout PDF through the Yunge Reader PDF driver."
@@ -238,6 +249,7 @@
         (setq-local yunge-reader-pdf--pending-location nil)
         (setq-local yunge-reader-pdf--resize-timer nil)
         (setq-local yunge-reader-pdf--pending-resize nil)
+        (setq-local mwheel-coalesce-scroll-events nil)
         (add-hook 'yunge-reader-refresh-hook
                   #'yunge-reader-pdf--refresh nil t)
         (add-hook 'yunge-reader-view-role-change-hook
@@ -268,6 +280,7 @@
     (remove-hook 'kill-buffer-hook
                  #'yunge-reader-pdf--cancel-resize t)
     (kill-local-variable 'line-spacing)
+    (kill-local-variable 'mwheel-coalesce-scroll-events)
     (setq yunge-reader-pdf--page-infos nil
           yunge-reader-pdf--page-positions nil
           yunge-reader-pdf--render-results nil
@@ -3408,6 +3421,50 @@ when non-nil, is a previously resolved start character position."
     (dotimes (_ (abs count))
       (funcall function pixels))
     (yunge-reader-pdf--update-visible-pages (selected-window))))
+
+(defun yunge-reader-pdf--wheel-pixel-delta (event window)
+  "Return the bounded signed pixel delta for wheel EVENT in WINDOW."
+  (let* ((pixel-data (nth 4 event))
+         (raw-delta (and (consp pixel-data) (cdr pixel-data)))
+         (line-height
+          (max 1 (frame-char-height (window-frame window))))
+         (fallback
+          (* line-height
+             (max 1 yunge-reader-pdf-wheel-fallback-lines)))
+         (event-type (event-basic-type event))
+         (delta
+          (cond
+           ((numberp raw-delta) (round raw-delta))
+           ((memq event-type '(wheel-down mouse-5)) (- fallback))
+           ((memq event-type '(wheel-up mouse-4)) fallback)
+           (t 0)))
+         (limit
+          (max line-height
+               (/ (window-text-height window t) 2))))
+    (max (- limit) (min limit delta))))
+
+(defun yunge-reader-pdf-scroll-wheel (event)
+  "Scroll the PDF under wheel EVENT by its bounded pixel delta."
+  (interactive "e")
+  (let ((window (mwheel-event-window event)))
+    (when (framep window)
+      (setq window (frame-selected-window window)))
+    (when (window-live-p window)
+      (with-selected-window window
+        (when yunge-reader-pdf-view-mode
+          (let ((delta
+                 (yunge-reader-pdf--wheel-pixel-delta event window)))
+            (unless (zerop delta)
+              (yunge-reader--detach-search-navigation)
+              (condition-case nil
+                  (if (< delta 0)
+                      (pixel-scroll-precision-scroll-down-page (- delta))
+                    (pixel-scroll-precision-scroll-up-page delta))
+                (beginning-of-buffer nil)
+                (end-of-buffer nil))
+              (yunge-reader-pdf--update-visible-pages window))))))))
+
+(put 'yunge-reader-pdf-scroll-wheel 'scroll-command t)
 
 (defun yunge-reader-pdf-scroll-up-line (&optional count)
   "Scroll backward by one PDF screen line COUNT times."

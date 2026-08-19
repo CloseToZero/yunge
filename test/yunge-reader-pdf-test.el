@@ -57,7 +57,11 @@
      ("gp" . yunge-reader-pdf-goto-page)
      ("gr" . yunge-reader-refresh)
      ("j" . yunge-reader-pdf-scroll-down-line)
-     ("k" . yunge-reader-pdf-scroll-up-line)))
+     ("k" . yunge-reader-pdf-scroll-up-line)
+     ("<mouse-4>" . yunge-reader-pdf-scroll-wheel)
+     ("<mouse-5>" . yunge-reader-pdf-scroll-wheel)
+     ("<wheel-down>" . yunge-reader-pdf-scroll-wheel)
+     ("<wheel-up>" . yunge-reader-pdf-scroll-wheel)))
   (should-not
    (eq (lookup-key yunge-reader-pdf-view-mode-map (kbd "n"))
        #'yunge-reader-pdf-next-page))
@@ -182,6 +186,61 @@
      (equal (nreverse scrolls)
             '((up 19) (up 19) (down 19))))
     (should (equal updates '(window window)))))
+
+(ert-deftest yunge-reader-pdf-does-not-coalesce-wheel-events ()
+  (let ((mwheel-coalesce-scroll-events t))
+    (with-temp-buffer
+      (yunge-reader-pdf-view-mode 1)
+      (should (local-variable-p 'mwheel-coalesce-scroll-events))
+      (should-not mwheel-coalesce-scroll-events)
+      (yunge-reader-pdf-view-mode -1)
+      (should-not (local-variable-p 'mwheel-coalesce-scroll-events))
+      (should mwheel-coalesce-scroll-events))))
+
+(ert-deftest yunge-reader-pdf-bounds-wheel-pixel-deltas ()
+  (let ((window (selected-window))
+        (yunge-reader-pdf-wheel-fallback-lines 3))
+    (cl-letf (((symbol-function 'window-frame)
+               (lambda (&optional _window) 'frame))
+              ((symbol-function 'frame-char-height)
+               (lambda (&optional _frame) 20))
+              ((symbol-function 'window-text-height)
+               (lambda (&optional _window _pixelwise) 600)))
+      (should
+       (= (yunge-reader-pdf--wheel-pixel-delta
+           '(wheel-down nil nil nil (0 . -17)) window)
+          -17))
+      (should
+       (= (yunge-reader-pdf--wheel-pixel-delta
+           '(wheel-down nil nil nil (0 . -900)) window)
+          -300))
+      (should
+       (= (yunge-reader-pdf--wheel-pixel-delta '(wheel-down) window)
+          -60))
+      (should
+       (= (yunge-reader-pdf--wheel-pixel-delta '(wheel-up) window)
+          60)))))
+
+(ert-deftest yunge-reader-pdf-scrolls-wheel-deltas-as-pixels ()
+  (let (scrolls updates)
+    (save-window-excursion
+      (with-temp-buffer
+        (set-window-buffer (selected-window) (current-buffer))
+        (yunge-reader-pdf-view-mode 1)
+        (cl-letf (((symbol-function 'mwheel-event-window)
+                   (lambda (_event) (selected-window)))
+                  ((symbol-function
+                    'yunge-reader-pdf--wheel-pixel-delta)
+                   (lambda (_event _window) -45))
+                  ((symbol-function
+                    'pixel-scroll-precision-scroll-down-page)
+                   (lambda (pixels) (push pixels scrolls)))
+                  ((symbol-function
+                    'yunge-reader-pdf--update-visible-pages)
+                   (lambda (&optional window) (push window updates))))
+          (yunge-reader-pdf-scroll-wheel '(wheel-down)))))
+    (should (equal scrolls '(45)))
+    (should (= (length updates) 1))))
 
 (ert-deftest yunge-reader-pdf-registers-only-when-requested ()
   (let ((yunge-reader-drivers nil)

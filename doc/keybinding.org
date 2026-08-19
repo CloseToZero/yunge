@@ -362,6 +362,10 @@ keys stay separate from search repeat keys.  Search-result changes and
 ~gg/G/gp~ are semantic jumps, so ~C-o/C-i~ can revisit them.  Paging and
 ordinary scrolling do not add jump entries.
 
+PDF mouse-wheel input likewise scrolls by bounded device pixels rather than
+rendered buffer lines.  Reader does not apply Emacs's progressive text-line
+acceleration to the continuous PDF roll.
+
 In paginated reflowable readers, ~J/K~ and ~C-d/C-u~ move to the next or
 previous reflowed screen; Page Down and Page Up provide the same commands.
 ~j/k~ move by one computed content line without the screen-transition
