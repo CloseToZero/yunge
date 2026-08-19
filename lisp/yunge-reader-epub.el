@@ -694,20 +694,6 @@ VALUES is an alist containing complete, already bounded property values."
   (yunge-reader--follow-action
    (make-yunge-reader-action :type 'uri :uri uri)))
 
-(defun yunge-reader-epub--face-color
-    (face attribute frame fallback)
-  "Return FACE ATTRIBUTE on FRAME as CSS RGB, or FALLBACK."
-  (let* ((value
-          (and (facep face)
-               (face-attribute face attribute frame 'default)))
-         (rgb (and value (color-values value frame))))
-    (if rgb
-        (apply #'format "#%02x%02x%02x"
-               (mapcar (lambda (component)
-                         (round component 257))
-                       rgb))
-      fallback)))
-
 (defun yunge-reader-epub--resolved-appearance (window)
   "Return the current document appearance resolved for WINDOW."
   (pcase (yunge-reader-effective-appearance)
@@ -715,25 +701,25 @@ VALUES is an alist containing complete, already bounded property values."
     ('follow-emacs
      (let* ((frame (window-frame window))
             (foreground
-             (yunge-reader-epub--face-color
+             (yunge-reader--face-color
               'default :foreground frame "#000000"))
             (background
-             (yunge-reader-epub--face-color
+             (yunge-reader--face-color
               'default :background frame "#ffffff")))
        `((mode . follow-emacs)
          (foreground . ,foreground)
          (background . ,background)
          (link
-          . ,(yunge-reader-epub--face-color
+          . ,(yunge-reader--face-color
               'link :foreground frame foreground))
          (selection-foreground
-          . ,(yunge-reader-epub--face-color
+          . ,(yunge-reader--face-color
               'region :foreground frame foreground))
          (selection-background
-          . ,(yunge-reader-epub--face-color
+          . ,(yunge-reader--face-color
               'region :background frame background))
          (search-background
-          . ,(yunge-reader-epub--face-color
+          . ,(yunge-reader--face-color
               'isearch :background frame background)))))))
 
 (defun yunge-reader-epub--appearance-changed ()

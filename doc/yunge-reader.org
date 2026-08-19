@@ -543,6 +543,21 @@ Only an explicit =RET= choice or Ctrl-Mouse-1 hit may pass an external URI to
 the allowlist.  Opening an external URI neither records a Reader jump nor
 updates the document's saved place.
 
+PDF =original= rendering preserves the colors produced by PDFium.  A PDF that
+uses =follow-emacs= instead resolves foreground and background colors from the
+exact frame presenting the view, then maps every rendered tone between those
+two colors.  This deliberately produces a monochrome themed page, including
+colored illustrations; switching the document back to =original= restores
+its authored colors.
+
+Appearance is part of both the in-memory render key and the native disk-cache
+key.  Changing a document appearance or an Emacs theme can therefore retain
+the old page only as a temporary fallback while a correctly colored page is
+rendered.  It cannot mistake the fallback for a current cache hit.  Selection
+and search overlays use the frame's =region= and =isearch= backgrounds only in
+=follow-emacs= mode; their existing Reader colors remain unchanged in
+=original= mode.
+
 Ctrl-Mouse-1 converts the image coordinate to canonical PDF points and tests
 the cached rectangles locally.  When link data is still loading, activation
 is allowed only if the original Reader window, buffer, point, scroll state,

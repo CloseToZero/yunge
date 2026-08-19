@@ -51,6 +51,7 @@
 (declare-function yunge-reader-pdf--location "yunge-reader-pdf")
 (declare-function yunge-reader-pdf--page-count "yunge-reader-pdf")
 (declare-function yunge-reader-pdf--page-position "yunge-reader-pdf")
+(declare-function yunge-reader-pdf--render-appearance "yunge-reader-pdf")
 (declare-function yunge-reader-pdf--render-key "yunge-reader-pdf")
 (declare-function yunge-reader-pdf--restore-location "yunge-reader-pdf")
 
@@ -176,13 +177,17 @@
 
 (defun yunge-reader-pdf-smoke--exact-image-p ()
   "Return whether page one displays its exact completed render."
-  (when-let* ((width (yunge-reader-pdf-smoke--width))
+  (when-let* ((window (yunge-reader-pdf-smoke--window))
+              (width (yunge-reader-pdf-smoke--width))
+              (appearance
+               (yunge-reader-pdf--render-appearance window))
               (position (yunge-reader-pdf--page-position 0))
               (display (get-text-property position 'display))
               (entry
                (and (hash-table-p yunge-reader-pdf--render-results)
                     (gethash
-                     (yunge-reader-pdf--render-key 0 width)
+                     (yunge-reader-pdf--render-key
+                      0 width appearance)
                      yunge-reader-pdf--render-results))))
     (and (imagep display)
          (file-regular-p (alist-get 'path entry)))))

@@ -5,6 +5,10 @@
 (require 'yunge-test-helper)
 (require 'yunge-reader-pdf)
 
+(defconst yunge-reader-pdf-test--original-appearance
+  '((mode . original))
+  "Canonical original PDF appearance used by tests.")
+
 (defun yunge-reader-pdf-test--document (&rest pages)
   "Return a fixed-layout reader document containing PAGES."
   (make-yunge-reader-document
@@ -294,6 +298,112 @@
           (format " %s  Page 2/3  150%%  Continuous "
                   (cdr spec))))))
     (setq yunge-reader-document nil)))
+
+(ert-deftest yunge-reader-pdf-resolves-appearance-for-window-frame ()
+  (let ((yunge-reader-default-appearances
+         '((pdf . follow-emacs)))
+        (yunge-reader-saved-appearance-overrides nil)
+        (document
+         (make-yunge-reader-document
+          :file "C:/books/theme.pdf" :driver 'pdf))
+        calls)
+    (with-temp-buffer
+      (setq yunge-reader-document document)
+      (cl-letf (((symbol-function 'window-frame)
+                 (lambda (_window) 'surface-frame))
+                ((symbol-function 'yunge-reader--face-color)
+                 (lambda (face attribute frame fallback)
+                   (push (list face attribute frame fallback) calls)
+                   (pcase (cons face attribute)
+                     (`(default . :foreground) "#112233")
+                     (`(default . :background) "#f4f5f6")))))
+        (should
+         (equal
+          (yunge-reader-pdf--render-appearance 'surface-window)
+          '((mode . follow-emacs)
+            (foreground . "#112233")
+            (background . "#f4f5f6"))))
+        (should
+         (equal
+          (nreverse calls)
+          '((default :foreground surface-frame "#000000")
+            (default :background surface-frame "#ffffff"))))))))
+
+(ert-deftest yunge-reader-pdf-keeps-original-appearance-unmodified ()
+  (let ((yunge-reader-default-appearances '((pdf . original)))
+        (yunge-reader-saved-appearance-overrides nil)
+        (document
+         (make-yunge-reader-document
+          :file "C:/books/original.pdf" :driver 'pdf)))
+    (with-temp-buffer
+      (setq yunge-reader-document document)
+      (cl-letf (((symbol-function 'yunge-reader--face-color)
+                 (lambda (&rest _arguments)
+                   (ert-fail "Original PDF resolved theme colors"))))
+        (should
+         (equal (yunge-reader-pdf--render-appearance)
+                yunge-reader-pdf-test--original-appearance))))))
+
+(ert-deftest yunge-reader-pdf-encodes-native-appearance-modes ()
+  (should
+   (equal
+    (yunge-reader-pdf--native-appearance
+     '((mode . follow-emacs)
+       (foreground . "#112233")
+       (background . "#f4f5f6")))
+    '((mode . "follow-emacs")
+      (foreground . "#112233")
+      (background . "#f4f5f6"))))
+  (should-error
+   (yunge-reader-pdf--native-appearance '((mode . sepia)))))
+
+(ert-deftest yunge-reader-pdf-themes-reader-owned-highlights ()
+  (cl-letf (((symbol-function 'yunge-reader-pdf--render-appearance)
+             (lambda (&optional _window) '((mode . original))))
+            ((symbol-function 'yunge-reader--face-color)
+             (lambda (&rest _arguments)
+               (ert-fail "Original PDF resolved a highlight face"))))
+    (should
+     (equal
+      (yunge-reader-pdf--highlight-color
+       'region yunge-reader-pdf-selection-color)
+      yunge-reader-pdf-selection-color)))
+  (let (seen)
+    (cl-letf (((symbol-function 'yunge-reader-pdf--render-appearance)
+               (lambda (&optional _window)
+                 '((mode . follow-emacs))))
+              ((symbol-function 'window-frame)
+               (lambda (_window) 'surface-frame))
+              ((symbol-function 'yunge-reader--face-color)
+               (lambda (face attribute frame fallback)
+                 (setq seen (list face attribute frame fallback))
+                 "#334455")))
+      (should
+       (equal
+        (yunge-reader-pdf--highlight-color
+         'region "#abcdef" 'surface-window)
+        "#334455"))
+      (should
+       (equal seen
+              '(region :background surface-frame "#abcdef"))))))
+
+(ert-deftest yunge-reader-pdf-appearance-change-refreshes-live-pages ()
+  (with-temp-buffer
+    (yunge-reader-mode)
+    (yunge-reader-pdf-view-mode 1)
+    (setq yunge-reader-document 'document)
+    (let (events)
+      (cl-letf (((symbol-function 'yunge-reader-pdf--viewport-window)
+                 (lambda () 'surface-window))
+                ((symbol-function
+                  'yunge-reader-pdf--update-visible-pages)
+                 (lambda (window) (push (list 'update window) events)))
+                ((symbol-function 'yunge-reader-pdf--force-redisplay)
+                 (lambda () (push '(redisplay) events))))
+        (yunge-reader-pdf--appearance-changed))
+      (should
+       (equal (nreverse events)
+              '((update surface-window) (redisplay)))))))
 
 (ert-deftest yunge-reader-pdf-open-and-close-balance-native-lease ()
   (with-temp-buffer
@@ -1045,7 +1155,10 @@
        document 'page-links '(:page 2) #'ignore)
       (yunge-reader-pdf--request
        document 'render-page
-       '(:page 2 :width 900 :cache-key "key") #'ignore)
+       `(:page 2 :width 900
+         :appearance ,yunge-reader-pdf-test--original-appearance
+         :cache-key "key")
+       #'ignore)
       (yunge-reader-pdf--request
        document 'search
        (list
@@ -1071,6 +1184,9 @@
     (let ((render (nth 3 calls)))
       (should (equal (car render) "render-page"))
       (should (= (cdr (assq 'width (cdr render))) 900))
+      (should
+       (equal (cdr (assq 'appearance (cdr render)))
+              '((mode . "original"))))
       (should (equal (cdr (assq 'cache-key (cdr render))) "key")))
     (let ((search (nth 4 calls)))
       (should (equal (car search) "search"))
@@ -1435,22 +1551,25 @@
           [((width . 100.0) (height . 200.0))]
           yunge-reader-pdf--working-pages '(0)
           yunge-reader-pdf--displayed-pages '(0))
-    (puthash '(0 . 901)
+    (puthash `(0 901 ,yunge-reader-pdf-test--original-appearance)
              '((path . "current.png"))
              yunge-reader-pdf--render-results)
     (let (painted)
       (cl-letf (((symbol-function 'yunge-reader-pdf--page-width)
                  (lambda (_page &optional _window) 901))
-                ((symbol-function 'yunge-reader-pdf--paint-page)
-                 (lambda (_page) (setq painted t))))
+                 ((symbol-function 'yunge-reader-pdf--paint-page)
+                  (lambda (&rest _arguments) (setq painted t))))
         (yunge-reader-pdf--render-complete
-         (current-buffer) nil 1 0 900
-         '((path . "stale.png")) nil))
+          (current-buffer) nil 1 0 900
+          yunge-reader-pdf-test--original-appearance
+          '((path . "stale.png")) nil))
       (should-not painted)
       (should-not
-       (gethash '(0 . 900) yunge-reader-pdf--render-results))
+       (gethash `(0 900 ,yunge-reader-pdf-test--original-appearance)
+                yunge-reader-pdf--render-results))
       (should
-       (gethash '(0 . 901) yunge-reader-pdf--render-results)))))
+       (gethash `(0 901 ,yunge-reader-pdf-test--original-appearance)
+                yunge-reader-pdf--render-results)))))
 
 (ert-deftest yunge-reader-pdf-converts-display-to-page-coordinates ()
   (with-temp-buffer
@@ -2106,7 +2225,7 @@
            :start (make-yunge-reader-position :unit 0 :offset 4)
            :end (make-yunge-reader-position :unit 0 :offset 4)))
     (puthash
-     '(0 . 100)
+     `(0 100 ,yunge-reader-pdf-test--original-appearance)
      '((path . "C:/cache/page.png")
        (pixel-width . 100) (pixel-height . 200))
      yunge-reader-pdf--render-results)
@@ -2125,7 +2244,8 @@
                          captured-properties properties)
                    'image)))
         (should
-         (eq (yunge-reader-pdf--display-image-object 0 100)
+         (eq (yunge-reader-pdf--display-image-object
+              0 100 yunge-reader-pdf-test--original-appearance)
              'image)))
       (should
        (equal (dom-attr (car (dom-by-tag captured-svg 'image))
@@ -2311,13 +2431,72 @@
                 (yunge-reader-pdf--finish-prefetch
                  (yunge-reader-pdf--prefetch-task-document task)
                  kind page
-                 (yunge-reader-pdf--prefetch-task-width task)))
+                 (yunge-reader-pdf--prefetch-task-width task)
+                 (yunge-reader-pdf--prefetch-task-appearance task)))
               'started)))
         (yunge-reader-pdf--queue-pages '(0 1)))
       (should (equal (nreverse operations)
                      '((render 0) (render 1)
                        (text 0) (text 1)
                        (links 0) (links 1)))))))
+
+(ert-deftest yunge-reader-pdf-render-cache-separates-appearances ()
+  (let ((file (make-temp-file "yunge-reader-pdf-appearance-")))
+    (unwind-protect
+        (with-temp-buffer
+          (setq yunge-reader-document
+                (make-yunge-reader-document :file file))
+          (cl-letf (((symbol-function 'yunge-reader-native--build-id)
+                     (lambda () "test-build")))
+            (should-not
+             (equal
+              (yunge-reader-pdf--cache-key
+               0 900 yunge-reader-pdf-test--original-appearance)
+              (yunge-reader-pdf--cache-key
+               0 900
+               '((mode . follow-emacs)
+                 (foreground . "#112233")
+                 (background . "#f4f5f6")))))))
+      (delete-file file))))
+
+(ert-deftest yunge-reader-pdf-render-request-includes-appearance ()
+  (with-temp-buffer
+    (yunge-reader-mode)
+    (yunge-reader-pdf-view-mode 1)
+    (setq yunge-reader-document 'document)
+    (let ((appearance
+           '((mode . follow-emacs)
+             (foreground . "#112233")
+             (background . "#f4f5f6")))
+          arguments)
+      (cl-letf (((symbol-function 'yunge-reader-pdf--cache-key)
+                 (lambda (_page _width _appearance)
+                   (make-string 64 ?a)))
+                ((symbol-function 'yunge-reader-request)
+                 (lambda (_operation request _complete)
+                   (setq arguments request))))
+        (should
+         (eq (yunge-reader-pdf--request-render 1 2 900 appearance)
+             'started)))
+      (should (equal (plist-get arguments :appearance) appearance)))))
+
+(ert-deftest yunge-reader-pdf-prefers-the-current-render-appearance ()
+  (with-temp-buffer
+    (yunge-reader-mode)
+    (yunge-reader-pdf-view-mode 1)
+    (let ((original yunge-reader-pdf-test--original-appearance)
+          (themed
+           '((mode . follow-emacs)
+             (foreground . "#112233")
+             (background . "#f4f5f6"))))
+      (puthash (list 0 700 original) 'original
+               yunge-reader-pdf--render-results)
+      (puthash (list 0 899 themed) 'themed
+               yunge-reader-pdf--render-results)
+      (should
+       (equal
+        (yunge-reader-pdf--nearest-render-entry 0 900 original)
+        (cons (list 0 700 original) 'original))))))
 
 (ert-deftest yunge-reader-pdf-prefetch-continues-after-an-error ()
   (with-temp-buffer
@@ -2345,7 +2524,8 @@
                   (yunge-reader-pdf--finish-prefetch
                    (yunge-reader-pdf--prefetch-task-document task)
                    kind page
-                   (yunge-reader-pdf--prefetch-task-width task))))
+                   (yunge-reader-pdf--prefetch-task-width task)
+                   (yunge-reader-pdf--prefetch-task-appearance task))))
               'started)))
         (yunge-reader-pdf--queue-pages '(0 1)))
       (should (= (length operations) 6))
@@ -2367,7 +2547,7 @@
           (((symbol-function 'yunge-reader-pdf--page-width)
             (lambda (_page &optional _window) 900))
            ((symbol-function 'yunge-reader-pdf--cache-key)
-            (lambda (_page _width) (make-string 64 ?a)))
+             (lambda (_page _width _appearance) (make-string 64 ?a)))
            ((symbol-function 'yunge-reader-request)
             (lambda (_operation _arguments callback)
               (cl-incf requests)
@@ -2394,7 +2574,7 @@
           (((symbol-function 'yunge-reader-pdf--page-width)
             (lambda (_page &optional _window) 900))
            ((symbol-function 'yunge-reader-pdf--cache-key)
-            (lambda (_page _width) (make-string 64 ?a)))
+             (lambda (_page _width _appearance) (make-string 64 ?a)))
            ((symbol-function 'yunge-reader-request)
             (lambda (operation arguments complete)
               (push
@@ -2428,7 +2608,8 @@
                   yunge-reader-pdf--render-pending)
                  1))
       (should-not
-       (gethash '(0 . 900) yunge-reader-pdf--render-results)))))
+        (gethash `(0 900 ,yunge-reader-pdf-test--original-appearance)
+                 yunge-reader-pdf--render-results)))))
 
 (ert-deftest yunge-reader-pdf-keeps-interactive-work-ahead-of-prefetch ()
   (with-temp-buffer
@@ -2442,7 +2623,7 @@
           (((symbol-function 'yunge-reader-pdf--page-width)
             (lambda (_page &optional _window) 900))
            ((symbol-function 'yunge-reader-pdf--cache-key)
-            (lambda (_page _width) (make-string 64 ?a)))
+             (lambda (_page _width _appearance) (make-string 64 ?a)))
            ((symbol-function 'yunge-reader-request)
             (lambda (operation arguments complete)
               (push
@@ -2467,7 +2648,8 @@
            1000 '((width . 100.0) (height . 200.0))))
     (dotimes (page 1000)
       (puthash
-       (cons page 800) '((path . "old.png"))
+       (list page 800 yunge-reader-pdf-test--original-appearance)
+       '((path . "old.png"))
        yunge-reader-pdf--render-results)
       (puthash
        page '((characters . ())) yunge-reader-pdf--text-cache)
@@ -2478,7 +2660,8 @@
        yunge-reader-pdf--link-cache))
     (dolist (page '(500 501))
       (puthash
-       (cons page 900) '((path . "current.png"))
+       (list page 900 yunge-reader-pdf-test--original-appearance)
+       '((path . "current.png"))
        yunge-reader-pdf--render-results))
     (cl-letf
         (((symbol-function 'yunge-reader-pdf--page-width)
@@ -2493,10 +2676,12 @@
     (should (= (hash-table-count yunge-reader-pdf--text-cache) 2))
     (should (= (hash-table-count yunge-reader-pdf--text-hit-cache) 2))
     (should (= (hash-table-count yunge-reader-pdf--link-cache) 2))
-    (should (gethash '(500 . 900)
+    (should (gethash `(500 900
+                       ,yunge-reader-pdf-test--original-appearance)
                      yunge-reader-pdf--render-results))
-    (should-not (gethash '(500 . 800)
-                         yunge-reader-pdf--render-results))
+    (should-not (gethash `(500 800
+                           ,yunge-reader-pdf-test--original-appearance)
+                          yunge-reader-pdf--render-results))
     (should-not yunge-reader-pdf--prefetch-active)
     (should-not yunge-reader-pdf--prefetch-queue)))
 
@@ -2506,32 +2691,36 @@
     (yunge-reader-pdf-view-mode 1)
     (dolist (width '(700 800 1100))
       (puthash
-       (cons 0 width)
+       (list 0 width yunge-reader-pdf-test--original-appearance)
        `((path . ,(format "%d.png" width)))
        yunge-reader-pdf--render-results))
-    (puthash '(1 . 800)
+    (puthash `(1 800 ,yunge-reader-pdf-test--original-appearance)
              '((path . "other.png"))
              yunge-reader-pdf--render-results)
     (let ((task
-           (make-yunge-reader-pdf--prefetch-task
-            :kind 'render :page 0 :width 900)))
+            (make-yunge-reader-pdf--prefetch-task
+             :kind 'render :page 0 :width 900
+             :appearance yunge-reader-pdf-test--original-appearance)))
       (yunge-reader-pdf--prune-working-set '(0) (list task)))
     (should (= (hash-table-count
                 yunge-reader-pdf--render-results)
                1))
     (should
      (equal
-      (gethash '(0 . 800) yunge-reader-pdf--render-results)
+      (gethash `(0 800 ,yunge-reader-pdf-test--original-appearance)
+               yunge-reader-pdf--render-results)
       '((path . "800.png"))))
-    (puthash '(0 . 900)
+    (puthash `(0 900 ,yunge-reader-pdf-test--original-appearance)
              '((path . "900.png"))
              yunge-reader-pdf--render-results)
-    (yunge-reader-pdf--prune-page-renders 0 900)
+    (yunge-reader-pdf--prune-page-renders
+     0 900 yunge-reader-pdf-test--original-appearance)
     (should (= (hash-table-count
                 yunge-reader-pdf--render-results)
                1))
     (should
-     (gethash '(0 . 900) yunge-reader-pdf--render-results))))
+     (gethash `(0 900 ,yunge-reader-pdf-test--original-appearance)
+              yunge-reader-pdf--render-results))))
 
 (ert-deftest yunge-reader-pdf-refresh-builds-and-prefetches-the-roll ()
   (with-temp-buffer
@@ -2543,7 +2732,8 @@
            '((page . 1) (width . 100.0) (height . 200.0))))
     (let (operations)
       (cl-letf (((symbol-function 'yunge-reader-pdf--cache-key)
-                 (lambda (_page _width) (make-string 64 ?a)))
+                 (lambda (_page _width _appearance)
+                   (make-string 64 ?a)))
                 ((symbol-function 'yunge-reader-pdf--paint-page)
                  #'ignore)
                 ((symbol-function 'yunge-reader-request)
@@ -3097,11 +3287,11 @@
            '((page . 1) (width . 100.0) (height . 200.0))))
     (yunge-reader-pdf--load-page-infos)
     (yunge-reader-pdf--build-roll)
-    (puthash '(0 . 900)
+    (puthash `(0 900 ,yunge-reader-pdf-test--original-appearance)
              '((path . "zero.png")
                (pixel-width . 900) (pixel-height . 1800))
              yunge-reader-pdf--render-results)
-    (puthash '(1 . 900)
+    (puthash `(1 900 ,yunge-reader-pdf-test--original-appearance)
              '((path . "one.png")
                (pixel-width . 900) (pixel-height . 1800))
              yunge-reader-pdf--render-results)
@@ -3138,7 +3328,7 @@
     (yunge-reader-pdf--load-page-infos)
     (yunge-reader-pdf--build-roll)
     (setq yunge-reader-pdf--displayed-pages '(0))
-    (puthash '(0 . 800)
+    (puthash `(0 800 ,yunge-reader-pdf-test--original-appearance)
              '((path . "old.png")
                (pixel-width . 800) (pixel-height . 1600))
              yunge-reader-pdf--render-results)
@@ -3159,7 +3349,7 @@
       (should (= (get-text-property
                   1 'yunge-reader-pdf-display-width)
                  1000))
-      (puthash '(0 . 1000)
+      (puthash `(0 1000 ,yunge-reader-pdf-test--original-appearance)
                '((path . "new.png")
                  (pixel-width . 1000) (pixel-height . 2000))
                yunge-reader-pdf--render-results)
@@ -3222,7 +3412,8 @@
       (cl-letf (((symbol-function 'yunge-reader-pdf--page-width)
                  (lambda (_page &optional _window) 900))
                 ((symbol-function 'yunge-reader-pdf--cache-key)
-                 (lambda (_page _width) (make-string 64 ?a)))
+                 (lambda (_page _width _appearance)
+                   (make-string 64 ?a)))
                 ((symbol-function 'yunge-reader-request)
                  (lambda (_operation _arguments _complete)
                    (cl-incf requests))))

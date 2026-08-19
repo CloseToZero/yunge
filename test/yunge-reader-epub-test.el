@@ -307,7 +307,7 @@
                          '(18 52 86)))))
       (should
        (equal
-        (yunge-reader-epub--face-color
+        (yunge-reader--face-color
          'default :foreground 'test-frame "#000000")
         "#123456"))
       (should
@@ -324,7 +324,7 @@
       (cl-letf
           (((symbol-function 'window-frame)
             (lambda (_window) 'surface-frame))
-           ((symbol-function 'yunge-reader-epub--face-color)
+           ((symbol-function 'yunge-reader--face-color)
             (lambda (face attribute frame fallback)
               (push (list face attribute frame fallback) calls)
               (pcase (cons face attribute)

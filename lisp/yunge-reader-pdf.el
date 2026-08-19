@@ -96,6 +96,7 @@
   kind
   page
   width
+  appearance
   generation)
 
 (cl-defstruct yunge-reader-pdf--hit-index
@@ -118,10 +119,10 @@
   "Vector mapping zero-based PDF pages to buffer positions.")
 
 (defvar-local yunge-reader-pdf--render-results nil
-  "Cache mapping page and pixel width to native render results.")
+  "Cache mapping page, width, and appearance to native render results.")
 
 (defvar-local yunge-reader-pdf--render-pending nil
-  "Map page and width render keys to request generations in flight.")
+  "Map render keys to document and generation pairs in flight.")
 
 (defvar-local yunge-reader-pdf--displayed-pages nil
   "Pages currently painted as images in any live view window.")
@@ -241,6 +242,8 @@
                   #'yunge-reader-pdf--refresh nil t)
         (add-hook 'yunge-reader-view-role-change-hook
                   #'yunge-reader-pdf--update-header nil t)
+        (add-hook 'yunge-reader-appearance-change-hook
+                  #'yunge-reader-pdf--appearance-changed nil t)
         (add-hook 'yunge-reader-search-result-hook
                   #'yunge-reader-pdf--search-result-changed nil t)
         (add-hook 'window-size-change-functions
@@ -254,6 +257,8 @@
                  #'yunge-reader-pdf--refresh t)
     (remove-hook 'yunge-reader-view-role-change-hook
                  #'yunge-reader-pdf--update-header t)
+    (remove-hook 'yunge-reader-appearance-change-hook
+                 #'yunge-reader-pdf--appearance-changed t)
     (remove-hook 'yunge-reader-search-result-hook
                  #'yunge-reader-pdf--search-result-changed t)
     (remove-hook 'window-size-change-functions
@@ -926,6 +931,9 @@ requests for the same document share one native open.  VIEW owns any prompt."
         (list (cons 'document id)
               (cons 'page (plist-get arguments :page))
               (cons 'width (plist-get arguments :width))
+              (cons 'appearance
+                    (yunge-reader-pdf--native-appearance
+                     (plist-get arguments :appearance)))
               (cons 'cache-key
                     (plist-get arguments :cache-key)))
         complete))
@@ -1105,6 +1113,54 @@ requests for the same document share one native open.  VIEW owns any prompt."
   "Return a live window suitable for measuring the current PDF view."
   (or (get-buffer-window (current-buffer) t)
       (selected-window)))
+
+(defun yunge-reader-pdf--render-appearance (&optional window)
+  "Return the native PDF appearance resolved for WINDOW."
+  (pcase (if (and (yunge-reader-document-p yunge-reader-document)
+                  (stringp
+                   (yunge-reader-document-file yunge-reader-document)))
+             (yunge-reader-effective-appearance)
+           'original)
+    ('original '((mode . original)))
+    ('follow-emacs
+     (let* ((window (or window (yunge-reader-pdf--viewport-window)))
+            (frame (window-frame window))
+            (foreground
+             (yunge-reader--face-color
+              'default :foreground frame "#000000"))
+            (background
+             (yunge-reader--face-color
+              'default :background frame "#ffffff")))
+       `((mode . follow-emacs)
+         (foreground . ,foreground)
+         (background . ,background))))))
+
+(defun yunge-reader-pdf--native-appearance (appearance)
+  "Return APPEARANCE encoded for the native JSON boundary."
+  (pcase (alist-get 'mode appearance)
+    ('original '((mode . "original")))
+    ('follow-emacs
+     `((mode . "follow-emacs")
+       (foreground . ,(alist-get 'foreground appearance))
+       (background . ,(alist-get 'background appearance))))
+    (mode (error "Invalid PDF appearance mode: %S" mode))))
+
+(defun yunge-reader-pdf--highlight-color (face fallback &optional window)
+  "Return FACE background in WINDOW for a themed PDF, or FALLBACK."
+  (if (eq (alist-get 'mode
+                     (yunge-reader-pdf--render-appearance window))
+          'follow-emacs)
+      (let* ((window (or window (yunge-reader-pdf--viewport-window)))
+             (frame (window-frame window)))
+        (yunge-reader--face-color face :background frame fallback))
+    fallback))
+
+(defun yunge-reader-pdf--appearance-changed ()
+  "Refresh PDF rendering after its effective appearance changes."
+  (when (and yunge-reader-pdf-view-mode yunge-reader-document)
+    (let ((window (yunge-reader-pdf--viewport-window)))
+      (yunge-reader-pdf--update-visible-pages window)
+      (yunge-reader-pdf--force-redisplay))))
 
 (defun yunge-reader-pdf--target-width
     (page-info &optional window suppress-scale)
@@ -1289,8 +1345,8 @@ When SUPPRESS-SCALE is non-nil, do not update the shared effective scale."
       (yunge-reader-pdf--update-visible-pages live-window)
       t)))
 
-(defun yunge-reader-pdf--cache-key (page width)
-  "Return an immutable render cache key for PAGE at WIDTH."
+(defun yunge-reader-pdf--cache-key (page width appearance)
+  "Return an immutable render key for PAGE, WIDTH, and APPEARANCE."
   (let* ((file (yunge-reader-document-file yunge-reader-document))
          (attributes (file-attributes file 'string)))
     (secure-hash
@@ -1300,7 +1356,7 @@ When SUPPRESS-SCALE is non-nil, do not update the shared effective scale."
        (file-truename file)
        (file-attribute-size attributes)
        (float-time (file-attribute-modification-time attributes))
-       page width
+       page width appearance
        yunge-reader-native-pdfium-api
        (yunge-reader-native--build-id))))))
 
@@ -1585,59 +1641,87 @@ Signal an error when CHARACTER supplies a malformed non-nil quad."
        :fill-opacity opacity))))
 
 (defun yunge-reader-pdf--paint-selection
-    (svg page page-info text-layer pixel-width pixel-height)
+    (svg page page-info text-layer pixel-width pixel-height &optional color)
   "Paint PAGE selection onto SVG using PAGE-INFO and TEXT-LAYER."
   (when-let* ((range
                (yunge-reader-pdf--selection-offsets page text-layer)))
     (yunge-reader-pdf--paint-range
      svg range text-layer page-info pixel-width pixel-height
-     yunge-reader-pdf-selection-color
+     (or color yunge-reader-pdf-selection-color)
      yunge-reader-pdf-selection-opacity)))
 
 (defun yunge-reader-pdf--paint-search
-    (svg page page-info text-layer pixel-width pixel-height)
+    (svg page page-info text-layer pixel-width pixel-height &optional color)
   "Paint PAGE's current search match onto SVG."
   (when-let* ((range
                (yunge-reader-pdf--search-offsets page text-layer)))
     (yunge-reader-pdf--paint-range
      svg range text-layer page-info pixel-width pixel-height
-     yunge-reader-pdf-search-color yunge-reader-pdf-search-opacity)))
+     (or color yunge-reader-pdf-search-color)
+     yunge-reader-pdf-search-opacity)))
 
-(defun yunge-reader-pdf--render-key (page width)
-  "Return the in-memory render key for PAGE and WIDTH."
-  (cons page width))
+(defun yunge-reader-pdf--render-key (page width appearance)
+  "Return the render key for PAGE, WIDTH, and APPEARANCE."
+  (list page width appearance))
 
-(defun yunge-reader-pdf--nearest-render-entry (page width)
-  "Return the nearest cached render entry for PAGE at WIDTH.
+(defun yunge-reader-pdf--render-key-page (key)
+  "Return the page stored in render KEY."
+  (car key))
+
+(defun yunge-reader-pdf--render-key-width (key)
+  "Return the width stored in render KEY."
+  (cadr key))
+
+(defun yunge-reader-pdf--render-key-appearance (key)
+  "Return the appearance stored in render KEY."
+  (caddr key))
+
+(defun yunge-reader-pdf--nearest-render-entry (page width appearance)
+  "Return the nearest PAGE render for WIDTH and APPEARANCE.
 The returned value has the render key as its car and the native result as its
-cdr."
+cdr.  A stale appearance is retained only while the exact one is pending."
   (when (hash-table-p yunge-reader-pdf--render-results)
-    (let (nearest nearest-distance)
+    (let (nearest nearest-rank)
       (maphash
        (lambda (key result)
-         (when (and (consp key)
-                    (eql (car key) page)
-                    (natnump (cdr key)))
-           (let ((distance (abs (- (cdr key) width))))
-             (when (or (null nearest-distance)
-                       (< distance nearest-distance))
+         (when (and (listp key)
+                    (eql (yunge-reader-pdf--render-key-page key) page)
+                    (natnump
+                     (yunge-reader-pdf--render-key-width key)))
+           (let ((rank
+                  (cons
+                   (if (equal
+                        (yunge-reader-pdf--render-key-appearance key)
+                        appearance)
+                       0 1)
+                   (abs
+                    (- (yunge-reader-pdf--render-key-width key)
+                       width)))))
+             (when (or (null nearest-rank)
+                       (< (car rank) (car nearest-rank))
+                       (and (= (car rank) (car nearest-rank))
+                            (< (cdr rank) (cdr nearest-rank))))
                (setq nearest (cons key result)
-                     nearest-distance distance)))))
+                     nearest-rank rank)))))
        yunge-reader-pdf--render-results)
       nearest)))
 
-(defun yunge-reader-pdf--display-image-object (page width &optional entry)
+(defun yunge-reader-pdf--display-image-object
+    (page width appearance &optional entry window)
   "Return an Emacs image object for PAGE displayed at WIDTH.
 Use the nearest cached render ENTRY while an exact render is unavailable."
   (let* ((entry
           (or entry
-              (yunge-reader-pdf--nearest-render-entry page width)))
+              (yunge-reader-pdf--nearest-render-entry
+               page width appearance)))
          (render-key (car-safe entry))
          (result (cdr-safe entry))
          (path (alist-get 'path result))
          (page-info (yunge-reader-pdf--page-info page))
          (fallback
-          (and (consp render-key) (/= (cdr render-key) width)))
+          (and
+           (listp render-key)
+           (/= (yunge-reader-pdf--render-key-width render-key) width)))
          (target-size
           (and page-info
                (yunge-reader-pdf--pixel-size page-info width)))
@@ -1665,9 +1749,13 @@ Use the nearest cached render ENTRY while an exact render is unavailable."
              :width pixel-width
              :height pixel-height)
             (yunge-reader-pdf--paint-selection
-             svg page page-info text-layer pixel-width pixel-height)
+             svg page page-info text-layer pixel-width pixel-height
+             (yunge-reader-pdf--highlight-color
+              'region yunge-reader-pdf-selection-color window))
             (yunge-reader-pdf--paint-search
-             svg page page-info text-layer pixel-width pixel-height)
+             svg page page-info text-layer pixel-width pixel-height
+             (yunge-reader-pdf--highlight-color
+              'isearch yunge-reader-pdf-search-color window))
             (svg-image svg :base-uri path))
         (if fallback
             (and pixel-width pixel-height
@@ -1822,20 +1910,26 @@ Use the nearest cached render ENTRY while an exact render is unavailable."
         (yunge-reader-pdf--scroll-to-search-result)
         (yunge-reader-pdf--force-redisplay)))))
 
-(defun yunge-reader-pdf--paint-page (page &optional width)
-  "Paint PAGE at WIDTH, using its current width when WIDTH is nil."
+(defun yunge-reader-pdf--paint-page
+    (page &optional width appearance window)
+  "Paint PAGE at WIDTH and APPEARANCE for WINDOW."
   (when-let* ((position (yunge-reader-pdf--page-position page)))
     (let* ((width
             (or width
                 (yunge-reader-pdf--display-width page)
                 (yunge-reader-pdf--page-width page)))
-           (entry (yunge-reader-pdf--nearest-render-entry page width))
+           (appearance
+            (or appearance
+                (yunge-reader-pdf--render-appearance window)))
+           (entry
+            (yunge-reader-pdf--nearest-render-entry
+             page width appearance))
            (display
             (if (and entry
                      (memq page yunge-reader-pdf--displayed-pages))
                 (condition-case image-error
                     (or (yunge-reader-pdf--display-image-object
-                         page width entry)
+                         page width appearance entry window)
                         (error "Emacs rejected the rendered PDF image"))
                   (error
                    (display-warning
@@ -1856,12 +1950,14 @@ Use the nearest cached render ENTRY while an exact render is unavailable."
 
 (defun yunge-reader-pdf--paint-pages (pages &optional window)
   "Paint PAGES for WINDOW and virtualize all former live images."
-  (let ((former yunge-reader-pdf--displayed-pages))
+  (let ((former yunge-reader-pdf--displayed-pages)
+        (appearance (yunge-reader-pdf--render-appearance window)))
     (setq yunge-reader-pdf--displayed-pages pages)
     (dolist (page (cl-remove-duplicates (append former pages)))
       (yunge-reader-pdf--paint-page
        page
-       (and window (yunge-reader-pdf--page-width page window))))))
+       (and window (yunge-reader-pdf--page-width page window))
+       appearance window))))
 
 (defun yunge-reader-pdf--build-roll ()
   "Build one stable buffer slot for every PDF page."
@@ -1939,21 +2035,25 @@ Use the nearest cached render ENTRY while an exact render is unavailable."
        (eql (yunge-reader-pdf--prefetch-task-page left)
             (yunge-reader-pdf--prefetch-task-page right))
        (equal (yunge-reader-pdf--prefetch-task-width left)
-              (yunge-reader-pdf--prefetch-task-width right))))
+              (yunge-reader-pdf--prefetch-task-width right))
+       (equal (yunge-reader-pdf--prefetch-task-appearance left)
+              (yunge-reader-pdf--prefetch-task-appearance right))))
 
 (defun yunge-reader-pdf--retain-page-p (page)
   "Return whether PAGE belongs to the current in-memory working set."
   (or (null yunge-reader-pdf--working-pages)
       (memq page yunge-reader-pdf--working-pages)))
 
-(defun yunge-reader-pdf--retain-render-p (page width)
-  "Return whether PAGE at WIDTH belongs to the current render set."
+(defun yunge-reader-pdf--retain-render-p (page width appearance)
+  "Return whether PAGE, WIDTH, and APPEARANCE are still current."
   (or (null yunge-reader-pdf--working-pages)
       (and (memq page yunge-reader-pdf--working-pages)
            (yunge-reader-pdf--page-info page)
            (= width
               (or (yunge-reader-pdf--display-width page)
-                  (yunge-reader-pdf--page-width page))))))
+                  (yunge-reader-pdf--page-width page)))
+           (equal appearance
+                  (yunge-reader-pdf--render-appearance)))))
 
 (defun yunge-reader-pdf--prune-cache (table retain)
   "Remove entries from hash TABLE unless RETAIN accepts their key."
@@ -1974,18 +2074,25 @@ Use the nearest cached render ENTRY while an exact render is unavailable."
     (dolist (task tasks)
       (when (eq (yunge-reader-pdf--prefetch-task-kind task) 'render)
         (let ((page (yunge-reader-pdf--prefetch-task-page task))
-              (width (yunge-reader-pdf--prefetch-task-width task)))
-          (puthash (yunge-reader-pdf--render-key page width)
+              (width (yunge-reader-pdf--prefetch-task-width task))
+              (appearance
+               (yunge-reader-pdf--prefetch-task-appearance task)))
+          (puthash (yunge-reader-pdf--render-key
+                    page width appearance)
                    t render-keys)
-          (puthash page width render-widths))))
+          (puthash page (cons width appearance) render-widths))))
     ;; Keep one old render only until each working page has its exact target.
     (maphash
-     (lambda (page width)
-       (unless (gethash (yunge-reader-pdf--render-key page width)
-                        yunge-reader-pdf--render-results)
-         (when-let* ((entry
-                      (yunge-reader-pdf--nearest-render-entry page width)))
-           (puthash (car entry) t render-keys))))
+     (lambda (page target)
+       (let ((width (car target))
+             (appearance (cdr target)))
+         (unless (gethash (yunge-reader-pdf--render-key
+                           page width appearance)
+                          yunge-reader-pdf--render-results)
+           (when-let* ((entry
+                        (yunge-reader-pdf--nearest-render-entry
+                         page width appearance)))
+             (puthash (car entry) t render-keys)))))
      render-widths)
     (yunge-reader-pdf--prune-cache
      yunge-reader-pdf--render-results
@@ -2000,13 +2107,16 @@ Use the nearest cached render ENTRY while an exact render is unavailable."
      yunge-reader-pdf--link-cache
      (lambda (page) (memq page pages)))))
 
-(defun yunge-reader-pdf--prune-page-renders (page width)
-  "Retain PAGE's WIDTH render and leave other pages unchanged."
+(defun yunge-reader-pdf--prune-page-renders (page width appearance)
+  "Retain PAGE's WIDTH and APPEARANCE render."
   (yunge-reader-pdf--prune-cache
    yunge-reader-pdf--render-results
    (lambda (key)
-     (or (/= (car key) page)
-         (= (cdr key) width)))))
+     (or (/= (yunge-reader-pdf--render-key-page key) page)
+         (and (= (yunge-reader-pdf--render-key-width key) width)
+              (equal
+               (yunge-reader-pdf--render-key-appearance key)
+               appearance))))))
 
 (defun yunge-reader-pdf--prefetch-task-needed-p (task)
   "Return whether TASK is still useful to the current PDF view."
@@ -2014,14 +2124,17 @@ Use the nearest cached render ENTRY while an exact render is unavailable."
          (yunge-reader-pdf--prefetch-task-document task))
         (kind (yunge-reader-pdf--prefetch-task-kind task))
         (page (yunge-reader-pdf--prefetch-task-page task))
-        (width (yunge-reader-pdf--prefetch-task-width task)))
+        (width (yunge-reader-pdf--prefetch-task-width task))
+        (appearance
+         (yunge-reader-pdf--prefetch-task-appearance task)))
     (and yunge-reader-pdf-view-mode
          (eq document yunge-reader-document)
          (memq page yunge-reader-pdf--working-pages)
          (pcase kind
            ('render
             (not
-             (gethash (yunge-reader-pdf--render-key page width)
+             (gethash (yunge-reader-pdf--render-key
+                       page width appearance)
                       yunge-reader-pdf--render-results)))
            ('text (not (gethash page yunge-reader-pdf--text-cache)))
            ('links (not (gethash page yunge-reader-pdf--link-cache)))
@@ -2034,7 +2147,8 @@ Use the nearest cached render ENTRY while an exact render is unavailable."
      (yunge-reader-pdf--request-render
       (yunge-reader-pdf--prefetch-task-generation task)
       (yunge-reader-pdf--prefetch-task-page task)
-      (yunge-reader-pdf--prefetch-task-width task)))
+      (yunge-reader-pdf--prefetch-task-width task)
+      (yunge-reader-pdf--prefetch-task-appearance task)))
     ('text
      (yunge-reader-pdf--request-text
       (yunge-reader-pdf--prefetch-task-page task)))
@@ -2067,8 +2181,8 @@ Use the nearest cached render ENTRY while an exact render is unavailable."
                 :warning)))))))))
 
 (defun yunge-reader-pdf--finish-prefetch
-    (document kind page &optional width error-data)
-  "Finish DOCUMENT prefetch for KIND, PAGE, WIDTH, and ERROR-DATA."
+    (document kind page &optional width appearance error-data)
+  "Finish DOCUMENT prefetch for KIND, PAGE, WIDTH, and APPEARANCE."
   (let ((task yunge-reader-pdf--prefetch-active))
     (when (and task
                (eq document
@@ -2076,8 +2190,13 @@ Use the nearest cached render ENTRY while an exact render is unavailable."
                (eq kind (yunge-reader-pdf--prefetch-task-kind task))
                (eql page (yunge-reader-pdf--prefetch-task-page task))
                (or (not (eq kind 'render))
-                   (equal width
-                          (yunge-reader-pdf--prefetch-task-width task))))
+                   (and
+                    (equal
+                     width
+                     (yunge-reader-pdf--prefetch-task-width task))
+                    (equal
+                     appearance
+                     (yunge-reader-pdf--prefetch-task-appearance task)))))
       (setq yunge-reader-pdf--prefetch-active nil)
       (if (yunge-reader-pdf--stopped-error-p error-data)
           (setq yunge-reader-pdf--prefetch-queue nil)
@@ -2086,6 +2205,7 @@ Use the nearest cached render ENTRY while an exact render is unavailable."
 (defun yunge-reader-pdf--prefetch-tasks (pages &optional window)
   "Return image-first background tasks for PDF PAGES in WINDOW."
   (let ((document yunge-reader-document)
+        (appearance (yunge-reader-pdf--render-appearance window))
         (generation yunge-reader-pdf--generation))
     (append
      (mapcar
@@ -2095,6 +2215,7 @@ Use the nearest cached render ENTRY while an exact render is unavailable."
          :kind 'render
          :page page
          :width (yunge-reader-pdf--page-width page window)
+         :appearance appearance
          :generation generation))
       pages)
      (mapcar
@@ -2123,14 +2244,15 @@ Use the nearest cached render ENTRY while an exact render is unavailable."
                   (* 100 yunge-reader-effective-scale)))))
 
 (defun yunge-reader-pdf--render-complete
-    (buffer document generation page width result error-data)
-  "Store one rendered PAGE result in BUFFER for GENERATION and WIDTH."
+    (buffer document generation page width appearance result error-data)
+  "Store one PAGE render for GENERATION, WIDTH, and APPEARANCE."
   (when (buffer-live-p buffer)
     (with-current-buffer buffer
       (unwind-protect
           (when (eq document yunge-reader-document)
             (let* ((render-key
-                    (yunge-reader-pdf--render-key page width))
+                    (yunge-reader-pdf--render-key
+                     page width appearance))
                    (pending
                     (and
                      (hash-table-p yunge-reader-pdf--render-pending)
@@ -2144,7 +2266,8 @@ Use the nearest cached render ENTRY while an exact render is unavailable."
                             (yunge-reader-pdf--stopped-error-p
                              error-data))
                            yunge-reader-pdf-view-mode
-                           (yunge-reader-pdf--retain-render-p page width))
+                           (yunge-reader-pdf--retain-render-p
+                            page width appearance))
                   (display-warning
                    'yunge-reader
                    (format "Could not render PDF page %d: %s"
@@ -2153,24 +2276,32 @@ Use the nearest cached render ENTRY while an exact render is unavailable."
                    :warning))
               (when (and
                      (hash-table-p yunge-reader-pdf--render-results)
-                     (yunge-reader-pdf--retain-render-p page width))
-                (puthash (yunge-reader-pdf--render-key page width)
+                     (yunge-reader-pdf--retain-render-p
+                      page width appearance))
+                (puthash (yunge-reader-pdf--render-key
+                          page width appearance)
                          result yunge-reader-pdf--render-results)
-                (yunge-reader-pdf--prune-page-renders page width))
+                (yunge-reader-pdf--prune-page-renders
+                 page width appearance))
               (when (and yunge-reader-pdf-view-mode
-                         (yunge-reader-pdf--retain-render-p page width)
+                         (yunge-reader-pdf--retain-render-p
+                          page width appearance)
                          (memq page yunge-reader-pdf--displayed-pages))
-                (yunge-reader-pdf--paint-page page width)
+                (yunge-reader-pdf--paint-page
+                 page width appearance)
                 (when (yunge-reader-pdf--search-page-p page)
                   (yunge-reader-pdf--scroll-to-search-result)))))
         (yunge-reader-pdf--finish-prefetch
-         document 'render page width error-data)))))
+         document 'render page width appearance error-data)))))
 
 (defun yunge-reader-pdf--request-render
-    (generation page &optional width)
-  "Request a render of PAGE for GENERATION unless it is cached."
+    (generation page &optional width appearance)
+  "Request PAGE for GENERATION, WIDTH, and APPEARANCE if uncached."
   (let* ((width (or width (yunge-reader-pdf--page-width page)))
-         (render-key (yunge-reader-pdf--render-key page width))
+         (appearance
+          (or appearance (yunge-reader-pdf--render-appearance)))
+         (render-key
+          (yunge-reader-pdf--render-key page width appearance))
          (document yunge-reader-document))
     (cond
      ((gethash render-key yunge-reader-pdf--render-results) 'cached)
@@ -2185,10 +2316,13 @@ Use the nearest cached render ENTRY while an exact render is unavailable."
              'render-page
              (list :page page
                    :width width
-                   :cache-key (yunge-reader-pdf--cache-key page width))
+                   :appearance appearance
+                   :cache-key
+                   (yunge-reader-pdf--cache-key
+                    page width appearance))
              (lambda (result request-error)
                (yunge-reader-pdf--render-complete
-                buffer document generation page width
+                buffer document generation page width appearance
                 result request-error)))
           (error
            (remhash render-key yunge-reader-pdf--render-pending)
@@ -2239,7 +2373,7 @@ Use the nearest cached render ENTRY while an exact render is unavailable."
                 (when repainted
                   (yunge-reader-pdf--force-redisplay)))))
         (yunge-reader-pdf--finish-prefetch
-         document 'text page nil error-data)))))
+         document 'text page nil nil error-data)))))
 
 (defun yunge-reader-pdf--request-text (page)
   "Request and cache canonical text geometry for PAGE."
@@ -2302,7 +2436,7 @@ Use the nearest cached render ENTRY while an exact render is unavailable."
                             (error-message-string callback-error))
                     :warning))))))
         (yunge-reader-pdf--finish-prefetch
-         document 'links page nil error-data)))))
+         document 'links page nil nil error-data)))))
 
 (defun yunge-reader-pdf--request-links (page &optional complete)
   "Request and cache PDF links for PAGE, then call COMPLETE."

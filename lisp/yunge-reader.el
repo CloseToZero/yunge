@@ -103,6 +103,19 @@ An omitted format also defaults to `original'."
 (defconst yunge-reader-appearances '(original follow-emacs)
   "Appearance values accepted by Reader documents.")
 
+(defun yunge-reader--face-color (face attribute frame fallback)
+  "Return FACE ATTRIBUTE on FRAME as RGB hex, or FALLBACK."
+  (let* ((value
+          (and (facep face)
+               (face-attribute face attribute frame 'default)))
+         (rgb (and value (color-values value frame))))
+    (if rgb
+        (apply #'format "#%02x%02x%02x"
+               (mapcar (lambda (component)
+                         (round component 257))
+                       rgb))
+      fallback)))
+
 (define-error 'yunge-reader-no-driver
   "No Yunge Reader driver accepts the document")
 

@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Chen Zhexuan
 // SPDX-License-Identifier: MIT
 
-use image::GenericImageView;
+use image::{DynamicImage, GenericImageView};
 use pdfium_render::prelude::*;
 use regex::{Regex, RegexBuilder};
 use serde::de::DeserializeOwned;
@@ -135,8 +135,95 @@ struct RenderParams {
     document: u64,
     page: u32,
     width: i32,
+    appearance: PdfAppearance,
     #[serde(rename = "cache-key")]
     cache_key: String,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct ThemeColor([u8; 3]);
+
+impl<'de> Deserialize<'de> for ThemeColor {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let value = String::deserialize(deserializer)?;
+        let valid = value.len() == 7
+            && value.starts_with('#')
+            && value.as_bytes()[1..].iter().all(|byte| {
+                byte.is_ascii_digit() || (b'a'..=b'f').contains(byte)
+            });
+        if !valid {
+            return Err(serde::de::Error::custom(
+                "PDF colors must be lowercase #rrggbb values",
+            ));
+        }
+        let mut channels = [0; 3];
+        for (index, channel) in channels.iter_mut().enumerate() {
+            let start = 1 + index * 2;
+            *channel = u8::from_str_radix(&value[start..start + 2], 16)
+                .map_err(serde::de::Error::custom)?;
+        }
+        Ok(Self(channels))
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum PdfAppearance {
+    Original,
+    FollowEmacs {
+        foreground: ThemeColor,
+        background: ThemeColor,
+    },
+}
+
+impl<'de> Deserialize<'de> for PdfAppearance {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let value = Value::deserialize(deserializer)?;
+        let mut fields = value.as_object().cloned().ok_or_else(|| {
+            serde::de::Error::custom("PDF appearance must be an object")
+        })?;
+        let mode = fields
+            .remove("mode")
+            .and_then(|value| value.as_str().map(str::to_owned))
+            .ok_or_else(|| {
+                serde::de::Error::custom("PDF appearance mode must be a string")
+            })?;
+        match mode.as_str() {
+            "original" if fields.is_empty() => Ok(Self::Original),
+            "follow-emacs" if fields.len() == 2 => {
+                let mut color = |key| {
+                    fields
+                        .remove(key)
+                        .ok_or_else(|| format!("missing PDF color {key}"))
+                        .and_then(|value| {
+                            serde_json::from_value(value)
+                                .map_err(|error| error.to_string())
+                        })
+                };
+                let appearance = Self::FollowEmacs {
+                    foreground: color("foreground")
+                        .map_err(serde::de::Error::custom)?,
+                    background: color("background")
+                        .map_err(serde::de::Error::custom)?,
+                };
+                if fields.is_empty() {
+                    Ok(appearance)
+                } else {
+                    Err(serde::de::Error::custom(
+                        "unknown PDF appearance color",
+                    ))
+                }
+            }
+            _ => Err(serde::de::Error::custom(
+                "invalid PDF appearance mode or fields",
+            )),
+        }
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -986,6 +1073,45 @@ fn valid_cache_key(value: &str) -> bool {
         && value
             .bytes()
             .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+}
+
+fn themed_channel(foreground: u8, background: u8, luminance: u16) -> u8 {
+    let ink = 255 - luminance;
+    let value = u32::from(foreground) * u32::from(ink)
+        + u32::from(background) * u32::from(luminance)
+        + 127;
+    (value / 255) as u8
+}
+
+fn apply_pdf_appearance(
+    image: DynamicImage,
+    appearance: PdfAppearance,
+) -> DynamicImage {
+    let PdfAppearance::FollowEmacs {
+        foreground,
+        background,
+    } = appearance
+    else {
+        return image;
+    };
+    let mut pixels = image.to_rgba8();
+    for pixel in pixels.pixels_mut() {
+        let [red, green, blue, alpha] = pixel.0;
+        let luminance = (54 * u16::from(red)
+            + 183 * u16::from(green)
+            + 19 * u16::from(blue)
+            + 128)
+            / 256;
+        for (channel, value) in pixel.0[..3].iter_mut().enumerate() {
+            *value = themed_channel(
+                foreground.0[channel],
+                background.0[channel],
+                luminance,
+            );
+        }
+        pixel.0[3] = alpha;
+    }
+    DynamicImage::ImageRgba8(pixels)
 }
 
 fn valid_cache_file_name(value: &str) -> bool {
@@ -1932,6 +2058,7 @@ impl Service {
                     format!("could not render page {}: {error}", params.page),
                 )
             })?;
+        let image = apply_pdf_appearance(image, params.appearance);
         let (width, height) = image.dimensions();
         let temporary =
             output.with_extension(format!("{}.tmp", std::process::id()));
@@ -2168,6 +2295,78 @@ mod tests {
     }
 
     #[test]
+    fn pdf_appearances_are_strictly_validated() {
+        let original = serde_json::from_value::<PdfAppearance>(json!({
+            "mode": "original",
+        }))
+        .unwrap();
+        assert_eq!(original, PdfAppearance::Original);
+
+        let following = serde_json::from_value::<PdfAppearance>(json!({
+            "mode": "follow-emacs",
+            "foreground": "#112233",
+            "background": "#f4f5f6",
+        }))
+        .unwrap();
+        assert_eq!(
+            following,
+            PdfAppearance::FollowEmacs {
+                foreground: ThemeColor([0x11, 0x22, 0x33]),
+                background: ThemeColor([0xf4, 0xf5, 0xf6]),
+            }
+        );
+
+        for appearance in [
+            json!({ "mode": "follow-emacs" }),
+            json!({
+                "mode": "follow-emacs",
+                "foreground": "#AABBCC",
+                "background": "#ffffff",
+            }),
+            json!({
+                "mode": "original",
+                "foreground": "#112233",
+            }),
+        ] {
+            assert!(
+                serde_json::from_value::<PdfAppearance>(appearance).is_err()
+            );
+        }
+    }
+
+    #[test]
+    fn pdf_theme_maps_tones_between_frame_colors() {
+        let source = image::RgbaImage::from_vec(
+            3,
+            1,
+            vec![0, 0, 0, 255, 255, 255, 255, 240, 255, 0, 0, 128],
+        )
+        .unwrap();
+        let foreground = ThemeColor([10, 20, 30]);
+        let background = ThemeColor([210, 220, 230]);
+        let result = apply_pdf_appearance(
+            DynamicImage::ImageRgba8(source),
+            PdfAppearance::FollowEmacs {
+                foreground,
+                background,
+            },
+        )
+        .to_rgba8();
+        assert_eq!(result.get_pixel(0, 0).0, [10, 20, 30, 255]);
+        assert_eq!(result.get_pixel(1, 0).0, [210, 220, 230, 240]);
+        let red_luminance = 54;
+        assert_eq!(
+            result.get_pixel(2, 0).0,
+            [
+                themed_channel(10, 210, red_luminance),
+                themed_channel(20, 220, red_luminance),
+                themed_channel(30, 230, red_luminance),
+                128,
+            ]
+        );
+    }
+
+    #[test]
     fn ready_reports_protocol_and_exact_source_build() {
         let value = serde_json::to_value(ready_message()).unwrap();
         assert_eq!(BUILD_ID, include_str!("../source.sha256").trim());
@@ -2216,7 +2415,8 @@ mod tests {
             r#"{"id":1,"op":"close","params":{}}"#,
             "\n",
             r#"{"id":2,"op":"render-page","params":{"#,
-            r#""document":1,"page":0,"width":1,"cache-key":"x"}}"#,
+            r#""document":1,"page":0,"width":1,"#,
+            r#""appearance":{"mode":"original"},"cache-key":"x"}}"#,
             "\n",
             r#"{"id":3,"op":"ping","params":{"extra":true}}"#,
             "\n",

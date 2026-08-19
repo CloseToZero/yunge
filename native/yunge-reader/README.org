@@ -699,15 +699,21 @@ Invalid pages, offsets, cursors, or limits return stable protocol errors.
             "cursor":{"page":0,"offset":15},"done":false}}
 #+end_src
 
-=render-page= additionally accepts pixel =width= from 16 through 8192 and a
-64-character lowercase hexadecimal =cache-key=.  The helper alone maps that
-key to =YUNGE_READER_CACHE/<key>.png=.  It returns the absolute path, pixel
-dimensions, and whether an existing valid cache entry was reused.  Reusing an
-entry refreshes its cache-pruning recency on a best-effort basis.
+=render-page= additionally accepts pixel =width= from 16 through 8192, a strict
+=appearance= object, and a 64-character lowercase hexadecimal =cache-key=.
+=original= preserves PDFium's rendered colors.  =follow-emacs= maps every
+rendered tone between the supplied lowercase =foreground= and =background=
+=#rrggbb= values; this intentionally makes colored page images monochrome.
+
+The helper alone maps the cache key to
+=YUNGE_READER_CACHE/<key>.png=.  It returns the absolute path, pixel dimensions,
+and whether an existing valid cache entry was reused.  Reusing an entry
+refreshes its cache-pruning recency on a best-effort basis.
 
 #+begin_src json
 {"id":8,"op":"render-page",
  "params":{"document":1,"page":0,"width":1000,
+"appearance":{"mode":"original"},
 "cache-key":"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"}}
 {"id":8,"ok":true,
  "result":{"path":"C:/cache/0123456789abcdef....png",
