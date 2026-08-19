@@ -77,6 +77,7 @@
 (defvar yunge-reader-pdf-smoke--initial nil)
 (defvar yunge-reader-pdf-smoke--fit-page nil)
 (defvar yunge-reader-pdf-smoke--manual-location nil)
+(defvar yunge-reader-pdf-smoke--original-render-path nil)
 (defvar yunge-reader-pdf-smoke--exit-status 0)
 
 (defun yunge-reader-pdf-smoke--warning
@@ -175,22 +176,33 @@
        (> (length yunge-reader-pdf--page-positions) 0)
        (yunge-reader-pdf--display-width 0)))
 
-(defun yunge-reader-pdf-smoke--exact-image-p ()
-  "Return whether page one displays its exact completed render."
+(defun yunge-reader-pdf-smoke--exact-render ()
+  "Return page one's current exact render result, or nil."
   (when-let* ((window (yunge-reader-pdf-smoke--window))
               (width (yunge-reader-pdf-smoke--width))
               (appearance
                (yunge-reader-pdf--render-appearance window))
-              (position (yunge-reader-pdf--page-position 0))
-              (display (get-text-property position 'display))
               (entry
                (and (hash-table-p yunge-reader-pdf--render-results)
                     (gethash
                      (yunge-reader-pdf--render-key
                       0 width appearance)
                      yunge-reader-pdf--render-results))))
+    entry))
+
+(defun yunge-reader-pdf-smoke--exact-image-p ()
+  "Return whether page one displays its exact completed render."
+  (when-let* ((position (yunge-reader-pdf--page-position 0))
+              (display (get-text-property position 'display))
+              (entry (yunge-reader-pdf-smoke--exact-render))
+              (path (alist-get 'path entry)))
     (and (imagep display)
-         (file-regular-p (alist-get 'path entry)))))
+         (file-regular-p path)
+         (equal (image-property display :file) path))))
+
+(defun yunge-reader-pdf-smoke--render-path ()
+  "Return page one's current exact render path, or nil."
+  (alist-get 'path (yunge-reader-pdf-smoke--exact-render)))
 
 (defun yunge-reader-pdf-smoke--location ()
   "Return a copy of the current stable PDF location, or nil."
@@ -245,8 +257,10 @@
             (window-body-height window t)))
      :zoom yunge-reader-zoom-mode
      :scale yunge-reader-effective-scale
-     :manual-scale yunge-reader-scale
+    :manual-scale yunge-reader-scale
     :width (yunge-reader-pdf-smoke--width)
+    :appearance (yunge-reader-effective-appearance)
+    :render (yunge-reader-pdf-smoke--render-path)
     :location (yunge-reader-pdf-smoke--location))
    yunge-reader-pdf-smoke--observations))
 
@@ -490,6 +504,48 @@
                      (error "PDF did not remain in Reader mode"))
                    (when (buffer-modified-p)
                      (error "PDF Reader buffer became modified"))
+                   (setq yunge-reader-pdf-smoke--original-render-path
+                         (yunge-reader-pdf-smoke--render-path)
+                         yunge-reader-pdf-smoke--phase 'themed
+                         yunge-reader-pdf-smoke--not-before
+                         (+ (float-time) 0.2))
+                   (yunge-reader-set-document-appearance 'follow-emacs)
+                   (run-at-time
+                    0.1 nil #'yunge-reader-pdf-smoke--poll))
+               (run-at-time
+                0.1 nil #'yunge-reader-pdf-smoke--poll)))
+            ('themed
+             (if (and (yunge-reader-pdf-smoke--settled-p)
+                      (eq (yunge-reader-effective-appearance)
+                          'follow-emacs)
+                      (not
+                       (equal (yunge-reader-pdf-smoke--render-path)
+                              yunge-reader-pdf-smoke--original-render-path))
+                      (yunge-reader-pdf-smoke--same-location-p
+                       (yunge-reader-pdf-smoke--location)
+                       yunge-reader-pdf-smoke--manual-location))
+                 (progn
+                   (yunge-reader-pdf-smoke--observation 'themed)
+                   (setq yunge-reader-pdf-smoke--phase
+                         'original-restored
+                         yunge-reader-pdf-smoke--not-before
+                         (+ (float-time) 0.2))
+                   (yunge-reader-set-document-appearance 'original)
+                   (run-at-time
+                    0.1 nil #'yunge-reader-pdf-smoke--poll))
+               (run-at-time
+                0.1 nil #'yunge-reader-pdf-smoke--poll)))
+            ('original-restored
+             (if (and (yunge-reader-pdf-smoke--settled-p)
+                      (eq (yunge-reader-effective-appearance) 'original)
+                      (equal (yunge-reader-pdf-smoke--render-path)
+                             yunge-reader-pdf-smoke--original-render-path)
+                      (yunge-reader-pdf-smoke--same-location-p
+                       (yunge-reader-pdf-smoke--location)
+                       yunge-reader-pdf-smoke--manual-location))
+                 (progn
+                   (yunge-reader-pdf-smoke--observation
+                    'original-restored)
                    (yunge-reader-pdf-smoke--finish))
                (run-at-time
                 0.1 nil #'yunge-reader-pdf-smoke--poll)))))))
