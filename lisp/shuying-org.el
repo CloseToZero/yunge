@@ -350,17 +350,37 @@ Return nil when POSITION has no preview or its source is currently visible."
   "Return an image display for ARTIFACT aligned to the text baseline."
   (let* ((metadata (shuying-artifact-metadata artifact))
          (height (plist-get metadata :height))
-         (depth (plist-get metadata :depth))
-         (ascent
-          (and height depth
-               (round
-                (* 100
-                   (- 1 (/ (max 0.0 (min depth height))
-                           height)))))))
-    (create-image
-     (shuying-artifact-path artifact) nil nil
-     :height (and height (cons height 'em))
-     :ascent (or ascent 'center))))
+         (depth (plist-get metadata :depth)))
+    (unless (and (numberp height)
+                 (> height 0)
+                 (numberp depth)
+                 (<= 0 depth height))
+      (error "Invalid Shuying artifact geometry: %S" metadata))
+    (let ((ascent
+           (round
+            (* 100
+               (- 1 (/ (max 0.0 (min depth height)) height))))))
+      (create-image
+       (shuying-artifact-path artifact) nil nil
+       :height (cons height 'em)
+       :ascent ascent))))
+
+(defun shuying-org--record-render-error
+    (overlay error-data report-error)
+  "Record OVERLAY's ERROR-DATA and call REPORT-ERROR."
+  (overlay-put overlay 'display nil)
+  (overlay-put overlay 'shuying-org-dirty t)
+  (overlay-put overlay 'shuying-org-error error-data)
+  (overlay-put overlay 'shuying-org-specification-hash nil)
+  (funcall report-error error-data))
+
+(defun shuying-org--record-display-error
+    (overlay error-data report-error)
+  "Record OVERLAY's display ERROR-DATA and call REPORT-ERROR."
+  (overlay-put overlay 'display nil)
+  (overlay-put overlay 'shuying-org-dirty nil)
+  (overlay-put overlay 'shuying-org-error error-data)
+  (funcall report-error error-data))
 
 (defun shuying-org--finish-render
     (buffer overlay generation artifact error-data report-error)
@@ -373,21 +393,21 @@ REPORT-ERROR reports a current render failure without duplicating its batch."
                 (overlay-get overlay 'shuying-org-generation)))
     (with-current-buffer buffer
       (if error-data
-          (progn
-            (overlay-put overlay 'display nil)
-            (overlay-put overlay 'shuying-org-dirty t)
-            (overlay-put overlay 'shuying-org-error error-data)
-            (overlay-put overlay 'shuying-org-specification-hash nil)
-            (funcall report-error error-data))
-        (let ((image (shuying-org--image artifact)))
-          (overlay-put overlay 'shuying-org-artifact
-                       (shuying-artifact-path artifact))
-          (overlay-put overlay 'shuying-org-image image)
-          (overlay-put overlay 'shuying-org-dirty nil)
-          (overlay-put overlay 'shuying-org-error nil)
-          (if (shuying-org--point-inside-overlay-p overlay)
-              (overlay-put overlay 'display nil)
-            (shuying-org--show-overlay overlay)))))))
+          (shuying-org--record-render-error
+           overlay error-data report-error)
+        (condition-case display-error
+            (let ((image (shuying-org--image artifact)))
+              (overlay-put overlay 'shuying-org-artifact
+                           (shuying-artifact-path artifact))
+              (overlay-put overlay 'shuying-org-image image)
+              (overlay-put overlay 'shuying-org-dirty nil)
+              (overlay-put overlay 'shuying-org-error nil)
+              (if (shuying-org--point-inside-overlay-p overlay)
+                  (overlay-put overlay 'display nil)
+                (shuying-org--show-overlay overlay)))
+          (error
+           (shuying-org--record-display-error
+            overlay display-error report-error)))))))
 
 (defun shuying-org--render-request
     (fragment specification specification-hash report-error)

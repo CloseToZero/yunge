@@ -92,8 +92,45 @@
       (should (eq (shuying-org--image artifact) 'image))
       (should
        (equal arguments
-              '("formula.svg" nil nil
-                :height (1.2 . em) :ascent 83))))))
+               '("formula.svg" nil nil
+                 :height (1.2 . em) :ascent 83))))))
+
+(ert-deftest shuying-org-rejects-invalid-artifact-geometry ()
+  (dolist (metadata '(nil
+                      (:height 0 :depth 0)
+                      (:height 1.0 :depth 2.0)))
+    (should-error
+     (shuying-org--image
+      (make-shuying-artifact
+       :path "formula.svg"
+       :metadata metadata)))))
+
+(ert-deftest shuying-org-records-image-construction-errors ()
+  (with-temp-buffer
+    (let* ((overlay (make-overlay (point-min) (point-min)))
+           (artifact
+            (make-shuying-artifact
+             :path "formula.svg"
+             :metadata '(:width 1.0 :height 1.2 :depth 0.2)))
+           reported)
+      (overlay-put overlay 'shuying-org-generation 1)
+      (overlay-put overlay 'shuying-org-dirty nil)
+      (overlay-put overlay 'shuying-org-specification-hash "current")
+      (cl-letf (((symbol-function 'create-image)
+                 (lambda (&rest _arguments)
+                   (error "SVG is unavailable"))))
+        (shuying-org--finish-render
+         (current-buffer) overlay 1 artifact nil
+         (lambda (error-data)
+           (setq reported error-data))))
+      (should (equal reported '(error "SVG is unavailable")))
+      (should-not (overlay-get overlay 'shuying-org-dirty))
+      (should (equal (overlay-get overlay 'shuying-org-error)
+                     reported))
+      (should
+       (equal (overlay-get overlay 'shuying-org-specification-hash)
+              "current"))
+      (should-not (overlay-get overlay 'display)))))
 
 (ert-deftest shuying-org-builds-direct-latex-render-specifications ()
   (let ((shuying-latex-engine-command '("test-latex"))
