@@ -160,6 +160,26 @@
                    callbacks)))
       (delete-directory root t))))
 
+(ert-deftest shuying-validates-a-batch-before-admitting-jobs ()
+  (let* ((root (make-temp-file "shuying-cache-" t))
+         (shuying-cache-directory root)
+         (shuying-backends nil)
+         (shuying--pending-jobs (make-hash-table :test #'equal))
+         (valid (shuying-test--spec "$valid$"))
+         (invalid (shuying-test--spec "$invalid$")))
+    (setf (shuying-render-spec-backend invalid) 'missing)
+    (unwind-protect
+        (progn
+          (shuying-register-backend 'test #'ignore)
+          (should-error
+           (shuying-render-batch
+            (list (cons valid #'ignore)
+                  (cons invalid #'ignore))))
+          (should (zerop (hash-table-count shuying--pending-jobs)))
+          (should-not
+           (directory-files root nil "\\`\\.\\(?:render\\|metadata\\)-")))
+      (delete-directory root t))))
+
 (ert-deftest shuying-groups-compatible-render-requests ()
   (let* ((root (make-temp-file "shuying-cache-" t))
          (shuying-cache-directory root)

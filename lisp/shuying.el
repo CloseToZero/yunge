@@ -227,6 +227,14 @@ Refuse to clear the cache while render jobs are pending."
       (error "Unknown Shuying backend: %s"
              (shuying-render-spec-backend specification))))
 
+(defun shuying--validate-render-request (request)
+  "Validate one render REQUEST before admitting its job."
+  (unless (and (consp request)
+               (shuying-render-spec-p (car request))
+               (functionp (cdr request)))
+    (error "Invalid Shuying render request: %S" request))
+  (shuying--backend-for (car request)))
+
 (defun shuying--group-jobs (jobs)
   "Group JOBS by backend and backend-defined compatibility key."
   (let (groups)
@@ -331,6 +339,8 @@ Refuse to clear the cache while render jobs are pending."
 Each element of REQUESTS has the form (SPECIFICATION . CALLBACK).
 CALLBACK receives a `shuying-artifact' and an error value.  Cache hits complete
 immediately, while identical pending specifications share a job."
+  (dolist (request requests)
+    (shuying--validate-render-request request))
   (let (jobs)
     (dolist (request requests)
       (let* ((specification (car request))
@@ -348,7 +358,6 @@ immediately, while identical pending specifications share a job."
          (pending
           (push callback (shuying--job-callbacks pending)))
          (t
-          (shuying--backend-for specification)
           (make-directory shuying-cache-directory t)
           (let ((job
                  (make-shuying--job
