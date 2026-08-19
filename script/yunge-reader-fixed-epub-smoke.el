@@ -82,6 +82,11 @@
     (push message yunge-reader-fixed-smoke--warnings))
   (apply original type message arguments))
 
+(defun yunge-reader-fixed-smoke--continue ()
+  "Continue polling the current fixed-layout smoke phase."
+  (yunge-reader-graphical-smoke-schedule
+   #'yunge-reader-fixed-smoke--poll))
+
 (defun yunge-reader-fixed-smoke--location ()
   "Return a copy of the current native location, or nil."
   (when-let* ((view yunge-reader-webview--buffer-view)
@@ -177,20 +182,22 @@
   (when (zerop yunge-reader-fixed-smoke--exit-status)
     (yunge-reader-fixed-smoke--log
      "Fixed EPUB smoke passed all variants\n"))
-  (run-at-time
-   0.1 nil #'kill-emacs yunge-reader-fixed-smoke--exit-status))
+  (yunge-reader-graphical-smoke-schedule
+   #'kill-emacs yunge-reader-fixed-smoke--exit-status))
 
 (defun yunge-reader-fixed-smoke--await-stop ()
   "Wait for the isolated helper to stop, then run the next action."
   (cond
    ((and (process-live-p yunge-reader-webview--process)
          (< (float-time) yunge-reader-fixed-smoke--stop-deadline))
-    (run-at-time 0.1 nil #'yunge-reader-fixed-smoke--await-stop))
+    (yunge-reader-graphical-smoke-schedule
+     #'yunge-reader-fixed-smoke--await-stop))
    ((process-live-p yunge-reader-webview--process)
     (yunge-reader-webview-stop t)
     (setq yunge-reader-fixed-smoke--stop-deadline
           (+ (float-time) 1.0))
-    (run-at-time 0.1 nil #'yunge-reader-fixed-smoke--await-stop))
+    (yunge-reader-graphical-smoke-schedule
+     #'yunge-reader-fixed-smoke--await-stop))
    ((eq yunge-reader-fixed-smoke--next-action 'next)
     (yunge-reader-fixed-smoke--start-variant))
    (t
@@ -202,7 +209,8 @@
         yunge-reader-fixed-smoke--stop-deadline
         (+ (float-time) 3.0))
   (yunge-reader-webview-stop)
-  (run-at-time 0.1 nil #'yunge-reader-fixed-smoke--await-stop))
+  (yunge-reader-graphical-smoke-schedule
+   #'yunge-reader-fixed-smoke--await-stop))
 
 (defun yunge-reader-fixed-smoke--finish (value error-data)
   "Record VALUE and ERROR-DATA, then continue or stop the smoke."
@@ -248,7 +256,7 @@
         (error "Fixed EPUB smoke timed out in %S"
                yunge-reader-fixed-smoke--phase))
        ((not (buffer-live-p yunge-reader-fixed-smoke--buffer))
-        (run-at-time 0.1 nil #'yunge-reader-fixed-smoke--poll))
+        (yunge-reader-fixed-smoke--continue))
        (t
         (with-current-buffer yunge-reader-fixed-smoke--buffer
           (let ((view yunge-reader-webview--buffer-view)
@@ -277,40 +285,32 @@
                       'initial view location)
                      (setq yunge-reader-fixed-smoke--phase 'last)
                      (yunge-reader-epub-last-location)
-                     (run-at-time
-                      0.1 nil #'yunge-reader-fixed-smoke--poll))
-                 (run-at-time
-                  0.1 nil #'yunge-reader-fixed-smoke--poll)))
+                     (yunge-reader-fixed-smoke--continue))
+                 (yunge-reader-fixed-smoke--continue)))
               ('last
                (if (yunge-reader-fixed-smoke--page-p location 3)
                    (progn
                      (yunge-reader-fixed-smoke--record 'last location)
                      (setq yunge-reader-fixed-smoke--phase 'first)
                      (yunge-reader-epub-first-location)
-                     (run-at-time
-                      0.1 nil #'yunge-reader-fixed-smoke--poll))
-                 (run-at-time
-                  0.1 nil #'yunge-reader-fixed-smoke--poll)))
+                     (yunge-reader-fixed-smoke--continue))
+                 (yunge-reader-fixed-smoke--continue)))
               ('first
                (if (yunge-reader-fixed-smoke--page-p location 1)
                    (progn
                      (yunge-reader-fixed-smoke--record 'first location)
                      (setq yunge-reader-fixed-smoke--phase 'next)
                      (yunge-reader-epub-next-page)
-                     (run-at-time
-                      0.1 nil #'yunge-reader-fixed-smoke--poll))
-                 (run-at-time
-                  0.1 nil #'yunge-reader-fixed-smoke--poll)))
+                     (yunge-reader-fixed-smoke--continue))
+                 (yunge-reader-fixed-smoke--continue)))
               ('next
                (if (yunge-reader-fixed-smoke--page-p location 2)
                    (progn
                      (yunge-reader-fixed-smoke--record 'next location)
                      (setq yunge-reader-fixed-smoke--phase 'previous)
                      (yunge-reader-epub-previous-page)
-                     (run-at-time
-                      0.1 nil #'yunge-reader-fixed-smoke--poll))
-                 (run-at-time
-                  0.1 nil #'yunge-reader-fixed-smoke--poll)))
+                     (yunge-reader-fixed-smoke--continue))
+                 (yunge-reader-fixed-smoke--continue)))
               ('previous
                (if (yunge-reader-fixed-smoke--page-p location 1)
                    (progn
@@ -318,10 +318,8 @@
                       'previous location)
                      (setq yunge-reader-fixed-smoke--phase 'fit-width)
                      (yunge-reader-fit-width)
-                     (run-at-time
-                      0.1 nil #'yunge-reader-fixed-smoke--poll))
-                 (run-at-time
-                  0.1 nil #'yunge-reader-fixed-smoke--poll)))
+                     (yunge-reader-fixed-smoke--continue))
+                 (yunge-reader-fixed-smoke--continue)))
               ('fit-width
                (if (and
                     (yunge-reader-fixed-smoke--same-surface-p view)
@@ -345,10 +343,8 @@
                       'fit-width view location)
                      (set-frame-size nil 700 700 t)
                      (redisplay t)
-                     (run-at-time
-                      0.1 nil #'yunge-reader-fixed-smoke--poll))
-                 (run-at-time
-                  0.1 nil #'yunge-reader-fixed-smoke--poll)))
+                     (yunge-reader-fixed-smoke--continue))
+                 (yunge-reader-fixed-smoke--continue)))
               ('fit-width-resize
                (let ((bounds
                       (yunge-reader-fixed-smoke--surface-bounds view)))
@@ -369,10 +365,8 @@
                        (setq yunge-reader-fixed-smoke--phase
                              'fit-page)
                        (yunge-reader-fit-page)
-                       (run-at-time
-                        0.1 nil #'yunge-reader-fixed-smoke--poll))
-                   (run-at-time
-                    0.1 nil #'yunge-reader-fixed-smoke--poll))))
+                       (yunge-reader-fixed-smoke--continue))
+                   (yunge-reader-fixed-smoke--continue))))
               ('fit-page
                (if (and
                     (yunge-reader-fixed-smoke--same-surface-p view)
@@ -396,10 +390,8 @@
                       'fit-page view location)
                      (set-frame-size nil 700 500 t)
                      (redisplay t)
-                     (run-at-time
-                      0.1 nil #'yunge-reader-fixed-smoke--poll))
-                 (run-at-time
-                  0.1 nil #'yunge-reader-fixed-smoke--poll)))
+                     (yunge-reader-fixed-smoke--continue))
+                 (yunge-reader-fixed-smoke--continue)))
               ('fit-page-resize
                (let ((bounds
                       (yunge-reader-fixed-smoke--surface-bounds view)))
@@ -419,10 +411,8 @@
                         'fit-page-resized view location)
                        (setq yunge-reader-fixed-smoke--phase 'manual)
                        (yunge-reader-zoom-reset)
-                       (run-at-time
-                        0.1 nil #'yunge-reader-fixed-smoke--poll))
-                   (run-at-time
-                    0.1 nil #'yunge-reader-fixed-smoke--poll))))
+                       (yunge-reader-fixed-smoke--continue))
+                   (yunge-reader-fixed-smoke--continue))))
               ('manual
                (if (and
                     (yunge-reader-fixed-smoke--same-surface-p view)
@@ -437,10 +427,8 @@
                       'manual view location)
                      (setq yunge-reader-fixed-smoke--phase 'scroll)
                      (yunge-reader-epub-next-screen)
-                     (run-at-time
-                      0.1 nil #'yunge-reader-fixed-smoke--poll))
-                 (run-at-time
-                  0.1 nil #'yunge-reader-fixed-smoke--poll)))
+                     (yunge-reader-fixed-smoke--continue))
+                 (yunge-reader-fixed-smoke--continue)))
               ('scroll
                (if (and (yunge-reader-fixed-smoke--page-p location 1)
                         (> (alist-get 'y location) 1.0))
@@ -461,10 +449,8 @@
                       'manual-scrolled view location)
                      (set-frame-size nil 760 600 t)
                      (redisplay t)
-                     (run-at-time
-                      0.1 nil #'yunge-reader-fixed-smoke--poll))
-                 (run-at-time
-                  0.1 nil #'yunge-reader-fixed-smoke--poll)))
+                     (yunge-reader-fixed-smoke--continue))
+                 (yunge-reader-fixed-smoke--continue)))
               ('manual-resize
                (let ((bounds
                       (yunge-reader-fixed-smoke--surface-bounds view)))
@@ -495,15 +481,12 @@
                        (setq yunge-reader-fixed-smoke--phase
                              'manual-line)
                        (yunge-reader-epub-next-line)
-                       (run-at-time
-                        0.1 nil #'yunge-reader-fixed-smoke--poll))
-                   (run-at-time
-                    0.1 nil #'yunge-reader-fixed-smoke--poll))))
+                       (yunge-reader-fixed-smoke--continue))
+                   (yunge-reader-fixed-smoke--continue))))
               ('manual-line
                (if (yunge-reader-fixed-smoke--same-viewport-p
                     location yunge-reader-fixed-smoke--scrolled)
-                   (run-at-time
-                    0.1 nil #'yunge-reader-fixed-smoke--poll)
+                   (yunge-reader-fixed-smoke--continue)
                  (let ((delta
                         (- (alist-get 'y location)
                            (alist-get
@@ -526,8 +509,7 @@
                     'manual-line view location)
                    (switch-to-buffer
                     yunge-reader-fixed-smoke--replacement)
-                   (run-at-time
-                    0.1 nil #'yunge-reader-fixed-smoke--poll))))
+                   (yunge-reader-fixed-smoke--continue))))
               ('hidden
                (if (and (null
                          (yunge-reader-fixed-smoke--surface view))
@@ -537,10 +519,8 @@
                      (setq yunge-reader-fixed-smoke--phase 'reopened)
                      (switch-to-buffer
                       yunge-reader-fixed-smoke--buffer)
-                     (run-at-time
-                      0.1 nil #'yunge-reader-fixed-smoke--poll))
-                 (run-at-time
-                  0.1 nil #'yunge-reader-fixed-smoke--poll)))
+                     (yunge-reader-fixed-smoke--continue))
+                 (yunge-reader-fixed-smoke--continue)))
               ('reopened
                (if (and
                     (yunge-reader-webview--surface-ready-p
@@ -556,8 +536,7 @@
                      (yunge-reader-fixed-smoke--record
                       'reopened location)
                      (yunge-reader-fixed-smoke--finish 'passed nil))
-                 (run-at-time
-                  0.1 nil #'yunge-reader-fixed-smoke--poll))))))))
+                 (yunge-reader-fixed-smoke--continue))))))))
     (error
      (yunge-reader-fixed-smoke--finish nil error-data))))
 
@@ -604,7 +583,7 @@
         (setq yunge-reader-fixed-smoke--buffer
               (find-file-noselect yunge-reader-fixed-smoke--file))
         (switch-to-buffer yunge-reader-fixed-smoke--buffer)
-        (run-at-time 0.1 nil #'yunge-reader-fixed-smoke--poll))
+        (yunge-reader-fixed-smoke--continue))
     (error
      (setq yunge-reader-fixed-smoke--exit-status 1
            yunge-reader-fixed-smoke--remaining nil)

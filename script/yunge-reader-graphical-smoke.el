@@ -61,6 +61,11 @@ LOG-ENVIRONMENT-VARIABLE optionally names a diagnostic log file."
     (when log-file
       (write-region text nil log-file 'append 'silent))))
 
+(defun yunge-reader-graphical-smoke-schedule
+    (function &rest arguments)
+  "Call FUNCTION with ARGUMENTS after the UI settling interval."
+  (apply #'run-at-time 0.1 nil function arguments))
+
 (defun yunge-reader-graphical-smoke-run-process
     (context program arguments)
   "Run PROGRAM with ARGUMENTS for smoke CONTEXT or signal with its output."

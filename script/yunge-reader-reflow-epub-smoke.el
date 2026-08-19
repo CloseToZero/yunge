@@ -96,6 +96,11 @@
     (push message yunge-reader-reflow-smoke--warnings))
   (apply original type message arguments))
 
+(defun yunge-reader-reflow-smoke--continue ()
+  "Continue polling the current reflowable smoke phase."
+  (yunge-reader-graphical-smoke-schedule
+   #'yunge-reader-reflow-smoke--poll))
+
 (defun yunge-reader-reflow-smoke--location ()
   "Return a copy of the current native location, or nil."
   (when-let* ((view yunge-reader-webview--buffer-view)
@@ -356,20 +361,22 @@
     (yunge-reader-reflow-smoke--log
      "Reflow EPUB smoke passed: %S\n"
      (nreverse yunge-reader-reflow-smoke--observations)))
-  (run-at-time
-   0.1 nil #'kill-emacs yunge-reader-reflow-smoke--exit-status))
+  (yunge-reader-graphical-smoke-schedule
+   #'kill-emacs yunge-reader-reflow-smoke--exit-status))
 
 (defun yunge-reader-reflow-smoke--await-stop ()
   "Wait for the isolated helper to stop, then complete the smoke."
   (cond
    ((and (process-live-p yunge-reader-webview--process)
          (< (float-time) yunge-reader-reflow-smoke--stop-deadline))
-    (run-at-time 0.1 nil #'yunge-reader-reflow-smoke--await-stop))
+    (yunge-reader-graphical-smoke-schedule
+     #'yunge-reader-reflow-smoke--await-stop))
    ((process-live-p yunge-reader-webview--process)
     (yunge-reader-webview-stop t)
     (setq yunge-reader-reflow-smoke--stop-deadline
           (+ (float-time) 1.0))
-    (run-at-time 0.1 nil #'yunge-reader-reflow-smoke--await-stop))
+    (yunge-reader-graphical-smoke-schedule
+     #'yunge-reader-reflow-smoke--await-stop))
    (t
     (yunge-reader-reflow-smoke--complete-run))))
 
@@ -394,7 +401,8 @@
   (setq yunge-reader-reflow-smoke--stop-deadline
         (+ (float-time) 3.0))
   (yunge-reader-webview-stop)
-  (run-at-time 0.1 nil #'yunge-reader-reflow-smoke--await-stop))
+  (yunge-reader-graphical-smoke-schedule
+   #'yunge-reader-reflow-smoke--await-stop))
 
 (defun yunge-reader-reflow-smoke--poll ()
   "Advance the reflowable EPUB smoke state machine."
@@ -404,7 +412,7 @@
         (error "Reflow EPUB smoke timed out in %S"
                yunge-reader-reflow-smoke--phase))
        ((not (buffer-live-p yunge-reader-reflow-smoke--buffer))
-        (run-at-time 0.1 nil #'yunge-reader-reflow-smoke--poll))
+        (yunge-reader-reflow-smoke--continue))
        (t
         (with-current-buffer yunge-reader-reflow-smoke--buffer
           (let ((view yunge-reader-webview--buffer-view)
@@ -429,10 +437,8 @@
                      (yunge-reader-reflow-smoke--observe
                       'initial view location)
                      (yunge-reader-epub-next-screen)
-                     (run-at-time
-                      0.1 nil #'yunge-reader-reflow-smoke--poll))
-                 (run-at-time
-                  0.1 nil #'yunge-reader-reflow-smoke--poll)))
+                     (yunge-reader-reflow-smoke--continue))
+                 (yunge-reader-reflow-smoke--continue)))
               ('retain
                (if (and
                     (yunge-reader-reflow-smoke--chapter-p location 1)
@@ -450,10 +456,8 @@
                       'retained view location)
                      (switch-to-buffer
                       yunge-reader-reflow-smoke--replacement)
-                     (run-at-time
-                      0.1 nil #'yunge-reader-reflow-smoke--poll))
-                 (run-at-time
-                  0.1 nil #'yunge-reader-reflow-smoke--poll)))
+                     (yunge-reader-reflow-smoke--continue))
+                 (yunge-reader-reflow-smoke--continue)))
               ('hidden
                (if (and
                     (null (yunge-reader-reflow-smoke--surface view))
@@ -462,10 +466,8 @@
                    (progn
                      (setq yunge-reader-reflow-smoke--phase 'reopened)
                      (switch-to-buffer yunge-reader-reflow-smoke--buffer)
-                     (run-at-time
-                      0.1 nil #'yunge-reader-reflow-smoke--poll))
-                 (run-at-time
-                  0.1 nil #'yunge-reader-reflow-smoke--poll)))
+                     (yunge-reader-reflow-smoke--continue))
+                 (yunge-reader-reflow-smoke--continue)))
               ('reopened
                (if (and
                     (yunge-reader-webview--surface-ready-p
@@ -486,10 +488,8 @@
                            'search-first)
                      (yunge-reader-search
                       yunge-reader-reflow-smoke--search-query)
-                     (run-at-time
-                      0.1 nil #'yunge-reader-reflow-smoke--poll))
-                 (run-at-time
-                  0.1 nil #'yunge-reader-reflow-smoke--poll)))
+                     (yunge-reader-reflow-smoke--continue))
+                 (yunge-reader-reflow-smoke--continue)))
               ('search-first
                (if (yunge-reader-reflow-smoke--search-settled-p
                     location 1)
@@ -499,10 +499,8 @@
                      (yunge-reader-reflow-smoke--observe
                       'search-first view location)
                      (yunge-reader-search-next)
-                     (run-at-time
-                      0.1 nil #'yunge-reader-reflow-smoke--poll))
-                 (run-at-time
-                  0.1 nil #'yunge-reader-reflow-smoke--poll)))
+                     (yunge-reader-reflow-smoke--continue))
+                 (yunge-reader-reflow-smoke--continue)))
               ('search-next
                (let ((selection
                       (yunge-reader-reflow-smoke--search-selection)))
@@ -518,10 +516,8 @@
                        (yunge-reader-reflow-smoke--observe
                         'search-next view location)
                        (yunge-reader-clear-search)
-                       (run-at-time
-                        0.1 nil #'yunge-reader-reflow-smoke--poll))
-                   (run-at-time
-                    0.1 nil #'yunge-reader-reflow-smoke--poll))))
+                       (yunge-reader-reflow-smoke--continue))
+                   (yunge-reader-reflow-smoke--continue))))
               ('search-cleared
                (if (and (null yunge-reader-search-query)
                         (null yunge-reader-search-results)
@@ -536,10 +532,8 @@
                            'selection-selected)
                      (yunge-reader-webview--select-view-range
                       view yunge-reader-reflow-smoke--search-selection)
-                     (run-at-time
-                      0.1 nil #'yunge-reader-reflow-smoke--poll))
-                 (run-at-time
-                  0.1 nil #'yunge-reader-reflow-smoke--poll)))
+                     (yunge-reader-reflow-smoke--continue))
+                 (yunge-reader-reflow-smoke--continue)))
               ('selection-selected
                (if (yunge-reader-reflow-smoke--selection-settled-p
                     view yunge-reader-reflow-smoke--search-selection)
@@ -549,10 +543,8 @@
                      (setq yunge-reader-reflow-smoke--phase
                            'selection-copied)
                      (yunge-reader-copy-selection)
-                     (run-at-time
-                      0.1 nil #'yunge-reader-reflow-smoke--poll))
-                 (run-at-time
-                  0.1 nil #'yunge-reader-reflow-smoke--poll)))
+                     (yunge-reader-reflow-smoke--continue))
+                 (yunge-reader-reflow-smoke--continue)))
               ('selection-copied
                (if (and
                     (not yunge-reader--copy-pending)
@@ -584,10 +576,8 @@
                      (unless (buffer-live-p
                               yunge-reader-reflow-smoke--outline-buffer)
                        (error "Reader did not create an outline buffer"))
-                     (run-at-time
-                      0.1 nil #'yunge-reader-reflow-smoke--poll))
-                 (run-at-time
-                  0.1 nil #'yunge-reader-reflow-smoke--poll)))
+                     (yunge-reader-reflow-smoke--continue))
+                 (yunge-reader-reflow-smoke--continue)))
               ('outline-loading
                (let ((outline-window
                       (and
@@ -607,10 +597,8 @@
                        (yunge-reader-reflow-smoke--observe
                         'outline-loaded view location)
                        (yunge-reader-reflow-smoke--follow-outline)
-                       (run-at-time
-                        0.1 nil #'yunge-reader-reflow-smoke--poll))
-                   (run-at-time
-                    0.1 nil #'yunge-reader-reflow-smoke--poll))))
+                       (yunge-reader-reflow-smoke--continue))
+                   (yunge-reader-reflow-smoke--continue))))
               ('outline-shown
                (let ((reader-window
                       (get-buffer-window (current-buffer) t)))
@@ -635,10 +623,8 @@
                        (setq
                         yunge-reader-reflow-smoke--additional-buffer
                         (yunge-reader-new-view))
-                       (run-at-time
-                        0.1 nil #'yunge-reader-reflow-smoke--poll))
-                   (run-at-time
-                    0.1 nil #'yunge-reader-reflow-smoke--poll))))
+                       (yunge-reader-reflow-smoke--continue))
+                   (yunge-reader-reflow-smoke--continue))))
               ('additional-opening
                (let* ((additional-view
                        (yunge-reader-reflow-smoke--buffer-view
@@ -647,9 +633,10 @@
                        (yunge-reader-reflow-smoke--buffer-location
                         yunge-reader-reflow-smoke--additional-buffer)))
                  (if (and
-                      additional-view
-                      (yunge-reader-webview--surface-ready-p
-                       additional-view)
+                       additional-view
+                       (yunge-reader-webview--surface-ready-p
+                        (yunge-reader-reflow-smoke--surface
+                         additional-view))
                       (numberp
                        (yunge-reader-reflow-smoke--surface-id
                         additional-view))
@@ -677,10 +664,8 @@
                        (with-current-buffer
                            yunge-reader-reflow-smoke--additional-buffer
                          (yunge-reader-epub-first-location))
-                       (run-at-time
-                        0.1 nil #'yunge-reader-reflow-smoke--poll))
-                   (run-at-time
-                    0.1 nil #'yunge-reader-reflow-smoke--poll))))
+                       (yunge-reader-reflow-smoke--continue))
+                   (yunge-reader-reflow-smoke--continue))))
               ('additional-moved
                (let* ((additional-view
                        (yunge-reader-reflow-smoke--buffer-view
@@ -705,8 +690,7 @@
                         view location additional-view
                         additional-location)
                        (yunge-reader-reflow-smoke--finish))
-                   (run-at-time
-                    0.1 nil #'yunge-reader-reflow-smoke--poll)))))))))
+                   (yunge-reader-reflow-smoke--continue)))))))))
     (error
      (yunge-reader-reflow-smoke--finish error-data))))
 
@@ -746,7 +730,7 @@
         (setq yunge-reader-reflow-smoke--buffer
               (find-file-noselect yunge-reader-reflow-smoke--file))
         (switch-to-buffer yunge-reader-reflow-smoke--buffer)
-        (run-at-time 0.1 nil #'yunge-reader-reflow-smoke--poll))
+        (yunge-reader-reflow-smoke--continue))
     (error
      (yunge-reader-reflow-smoke--finish error-data))))
 

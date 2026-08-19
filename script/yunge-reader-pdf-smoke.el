@@ -87,6 +87,11 @@
     (push message yunge-reader-pdf-smoke--warnings))
   (apply original type message arguments))
 
+(defun yunge-reader-pdf-smoke--continue ()
+  "Continue polling the current PDF smoke phase."
+  (yunge-reader-graphical-smoke-schedule
+   #'yunge-reader-pdf-smoke--poll))
+
 (defun yunge-reader-pdf-smoke--page-stream (page)
   "Return the PDF content stream for one-based fixture PAGE."
   (let ((red (+ 0.72 (* 0.06 page)))
@@ -301,7 +306,7 @@
   (setq yunge-reader-pdf-smoke--phase phase
         yunge-reader-pdf-smoke--not-before (+ (float-time) 0.5))
   (set-frame-size nil width height t)
-  (run-at-time 0.1 nil #'yunge-reader-pdf-smoke--poll))
+  (yunge-reader-pdf-smoke--continue))
 
 (defun yunge-reader-pdf-smoke--settled-p ()
   "Return whether the current PDF resize and exact render settled."
@@ -323,7 +328,8 @@
     (yunge-reader-pdf-smoke--log
      "PDF graphical smoke passed: %S\n"
      (nreverse yunge-reader-pdf-smoke--observations)))
-  (run-at-time 0.1 nil #'kill-emacs yunge-reader-pdf-smoke--exit-status))
+  (yunge-reader-graphical-smoke-schedule
+   #'kill-emacs yunge-reader-pdf-smoke--exit-status))
 
 (defun yunge-reader-pdf-smoke--finish (&optional error-data)
   "Finish the graphical PDF smoke, reporting optional ERROR-DATA."
@@ -350,7 +356,8 @@
        (yunge-reader-pdf-smoke--log
         "PDF buffer cleanup failed: %S\n" cleanup-error))))
   (yunge-reader-native-stop t)
-  (run-at-time 0.1 nil #'yunge-reader-pdf-smoke--complete-run))
+  (yunge-reader-graphical-smoke-schedule
+   #'yunge-reader-pdf-smoke--complete-run))
 
 (defun yunge-reader-pdf-smoke--poll ()
   "Advance the graphical PDF smoke state machine."
@@ -365,7 +372,7 @@
                yunge-reader-pdf-smoke--phase))
        ((not (and (buffer-live-p yunge-reader-pdf-smoke--buffer)
                   (yunge-reader-pdf-smoke--window)))
-        (run-at-time 0.1 nil #'yunge-reader-pdf-smoke--poll))
+        (yunge-reader-pdf-smoke--continue))
        (t
         (with-current-buffer yunge-reader-pdf-smoke--buffer
           (pcase yunge-reader-pdf-smoke--phase
@@ -385,8 +392,7 @@
                    (yunge-reader-pdf-smoke--observation 'fit-width)
                    (yunge-reader-pdf-smoke--resize
                     760 780 'fit-width-resized))
-               (run-at-time
-                0.1 nil #'yunge-reader-pdf-smoke--poll)))
+               (yunge-reader-pdf-smoke--continue)))
             ('fit-width-resized
              (if (and (yunge-reader-pdf-smoke--settled-p)
                       (yunge-reader-pdf-smoke--centered-p)
@@ -408,10 +414,8 @@
                    (setq yunge-reader-pdf-smoke--phase 'fit-page
                          yunge-reader-pdf-smoke--not-before
                          (+ (float-time) 0.5))
-                   (run-at-time
-                    0.1 nil #'yunge-reader-pdf-smoke--poll))
-               (run-at-time
-                0.1 nil #'yunge-reader-pdf-smoke--poll)))
+                   (yunge-reader-pdf-smoke--continue))
+               (yunge-reader-pdf-smoke--continue)))
             ('fit-page
              (if (and (eq yunge-reader-zoom-mode 'fit-page)
                       (yunge-reader-pdf-smoke--settled-p)
@@ -426,8 +430,7 @@
                    (yunge-reader-pdf-smoke--observation 'fit-page)
                    (yunge-reader-pdf-smoke--resize
                     760 560 'fit-page-resized))
-               (run-at-time
-                0.1 nil #'yunge-reader-pdf-smoke--poll)))
+               (yunge-reader-pdf-smoke--continue)))
             ('fit-page-resized
              (if (and (yunge-reader-pdf-smoke--settled-p)
                       (yunge-reader-pdf-smoke--centered-p)
@@ -449,10 +452,8 @@
                    (setq yunge-reader-pdf-smoke--phase 'manual
                          yunge-reader-pdf-smoke--not-before
                          (+ (float-time) 0.5))
-                   (run-at-time
-                    0.1 nil #'yunge-reader-pdf-smoke--poll))
-               (run-at-time
-                0.1 nil #'yunge-reader-pdf-smoke--poll)))
+                   (yunge-reader-pdf-smoke--continue))
+               (yunge-reader-pdf-smoke--continue)))
             ('manual
              (if (and (eq yunge-reader-zoom-mode 'manual)
                       (= yunge-reader-scale 1.0)
@@ -468,10 +469,8 @@
                    (setq yunge-reader-pdf-smoke--phase 'manual-anchor
                          yunge-reader-pdf-smoke--not-before
                          (+ (float-time) 0.2))
-                   (run-at-time
-                    0.1 nil #'yunge-reader-pdf-smoke--poll))
-               (run-at-time
-                0.1 nil #'yunge-reader-pdf-smoke--poll)))
+                   (yunge-reader-pdf-smoke--continue))
+               (yunge-reader-pdf-smoke--continue)))
             ('manual-anchor
              (let ((location (yunge-reader-pdf-smoke--location)))
                (if (and (yunge-reader-pdf-smoke--settled-p)
@@ -485,8 +484,7 @@
                      (yunge-reader-pdf-smoke--observation 'manual)
                      (yunge-reader-pdf-smoke--resize
                       920 700 'manual-resized))
-                 (run-at-time
-                  0.1 nil #'yunge-reader-pdf-smoke--poll))))
+                 (yunge-reader-pdf-smoke--continue))))
             ('manual-resized
              (if (and (yunge-reader-pdf-smoke--settled-p)
                       (yunge-reader-pdf-smoke--centered-p)
@@ -510,10 +508,8 @@
                          yunge-reader-pdf-smoke--not-before
                          (+ (float-time) 0.2))
                    (yunge-reader-set-document-appearance 'follow-emacs)
-                   (run-at-time
-                    0.1 nil #'yunge-reader-pdf-smoke--poll))
-               (run-at-time
-                0.1 nil #'yunge-reader-pdf-smoke--poll)))
+                   (yunge-reader-pdf-smoke--continue))
+               (yunge-reader-pdf-smoke--continue)))
             ('themed
              (if (and (yunge-reader-pdf-smoke--settled-p)
                       (eq (yunge-reader-effective-appearance)
@@ -531,10 +527,8 @@
                          yunge-reader-pdf-smoke--not-before
                          (+ (float-time) 0.2))
                    (yunge-reader-set-document-appearance 'original)
-                   (run-at-time
-                    0.1 nil #'yunge-reader-pdf-smoke--poll))
-               (run-at-time
-                0.1 nil #'yunge-reader-pdf-smoke--poll)))
+                   (yunge-reader-pdf-smoke--continue))
+               (yunge-reader-pdf-smoke--continue)))
             ('original-restored
              (if (and (yunge-reader-pdf-smoke--settled-p)
                       (eq (yunge-reader-effective-appearance) 'original)
@@ -547,8 +541,7 @@
                    (yunge-reader-pdf-smoke--observation
                     'original-restored)
                    (yunge-reader-pdf-smoke--finish))
-               (run-at-time
-                0.1 nil #'yunge-reader-pdf-smoke--poll)))))))
+               (yunge-reader-pdf-smoke--continue)))))))
     (error
      (yunge-reader-pdf-smoke--finish error-data))))
 
@@ -577,7 +570,7 @@
         (setq yunge-reader-pdf-smoke--buffer
               (find-file-noselect yunge-reader-pdf-smoke--file))
         (switch-to-buffer yunge-reader-pdf-smoke--buffer)
-        (run-at-time 0.1 nil #'yunge-reader-pdf-smoke--poll))
+        (yunge-reader-pdf-smoke--continue))
     (error
      (yunge-reader-pdf-smoke--finish error-data))))
 
