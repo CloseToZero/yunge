@@ -185,7 +185,14 @@ Refuse to clear the cache while render jobs are pending."
 (defun shuying--notify-callbacks (callbacks artifact error-data)
   "Notify CALLBACKS that ARTIFACT completed with ERROR-DATA."
   (dolist (callback callbacks)
-    (funcall callback artifact error-data)))
+    (condition-case callback-error
+        (funcall callback artifact error-data)
+      (error
+       (display-warning
+        'shuying
+        (format "Shuying render callback failed: %s"
+                (error-message-string callback-error))
+        :error)))))
 
 (defun shuying--complete-job (job error-data)
   "Complete JOB with ERROR-DATA."

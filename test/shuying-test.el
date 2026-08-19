@@ -160,6 +160,47 @@
                    callbacks)))
       (delete-directory root t))))
 
+(ert-deftest shuying-isolates-coalesced-render-callback-failures ()
+  (let* ((root (make-temp-file "shuying-cache-" t))
+         (shuying-cache-directory root)
+         (shuying-backends nil)
+         (shuying--pending-jobs (make-hash-table :test #'equal))
+         (shuying--waiting-batches nil)
+         (shuying--active-batch-count 0)
+         completion
+         backend-request
+         notified
+         warning)
+    (unwind-protect
+        (progn
+          (shuying-register-backend
+           'test
+           (lambda (requests complete)
+             (setq backend-request (car requests)
+                   completion complete)))
+          (let ((specification (shuying-test--spec)))
+            (shuying-render
+             specification
+             (lambda (_artifact _error-data)
+               (error "Consumer failed")))
+            (shuying-render
+             specification
+             (lambda (_artifact _error-data)
+               (setq notified t))))
+          (with-temp-file
+              (shuying-backend-request-output-file backend-request)
+            (insert "artifact"))
+          (cl-letf (((symbol-function 'display-warning)
+                     (lambda (_type message &rest _arguments)
+                       (setq warning message))))
+            (funcall completion backend-request nil))
+          (should notified)
+          (should (string-match-p "Consumer failed" warning))
+          (should (zerop (hash-table-count shuying--pending-jobs)))
+          (should (zerop shuying--active-batch-count))
+          (should-not shuying--waiting-batches))
+      (delete-directory root t))))
+
 (ert-deftest shuying-validates-a-batch-before-admitting-jobs ()
   (let* ((root (make-temp-file "shuying-cache-" t))
          (shuying-cache-directory root)
