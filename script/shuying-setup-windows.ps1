@@ -49,8 +49,11 @@ function Update-ProcessPath {
 function Find-Application {
     param([string] $Name)
 
-    $command = Get-Command $Name -CommandType Application -ErrorAction SilentlyContinue |
-        Select-Object -First 1
+    $command = (
+        Get-Command $Name -CommandType Application `
+            -ErrorAction SilentlyContinue |
+            Select-Object -First 1
+    )
     if ($null -eq $command) {
         return $null
     }
@@ -85,7 +88,8 @@ function Invoke-Checked {
         $ErrorActionPreference = $previousErrorPreference
     }
     if ($status -notin $SuccessCodes) {
-        throw "Command exited with status ${status}: $Program $($Arguments -join ' ')"
+        $argumentText = $Arguments -join ' '
+        throw "Command exited with status ${status}: $Program $argumentText"
     }
 }
 
@@ -115,7 +119,8 @@ function Test-MiktexPackageInstalled {
         }
     })
     if ($status -ne 0) {
-        throw "Could not inspect MiKTeX package ${Package}: $($lines -join '; ')"
+        $lineText = $lines -join '; '
+        throw "Could not inspect MiKTeX package ${Package}: $lineText"
     }
     $installed = $lines | Where-Object {
         $_ -match '^(true|false)$'
@@ -138,7 +143,10 @@ function Get-InstallerMetadata {
         '\s*</div>.*?href=[''\"](?<href>[^''\"]*\k<name>)[''\"]'
     $match = [regex]::Match($Content, $pattern)
     if (-not $match.Success) {
-        throw 'Could not find the current installer and SHA-256 on the MiKTeX download page'
+        throw (
+            'Could not find the current installer and SHA-256 on the ' +
+            'MiKTeX download page'
+        )
     }
     return [pscustomobject]@{
         Name = $match.Groups['name'].Value
@@ -201,12 +209,18 @@ try {
     if ([string]::IsNullOrWhiteSpace($miktex)) {
         $otherLatex = Find-Application 'latex.exe'
         if (-not [string]::IsNullOrWhiteSpace($otherLatex)) {
-            throw "Found a non-MiKTeX LaTeX command at $otherLatex; refusing to install a second TeX distribution"
+            throw (
+                "Found a non-MiKTeX LaTeX command at $otherLatex; " +
+                'refusing to install a second TeX distribution'
+            )
         }
 
         Write-Stage 'Discovering the current MiKTeX installer'
-        $downloadResponse = Invoke-WebRequest -UseBasicParsing -Uri $DownloadPage
-        $metadata = Get-InstallerMetadata $downloadResponse.Content $DownloadPage
+        $downloadResponse = (
+            Invoke-WebRequest -UseBasicParsing -Uri $DownloadPage
+        )
+        $pageContent = $downloadResponse.Content
+        $metadata = Get-InstallerMetadata $pageContent $DownloadPage
         if ($metadata.Uri.Scheme -ne 'https' -or
             $metadata.Uri.Host -ne $DownloadPage.Host) {
             throw "Unexpected MiKTeX installer URL: $($metadata.Uri)"
@@ -214,26 +228,46 @@ try {
         $installer = Join-Path $WorkDirectory $metadata.Name
 
         Write-Stage "Downloading $($metadata.Name)"
-        Invoke-WebRequest -UseBasicParsing -Uri $metadata.Uri -OutFile $installer
+        Invoke-WebRequest `
+            -UseBasicParsing `
+            -Uri $metadata.Uri `
+            -OutFile $installer
 
         Write-Stage 'Verifying the installer'
-        $actualHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $installer).Hash.ToLowerInvariant()
+        $fileHash = Get-FileHash -Algorithm SHA256 -LiteralPath $installer
+        $actualHash = $fileHash.Hash.ToLowerInvariant()
         if ($actualHash -ne $metadata.Hash) {
-            throw "Installer SHA-256 mismatch: expected $($metadata.Hash), got $actualHash"
+            throw (
+                "Installer SHA-256 mismatch: expected $($metadata.Hash), " +
+                "got $actualHash"
+            )
         }
         $signature = Get-AuthenticodeSignature -LiteralPath $installer
-        if ($signature.Status -eq [System.Management.Automation.SignatureStatus]::Valid) {
-            Write-Output "Installer Authenticode signature is valid: $($signature.SignerCertificate.Subject)"
+        $validSignature = (
+            [System.Management.Automation.SignatureStatus]::Valid
+        )
+        if ($signature.Status -eq $validSignature) {
+            $subject = $signature.SignerCertificate.Subject
+            Write-Output "Installer Authenticode signature is valid: $subject"
         }
-        elseif ($signature.Status -eq [System.Management.Automation.SignatureStatus]::NotSigned) {
+        elseif (
+            $signature.Status -eq
+            [System.Management.Automation.SignatureStatus]::NotSigned
+        ) {
             # MiKTeX publishes the Windows installer and its SHA-256 together,
             # but the current official installer is not Authenticode-signed.
             # The matched digest still protects a download served by a CTAN
             # mirror from differing from the file named by the HTTPS page.
-            Write-Output 'Installer is not Authenticode-signed; the official SHA-256 matched.'
+            Write-Output (
+                'Installer is not Authenticode-signed; the official ' +
+                'SHA-256 matched.'
+            )
         }
         else {
-            throw "Installer Authenticode verification failed: $($signature.Status)"
+            throw (
+                'Installer Authenticode verification failed: ' +
+                $signature.Status
+            )
         }
 
         Write-Stage 'Installing per-user MiKTeX'
@@ -241,7 +275,10 @@ try {
         Update-ProcessPath
         $miktex = Find-Application 'miktex.exe'
         if ([string]::IsNullOrWhiteSpace($miktex)) {
-            throw 'MiKTeX installation completed, but miktex.exe is not available in the refreshed PATH'
+            throw (
+                'MiKTeX installation completed, but miktex.exe is not ' +
+                'available in the refreshed PATH'
+            )
         }
     }
 
@@ -317,8 +354,10 @@ finally {
             Remove-SetupWorkDirectory $WorkDirectory
         }
         catch {
+            $cleanupError = $_.Exception.Message
             [Console]::Error.WriteLine(
-                "Warning: could not remove setup files in ${WorkDirectory}: $($_.Exception.Message)"
+                "Warning: could not remove setup files in " +
+                "${WorkDirectory}: $cleanupError"
             )
         }
     }

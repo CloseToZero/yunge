@@ -26,7 +26,7 @@
                       "Test-MiktexPackageInstalled"
                       "Already installed: $package"
                       "SignatureStatus]::NotSigned"
-                      "the official SHA-256 matched"
+                      "SHA-256 matched."
                       "Authenticode verification failed"))
         (goto-char (point-min))
         (should (search-forward text nil t))))))

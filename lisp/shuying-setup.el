@@ -1,4 +1,4 @@
-;;; shuying-setup.el --- Install Shuying dependencies -*- lexical-binding: t; -*-
+;;; shuying-setup.el --- Shuying dependency setup -*- lexical-binding: t; -*-
 ;; SPDX-FileCopyrightText: 2026 Chen Zhexuan
 ;; SPDX-License-Identifier: MIT
 
