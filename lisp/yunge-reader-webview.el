@@ -19,40 +19,49 @@
   (add-hook 'kill-buffer-hook
             #'yunge-reader-webview--kill-buffer nil t))
 
-(defun yunge-reader-webview--appearance-complete
-    (view id appearance _result error-data)
-  "Finish applying APPEARANCE to VIEW surface ID."
+(defun yunge-reader-webview--surface-value-complete
+    (view id surface requested read-applied set-applied
+          _result error-data)
+  "Finish applying REQUESTED to VIEW's SURFACE ID.
+READ-APPLIED returns the recorded value.  SET-APPLIED replaces it."
   (when (and error-data
              (yunge-reader-webview--surface-current-p view id))
-    (let ((surface (yunge-reader-webview--view-surface view)))
-      (when (equal appearance
-                   (yunge-reader-webview--surface-appearance surface))
-        (setf (yunge-reader-webview--surface-appearance surface) nil)))
+    (when (equal requested (funcall read-applied surface))
+      (funcall set-applied surface nil))
     (display-warning
      'yunge-reader (error-message-string error-data) :warning)))
 
-(defun yunge-reader-webview--sync-view-appearance (view)
-  "Send VIEW's desired appearance to its ready native surface."
-  (let ((appearance (yunge-reader-webview--view-appearance view))
-        (surface (yunge-reader-webview--view-surface view)))
+(defun yunge-reader-webview--sync-surface-value
+    (view desired read-applied set-applied send)
+  "Synchronize VIEW's DESIRED value with its ready surface.
+READ-APPLIED and SET-APPLIED access the optimistic surface value.
+SEND starts the native request and accepts VIEW, value, and completion."
+  (let ((surface (yunge-reader-webview--view-surface view)))
     (when (and surface
-               appearance
+               desired
                (yunge-reader-webview--surface-ready-p surface)
                (yunge-reader-webview--surface-current-p
                 view (yunge-reader-webview--surface-id surface))
-               (not
-                (equal appearance
-                       (yunge-reader-webview--surface-appearance
-                        surface))))
+               (not (equal desired
+                           (funcall read-applied surface))))
       (let ((id (yunge-reader-webview--surface-id surface))
-            (requested (copy-tree appearance)))
-        (setf (yunge-reader-webview--surface-appearance surface)
-              (copy-tree requested))
-        (yunge-reader-webview--set-native-view-appearance
-         view requested
+            (requested (copy-tree desired)))
+        (funcall set-applied surface (copy-tree requested))
+        (funcall
+         send view requested
          (apply-partially
-          #'yunge-reader-webview--appearance-complete
-          view id requested))))))
+          #'yunge-reader-webview--surface-value-complete
+          view id surface requested read-applied set-applied))))))
+
+(defun yunge-reader-webview--sync-view-appearance (view)
+  "Send VIEW's desired appearance to its ready native surface."
+  (yunge-reader-webview--sync-surface-value
+   view
+   (yunge-reader-webview--view-appearance view)
+   #'yunge-reader-webview--surface-appearance
+   (lambda (surface value)
+     (setf (yunge-reader-webview--surface-appearance surface) value))
+   #'yunge-reader-webview--set-native-view-appearance))
 
 (defun yunge-reader-webview--set-view-appearance (view appearance)
   "Set logical VIEW's APPEARANCE and synchronize its live surface."
@@ -96,39 +105,15 @@
           (yunge-reader-webview--sync-view-appearance view)))
     (setf (yunge-reader-webview--view-appearance view) nil)))
 
-(defun yunge-reader-webview--style-complete
-    (view id style _result error-data)
-  "Finish applying STYLE to VIEW surface ID."
-  (when (yunge-reader-webview--surface-current-p view id)
-    (when error-data
-      (let ((surface (yunge-reader-webview--view-surface view)))
-        (when (equal style
-                     (yunge-reader-webview--surface-style surface))
-          (setf (yunge-reader-webview--surface-style surface) nil)))
-      (display-warning
-       'yunge-reader (error-message-string error-data) :warning))))
-
 (defun yunge-reader-webview--sync-view-style (view)
   "Send VIEW's desired style to its ready native surface."
-  (let ((style (yunge-reader-webview--view-style view))
-        (surface (yunge-reader-webview--view-surface view)))
-    (when (and surface
-               style
-               (yunge-reader-webview--surface-ready-p surface)
-               (yunge-reader-webview--surface-current-p
-                view (yunge-reader-webview--surface-id surface))
-               (not
-                (equal style
-                       (yunge-reader-webview--surface-style surface))))
-      (let ((id (yunge-reader-webview--surface-id surface))
-            (requested (copy-tree style)))
-        (setf (yunge-reader-webview--surface-style surface)
-              (copy-tree requested))
-        (yunge-reader-webview--set-native-view-style
-         view requested
-         (apply-partially
-          #'yunge-reader-webview--style-complete
-          view id requested))))))
+  (yunge-reader-webview--sync-surface-value
+   view
+   (yunge-reader-webview--view-style view)
+   #'yunge-reader-webview--surface-style
+   (lambda (surface value)
+     (setf (yunge-reader-webview--surface-style surface) value))
+   #'yunge-reader-webview--set-native-view-style))
 
 (defun yunge-reader-webview--set-view-style (view style)
   "Set logical VIEW's desired STYLE and synchronize its live surface."
@@ -143,36 +128,15 @@
     (yunge-reader-webview--sync-view-style view)
     style))
 
-(defun yunge-reader-webview--zoom-complete
-    (view id zoom _result error-data)
-  "Finish applying ZOOM to VIEW surface ID."
-  (when (and error-data
-             (yunge-reader-webview--surface-current-p view id))
-    (let ((surface (yunge-reader-webview--view-surface view)))
-      (when (equal zoom
-                   (yunge-reader-webview--surface-zoom surface))
-        (setf (yunge-reader-webview--surface-zoom surface) nil)))
-    (display-warning
-     'yunge-reader (error-message-string error-data) :warning)))
-
 (defun yunge-reader-webview--sync-view-zoom (view)
   "Send VIEW's desired fixed zoom to its ready native surface."
-  (let ((zoom (yunge-reader-webview--view-zoom view))
-        (surface (yunge-reader-webview--view-surface view)))
-    (when (and surface
-               zoom
-               (yunge-reader-webview--surface-ready-p surface)
-               (yunge-reader-webview--surface-current-p
-                view (yunge-reader-webview--surface-id surface))
-               (not
-                (equal zoom
-                       (yunge-reader-webview--surface-zoom surface))))
-      (let ((id (yunge-reader-webview--surface-id surface)))
-        (setf (yunge-reader-webview--surface-zoom surface) zoom)
-        (yunge-reader-webview--set-native-view-zoom
-         view zoom
-         (apply-partially
-          #'yunge-reader-webview--zoom-complete view id zoom))))))
+  (yunge-reader-webview--sync-surface-value
+   view
+   (yunge-reader-webview--view-zoom view)
+   #'yunge-reader-webview--surface-zoom
+   (lambda (surface value)
+     (setf (yunge-reader-webview--surface-zoom surface) value))
+   #'yunge-reader-webview--set-native-view-zoom))
 
 (defun yunge-reader-webview--set-view-zoom (view zoom)
   "Set logical VIEW's desired fixed-layout ZOOM and synchronize it."
@@ -186,39 +150,16 @@
   (yunge-reader-webview--sync-view-zoom view)
   zoom)
 
-(defun yunge-reader-webview--scroll-bar-complete
-    (view id mode _result error-data)
-  "Finish applying scroll bar MODE to VIEW surface ID."
-  (when (and error-data
-             (yunge-reader-webview--surface-current-p view id))
-    (let ((surface (yunge-reader-webview--view-surface view)))
-      (when (eq mode
-                (yunge-reader-webview--surface-scroll-bar-mode surface))
-        (setf (yunge-reader-webview--surface-scroll-bar-mode surface)
-              nil)))
-    (display-warning
-     'yunge-reader (error-message-string error-data) :warning)))
-
 (defun yunge-reader-webview--sync-view-scroll-bars (view)
   "Send VIEW's resolved scroll bar mode to its ready native surface."
-  (let ((mode (yunge-reader-webview--view-scroll-bar-mode view))
-        (surface (yunge-reader-webview--view-surface view)))
-    (when (and surface
-               mode
-               (yunge-reader-webview--surface-ready-p surface)
-               (yunge-reader-webview--surface-current-p
-                view (yunge-reader-webview--surface-id surface))
-               (not
-                (eq mode
-                    (yunge-reader-webview--surface-scroll-bar-mode
-                     surface))))
-      (let ((id (yunge-reader-webview--surface-id surface)))
-        (setf (yunge-reader-webview--surface-scroll-bar-mode surface)
-              mode)
-        (yunge-reader-webview--set-native-scroll-bar-mode
-         view mode
-         (apply-partially
-          #'yunge-reader-webview--scroll-bar-complete view id mode))))))
+  (yunge-reader-webview--sync-surface-value
+   view
+   (yunge-reader-webview--view-scroll-bar-mode view)
+   #'yunge-reader-webview--surface-scroll-bar-mode
+   (lambda (surface value)
+     (setf
+      (yunge-reader-webview--surface-scroll-bar-mode surface) value))
+   #'yunge-reader-webview--set-native-scroll-bar-mode))
 
 (defun yunge-reader-webview--resolved-scroll-bar-mode (view window)
   "Return VIEW's resolved scroll bar mode in WINDOW."
