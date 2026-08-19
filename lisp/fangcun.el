@@ -182,7 +182,9 @@ When the helper is unavailable, synchronization falls back to Emacs."
      do (dolist (other rest)
           (let ((root (fangcun-yiyu-root yiyu))
                 (other-root (fangcun-yiyu-root other)))
-            (when (or (file-in-directory-p root other-root)
+            (when (or (equal root other-root)
+                      (file-equal-p root other-root)
+                      (file-in-directory-p root other-root)
                       (file-in-directory-p other-root root))
               (user-error
                "Fangcun yiyu roots overlap: %s and %s"
@@ -347,13 +349,22 @@ directory or any notes below it."
   "Return why FILE cannot name a new file below ROOT, or nil."
   (setq file (expand-file-name file))
   (let ((directory (file-name-directory file))
-        (name (file-name-nondirectory file)))
+        (name (file-name-nondirectory file))
+        relative-components)
     (cond
      ((file-remote-p file)
       "Fangcun files must be local")
      ((not (file-in-directory-p file root))
       (format "Fangcun files must stay below %s" root))
-     ((fangcun--portable-file-name-error name))
+     ((progn
+        (setq relative-components
+              (split-string
+               (subst-char-in-string
+                ?\\ ?/ (file-relative-name file root))
+               "/" t))
+        (seq-some
+         #'fangcun--portable-file-name-error
+         relative-components)))
      ((not (string-suffix-p ".org" name))
       "Fangcun file names must end with .org")
      ((file-exists-p file)

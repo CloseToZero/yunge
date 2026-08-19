@@ -131,6 +131,8 @@
     (dolist (name
              '("theorems.org"
                "new.txt"
+               "CON/new.org"
+               "trailing./new.org"
                "../outside.org"))
       (should
        (fangcun--new-file-name-error
@@ -360,6 +362,11 @@
           (let ((fangcun-yiyus
                  `((notes :name "Notes" :root ,root)
                    (nested :name "Nested" :root ,nested))))
+            (should-error
+             (fangcun--configured-yiyus) :type 'user-error))
+          (let ((fangcun-yiyus
+                 `((notes :name "Notes" :root ,root)
+                   (same :name "Same" :root ,root))))
             (should-error
              (fangcun--configured-yiyus) :type 'user-error)))
       (delete-directory root t))))

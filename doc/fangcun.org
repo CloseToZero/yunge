@@ -22,11 +22,11 @@ selects a configured yiyu.  The file prompt can navigate to an existing
 subdirectory or name a new one below that yiyu.  An optional title is used
 verbatim as the suggested file name, which is always shown for confirmation.
 
-The file name is checked for characters and reserved names that cannot be shared
-across the supported platforms.  Invalid input remains in the prompt for
-editing; Fangcun does not rewrite it.  The path must stay inside the selected
-yiyu, and its name must end with =.org= and must not already exist.  Fangcun
-creates missing parent directories after the path is accepted.
+Every new relative path component is checked for characters and reserved names
+that cannot be shared across the supported platforms.  Invalid input remains in
+the prompt for editing; Fangcun does not rewrite it.  The path must stay inside
+the selected yiyu, and its name must end with =.org= and must not already exist.
+Fangcun creates missing parent directories after the path is accepted.
 
 =M-x fangcun-db-sync= synchronizes the database with the =.org= files below the
 configured yiyu roots.  It indexes added or changed files and removes files
