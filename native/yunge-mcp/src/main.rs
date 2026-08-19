@@ -23,6 +23,7 @@ use tokio::process::Command;
 
 const DISPATCH_FORM: &str =
     "(progn (require 'yunge-mcp) (yunge-mcp-server-dispatch))";
+const BUILD_ID: &str = env!("YUNGE_MCP_BUILD_ID");
 
 #[derive(Clone, Debug)]
 struct EmacsBridge {
@@ -157,6 +158,7 @@ impl EmacsBridge {
         let output = command
             .arg("--eval")
             .arg(DISPATCH_FORM)
+            .arg(BUILD_ID)
             .arg(request_argument)
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
@@ -319,5 +321,11 @@ mod tests {
         let decoded = STANDARD.decode(encoded).unwrap();
         let value: Value = serde_json::from_slice(&decoded).unwrap();
         assert_eq!(value["arguments"]["query"], "中文检索");
+    }
+
+    #[test]
+    fn build_id_is_available_to_bridge_requests() {
+        assert_eq!(BUILD_ID.len(), 64);
+        assert!(BUILD_ID.bytes().all(|byte| byte.is_ascii_hexdigit()));
     }
 }

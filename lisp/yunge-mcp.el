@@ -4,6 +4,8 @@
 
 (require 'cl-lib)
 (require 'json)
+(require 'subr-x)
+(require 'yunge-state)
 
 (cl-defstruct yunge-mcp-tool
   name
@@ -16,6 +18,34 @@
   "Tools available through the Yunge MCP server.")
 
 (defvar server-eval-args-left)
+
+(defconst yunge-mcp--native-source-hash-file
+  (expand-file-name
+   "native/yunge-mcp/source.sha256" yunge-config-directory)
+  "File containing the expected Yunge MCP helper build ID.")
+
+(defun yunge-mcp--helper-build-id ()
+  "Return the expected Yunge MCP helper build ID, or nil."
+  (when (file-readable-p yunge-mcp--native-source-hash-file)
+    (with-temp-buffer
+      (insert-file-contents yunge-mcp--native-source-hash-file)
+      (let ((build-id (string-trim (buffer-string))))
+        (unless (string-empty-p build-id)
+          build-id)))))
+
+(defun yunge-mcp--server-request-argument ()
+  "Consume and validate one helper request from client arguments."
+  (let ((actual-build-id (pop server-eval-args-left))
+        (request-argument (pop server-eval-args-left))
+        (expected-build-id (yunge-mcp--helper-build-id)))
+    (unless expected-build-id
+      (user-error
+       "Yunge MCP source build ID is unavailable; run M-x yunge-mcp-install"))
+    (unless (and request-argument
+                 (equal actual-build-id expected-build-id))
+      (user-error
+       "Yunge MCP helper is outdated; run M-x yunge-mcp-install"))
+    request-argument))
 
 (defun yunge-mcp-register-tool
     (name description input-schema function &optional annotations)
@@ -108,12 +138,10 @@ receives its arguments as a plist.  ANNOTATIONS contains MCP tool hints."
      t)))
 
 (defun yunge-mcp-server-dispatch ()
-  "Dispatch the Base64 request supplied by an Emacs client process."
-  (unless server-eval-args-left
-    (user-error "The Yunge MCP request argument is missing"))
+  "Validate the native helper and dispatch its Base64 request."
   (yunge-mcp-dispatch
    (decode-coding-string
-    (base64-decode-string (pop server-eval-args-left))
+    (base64-decode-string (yunge-mcp--server-request-argument))
     'utf-8)))
 
 (provide 'yunge-mcp)

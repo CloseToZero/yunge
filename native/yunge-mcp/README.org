@@ -7,9 +7,11 @@ use standard error.
 
 Tool descriptions and implementations live in Emacs.  For each =tools/list=
 or =tools/call= request, the executable invokes =emacsclient= with a fixed Lisp
-form and passes the bridge request as a separate ASCII Base64 process argument.
-The decoded request is UTF-8 JSON.  This avoids platform command-line encoding
-loss and never constructs Lisp source from tool input.
+form and passes its source build ID followed by the bridge request as separate
+process arguments.  The request is ASCII Base64 containing UTF-8 JSON.  Emacs
+rejects an installed helper whose build ID differs from the tracked source and
+directs the user to run =M-x yunge-mcp-install=.  This avoids platform
+command-line encoding loss and never constructs Lisp source from tool input.
 
 The internal request is a JSON object with an =operation= member:
 

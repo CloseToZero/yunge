@@ -101,9 +101,13 @@
             "\"arguments\":{\"value\":\"中文检索\"}}")
            'utf-8))
          (server-eval-args-left
-          (list (base64-encode-string request t) "untouched"))
+          (list "test-build"
+                (base64-encode-string request t)
+                "untouched"))
         (yunge-mcp--tools (make-hash-table :test #'equal)))
-    (cl-letf (((symbol-function 'yunge-mcp--load-tools) #'ignore))
+    (cl-letf (((symbol-function 'yunge-mcp--load-tools) #'ignore)
+              ((symbol-function 'yunge-mcp--helper-build-id)
+               (lambda () "test-build")))
       (yunge-mcp-register-tool
        "echo" "Echo" '(:type "object")
        (lambda (arguments)
@@ -115,6 +119,26 @@
          (equal (plist-get (plist-get response :value) :value)
                 "中文检索")))
       (should (equal server-eval-args-left '("untouched"))))))
+
+(ert-deftest yunge-mcp-server-dispatch-rejects-an-outdated-helper ()
+  (let ((server-eval-args-left
+         '("eyJvcGVyYXRpb24iOiJsaXN0LXRvb2xzIn0=")))
+    (cl-letf (((symbol-function 'yunge-mcp--helper-build-id)
+               (lambda () "test-build")))
+      (let ((error-data
+             (should-error (yunge-mcp-server-dispatch)
+                           :type 'user-error)))
+        (should
+         (string-match-p
+          (regexp-quote "M-x yunge-mcp-install")
+          (error-message-string error-data)))))))
+
+(ert-deftest yunge-mcp-server-dispatch-rejects-a-mismatched-build ()
+  (let ((server-eval-args-left
+         '("old-build" "eyJvcGVyYXRpb24iOiJsaXN0LXRvb2xzIn0=")))
+    (cl-letf (((symbol-function 'yunge-mcp--helper-build-id)
+               (lambda () "test-build")))
+      (should-error (yunge-mcp-server-dispatch) :type 'user-error))))
 
 (ert-deftest yunge-mcp-registers-json-without-losing-other-settings ()
   (let ((file (make-temp-file "yunge-mcp-json-")))
