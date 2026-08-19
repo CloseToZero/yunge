@@ -63,6 +63,23 @@
    (yunge-reader-transport--session-callbacks
     yunge-reader-native--transport)))
 
+(ert-deftest yunge-reader-native-renderer-core-tests-pass ()
+  (let ((node (executable-find "node")))
+    (skip-unless node)
+    (with-temp-buffer
+      (let ((status
+             (call-process
+              node nil t nil "--test"
+              (expand-file-name
+               (concat
+                "native/yunge-reader/renderer-test/"
+                "yunge-reader-core.test.mjs")
+               yunge-test-root))))
+        (unless (zerop status)
+          (ert-fail
+           (format "Node exited with %S:\n%s"
+                   status (buffer-string))))))))
+
 (ert-deftest yunge-reader-native-queues-until-validated-ready ()
   (yunge-reader-native-test--with-fake-process
     (let (result)

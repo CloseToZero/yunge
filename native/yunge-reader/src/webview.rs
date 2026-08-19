@@ -1894,12 +1894,16 @@ mod tests {
         assert!(!csp.contains("script-src 'self' blob:"));
         assert!(app_asset("foliate-js/search.js").is_some());
         assert!(app_asset("foliate-js/view.js").is_some());
+        assert!(app_asset("yunge-reader-core.mjs").is_some());
         assert!(app_asset("foliate-js/vendor/zip.js").is_none());
         let adapter =
             std::str::from_utf8(app_asset("yunge-reader.js").unwrap().1)
                 .unwrap();
+        let core =
+            std::str::from_utf8(app_asset("yunge-reader-core.mjs").unwrap().1)
+                .unwrap();
         assert!(adapter.contains("post('accelerator', { key })"));
-        assert!(adapter.contains("const READER_CHARACTER_KEYS"));
+        assert!(core.contains("export const READER_CHARACTER_KEYS"));
         assert!(adapter.contains("checkedRendererAccelerators"));
         assert!(adapter.contains("event.code === 'Space'"));
         assert!(adapter.contains("key === 'SPC' || key === 'g'"));
@@ -1924,8 +1928,8 @@ mod tests {
         assert!(adapter.contains("if (view.isFixedLayout) return"));
         assert!(adapter.contains("appearanceStyleCSS(appearance)"));
         assert!(adapter.contains("view.renderer.setStyles(["));
-        assert!(adapter.contains("background-color: transparent !important"));
-        assert!(adapter.contains("::selection"));
+        assert!(core.contains("background-color: transparent !important"));
+        assert!(core.contains("::selection"));
         assert!(adapter.contains("session.searchResultCFI"));
         assert!(adapter.contains("appearance['search-background']"));
         assert!(adapter.contains("collapseCFI(relocation.cfi)"));

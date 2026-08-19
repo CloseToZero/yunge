@@ -267,6 +267,10 @@ pub(super) fn app_asset(path: &str) -> Option<(&'static str, &'static [u8])> {
             "text/javascript; charset=utf-8",
             include_bytes!("../../renderer/yunge-reader.js"),
         )),
+        "yunge-reader-core.mjs" => Some((
+            "text/javascript; charset=utf-8",
+            include_bytes!("../../renderer/yunge-reader-core.mjs"),
+        )),
         "foliate-js/epub.js" => Some((
             "text/javascript; charset=utf-8",
             include_bytes!("../../renderer/foliate-js/epub.js"),
