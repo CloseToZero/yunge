@@ -78,23 +78,28 @@ fn sorted_entries(directory: &Path) -> Result<Vec<fs::DirEntry>, Error> {
     Ok(entries)
 }
 
+fn protocol_path(path: &Path) -> Result<String, Error> {
+    path.to_str().map(str::to_owned).ok_or_else(|| {
+        format!("filesystem path is not valid UTF-8: {}", path.display()).into()
+    })
+}
+
 fn scan_directory(
     yiyu: &str,
     directory: &Path,
     states: &mut Vec<Message>,
 ) -> Result<(), Error> {
     for entry in sorted_entries(directory)? {
+        let path = entry.path();
         let file_type = entry.file_type()?;
         if file_type.is_dir() {
-            scan_directory(yiyu, &entry.path(), states)?;
-        } else if file_type.is_file()
-            && entry.path().extension() == Some(OsStr::new("org"))
-        {
+            scan_directory(yiyu, &path, states)?;
+        } else if file_type.is_file() && org_path(&path) {
             let metadata = entry.metadata()?;
             let mtime = metadata.modified()?.duration_since(UNIX_EPOCH)?;
             states.push(Message::State {
                 yiyu: yiyu.to_owned(),
-                file: entry.path().to_string_lossy().into_owned(),
+                file: protocol_path(&path)?,
                 mtime: mtime.as_secs_f64(),
                 size: metadata.len(),
             });
@@ -138,12 +143,13 @@ fn event_message(event: Event) -> Option<Message> {
     if event.need_rescan() || structural_change(&event) {
         return Some(Message::Rescan);
     }
-    let paths = event
-        .paths
-        .into_iter()
-        .filter(|path| org_path(path))
-        .map(|path| path.to_string_lossy().into_owned())
-        .collect::<Vec<_>>();
+    let mut paths = Vec::new();
+    for path in event.paths.into_iter().filter(|path| org_path(path)) {
+        match protocol_path(&path) {
+            Ok(path) => paths.push(path),
+            Err(_) => return Some(Message::Rescan),
+        }
+    }
     (!paths.is_empty()).then_some(Message::Event { paths })
 }
 
@@ -197,7 +203,29 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::ffi::OsString;
     use std::time::{Duration, Instant};
+
+    #[cfg(unix)]
+    use std::os::unix::ffi::OsStringExt;
+    #[cfg(windows)]
+    use std::os::windows::ffi::OsStringExt;
+
+    #[cfg(unix)]
+    fn non_utf8_org_path() -> PathBuf {
+        PathBuf::from(OsString::from_vec(vec![0xff, b'.', b'o', b'r', b'g']))
+    }
+
+    #[cfg(windows)]
+    fn non_utf8_org_path() -> PathBuf {
+        PathBuf::from(OsString::from_wide(&[
+            0xd800,
+            b'.' as u16,
+            b'o' as u16,
+            b'r' as u16,
+            b'g' as u16,
+        ]))
+    }
 
     #[test]
     fn scan_finds_org_files_below_the_root() {
@@ -314,6 +342,15 @@ mod tests {
     fn ambiguous_removal_requests_a_rescan() {
         let event = Event::new(EventKind::Remove(RemoveKind::Any))
             .add_path(PathBuf::from("removed-directory"));
+        assert!(matches!(event_message(event), Some(Message::Rescan)));
+    }
+
+    #[test]
+    fn unrepresentable_paths_are_never_reported_lossily() {
+        let path = non_utf8_org_path();
+        assert!(protocol_path(&path).is_err());
+        let event =
+            Event::new(EventKind::Modify(ModifyKind::Any)).add_path(path);
         assert!(matches!(event_message(event), Some(Message::Rescan)));
     }
 }

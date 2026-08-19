@@ -44,6 +44,10 @@ After =ready=, =scan= emits one state for each discovered Org file:
 path.  =mtime= is seconds since the Unix epoch, and =size= is bytes.  A
 successful scan exits with status zero after its last state.
 
+A path that cannot be represented exactly in UTF-8 fails the native scan so
+Emacs can use its filesystem fallback.  The watch command emits =rescan= for
+such a path instead of emitting a lossy substitute.
+
 If scanning fails, the helper emits an =error= and exits nonzero.  Emacs checks
 the exit status before consuming states, so it never uses a partial scan.
 
