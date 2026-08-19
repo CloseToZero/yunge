@@ -52,9 +52,10 @@
   '(font-scale line-height content-width side-padding)
   "Semantic fields in one EPUB reading style.")
 
-(defconst yunge-reader-webview--epub-appearances
-  '(original follow-emacs)
-  "Appearance values accepted by EPUB WebView surfaces.")
+(defconst yunge-reader-webview--epub-appearance-color-keys
+  '(foreground background link selection-foreground
+    selection-background search-background)
+  "Color fields required by one follow-Emacs EPUB appearance.")
 
 (defconst yunge-reader-webview--epub-fixed-scale-min 0.25
   "Minimum manual scale accepted for a fixed-layout EPUB.")
@@ -421,9 +422,44 @@ OFFSET and CHARACTER-LIMIT describe the request that produced RESULT."
     (error "Invalid EPUB reading style: %S" style))
   style)
 
+(defun yunge-reader-webview--valid-color-p (color)
+  "Return non-nil when COLOR is one normalized CSS RGB color."
+  (let ((case-fold-search nil))
+    (and (stringp color)
+         (string-match-p "\\`#[0-9a-f]\\{6\\}\\'" color))))
+
+(defun yunge-reader-webview--valid-appearance-p (appearance)
+  "Return non-nil when APPEARANCE is bounded EPUB surface data."
+  (and
+   (listp appearance)
+   (assq 'mode appearance)
+   (let ((mode (alist-get 'mode appearance)))
+     (pcase mode
+       ('original
+        (equal (mapcar #'car-safe appearance) '(mode)))
+       ('follow-emacs
+        (and
+         (= (length appearance)
+            (1+ (length
+                 yunge-reader-webview--epub-appearance-color-keys)))
+         (cl-every
+          (lambda (entry)
+            (memq (car-safe entry)
+                  (cons
+                   'mode
+                   yunge-reader-webview--epub-appearance-color-keys)))
+          appearance)
+         (cl-every
+          (lambda (key)
+            (and (assq key appearance)
+                 (yunge-reader-webview--valid-color-p
+                  (alist-get key appearance))))
+          yunge-reader-webview--epub-appearance-color-keys)))
+       (_ nil)))))
+
 (defun yunge-reader-webview--check-appearance (appearance)
   "Return APPEARANCE or signal when it is not valid for EPUB."
-  (unless (memq appearance yunge-reader-webview--epub-appearances)
+  (unless (yunge-reader-webview--valid-appearance-p appearance)
     (error "Invalid EPUB appearance: %S" appearance))
   appearance)
 

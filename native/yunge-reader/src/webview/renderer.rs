@@ -667,7 +667,7 @@ pub(super) fn open_script(
     view: u64,
     resource_root: &str,
     location: Option<&EpubLocator>,
-    appearance: EpubAppearance,
+    appearance: &EpubAppearance,
     style: Option<&EpubStyle>,
     zoom: Option<&EpubZoom>,
     scroll_bars: bool,
@@ -688,7 +688,7 @@ pub(super) fn open_script(
 
 pub(super) fn appearance_script(
     view: u64,
-    appearance: EpubAppearance,
+    appearance: &EpubAppearance,
 ) -> String {
     let payload = serde_json::to_string(&json!({
         "view": view,

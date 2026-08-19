@@ -256,7 +256,7 @@
         (yunge-reader-default-appearances '((epub . follow-emacs)))
         (yunge-reader-saved-appearance-overrides nil)
         (document (yunge-reader-epub-test--document))
-        attached-appearance
+        attached-appearance-function
         attached-style)
     (with-temp-buffer
       (yunge-reader-mode)
@@ -269,8 +269,8 @@
              'yunge-reader-webview--attach-shared-publication)
              (lambda (_publication layout &rest options)
                (should (eq layout 'reflow))
-               (setq attached-appearance
-                     (plist-get options :appearance)
+               (setq attached-appearance-function
+                     (plist-get options :appearance-function)
                      attached-style (plist-get options :style)))))
         (yunge-reader-epub--attach document))
       (should yunge-reader-epub-view-mode)
@@ -280,12 +280,74 @@
       (should (eq yunge-reader-zoom-mode 'manual))
       (should (= yunge-reader-scale 1.8))
       (should (= yunge-reader-effective-scale 1.8))
-      (should (eq attached-appearance 'follow-emacs))
+      (should (functionp attached-appearance-function))
+      (should
+       (eq (alist-get
+            'mode
+            (funcall attached-appearance-function (selected-window)))
+           'follow-emacs))
       (should (= (alist-get 'font-scale attached-style) 1.8))
       (should
        (memq #'yunge-reader-epub--appearance-changed
              yunge-reader-appearance-change-hook))
       (should (string-match-p "Font 180%" header-line-format)))))
+
+(ert-deftest yunge-reader-epub-normalizes-frame-face-colors ()
+  (let (seen)
+    (cl-letf (((symbol-function 'facep) (lambda (_face) t))
+              ((symbol-function 'face-attribute)
+               (lambda (face attribute frame inherit)
+                 (setq seen (list face attribute frame inherit))
+                 "#123456"))
+              ((symbol-function 'color-values)
+               (lambda (color frame)
+                 (should (equal color "#123456"))
+                 (should (eq frame 'test-frame))
+                 (mapcar (lambda (value) (* value 257))
+                         '(18 52 86)))))
+      (should
+       (equal
+        (yunge-reader-epub--face-color
+         'default :foreground 'test-frame "#000000")
+        "#123456"))
+      (should
+       (equal seen '(default :foreground test-frame default))))))
+
+(ert-deftest yunge-reader-epub-resolves-appearance-for-surface-frame ()
+  (let ((yunge-reader-default-appearances
+         '((epub . follow-emacs)))
+        (document (yunge-reader-epub-test--document))
+        calls)
+    (setf (yunge-reader-document-driver document) 'epub)
+    (with-temp-buffer
+      (setq yunge-reader-document document)
+      (cl-letf
+          (((symbol-function 'window-frame)
+            (lambda (_window) 'surface-frame))
+           ((symbol-function 'yunge-reader-epub--face-color)
+            (lambda (face attribute frame fallback)
+              (push (list face attribute frame fallback) calls)
+              (pcase (cons face attribute)
+                (`(default . :foreground) "#112233")
+                (`(default . :background) "#f4f5f6")
+                (`(link . :foreground) "#2244aa")
+                (`(region . :foreground) "#ffffff")
+                (`(region . :background) "#335577")
+                (`(isearch . :background) "#aa5500")))))
+        (should
+         (equal
+          (yunge-reader-epub--resolved-appearance 'surface-window)
+          '((mode . follow-emacs)
+            (foreground . "#112233")
+            (background . "#f4f5f6")
+            (link . "#2244aa")
+            (selection-foreground . "#ffffff")
+            (selection-background . "#335577")
+            (search-background . "#aa5500"))))
+        (should (= (length calls) 6))
+        (should
+         (cl-every (lambda (call) (eq (nth 2 call) 'surface-frame))
+                   calls))))))
 
 (ert-deftest yunge-reader-epub-keeps-reflow-controls-from-fixed-views ()
   (let ((document
@@ -575,7 +637,8 @@
                      :publication publication
                      :layout layout
                      :persistent t
-                     :appearance (plist-get options :appearance)
+                     :appearance-function
+                     (plist-get options :appearance-function)
                      :style
                      (copy-tree (plist-get options :style))
                      :location-changed-function
@@ -622,9 +685,9 @@
               yunge-reader-webview--buffer-view)
              #'yunge-reader-epub--external-link))
         (should
-         (eq (yunge-reader-webview--view-appearance
+         (eq (yunge-reader-webview--view-appearance-function
               yunge-reader-webview--buffer-view)
-             'original))
+             #'yunge-reader-epub--resolved-appearance))
         (should
          (equal
           (yunge-reader-webview--view-style
@@ -636,10 +699,9 @@
         (yunge-reader--store-appearance-override
          (yunge-reader-document-file document) 'follow-emacs)
         (run-hooks 'yunge-reader-appearance-change-hook)
-        (should
-         (eq (yunge-reader-webview--view-appearance
-              yunge-reader-webview--buffer-view)
-             'follow-emacs))
+        (should-not
+         (yunge-reader-webview--view-appearance
+          yunge-reader-webview--buffer-view))
         (yunge-reader-epub--detach document)
         (should-not yunge-reader-epub-view-mode)
         (should-not

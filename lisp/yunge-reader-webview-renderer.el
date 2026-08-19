@@ -146,6 +146,15 @@ returned batch, and COMPLETE receives the validated native result."
   (let ((value (yunge-reader-webview--check-fixed-zoom zoom)))
     (if (symbolp value) (symbol-name value) value)))
 
+(defun yunge-reader-webview--appearance-value (appearance)
+  "Return protocol data for validated APPEARANCE."
+  (let ((value
+         (copy-tree
+          (yunge-reader-webview--check-appearance appearance))))
+    (setf (alist-get 'mode value)
+          (symbol-name (alist-get 'mode value)))
+    value))
+
 (defun yunge-reader-webview--open-view-publication
     (view publication callback location appearance style zoom bar-mode)
   "Open PUBLICATION in native VIEW with LOCATION and presentation state.
@@ -157,8 +166,7 @@ CALLBACK when complete."
     `((view . ,(yunge-reader-webview--view-id view))
       (publication . ,publication)
       (appearance
-       . ,(symbol-name
-           (yunge-reader-webview--check-appearance appearance))))
+       . ,(yunge-reader-webview--appearance-value appearance)))
     (when location
       `((location . ,(yunge-reader-webview--check-location location))))
     (when style
@@ -180,8 +188,7 @@ CALLBACK when complete."
    "view-appearance"
    `((view . ,(yunge-reader-webview--view-id view))
      (appearance
-      . ,(symbol-name
-          (yunge-reader-webview--check-appearance appearance))))
+      . ,(yunge-reader-webview--appearance-value appearance)))
    callback))
 
 (defun yunge-reader-webview--navigate-view

@@ -37,6 +37,14 @@ const MAX_SEARCH_SECTION_LIMIT = 64
 const MAX_SEARCH_CURSOR_OFFSET = 1024 * 1024
 const MAX_SEARCH_RESULT_BYTES = 384 * 1024
 const SEARCH_HIGHLIGHT_COLOR = '#ff7800'
+const APPEARANCE_COLOR_KEYS = Object.freeze([
+    'foreground',
+    'background',
+    'link',
+    'selection-foreground',
+    'selection-background',
+    'search-background',
+])
 const MAX_MEDIA_CANDIDATES = 256
 const MAX_TEXT_NODES = 4096
 const MAX_TEXT_SAMPLE = 4096
@@ -181,10 +189,31 @@ const checkedView = value => {
 }
 
 const checkedAppearance = value => {
-    if (value !== 'original' && value !== 'follow-emacs') {
+    const keys = value && typeof value === 'object'
+        && !Array.isArray(value) ? Object.keys(value) : []
+    if (!value || typeof value !== 'object' || Array.isArray(value)
+        || typeof value.mode !== 'string') {
         throw new Error('Invalid EPUB appearance')
     }
-    return value
+    if (value.mode === 'original') {
+        if (keys.length !== 1 || keys[0] !== 'mode') {
+            throw new Error('Invalid EPUB appearance')
+        }
+        return Object.freeze({ mode: 'original' })
+    }
+    if (value.mode !== 'follow-emacs'
+        || keys.length !== APPEARANCE_COLOR_KEYS.length + 1
+        || keys.some(key => key !== 'mode'
+            && !APPEARANCE_COLOR_KEYS.includes(key))
+        || APPEARANCE_COLOR_KEYS.some(key =>
+            typeof value[key] !== 'string'
+            || !/^#[0-9a-f]{6}$/u.test(value[key]))) {
+        throw new Error('Invalid EPUB appearance')
+    }
+    return Object.freeze(Object.fromEntries([
+        ['mode', value.mode],
+        ...APPEARANCE_COLOR_KEYS.map(key => [key, value[key]]),
+    ]))
 }
 
 const checkedStyle = value => {
@@ -219,20 +248,91 @@ const checkedStyle = value => {
     })
 }
 
-const applyReadingStyle = (view, style) => {
+const readingStyleCSS = style => `
+    body {
+        font-size: ${style.fontScale}em !important;
+        line-height: ${style.lineHeight} !important;
+    }
+    p, li, blockquote, dd {
+        line-height: ${style.lineHeight} !important;
+    }
+`
+
+const colorScheme = background => {
+    const channels = background.slice(1).match(/../gu)
+        .map(channel => Number.parseInt(channel, 16) / 255)
+    const linear = channels.map(channel => channel <= 0.04045
+        ? channel / 12.92 : ((channel + 0.055) / 1.055) ** 2.4)
+    const luminance = linear[0] * 0.2126
+        + linear[1] * 0.7152 + linear[2] * 0.0722
+    return luminance < 0.18 ? 'dark' : 'light'
+}
+
+const appearanceStyleCSS = appearance => {
+    if (appearance.mode === 'original') return ['', '']
+    const foreground = appearance.foreground
+    const background = appearance.background
+    const link = appearance.link
+    const selectionForeground = appearance['selection-foreground']
+    const selectionBackground = appearance['selection-background']
+    return [`
+        html {
+            color-scheme: ${colorScheme(background)};
+            color: ${foreground};
+            background-color: ${background};
+        }
+        a:any-link {
+            color: ${link};
+        }
+    `, `
+        html, body {
+            color: ${foreground} !important;
+            background: ${background} !important;
+        }
+        body * {
+            color: inherit !important;
+            border-color: currentcolor !important;
+            background-color: transparent !important;
+        }
+        a:any-link {
+            color: ${link} !important;
+        }
+        ::selection {
+            color: ${selectionForeground} !important;
+            background: ${selectionBackground} !important;
+        }
+        img, svg, video, canvas {
+            background-color: transparent !important;
+        }
+    `]
+}
+
+const applyViewStyles = (view, appearance, style) => {
     if (view.isFixedLayout) return
     view.renderer.setAttribute('max-inline-size',
         `${style.contentWidth}px`)
     view.renderer.setAttribute('gap', `${style.sidePadding}%`)
-    view.renderer.setStyles(`
-        body {
-            font-size: ${style.fontScale}em !important;
-            line-height: ${style.lineHeight} !important;
-        }
-        p, li, blockquote, dd {
-            line-height: ${style.lineHeight} !important;
-        }
-    `)
+    const [beforeStyle, appearanceStyle] =
+        appearanceStyleCSS(appearance)
+    view.renderer.setStyles([
+        beforeStyle,
+        `${appearanceStyle}\n${readingStyleCSS(style)}`,
+    ])
+}
+
+const applyCanvasAppearance = appearance => {
+    const root = document.documentElement
+    if (appearance?.mode === 'follow-emacs') {
+        root.style.colorScheme = colorScheme(appearance.background)
+        root.style.setProperty(
+            '--yunge-reader-foreground', appearance.foreground)
+        root.style.setProperty(
+            '--yunge-reader-background', appearance.background)
+    } else {
+        root.style.removeProperty('color-scheme')
+        root.style.removeProperty('--yunge-reader-foreground')
+        root.style.removeProperty('--yunge-reader-background')
+    }
 }
 
 const checkedZoom = value => {
@@ -269,6 +369,11 @@ const sameReadingStyle = (left, right) => left && right
     && left.contentWidth === right.contentWidth
     && left.sidePadding === right.sidePadding
 
+const sameAppearance = (left, right) => left && right
+    && left.mode === right.mode
+    && (left.mode === 'original'
+        || APPEARANCE_COLOR_KEYS.every(key => left[key] === right[key]))
+
 const applyPendingStyle = session => {
     session.styleFrame = null
     const style = session.pendingStyle
@@ -276,7 +381,7 @@ const applyPendingStyle = session => {
     if (current !== session || !style
         || sameReadingStyle(session.style, style)) return
     try {
-        applyReadingStyle(session.view, style)
+        applyViewStyles(session.view, session.appearance, style)
         session.style = style
     } catch (error) {
         post('style-error', { message: error?.message ?? error })
@@ -309,7 +414,21 @@ const setAppearance = ({ view: viewID, appearance }) => {
         if (!current || current.viewID !== viewID) {
             throw new Error('EPUB view is not open')
         }
-        current.appearance = appearance
+        const session = current
+        if (sameAppearance(session.appearance, appearance)) return
+        applyViewStyles(session.view, appearance, session.style)
+        session.appearance = appearance
+        applyCanvasAppearance(appearance)
+        if (session.searchResultCFI) {
+            void Promise.resolve(paintSearchResult(
+                session, session.searchResultCFI)).catch(error => {
+                if (current === session) {
+                    post('appearance-error', {
+                        message: error?.message ?? error,
+                    })
+                }
+            })
+        }
     } catch (error) {
         post('appearance-error', { message: error?.message ?? error })
     }
@@ -633,19 +752,21 @@ const protectBook = book => {
 }
 
 const closeCurrent = () => {
-    if (!current) return
-    if (current.locationTimer) clearTimeout(current.locationTimer)
-    current.pendingNavigation = null
-    if (current.styleFrame !== null) {
-        cancelAnimationFrame(current.styleFrame)
+    if (current) {
+        if (current.locationTimer) clearTimeout(current.locationTimer)
+        current.pendingNavigation = null
+        if (current.styleFrame !== null) {
+            cancelAnimationFrame(current.styleFrame)
+        }
+        if (current.selectionFrame !== null) {
+            cancelAnimationFrame(current.selectionFrame)
+        }
+        current.view.close()
+        current.book.destroy()
+        current.view.remove()
+        current = null
     }
-    if (current.selectionFrame !== null) {
-        cancelAnimationFrame(current.selectionFrame)
-    }
-    current.view.close()
-    current.book.destroy()
-    current.view.remove()
-    current = null
+    applyCanvasAppearance(null)
 }
 
 const boundedOutlineTitle = value => {
@@ -1323,6 +1444,7 @@ const open = async ({
         viewID = checkedView(viewID)
         location = location ? checkedLocator(location) : null
         appearance = checkedAppearance(appearance)
+        applyCanvasAppearance(appearance)
         scrollBars = checkedScrollBars(scrollBars)
         checkedRendererAccelerators(rendererAccelerators)
         const root = checkedRoot(resourceRoot)
@@ -1363,7 +1485,7 @@ const open = async ({
         }
         view.renderer.setAttribute('flow', 'scrolled')
         view.renderer.setAttribute('animated', '')
-        applyReadingStyle(view, style)
+        applyViewStyles(view, appearance, style)
         applyScrollBars(view, scrollBars)
         Object.assign(view.renderer.style, {
             display: 'block',
@@ -1398,6 +1520,7 @@ const open = async ({
             userMovementDeadline: 0,
             pendingNavigation: null,
             navigationRunning: false,
+            searchResultCFI: null,
             searchResultRevision: 0,
             selectionRevision: 0,
         }
@@ -1463,10 +1586,15 @@ const selectionCFI = (session, selection, label) => {
     return fromRangeEndpoints(selection.start, selection.end)
 }
 
-const paintSearchResult = (session, cfi) =>
-    session.view.setSearchResult(cfi, {
-        drawOptions: { color: SEARCH_HIGHLIGHT_COLOR },
+const paintSearchResult = (session, cfi) => {
+    session.searchResultCFI = cfi
+    const color = session.appearance.mode === 'follow-emacs'
+        ? session.appearance['search-background']
+        : SEARCH_HIGHLIGHT_COLOR
+    return session.view.setSearchResult(cfi, {
+        drawOptions: { color },
     })
+}
 
 const lineDistance = session => {
     const content = session.view.renderer.getContents()?.[0]
@@ -1636,6 +1764,7 @@ const setSearchResult = request => {
         }
         const session = current
         const revision = ++session.searchResultRevision
+        session.searchResultCFI = null
         session.view.setSearchResult(null)
         if (session.pendingNavigation?.command === 'show-search-result') {
             session.pendingNavigation = null

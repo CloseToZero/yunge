@@ -152,14 +152,15 @@ navigation without exposing the local EPUB path.
 
 =view-open-publication= attaches an open publication to a child view.  It
 accepts an optional stable locator, a required appearance, and a required
-resolved scroll bar policy.  Appearance is =original= or =follow-emacs= and
-remains independent from reflow style and fixed zoom.  A reflowable
-publication accepts a complete semantic reading style:
+resolved scroll bar policy.  Appearance is a strict object whose mode is
+=original= or =follow-emacs=.  It remains independent from reflow style and
+fixed zoom.  A reflowable publication accepts a complete semantic reading
+style:
 
 #+begin_src json
 {"id":2,"op":"view-open-publication",
  "params":{"view":1,"publication":1,
-           "appearance":"original",
+           "appearance":{"mode":"original"},
            "scroll-bars":false,
            "style":{"font-scale":1.0,"line-height":1.6,
                     "content-width":720,"side-padding":7.0}}}
@@ -178,7 +179,7 @@ A pre-paginated publication instead accepts =zoom= as =fit-page=,
 #+begin_src json
 {"id":3,"op":"view-open-publication",
  "params":{"view":2,"publication":2,
-           "appearance":"original",
+           "appearance":{"mode":"original"},
            "scroll-bars":false,"zoom":"fit-page"}}
 #+end_src
 
@@ -186,15 +187,30 @@ Layout is authoritative: reflowable views reject =zoom=, and pre-paginated
 views reject =style=.  This keeps font reflow and fixed page scaling as
 separate state rather than assigning ambiguous meaning to one zoom value.
 
-=view-appearance= changes the validated appearance mode of an attached view
-without reopening its publication or changing its layout state.  The
-=original= mode installs no Reader color overrides.  Renderer failures are
-reported as bounded =appearance-error= events.
+=view-appearance= changes an attached view without reopening its publication
+or changing its layout state.  The exact =original= object installs no Reader
+color overrides.  =follow-emacs= requires normalized lowercase RGB colors
+for the content foreground, background, links, selection foreground and
+background, and search background.  Unknown, missing, or malformed fields are
+rejected.  Renderer failures are reported as bounded =appearance-error=
+events.
 
 #+begin_src json
 {"id":4,"op":"view-appearance",
- "params":{"view":1,"appearance":"follow-emacs"}}
+ "params":{"view":1,
+           "appearance":{"mode":"follow-emacs",
+                         "foreground":"#d8d8d8",
+                         "background":"#181818",
+                         "link":"#6ca0ff",
+                         "selection-foreground":"#ffffff",
+                         "selection-background":"#335577",
+                         "search-background":"#aa5500"}}}
 #+end_src
+
+The renderer installs the palette around author CSS only for reflowable
+publications.  Pre-paginated content remains untouched; its outer canvas still
+uses the requested foreground and background.  Search overlays use the same
+palette in either layout.
 
 =view-style= accepts the same complete style object for an attached
 reflowable view.

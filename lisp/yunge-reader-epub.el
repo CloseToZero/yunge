@@ -694,12 +694,53 @@ VALUES is an alist containing complete, already bounded property values."
   (yunge-reader--follow-action
    (make-yunge-reader-action :type 'uri :uri uri)))
 
+(defun yunge-reader-epub--face-color
+    (face attribute frame fallback)
+  "Return FACE ATTRIBUTE on FRAME as CSS RGB, or FALLBACK."
+  (let* ((value
+          (and (facep face)
+               (face-attribute face attribute frame 'default)))
+         (rgb (and value (color-values value frame))))
+    (if rgb
+        (apply #'format "#%02x%02x%02x"
+               (mapcar (lambda (component)
+                         (round component 257))
+                       rgb))
+      fallback)))
+
+(defun yunge-reader-epub--resolved-appearance (window)
+  "Return the current document appearance resolved for WINDOW."
+  (pcase (yunge-reader-effective-appearance)
+    ('original '((mode . original)))
+    ('follow-emacs
+     (let* ((frame (window-frame window))
+            (foreground
+             (yunge-reader-epub--face-color
+              'default :foreground frame "#000000"))
+            (background
+             (yunge-reader-epub--face-color
+              'default :background frame "#ffffff")))
+       `((mode . follow-emacs)
+         (foreground . ,foreground)
+         (background . ,background)
+         (link
+          . ,(yunge-reader-epub--face-color
+              'link :foreground frame foreground))
+         (selection-foreground
+          . ,(yunge-reader-epub--face-color
+              'region :foreground frame foreground))
+         (selection-background
+          . ,(yunge-reader-epub--face-color
+              'region :background frame background))
+         (search-background
+          . ,(yunge-reader-epub--face-color
+              'isearch :background frame background)))))))
+
 (defun yunge-reader-epub--appearance-changed ()
   "Synchronize the current EPUB view's effective appearance."
   (when-let* ((view yunge-reader-webview--buffer-view)
               ((not (yunge-reader-webview--view-destroyed view))))
-    (yunge-reader-webview--set-view-appearance
-     view (yunge-reader-effective-appearance))))
+    (yunge-reader-webview--refresh-view-appearance view)))
 
 (defun yunge-reader-epub--attach (document)
   "Attach a persistent EPUB WebView for DOCUMENT."
@@ -729,7 +770,8 @@ VALUES is an alist containing complete, already bounded property values."
            :selection-changed-function
            #'yunge-reader-epub--selection-changed
            :accelerator-function #'yunge-reader-epub--accelerator
-           :appearance (yunge-reader-effective-appearance document)
+           :appearance-function
+           #'yunge-reader-epub--resolved-appearance
            :style style
            :zoom (and (eq layout 'fixed) zoom)
            :zoom-changed-function

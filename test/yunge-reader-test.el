@@ -1138,6 +1138,40 @@
     (should (eq (yunge-reader-effective-appearance document)
                 'follow-emacs))))
 
+(ert-deftest yunge-reader-theme-changes-refresh-following-documents ()
+  (let* ((following
+          (make-yunge-reader-document
+           :file "following.epub" :driver 'epub))
+         (original
+          (make-yunge-reader-document
+           :file "original.pdf" :driver 'pdf))
+         (following-entry
+          (yunge-reader--make-document-entry
+           :state 'ready :document following))
+         (original-entry
+          (yunge-reader--make-document-entry
+           :state 'ready :document original))
+         (loading-entry
+          (yunge-reader--make-document-entry
+           :state 'opening :document following))
+         (yunge-reader-default-appearances
+          '((epub . follow-emacs) (pdf . original)))
+         (yunge-reader-saved-appearance-overrides nil)
+         (yunge-reader--document-registry
+          (make-hash-table :test #'equal))
+         notified)
+    (puthash 'following following-entry
+             yunge-reader--document-registry)
+    (puthash 'original original-entry
+             yunge-reader--document-registry)
+    (puthash 'loading loading-entry
+             yunge-reader--document-registry)
+    (cl-letf (((symbol-function
+                'yunge-reader--notify-appearance-change)
+               (lambda (entry) (push entry notified))))
+      (yunge-reader--theme-changed 'test-theme))
+    (should (equal notified (list following-entry)))))
+
 (ert-deftest yunge-reader-cleans-missing-durable-document-state ()
   (let* ((existing (make-temp-file "yunge-reader-state-"))
          (missing (concat existing ".missing"))

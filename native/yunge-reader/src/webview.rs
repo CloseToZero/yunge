@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Chen Zhexuan
 // SPDX-License-Identifier: MIT
 
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::{Value, json};
 use std::collections::HashMap;
 use std::io::{self, BufRead, Write};
@@ -246,11 +246,104 @@ struct EpubStyle {
     side_padding: f64,
 }
 
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "kebab-case")]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(transparent)]
+struct EpubColor(String);
+
+impl<'de> Deserialize<'de> for EpubColor {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let value = String::deserialize(deserializer)?;
+        let valid = value.len() == 7
+            && value.starts_with('#')
+            && value.as_bytes()[1..].iter().all(|byte| {
+                byte.is_ascii_digit() || (b'a'..=b'f').contains(byte)
+            });
+        if valid {
+            Ok(Self(value))
+        } else {
+            Err(serde::de::Error::custom(
+                "EPUB colors must be lowercase #rrggbb values",
+            ))
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(
+    rename_all = "kebab-case",
+    rename_all_fields = "kebab-case",
+    tag = "mode"
+)]
 enum EpubAppearance {
     Original,
-    FollowEmacs,
+    FollowEmacs {
+        foreground: EpubColor,
+        background: EpubColor,
+        link: EpubColor,
+        selection_foreground: EpubColor,
+        selection_background: EpubColor,
+        search_background: EpubColor,
+    },
+}
+
+impl<'de> Deserialize<'de> for EpubAppearance {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let value = Value::deserialize(deserializer)?;
+        let mut fields = value.as_object().cloned().ok_or_else(|| {
+            serde::de::Error::custom("EPUB appearance must be an object")
+        })?;
+        let mode = fields
+            .remove("mode")
+            .and_then(|value| value.as_str().map(str::to_owned))
+            .ok_or_else(|| {
+                serde::de::Error::custom(
+                    "EPUB appearance mode must be a string",
+                )
+            })?;
+        match mode.as_str() {
+            "original" if fields.is_empty() => Ok(Self::Original),
+            "follow-emacs" if fields.len() == 6 => {
+                let mut color = |key| {
+                    fields
+                        .remove(key)
+                        .ok_or_else(|| format!("missing EPUB color {key}"))
+                        .and_then(|value| {
+                            serde_json::from_value(value)
+                                .map_err(|error| error.to_string())
+                        })
+                };
+                let appearance = Self::FollowEmacs {
+                    foreground: color("foreground")
+                        .map_err(serde::de::Error::custom)?,
+                    background: color("background")
+                        .map_err(serde::de::Error::custom)?,
+                    link: color("link").map_err(serde::de::Error::custom)?,
+                    selection_foreground: color("selection-foreground")
+                        .map_err(serde::de::Error::custom)?,
+                    selection_background: color("selection-background")
+                        .map_err(serde::de::Error::custom)?,
+                    search_background: color("search-background")
+                        .map_err(serde::de::Error::custom)?,
+                };
+                if fields.is_empty() {
+                    Ok(appearance)
+                } else {
+                    Err(serde::de::Error::custom(
+                        "unknown EPUB appearance color",
+                    ))
+                }
+            }
+            _ => Err(serde::de::Error::custom(
+                "invalid EPUB appearance mode or fields",
+            )),
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Serialize)]
@@ -1133,7 +1226,7 @@ impl Service {
             params.view,
             &resource_root,
             location.as_ref(),
-            params.appearance,
+            &params.appearance,
             style.as_ref(),
             zoom.as_ref(),
             params.scroll_bars,
@@ -1169,7 +1262,7 @@ impl Service {
             ));
         }
         let script =
-            publication_appearance_script(params.view, params.appearance);
+            publication_appearance_script(params.view, &params.appearance);
         view.surface
             .webview()
             .evaluate_script(&script)
@@ -1620,6 +1713,31 @@ mod tests {
 
     static TEMPORARY_ID: AtomicU64 = AtomicU64::new(1);
 
+    fn original_appearance() -> EpubAppearance {
+        serde_json::from_value(json!({ "mode": "original" })).unwrap()
+    }
+
+    fn follow_emacs_appearance() -> EpubAppearance {
+        serde_json::from_value(json!({
+            "mode": "follow-emacs",
+            "foreground": "#112233",
+            "background": "#f4f5f6",
+            "link": "#2244aa",
+            "selection-foreground": "#ffffff",
+            "selection-background": "#335577",
+            "search-background": "#aa5500",
+        }))
+        .unwrap()
+    }
+
+    fn original_appearance_json() -> Value {
+        json!({ "mode": "original" })
+    }
+
+    fn follow_emacs_appearance_json() -> Value {
+        serde_json::to_value(follow_emacs_appearance()).unwrap()
+    }
+
     struct TemporaryEpub(PathBuf);
 
     impl Drop for TemporaryEpub {
@@ -1744,8 +1862,14 @@ mod tests {
         assert!(adapter.contains("checkedExternalURI(event.detail?.href)"));
         assert!(adapter.contains("checkedAppearance(appearance)"));
         assert!(adapter.contains("post('appearance-error'"));
-        assert!(adapter.contains("applyReadingStyle(view, style)"));
+        assert!(adapter.contains("applyViewStyles(view, appearance, style)"));
         assert!(adapter.contains("if (view.isFixedLayout) return"));
+        assert!(adapter.contains("appearanceStyleCSS(appearance)"));
+        assert!(adapter.contains("view.renderer.setStyles(["));
+        assert!(adapter.contains("background-color: transparent !important"));
+        assert!(adapter.contains("::selection"));
+        assert!(adapter.contains("session.searchResultCFI"));
+        assert!(adapter.contains("appearance['search-background']"));
         assert!(adapter.contains("collapseCFI(relocation.cfi)"));
         assert!(adapter.contains("session.commandNavigation"));
         assert!(adapter.contains("view.renderer.setAttribute('animated', '')"));
@@ -2460,7 +2584,7 @@ mod tests {
             4,
             "https://yunge-reader-book.localhost/token/",
             Some(&location),
-            EpubAppearance::FollowEmacs,
+            &follow_emacs_appearance(),
             Some(&EpubStyle::default()),
             None,
             false,
@@ -2471,7 +2595,9 @@ mod tests {
         assert!(script.contains(r#""cfi":"epubcfi(/6/4!/4/2)"#));
         assert!(script.contains(r#""x":12.5"#));
         assert!(script.contains(r#""y":30.0"#));
-        assert!(script.contains(r#""appearance":"follow-emacs""#));
+        assert!(script.contains(r#""mode":"follow-emacs""#));
+        assert!(script.contains(r##""foreground":"#112233""##));
+        assert!(script.contains(r##""search-background":"#aa5500""##));
         assert!(script.contains(r#""font-scale":1.0"#));
         assert!(script.contains(r#""line-height":1.6"#));
         assert!(script.contains(r#""content-width":720"#));
@@ -2484,7 +2610,7 @@ mod tests {
             4,
             "https://yunge-reader-book.localhost/token/",
             None,
-            EpubAppearance::Original,
+            &original_appearance(),
             None,
             Some(&EpubZoom::Mode(EpubZoomMode::FitPage)),
             false,
@@ -2493,13 +2619,14 @@ mod tests {
         assert!(fixed_script.contains(r#""zoom":"fit-page""#));
 
         let appearance_script =
-            publication_appearance_script(4, EpubAppearance::FollowEmacs);
+            publication_appearance_script(4, &follow_emacs_appearance());
         assert!(
             appearance_script
                 .starts_with("void globalThis.yungeReader.setAppearance(")
         );
         assert!(appearance_script.contains(r#""view":4"#));
-        assert!(appearance_script.contains(r#""appearance":"follow-emacs""#));
+        assert!(appearance_script.contains(r#""mode":"follow-emacs""#));
+        assert!(appearance_script.contains(r##""link":"#2244aa""##));
         assert!(!appearance_script.contains("eval"));
 
         let style_script = publication_style_script(4, &EpubStyle::default());
@@ -3110,20 +3237,20 @@ mod tests {
         let parsed = Service::parse::<ViewPublicationParams>(json!({
             "view": 4,
             "publication": 7,
-            "appearance": "original",
+            "appearance": original_appearance_json(),
             "scroll-bars": false,
         }))
         .unwrap();
         assert_eq!(parsed.style, None);
         assert_eq!(parsed.zoom, None);
-        assert_eq!(parsed.appearance, EpubAppearance::Original);
+        assert_eq!(parsed.appearance, original_appearance());
         assert!(!parsed.scroll_bars);
 
         assert!(
             Service::parse::<ViewPublicationParams>(json!({
                 "view": 4,
                 "publication": 7,
-                "appearance": "original",
+                "appearance": original_appearance_json(),
             }))
             .is_err()
         );
@@ -3190,18 +3317,45 @@ mod tests {
 
         let parsed = Service::parse::<ViewAppearanceParams>(json!({
             "view": 4,
-            "appearance": "follow-emacs",
+            "appearance": follow_emacs_appearance_json(),
         }))
         .unwrap();
         assert_eq!(parsed.view, 4);
-        assert_eq!(parsed.appearance, EpubAppearance::FollowEmacs);
+        assert_eq!(parsed.appearance, follow_emacs_appearance());
         assert!(
             Service::parse::<ViewAppearanceParams>(json!({
                 "view": 4,
-                "appearance": "sepia",
+                "appearance": { "mode": "sepia" },
             }))
             .is_err()
         );
+        for appearance in [
+            json!({
+                "mode": "follow-emacs",
+                "foreground": "#112233",
+            }),
+            json!({
+                "mode": "follow-emacs",
+                "foreground": "#AABBCC",
+                "background": "#f4f5f6",
+                "link": "#2244aa",
+                "selection-foreground": "#ffffff",
+                "selection-background": "#335577",
+                "search-background": "#aa5500",
+            }),
+            json!({
+                "mode": "original",
+                "foreground": "#112233",
+            }),
+        ] {
+            assert!(
+                Service::parse::<ViewAppearanceParams>(json!({
+                    "view": 4,
+                    "appearance": appearance,
+                }))
+                .is_err()
+            );
+        }
 
         let parsed = Service::parse::<ViewStyleParams>(json!({
             "view": 4,
@@ -3248,7 +3402,7 @@ mod tests {
             Service::parse::<ViewPublicationParams>(json!({
                 "view": 4,
                 "publication": 7,
-                "appearance": "original",
+                "appearance": original_appearance_json(),
                 "scroll-bars": true,
                 "style": {
                     "font-scale": 1.0,

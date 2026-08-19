@@ -14,6 +14,8 @@
                   "yunge-reader-webview" (view))
 (declare-function yunge-reader-webview--resolved-scroll-bar-mode
                   "yunge-reader-webview" (view window))
+(declare-function yunge-reader-webview--resolved-appearance
+                  "yunge-reader-webview" (view window))
 (declare-function yunge-reader-webview--set-buffer-message
                   "yunge-reader-webview" (view message))
 (declare-function yunge-reader-webview--set-view-selection
@@ -200,7 +202,8 @@
                  (copy-tree
                   (yunge-reader-webview--view-style view)))
             (yunge-reader-webview--view-surface-appearance view)
-            (yunge-reader-webview--view-appearance view)
+            (copy-tree
+             (yunge-reader-webview--view-appearance view))
             (yunge-reader-webview--view-surface-zoom view)
             (yunge-reader-webview--view-zoom view)
             (yunge-reader-webview--view-surface-scroll-bar-mode view)
@@ -211,7 +214,8 @@
        (apply-partially
         #'yunge-reader-webview--open-complete view id)
        (yunge-reader-webview--view-location view)
-       (yunge-reader-webview--view-appearance view)
+       (copy-tree
+        (yunge-reader-webview--view-appearance view))
        (yunge-reader-webview--view-style view)
        (yunge-reader-webview--view-zoom view)
        (yunge-reader-webview--view-scroll-bar-mode view)))))
@@ -287,6 +291,8 @@
     (error "EPUB view already owns a native surface"))
   (unless (yunge-reader-webview--view-destroyed view)
     (let ((id (cl-incf yunge-reader-webview--next-view-id))
+          (appearance
+           (yunge-reader-webview--resolved-appearance view window))
           (bar-mode
            (yunge-reader-webview--resolved-scroll-bar-mode view window)))
       (yunge-reader-webview--set-view-selection view nil)
@@ -295,6 +301,7 @@
             (yunge-reader-webview--view-window view) window
             (yunge-reader-webview--view-native-focused view) nil
             (yunge-reader-webview--view-focus-release-pending view) nil
+            (yunge-reader-webview--view-appearance view) appearance
             (yunge-reader-webview--view-surface-appearance view) nil
             (yunge-reader-webview--view-surface-style view) nil
             (yunge-reader-webview--view-surface-zoom view) nil

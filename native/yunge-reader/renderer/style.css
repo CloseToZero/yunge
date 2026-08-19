@@ -14,8 +14,8 @@ foliate-view {
 }
 
 body {
-  background: Canvas;
-  color: CanvasText;
+  background: var(--yunge-reader-background, Canvas);
+  color: var(--yunge-reader-foreground, CanvasText);
   overflow: hidden;
 }
 

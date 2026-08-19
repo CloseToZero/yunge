@@ -721,6 +721,23 @@ automatically."
        (yunge-reader--notify-appearance-change entry)))
    yunge-reader--document-registry))
 
+(defun yunge-reader--theme-changed (&optional _theme)
+  "Refresh live Reader documents that follow the Emacs theme."
+  (maphash
+   (lambda (_key entry)
+     (let ((document
+            (yunge-reader--document-entry-document entry)))
+       (when (and
+              (eq (yunge-reader--document-entry-state entry) 'ready)
+              (yunge-reader-document-p document)
+              (eq (yunge-reader-effective-appearance document)
+                  'follow-emacs))
+         (yunge-reader--notify-appearance-change entry))))
+   yunge-reader--document-registry))
+
+(add-hook 'enable-theme-functions #'yunge-reader--theme-changed)
+(add-hook 'disable-theme-functions #'yunge-reader--theme-changed)
+
 (defun yunge-reader--entry-view (entry &optional preferred)
   "Return a live view of ENTRY, preferring PREFERRED."
   (let ((views (yunge-reader--entry-live-views entry)))

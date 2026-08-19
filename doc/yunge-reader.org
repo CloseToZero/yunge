@@ -857,11 +857,21 @@ external navigation.  Renderer IPC accepts only bounded, versioned messages
 from the renderer application origin.
 
 EPUB appearance is logical-view state rather than part of reflow style.  Each
-surface open carries =original= or =follow-emacs=, and a live change uses the
-independent =view-appearance= operation.  Recreating a native surface
-retains the logical value, while a rejected update clears only its
-applied-surface copy so synchronization can retry.  =original= adds no
-Reader color rules.
+document persists only =original= or =follow-emacs=.  Each surface resolves
+that mode against the exact owning Emacs frame and sends a strict palette with
+foreground, background, link, selection, and search colors.  Theme changes
+refresh every live view that effectively follows Emacs without changing its
+saved document preference.  Recreating a surface resolves its palette again,
+so moving a logical view between frames cannot retain colors from the old
+frame.
+
+A live change uses the independent =view-appearance= operation.  Rejected
+updates clear only the applied-surface copy so synchronization can retry.
+=original= installs empty appearance styles and therefore adds no Reader
+color rules.  For reflowable EPUB, =follow-emacs= composes a style before and
+after author CSS while retaining the independent font and line layout rules.
+For pre-paginated EPUB, authored page content remains unchanged and only the
+outer WebView canvas plus Reader-owned search overlay follows Emacs.
 
 WebView2 forwards =ESC=, =C-g=, =C-d/C-u=, and Page Down or Page Up through
 its native accelerator event.  A bounded renderer listener forwards =G=,
