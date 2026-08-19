@@ -253,19 +253,25 @@
 
 (ert-deftest yunge-reader-epub-opens-with-a-pending-manual-scale ()
   (let ((yunge-reader-epub-default-font-scale 1.25)
+        (yunge-reader-default-appearances '((epub . follow-emacs)))
+        (yunge-reader-saved-appearance-overrides nil)
         (document (yunge-reader-epub-test--document))
+        attached-appearance
         attached-style)
     (with-temp-buffer
       (yunge-reader-mode)
+      (setf (yunge-reader-document-driver document) 'epub)
       (setq yunge-reader-document document
             yunge-reader--pending-place
             '(:zoom-mode manual :scale 1.8))
       (cl-letf
           (((symbol-function
              'yunge-reader-webview--attach-shared-publication)
-            (lambda (_publication layout &rest options)
-              (should (eq layout 'reflow))
-              (setq attached-style (plist-get options :style)))))
+             (lambda (_publication layout &rest options)
+               (should (eq layout 'reflow))
+               (setq attached-appearance
+                     (plist-get options :appearance)
+                     attached-style (plist-get options :style)))))
         (yunge-reader-epub--attach document))
       (should yunge-reader-epub-view-mode)
       (should (= yunge-reader-default-scale 1.25))
@@ -274,7 +280,11 @@
       (should (eq yunge-reader-zoom-mode 'manual))
       (should (= yunge-reader-scale 1.8))
       (should (= yunge-reader-effective-scale 1.8))
+      (should (eq attached-appearance 'follow-emacs))
       (should (= (alist-get 'font-scale attached-style) 1.8))
+      (should
+       (memq #'yunge-reader-epub--appearance-changed
+             yunge-reader-appearance-change-hook))
       (should (string-match-p "Font 180%" header-line-format)))))
 
 (ert-deftest yunge-reader-epub-keeps-reflow-controls-from-fixed-views ()
@@ -547,6 +557,7 @@
 (ert-deftest yunge-reader-epub-balances-shared-publication-ownership ()
   (let* ((handle (yunge-reader-epub-test--handle 11))
          (document (yunge-reader-epub-test--document handle))
+         (yunge-reader-saved-appearance-overrides nil)
          detach-complete
          close-complete
          closed-publication)
@@ -564,6 +575,7 @@
                      :publication publication
                      :layout layout
                      :persistent t
+                     :appearance (plist-get options :appearance)
                      :style
                      (copy-tree (plist-get options :style))
                      :location-changed-function
@@ -610,6 +622,10 @@
               yunge-reader-webview--buffer-view)
              #'yunge-reader-epub--external-link))
         (should
+         (eq (yunge-reader-webview--view-appearance
+              yunge-reader-webview--buffer-view)
+             'original))
+        (should
          (equal
           (yunge-reader-webview--view-style
            yunge-reader-webview--buffer-view)
@@ -617,8 +633,18 @@
             (line-height . 1.6)
             (content-width . 720)
             (side-padding . 7.0))))
+        (yunge-reader--store-appearance-override
+         (yunge-reader-document-file document) 'follow-emacs)
+        (run-hooks 'yunge-reader-appearance-change-hook)
+        (should
+         (eq (yunge-reader-webview--view-appearance
+              yunge-reader-webview--buffer-view)
+             'follow-emacs))
         (yunge-reader-epub--detach document)
         (should-not yunge-reader-epub-view-mode)
+        (should-not
+         (memq #'yunge-reader-epub--appearance-changed
+               yunge-reader-appearance-change-hook))
         (should (= (yunge-reader-epub-handle-pending-detaches
                     handle)
                    1))

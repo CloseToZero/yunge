@@ -52,6 +52,10 @@
   '(font-scale line-height content-width side-padding)
   "Semantic fields in one EPUB reading style.")
 
+(defconst yunge-reader-webview--epub-appearances
+  '(original follow-emacs)
+  "Appearance values accepted by EPUB WebView surfaces.")
+
 (defconst yunge-reader-webview--epub-fixed-scale-min 0.25
   "Minimum manual scale accepted for a fixed-layout EPUB.")
 
@@ -92,7 +96,7 @@
           (lambda (capability)
             (member capability (alist-get 'capabilities message)))
           '("publication-close" "publication-info" "publication-open"
-            "publication-resources" "view-bounds"
+            "publication-resources" "view-appearance" "view-bounds"
             "view-clear-selection" "view-create"
             "view-destroy" "view-events" "view-focus"
             "view-focus-parent" "view-info"
@@ -416,6 +420,12 @@ OFFSET and CHARACTER-LIMIT describe the request that produced RESULT."
   (unless (yunge-reader-webview--valid-style-p style)
     (error "Invalid EPUB reading style: %S" style))
   style)
+
+(defun yunge-reader-webview--check-appearance (appearance)
+  "Return APPEARANCE or signal when it is not valid for EPUB."
+  (unless (memq appearance yunge-reader-webview--epub-appearances)
+    (error "Invalid EPUB appearance: %S" appearance))
+  appearance)
 
 (defun yunge-reader-webview--valid-fixed-zoom-p (zoom)
   "Return non-nil when ZOOM is a bounded fixed-layout EPUB zoom."

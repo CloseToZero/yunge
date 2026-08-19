@@ -68,7 +68,7 @@
          "g" "j" "k" "y"))
      (capabilities
       . ("publication-close" "publication-info" "publication-open"
-         "publication-resources" "view-bounds"
+          "publication-resources" "view-appearance" "view-bounds"
          "view-clear-selection" "view-create"
          "view-destroy" "view-events" "view-focus"
          "view-focus-parent" "view-info"
@@ -484,6 +484,64 @@
           (color . "red"))))
     (should-not (yunge-reader-webview--valid-style-p style))))
 
+(ert-deftest yunge-reader-webview-validates-epub-appearances ()
+  (dolist (appearance '(original follow-emacs))
+    (should
+     (eq (yunge-reader-webview--check-appearance appearance)
+         appearance)))
+  (dolist (appearance '(nil themed "original"))
+    (should-error
+     (yunge-reader-webview--check-appearance appearance))))
+
+(ert-deftest yunge-reader-webview-defers-hidden-appearance ()
+  (let* ((view (yunge-reader-webview--make-view :publication 8))
+         (yunge-reader-webview--views
+          (make-hash-table :test #'eql))
+         requests)
+    (cl-letf
+        (((symbol-function
+           'yunge-reader-webview--set-native-view-appearance)
+          (lambda (value appearance complete)
+            (push (list value appearance complete) requests))))
+      (yunge-reader-webview--set-view-appearance view 'follow-emacs)
+      (should-not requests)
+      (should
+       (eq (yunge-reader-webview--view-appearance view)
+           'follow-emacs))
+      (setf (yunge-reader-webview--view-id view) 22
+            (yunge-reader-webview--view-surface-state view) 'ready)
+      (puthash 22 view yunge-reader-webview--views)
+      (yunge-reader-webview--sync-view-appearance view)
+      (should (= (length requests) 1))
+      (should (eq (cadar requests) 'follow-emacs))
+      (should
+       (eq (yunge-reader-webview--view-surface-appearance view)
+           'follow-emacs)))))
+
+(ert-deftest yunge-reader-webview-appearance-failure-is-retryable ()
+  (let* ((view
+          (yunge-reader-webview--make-view
+           :id 23 :surface-state 'ready :publication 8
+           :appearance 'follow-emacs))
+         (yunge-reader-webview--views
+          (make-hash-table :test #'eql))
+         warning
+         complete)
+    (puthash 23 view yunge-reader-webview--views)
+    (cl-letf
+        (((symbol-function
+           'yunge-reader-webview--set-native-view-appearance)
+          (lambda (_view _appearance callback)
+            (setq complete callback)))
+         ((symbol-function 'display-warning)
+          (lambda (&rest value) (setq warning value))))
+      (yunge-reader-webview--sync-view-appearance view)
+      (should complete)
+      (funcall complete nil '(error "appearance failed")))
+    (should-not
+     (yunge-reader-webview--view-surface-appearance view))
+    (should (equal (cadr warning) "appearance failed"))))
+
 (ert-deftest yunge-reader-webview-validates-fixed-layout-zoom ()
   (dolist (zoom '(fit-page fit-width 0.25 1.0 8.0))
     (should (yunge-reader-webview--valid-fixed-zoom-p zoom))
@@ -664,7 +722,7 @@
           (style (yunge-reader-webview-test--style))
           (target '((href . "OPS/chapter.xhtml#section"))))
       (yunge-reader-webview--open-view-publication
-       view 7 #'ignore location style nil 'hidden)
+       view 7 #'ignore location 'original style nil 'hidden)
       (yunge-reader-webview--navigate-view
        view "next-screen" #'ignore)
       (yunge-reader-webview--navigate-view
@@ -675,6 +733,8 @@
        view "next-line" #'ignore)
       (yunge-reader-webview--navigate-view
        view "go-to" #'ignore target)
+      (yunge-reader-webview--set-native-view-appearance
+       view 'follow-emacs #'ignore)
       (yunge-reader-webview--set-native-view-style
        view style #'ignore)
       (yunge-reader-webview--set-native-view-zoom
@@ -692,15 +752,16 @@
               (previous-page (nth 3 requests))
               (line (nth 4 requests))
               (go-to (nth 5 requests))
-              (styled (nth 6 requests))
-              (zoomed (nth 7 requests))
-              (scroll-bars (nth 8 requests)))
+              (appearance (nth 6 requests))
+              (styled (nth 7 requests))
+              (zoomed (nth 8 requests))
+              (scroll-bars (nth 9 requests)))
         (should
          (equal
           (mapcar (lambda (request) (alist-get 'op request)) requests)
            '("view-open-publication" "view-navigate" "view-navigate"
              "view-navigate" "view-navigate" "view-navigate"
-             "view-style" "view-zoom"
+             "view-appearance" "view-style" "view-zoom"
              "view-scroll-bars")))
         (should
          (equal (alist-get 'location (alist-get 'params open))
@@ -708,6 +769,9 @@
         (should
          (equal (alist-get 'style (alist-get 'params open))
                 style))
+        (should
+         (equal (alist-get 'appearance (alist-get 'params open))
+                "original"))
         (should
          (eq (alist-get 'scroll-bars (alist-get 'params open))
              :false))
@@ -734,6 +798,10 @@
          (equal (alist-get 'style (alist-get 'params styled))
                 style))
         (should
+         (equal
+          (alist-get 'appearance (alist-get 'params appearance))
+          "follow-emacs"))
+        (should
          (alist-get 'visible (alist-get 'params scroll-bars)))))))
 
 (ert-deftest yunge-reader-webview-serializes-initial-fixed-zoom ()
@@ -744,7 +812,7 @@
      (yunge-reader-webview-test--ready-message))
     (yunge-reader-webview--open-view-publication
      (yunge-reader-webview--make-view :id 4)
-     7 #'ignore nil nil 'fit-page 'hidden)
+     7 #'ignore nil 'original nil 'fit-page 'hidden)
     (let* ((request
             (json-parse-string (car sent) :object-type 'alist))
            (parameters (alist-get 'params request)))
@@ -783,7 +851,8 @@
        7 (lambda (_value _error-data)))
       (yunge-reader-webview--open-view-publication
        (yunge-reader-webview--make-view :id 4)
-       7 (lambda (_value _error-data)) nil nil nil 'hidden)
+       7 (lambda (_value _error-data))
+       nil 'original nil nil 'hidden)
       (yunge-reader-webview--close-publication
        7 (lambda (_value _error-data)))
       (let ((requests
@@ -1116,9 +1185,22 @@
           (should location-user)
           (should
            (equal (yunge-reader-webview--view-location view)
-                  '((cfi . "epubcfi(/6/6!/4/2)")
-                    (href . "OPS/next.xhtml")
-                    (fraction . 0.3))))
+                   '((cfi . "epubcfi(/6/6!/4/2)")
+                     (href . "OPS/next.xhtml")
+                     (fraction . 0.3))))
+          (setf (yunge-reader-webview--view-surface-appearance view)
+                'follow-emacs)
+          (cl-letf (((symbol-function 'display-warning)
+                     (lambda (&rest value) (setq warning value))))
+            (yunge-reader-webview--handle-event
+             'fake-webview-process
+             '((kind . "event")
+               (event . "appearance-error")
+               (view . 6)
+               (message . "bad appearance"))))
+          (should-not
+           (yunge-reader-webview--view-surface-appearance view))
+          (should (equal (cadr warning) "bad appearance"))
           (setf (yunge-reader-webview--view-surface-style view)
                 (yunge-reader-webview-test--style))
           (cl-letf (((symbol-function 'display-warning)
@@ -1538,6 +1620,8 @@
            :surface-state 'native-ready
            :persistent t
            :publication 6
+           :appearance 'follow-emacs
+           :surface-appearance 'follow-emacs
            :style style
            :surface-style (copy-tree style)
            :zoom 'fit-width
@@ -1573,6 +1657,11 @@
           (should (gethash view yunge-reader-webview--logical-views))
           (should (equal (yunge-reader-webview--view-location view)
                          location))
+          (should
+           (eq (yunge-reader-webview--view-appearance view)
+               'follow-emacs))
+          (should-not
+           (yunge-reader-webview--view-surface-appearance view))
           (should-not
            (yunge-reader-webview--view-surface-style view))
           (should-not
@@ -1635,20 +1724,26 @@
          (view
           (yunge-reader-webview--make-view
            :id 22 :surface-state 'native-ready :publication 8
-           :location location :style style :scroll-bar-mode 'hidden))
+           :location location :appearance 'follow-emacs
+           :style style :scroll-bar-mode 'hidden))
          opened)
     (cl-letf
         (((symbol-function
            'yunge-reader-webview--open-view-publication)
           (lambda (value publication _complete
-                         target reading-style zoom bar-mode)
+                         target appearance reading-style zoom bar-mode)
             (setq opened
-                  (list value publication target reading-style
-                        zoom bar-mode)))))
+                  (list value publication target appearance
+                        reading-style zoom bar-mode)))))
       (yunge-reader-webview--try-open-publication view))
-    (should (equal opened (list view 8 location style nil 'hidden)))
+    (should
+     (equal opened
+            (list view 8 location 'follow-emacs style nil 'hidden)))
     (should
      (eq (yunge-reader-webview--view-surface-state view) 'opening))
+    (should
+     (eq (yunge-reader-webview--view-surface-appearance view)
+         'follow-emacs))
     (should
      (equal (yunge-reader-webview--view-surface-style view) style))
     (should-not
@@ -1660,19 +1755,20 @@
           (yunge-reader-webview--make-view
            :id 23 :layout 'fixed :surface-state 'native-ready
            :publication 8 :location location :zoom 'fit-width
-           :scroll-bar-mode 'hidden))
+           :appearance 'original :scroll-bar-mode 'hidden))
          opened)
     (cl-letf
         (((symbol-function
            'yunge-reader-webview--open-view-publication)
           (lambda (value publication _complete
-                         target style zoom bar-mode)
+                         target appearance style zoom bar-mode)
             (setq opened
-                  (list value publication target style zoom bar-mode)))))
+                  (list value publication target appearance
+                        style zoom bar-mode)))))
       (yunge-reader-webview--try-open-publication view))
     (should
      (equal opened
-            (list view 8 location nil 'fit-width 'hidden)))
+             (list view 8 location 'original nil 'fit-width 'hidden)))
     (should
      (eq (yunge-reader-webview--view-surface-zoom view) 'fit-width))))
 
@@ -1684,8 +1780,9 @@
     (with-temp-buffer
       (let ((view
              (yunge-reader-webview--attach-shared-publication
-              8 'reflow
-              :style style
+               8 'reflow
+               :appearance 'original
+               :style style
               :external-link-function link-function)))
         (should (eq (yunge-reader-webview--view-layout view) 'reflow))
         (should
@@ -1714,7 +1811,7 @@
     (with-temp-buffer
       (let ((view
              (yunge-reader-webview--attach-shared-publication
-              8 'fixed :zoom 1.5
+               8 'fixed :appearance 'original :zoom 1.5
               :zoom-changed-function function)))
         (should (eq (yunge-reader-webview--view-layout view) 'fixed))
         (should (= (yunge-reader-webview--view-zoom view) 1.5))
@@ -1724,7 +1821,7 @@
     (with-temp-buffer
       (let ((view
              (yunge-reader-webview--attach-shared-publication
-              8 'fixed)))
+               8 'fixed :appearance 'original)))
         (should
          (eq (yunge-reader-webview--view-zoom view) 'fit-page))))))
 
@@ -1733,16 +1830,18 @@
          (make-hash-table :test #'eq)))
     (with-temp-buffer
       (should-error
-       (yunge-reader-webview--attach-shared-publication
-        8 'fixed :style (yunge-reader-webview-test--style))))
+        (yunge-reader-webview--attach-shared-publication
+         8 'fixed :appearance 'original
+         :style (yunge-reader-webview-test--style))))
     (with-temp-buffer
       (should-error
-       (yunge-reader-webview--attach-shared-publication
-        8 'reflow :zoom 'fit-page)))
+        (yunge-reader-webview--attach-shared-publication
+         8 'reflow :appearance 'original :zoom 'fit-page)))
     (with-temp-buffer
       (should-error
-       (yunge-reader-webview--attach-shared-publication
-        8 'reflow :zoom-changed-function #'ignore)))))
+        (yunge-reader-webview--attach-shared-publication
+         8 'reflow :appearance 'original
+         :zoom-changed-function #'ignore)))))
 
 (ert-deftest yunge-reader-webview-waits-for-every-obsolete-surface ()
   (let* ((view

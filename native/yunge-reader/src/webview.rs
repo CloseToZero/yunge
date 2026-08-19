@@ -32,6 +32,7 @@ use protocol::{
 };
 use renderer::{
     RendererSearchCallback, app_navigation_allowed,
+    appearance_script as publication_appearance_script,
     clear_selection_script as publication_clear_selection_script,
     event as renderer_event,
     navigation_script as publication_navigation_script,
@@ -143,6 +144,7 @@ struct PublicationParams {
 struct ViewPublicationParams {
     view: u64,
     publication: u64,
+    appearance: EpubAppearance,
     #[serde(default)]
     location: Option<EpubLocator>,
     #[serde(default)]
@@ -158,6 +160,13 @@ struct ViewPublicationParams {
 struct ViewStyleParams {
     view: u64,
     style: EpubStyle,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ViewAppearanceParams {
+    view: u64,
+    appearance: EpubAppearance,
 }
 
 #[derive(Debug, Deserialize)]
@@ -235,6 +244,13 @@ struct EpubStyle {
     line_height: f64,
     content_width: u32,
     side_padding: f64,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+enum EpubAppearance {
+    Original,
+    FollowEmacs,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Serialize)]
@@ -1117,6 +1133,7 @@ impl Service {
             params.view,
             &resource_root,
             location.as_ref(),
+            params.appearance,
             style.as_ref(),
             zoom.as_ref(),
             params.scroll_bars,
@@ -1136,6 +1153,32 @@ impl Service {
             "view": params.view,
             "publication": params.publication,
             "opening": true,
+        }))
+    }
+
+    fn set_view_appearance(
+        &mut self,
+        params: Value,
+    ) -> Result<Value, ServiceError> {
+        let params: ViewAppearanceParams = Self::parse(params)?;
+        let view = self.view(params.view)?;
+        if view.publication.is_none() {
+            return Err(ServiceError::new(
+                "view-has-no-publication",
+                format!("view {} has no attached publication", params.view),
+            ));
+        }
+        let script =
+            publication_appearance_script(params.view, params.appearance);
+        view.surface
+            .webview()
+            .evaluate_script(&script)
+            .map_err(|error| {
+                ServiceError::new("view-update-failed", error.to_string())
+            })?;
+        Ok(json!({
+            "view": params.view,
+            "appearance": params.appearance,
         }))
     }
 
@@ -1373,6 +1416,9 @@ impl Service {
             Operation::ViewInfo => self.info(request.params),
             Operation::ViewCreate => self.create_view(request.params),
             Operation::ViewBounds => self.set_bounds(request.params),
+            Operation::ViewAppearance => {
+                self.set_view_appearance(request.params)
+            }
             Operation::ViewClearSelection => {
                 self.clear_selection(request.params)
             }
@@ -1696,6 +1742,8 @@ mod tests {
         assert!(adapter.contains("moveFixedViewport(session, 40)"));
         assert!(adapter.contains("post('external-link'"));
         assert!(adapter.contains("checkedExternalURI(event.detail?.href)"));
+        assert!(adapter.contains("checkedAppearance(appearance)"));
+        assert!(adapter.contains("post('appearance-error'"));
         assert!(adapter.contains("applyReadingStyle(view, style)"));
         assert!(adapter.contains("if (view.isFixedLayout) return"));
         assert!(adapter.contains("collapseCFI(relocation.cfi)"));
@@ -2113,6 +2161,20 @@ mod tests {
         assert!(event.selection.is_none());
         assert!(event.key.is_none());
 
+        let appearance_error = HttpRequest::builder()
+            .uri(APP_URL)
+            .body(
+                r#"{"protocol":1,"event":"appearance-error",
+                    "message":"bad appearance"}"#
+                    .into(),
+            )
+            .unwrap();
+        let event = renderer_event(8, &appearance_error).unwrap();
+        assert_eq!(event.event, "appearance-error");
+        assert_eq!(event.message.as_deref(), Some("bad appearance"));
+        assert!(event.location.is_none());
+        assert!(event.selection.is_none());
+
         let style_error = HttpRequest::builder()
             .uri(APP_URL)
             .body(
@@ -2398,6 +2460,7 @@ mod tests {
             4,
             "https://yunge-reader-book.localhost/token/",
             Some(&location),
+            EpubAppearance::FollowEmacs,
             Some(&EpubStyle::default()),
             None,
             false,
@@ -2408,6 +2471,7 @@ mod tests {
         assert!(script.contains(r#""cfi":"epubcfi(/6/4!/4/2)"#));
         assert!(script.contains(r#""x":12.5"#));
         assert!(script.contains(r#""y":30.0"#));
+        assert!(script.contains(r#""appearance":"follow-emacs""#));
         assert!(script.contains(r#""font-scale":1.0"#));
         assert!(script.contains(r#""line-height":1.6"#));
         assert!(script.contains(r#""content-width":720"#));
@@ -2420,12 +2484,23 @@ mod tests {
             4,
             "https://yunge-reader-book.localhost/token/",
             None,
+            EpubAppearance::Original,
             None,
             Some(&EpubZoom::Mode(EpubZoomMode::FitPage)),
             false,
         );
         assert!(fixed_script.contains(r#""style":null"#));
         assert!(fixed_script.contains(r#""zoom":"fit-page""#));
+
+        let appearance_script =
+            publication_appearance_script(4, EpubAppearance::FollowEmacs);
+        assert!(
+            appearance_script
+                .starts_with("void globalThis.yungeReader.setAppearance(")
+        );
+        assert!(appearance_script.contains(r#""view":4"#));
+        assert!(appearance_script.contains(r#""appearance":"follow-emacs""#));
+        assert!(!appearance_script.contains("eval"));
 
         let style_script = publication_style_script(4, &EpubStyle::default());
         assert!(
@@ -3035,17 +3110,28 @@ mod tests {
         let parsed = Service::parse::<ViewPublicationParams>(json!({
             "view": 4,
             "publication": 7,
+            "appearance": "original",
             "scroll-bars": false,
         }))
         .unwrap();
         assert_eq!(parsed.style, None);
         assert_eq!(parsed.zoom, None);
+        assert_eq!(parsed.appearance, EpubAppearance::Original);
         assert!(!parsed.scroll_bars);
 
         assert!(
             Service::parse::<ViewPublicationParams>(json!({
                 "view": 4,
                 "publication": 7,
+                "appearance": "original",
+            }))
+            .is_err()
+        );
+        assert!(
+            Service::parse::<ViewPublicationParams>(json!({
+                "view": 4,
+                "publication": 7,
+                "scroll-bars": false,
             }))
             .is_err()
         );
@@ -3102,6 +3188,21 @@ mod tests {
         .unwrap();
         assert_eq!(parsed.zoom, EpubZoom::Mode(EpubZoomMode::FitWidth));
 
+        let parsed = Service::parse::<ViewAppearanceParams>(json!({
+            "view": 4,
+            "appearance": "follow-emacs",
+        }))
+        .unwrap();
+        assert_eq!(parsed.view, 4);
+        assert_eq!(parsed.appearance, EpubAppearance::FollowEmacs);
+        assert!(
+            Service::parse::<ViewAppearanceParams>(json!({
+                "view": 4,
+                "appearance": "sepia",
+            }))
+            .is_err()
+        );
+
         let parsed = Service::parse::<ViewStyleParams>(json!({
             "view": 4,
             "style": {
@@ -3147,6 +3248,7 @@ mod tests {
             Service::parse::<ViewPublicationParams>(json!({
                 "view": 4,
                 "publication": 7,
+                "appearance": "original",
                 "scroll-bars": true,
                 "style": {
                     "font-scale": 1.0,

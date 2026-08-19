@@ -180,6 +180,13 @@ const checkedView = value => {
     return value
 }
 
+const checkedAppearance = value => {
+    if (value !== 'original' && value !== 'follow-emacs') {
+        throw new Error('Invalid EPUB appearance')
+    }
+    return value
+}
+
 const checkedStyle = value => {
     value ??= DEFAULT_STYLE
     const keys = value && typeof value === 'object' && !Array.isArray(value)
@@ -292,6 +299,19 @@ const setStyle = ({ view: viewID, style }) => {
             () => applyPendingStyle(session))
     } catch (error) {
         post('style-error', { message: error?.message ?? error })
+    }
+}
+
+const setAppearance = ({ view: viewID, appearance }) => {
+    try {
+        viewID = checkedView(viewID)
+        appearance = checkedAppearance(appearance)
+        if (!current || current.viewID !== viewID) {
+            throw new Error('EPUB view is not open')
+        }
+        current.appearance = appearance
+    } catch (error) {
+        post('appearance-error', { message: error?.message ?? error })
     }
 }
 
@@ -1292,7 +1312,7 @@ const search = request => {
 }
 
 const open = async ({
-    view: viewID, resourceRoot, location, style, zoom, scrollBars,
+    view: viewID, resourceRoot, location, appearance, style, zoom, scrollBars,
     rendererAccelerators,
 }) => {
     const mine = ++generation
@@ -1302,6 +1322,7 @@ const open = async ({
     try {
         viewID = checkedView(viewID)
         location = location ? checkedLocator(location) : null
+        appearance = checkedAppearance(appearance)
         scrollBars = checkedScrollBars(scrollBars)
         checkedRendererAccelerators(rendererAccelerators)
         const root = checkedRoot(resourceRoot)
@@ -1366,6 +1387,7 @@ const open = async ({
             selection: null,
             selectionDocument: null,
             selectionFrame: null,
+            appearance,
             style,
             zoom,
             effectiveScale: null,
@@ -1661,5 +1683,5 @@ const setSelection = request => {
 
 globalThis.yungeReader = Object.freeze({
     clearSelection, navigate, open, search, selectionText, setScrollBars,
-    setSearchResult, setSelection, setStyle, setZoom,
+    setAppearance, setSearchResult, setSelection, setStyle, setZoom,
 })

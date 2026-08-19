@@ -19,6 +19,49 @@
   (add-hook 'kill-buffer-hook
             #'yunge-reader-webview--kill-buffer nil t))
 
+(defun yunge-reader-webview--appearance-complete
+    (view id appearance _result error-data)
+  "Finish applying APPEARANCE to VIEW surface ID."
+  (when (and error-data
+             (yunge-reader-webview--surface-current-p view id))
+    (when (eq appearance
+              (yunge-reader-webview--view-surface-appearance view))
+      (setf (yunge-reader-webview--view-surface-appearance view) nil))
+    (display-warning
+     'yunge-reader (error-message-string error-data) :warning)))
+
+(defun yunge-reader-webview--sync-view-appearance (view)
+  "Send VIEW's desired appearance to its ready native surface."
+  (let ((appearance
+         (yunge-reader-webview--view-appearance view)))
+    (when (and appearance
+               (yunge-reader-webview--surface-ready-p view)
+               (yunge-reader-webview--surface-current-p
+                view (yunge-reader-webview--view-id view))
+               (not
+                (eq appearance
+                    (yunge-reader-webview--view-surface-appearance
+                     view))))
+      (let ((id (yunge-reader-webview--view-id view)))
+        (setf (yunge-reader-webview--view-surface-appearance view)
+              appearance)
+        (yunge-reader-webview--set-native-view-appearance
+         view appearance
+         (apply-partially
+          #'yunge-reader-webview--appearance-complete
+          view id appearance))))))
+
+(defun yunge-reader-webview--set-view-appearance (view appearance)
+  "Set logical VIEW's APPEARANCE and synchronize its live surface."
+  (when (or (null view)
+            (yunge-reader-webview--view-destroyed view))
+    (error "Cannot change the appearance of a dead EPUB view"))
+  (setq appearance
+        (yunge-reader-webview--check-appearance appearance))
+  (setf (yunge-reader-webview--view-appearance view) appearance)
+  (yunge-reader-webview--sync-view-appearance view)
+  appearance)
+
 (defun yunge-reader-webview--style-complete
     (view id style _result error-data)
   "Finish applying STYLE to VIEW surface ID."
@@ -574,6 +617,7 @@ When REVEAL is non-nil, navigate to the result before painting it."
             (yunge-reader-webview--view-native-focused view) nil
             (yunge-reader-webview--view-focus-release-pending view) nil
             (yunge-reader-webview--view-destroyed view) t
+            (yunge-reader-webview--view-surface-appearance view) nil
             (yunge-reader-webview--view-surface-style view) nil
             (yunge-reader-webview--view-surface-zoom view) nil
             (yunge-reader-webview--view-surface-scroll-bar-mode view) nil
@@ -605,14 +649,15 @@ When REVEAL is non-nil, navigate to the result before painting it."
 (cl-defun yunge-reader-webview--attach-shared-publication
     (publication layout
      &key location location-changed-function selection-changed-function
-     accelerator-function style zoom zoom-changed-function
+     accelerator-function appearance style zoom zoom-changed-function
      scroll-bar-function external-link-function)
   "Attach shared PUBLICATION with Reader LAYOUT to the current buffer.
 Restore bounded LOCATION when supplied.  Invoke LOCATION-CHANGED-FUNCTION
 with the logical view whenever its renderer reports a stable location.
 Invoke SELECTION-CHANGED-FUNCTION whenever its logical selection changes.
 Invoke ACCELERATOR-FUNCTION with the view and a normalized key when the
-focused native child forwards one.  STYLE or ZOOM is copied into the view.
+focused native child forwards one.  APPEARANCE and STYLE or ZOOM are copied
+into the view.
 Invoke ZOOM-CHANGED-FUNCTION with the view and its effective fixed scale.
 SCROLL-BAR-FUNCTION resolves its mode for the owning Emacs window.
 Invoke EXTERNAL-LINK-FUNCTION with the view and a validated absolute URI."
@@ -620,6 +665,7 @@ Invoke EXTERNAL-LINK-FUNCTION with the view and a validated absolute URI."
     (error "Invalid EPUB publication ID: %S" publication))
   (unless (memq layout '(fixed reflow))
     (error "Invalid EPUB publication layout: %S" layout))
+  (yunge-reader-webview--check-appearance appearance)
   (when (and (eq layout 'fixed) style)
     (error "Fixed-layout EPUB views do not accept reflow style"))
   (when (and (eq layout 'reflow) zoom)
@@ -668,6 +714,7 @@ Invoke EXTERNAL-LINK-FUNCTION with the view and a validated absolute URI."
           :persistent t
           :publication publication
           :layout layout
+          :appearance appearance
           :style (and style (copy-tree style))
           :zoom zoom
           :location (and location (copy-tree location))

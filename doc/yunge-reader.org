@@ -284,7 +284,8 @@ The implementation is divided into thirteen pieces:
 - =yunge-reader-pdf.el= maps the format-independent interface onto PDFium,
   virtualizes a continuous page roll, and paints visible selections.
 - =yunge-reader-webview-protocol.el= owns the WebView handshake and bounded
-  validation of renderer locations, selections, outlines, search, and styles.
+  validation of renderer locations, selections, outlines, search, appearance,
+  and styles.
 - =yunge-reader-webview-view.el= owns logical view records, surface state, and
   the registries that keep them independent from disposable native surfaces.
 - =yunge-reader-webview-renderer.el= maps validated EPUB operations onto
@@ -854,6 +855,13 @@ EPUB styles, images, fonts, and media; it does not admit blob or publication
 scripts.  The outer WebView denies permissions, downloads, new windows, and
 external navigation.  Renderer IPC accepts only bounded, versioned messages
 from the renderer application origin.
+
+EPUB appearance is logical-view state rather than part of reflow style.  Each
+surface open carries =original= or =follow-emacs=, and a live change uses the
+independent =view-appearance= operation.  Recreating a native surface
+retains the logical value, while a rejected update clears only its
+applied-surface copy so synchronization can retry.  =original= adds no
+Reader color rules.
 
 WebView2 forwards =ESC=, =C-g=, =C-d/C-u=, and Page Down or Page Up through
 its native accelerator event.  A bounded renderer listener forwards =G=,

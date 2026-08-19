@@ -124,6 +124,7 @@
           (yunge-reader-webview--view-window view) nil
           (yunge-reader-webview--view-native-focused view) nil
           (yunge-reader-webview--view-focus-release-pending view) nil
+          (yunge-reader-webview--view-surface-appearance view) nil
           (yunge-reader-webview--view-surface-style view) nil
           (yunge-reader-webview--view-surface-zoom view) nil
           (yunge-reader-webview--view-surface-scroll-bar-mode view) nil
@@ -161,6 +162,7 @@
   (when (and error-data
              (yunge-reader-webview--surface-current-p view id))
     (setf (yunge-reader-webview--view-surface-style view) nil
+          (yunge-reader-webview--view-surface-appearance view) nil
           (yunge-reader-webview--view-surface-zoom view) nil
           (yunge-reader-webview--view-surface-scroll-bar-mode view) nil))
   (cond
@@ -197,6 +199,8 @@
             (and (yunge-reader-webview--view-style view)
                  (copy-tree
                   (yunge-reader-webview--view-style view)))
+            (yunge-reader-webview--view-surface-appearance view)
+            (yunge-reader-webview--view-appearance view)
             (yunge-reader-webview--view-surface-zoom view)
             (yunge-reader-webview--view-zoom view)
             (yunge-reader-webview--view-surface-scroll-bar-mode view)
@@ -207,6 +211,7 @@
        (apply-partially
         #'yunge-reader-webview--open-complete view id)
        (yunge-reader-webview--view-location view)
+       (yunge-reader-webview--view-appearance view)
        (yunge-reader-webview--view-style view)
        (yunge-reader-webview--view-zoom view)
        (yunge-reader-webview--view-scroll-bar-mode view)))))
@@ -290,6 +295,7 @@
             (yunge-reader-webview--view-window view) window
             (yunge-reader-webview--view-native-focused view) nil
             (yunge-reader-webview--view-focus-release-pending view) nil
+            (yunge-reader-webview--view-surface-appearance view) nil
             (yunge-reader-webview--view-surface-style view) nil
             (yunge-reader-webview--view-surface-zoom view) nil
             (yunge-reader-webview--view-scroll-bar-mode view)

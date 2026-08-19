@@ -28,6 +28,8 @@
                   "yunge-reader-webview" (view))
 (declare-function yunge-reader-webview--sync-view-search-result
                   "yunge-reader-webview" (view &optional reveal))
+(declare-function yunge-reader-webview--sync-view-appearance
+                  "yunge-reader-webview" (view))
 (declare-function yunge-reader-webview--sync-view-style
                   "yunge-reader-webview" (view))
 (declare-function yunge-reader-webview--sync-view-zoom
@@ -126,6 +128,7 @@
          (yunge-reader-webview--store-view-location view message t)
          (yunge-reader-webview--set-surface-state view 'ready)
          (yunge-reader-webview--set-view-selection view nil)
+         (yunge-reader-webview--sync-view-appearance view)
          (yunge-reader-webview--sync-view-style view)
          (yunge-reader-webview--sync-view-zoom view)
          (yunge-reader-webview--sync-view-scroll-bars view)
@@ -163,6 +166,14 @@
        (let ((detail (alist-get 'message message)))
          (unless (stringp detail)
            (error "Malformed EPUB navigation error: %S" message))
+         (display-warning 'yunge-reader detail :warning)))
+      ("appearance-error"
+       (let ((detail (alist-get 'message message)))
+         (unless (stringp detail)
+           (error "Malformed EPUB appearance error: %S" message))
+         (when-let* ((view (gethash id yunge-reader-webview--views)))
+           (setf (yunge-reader-webview--view-surface-appearance view)
+                 nil))
          (display-warning 'yunge-reader detail :warning)))
       ("style-error"
        (let ((detail (alist-get 'message message)))
@@ -209,7 +220,8 @@
            (error "Malformed EPUB renderer error: %S" message))
          (when-let* ((view (gethash id yunge-reader-webview--views)))
            (yunge-reader-webview--set-surface-state view 'failed)
-           (setf (yunge-reader-webview--view-surface-style view) nil
+           (setf (yunge-reader-webview--view-surface-appearance view) nil
+                 (yunge-reader-webview--view-surface-style view) nil
                  (yunge-reader-webview--view-surface-zoom view) nil
                  (yunge-reader-webview--view-surface-scroll-bar-mode view)
                  nil

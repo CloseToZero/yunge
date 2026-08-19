@@ -147,14 +147,18 @@ returned batch, and COMPLETE receives the validated native result."
     (if (symbolp value) (symbol-name value) value)))
 
 (defun yunge-reader-webview--open-view-publication
-    (view publication callback location style zoom bar-mode)
+    (view publication callback location appearance style zoom bar-mode)
   "Open PUBLICATION in native VIEW with LOCATION and presentation state.
-STYLE and ZOOM are mutually exclusive.  Invoke CALLBACK when complete."
+APPEARANCE is independent of mutually exclusive STYLE and ZOOM.  Invoke
+CALLBACK when complete."
   (yunge-reader-webview--request
    "view-open-publication"
    (append
     `((view . ,(yunge-reader-webview--view-id view))
-      (publication . ,publication))
+      (publication . ,publication)
+      (appearance
+       . ,(symbol-name
+           (yunge-reader-webview--check-appearance appearance))))
     (when location
       `((location . ,(yunge-reader-webview--check-location location))))
     (when style
@@ -167,6 +171,17 @@ STYLE and ZOOM are mutually exclusive.  Invoke CALLBACK when complete."
                   'visible)
               t
             :false))))
+   callback))
+
+(defun yunge-reader-webview--set-native-view-appearance
+    (view appearance callback)
+  "Apply APPEARANCE to native VIEW, then invoke CALLBACK."
+  (yunge-reader-webview--request
+   "view-appearance"
+   `((view . ,(yunge-reader-webview--view-id view))
+     (appearance
+      . ,(symbol-name
+          (yunge-reader-webview--check-appearance appearance))))
    callback))
 
 (defun yunge-reader-webview--navigate-view

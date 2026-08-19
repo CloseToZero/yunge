@@ -13,12 +13,13 @@ pub(super) const ACCELERATORS: [&str; 18] = [
     "+", "-", "=", "<escape>", "<next>", "<prior>", "C-d", "C-g", "C-u", "G",
     "J", "K", "M-m", "SPC", "g", "j", "k", "y",
 ];
-pub(super) const CAPABILITIES: [&str; 23] = [
+pub(super) const CAPABILITIES: [&str; 24] = [
     "publication-close",
     "publication-info",
     "publication-open",
     "publication-resources",
     "view-bounds",
+    "view-appearance",
     "view-clear-selection",
     "view-create",
     "view-destroy",
@@ -57,6 +58,7 @@ pub(super) enum Operation {
     ViewInfo,
     ViewCreate,
     ViewBounds,
+    ViewAppearance,
     ViewClearSelection,
     ViewNavigate,
     ViewSearch,
@@ -88,6 +90,7 @@ impl Request {
             "view-info" => Operation::ViewInfo,
             "view-create" => Operation::ViewCreate,
             "view-bounds" => Operation::ViewBounds,
+            "view-appearance" => Operation::ViewAppearance,
             "view-clear-selection" => Operation::ViewClearSelection,
             "view-navigate" => Operation::ViewNavigate,
             "view-search" => Operation::ViewSearch,
@@ -234,6 +237,12 @@ mod tests {
         )
         .unwrap();
         assert_eq!(request.operation().unwrap(), Operation::ViewSetSelection);
+
+        let request = Request::decode(
+            r#"{"id":11,"op":"view-appearance","params":{"view":3}}"#,
+        )
+        .unwrap();
+        assert_eq!(request.operation().unwrap(), Operation::ViewAppearance);
     }
 
     #[test]

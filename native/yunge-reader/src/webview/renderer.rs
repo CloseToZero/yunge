@@ -8,8 +8,8 @@ use wry::http::Request as HttpRequest;
 use super::protocol::{PROTOCOL_VERSION, RENDERER_ACCELERATORS, Response};
 use super::resources::{APP_BROWSER_URL, APP_URL};
 use super::{
-    EpubLocator, EpubNavigationTarget, EpubOutline, EpubSearchCursor,
-    EpubSearchMatch, EpubSelection, EpubStyle, EpubZoom,
+    EpubAppearance, EpubLocator, EpubNavigationTarget, EpubOutline,
+    EpubSearchCursor, EpubSearchMatch, EpubSelection, EpubStyle, EpubZoom,
     MAX_EPUB_EXTERNAL_URI_BYTES, MAX_EPUB_SEARCH_RESULT_BYTES,
     MAX_EPUB_SELECTION_CHARACTERS, MAX_EPUB_SELECTION_RESULT_BYTES,
     MAX_RENDERER_ERROR_BYTES, MAX_RENDERER_MESSAGE_BYTES, NavigationCommand,
@@ -98,6 +98,7 @@ struct RendererMessage {
 #[serde(rename_all = "kebab-case")]
 enum RendererEvent {
     Accelerator,
+    AppearanceError,
     ExternalLink,
     Location,
     NavigationError,
@@ -590,6 +591,26 @@ pub(super) fn event(
                 None,
             )
         }
+        RendererEvent::AppearanceError => {
+            if message.location.is_some()
+                || message.outline.is_some()
+                || message.selection.is_some()
+                || message.key.is_some()
+                || message.uri.is_some()
+            {
+                return None;
+            }
+            let detail = message.message.filter(|value| !value.is_empty())?;
+            (
+                "appearance-error",
+                Some(detail),
+                None,
+                None,
+                None,
+                None,
+                None,
+            )
+        }
         RendererEvent::StyleError => {
             if message.location.is_some()
                 || message.outline.is_some()
@@ -646,6 +667,7 @@ pub(super) fn open_script(
     view: u64,
     resource_root: &str,
     location: Option<&EpubLocator>,
+    appearance: EpubAppearance,
     style: Option<&EpubStyle>,
     zoom: Option<&EpubZoom>,
     scroll_bars: bool,
@@ -654,6 +676,7 @@ pub(super) fn open_script(
         "view": view,
         "resourceRoot": resource_root,
         "location": location,
+        "appearance": appearance,
         "style": style,
         "zoom": zoom,
         "scrollBars": scroll_bars,
@@ -661,6 +684,18 @@ pub(super) fn open_script(
     }))
     .expect("publication open payload is serializable");
     format!("void globalThis.yungeReader.open({payload});")
+}
+
+pub(super) fn appearance_script(
+    view: u64,
+    appearance: EpubAppearance,
+) -> String {
+    let payload = serde_json::to_string(&json!({
+        "view": view,
+        "appearance": appearance,
+    }))
+    .expect("publication appearance payload is serializable");
+    format!("void globalThis.yungeReader.setAppearance({payload});")
 }
 
 pub(super) fn navigation_script(

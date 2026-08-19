@@ -87,7 +87,7 @@ installing or downloading it:
 #+begin_src json
 {"available":true,"build-id":"HASH",
  "capabilities":["publication-close","publication-info","publication-open",
-                 "publication-resources","view-bounds",
+                 "publication-resources","view-appearance","view-bounds",
                  "view-clear-selection","view-create",
                  "view-destroy","view-events","view-focus",
                  "view-focus-parent","view-info","view-navigate",
@@ -151,12 +151,15 @@ layout, native text selection, links, relocation events, and semantic screen
 navigation without exposing the local EPUB path.
 
 =view-open-publication= attaches an open publication to a child view.  It
-accepts an optional stable locator and a required resolved scroll bar policy.
-A reflowable publication accepts a complete semantic reading style:
+accepts an optional stable locator, a required appearance, and a required
+resolved scroll bar policy.  Appearance is =original= or =follow-emacs= and
+remains independent from reflow style and fixed zoom.  A reflowable
+publication accepts a complete semantic reading style:
 
 #+begin_src json
 {"id":2,"op":"view-open-publication",
  "params":{"view":1,"publication":1,
+           "appearance":"original",
            "scroll-bars":false,
            "style":{"font-scale":1.0,"line-height":1.6,
                     "content-width":720,"side-padding":7.0}}}
@@ -175,12 +178,23 @@ A pre-paginated publication instead accepts =zoom= as =fit-page=,
 #+begin_src json
 {"id":3,"op":"view-open-publication",
  "params":{"view":2,"publication":2,
+           "appearance":"original",
            "scroll-bars":false,"zoom":"fit-page"}}
 #+end_src
 
 Layout is authoritative: reflowable views reject =zoom=, and pre-paginated
 views reject =style=.  This keeps font reflow and fixed page scaling as
 separate state rather than assigning ambiguous meaning to one zoom value.
+
+=view-appearance= changes the validated appearance mode of an attached view
+without reopening its publication or changing its layout state.  The
+=original= mode installs no Reader color overrides.  Renderer failures are
+reported as bounded =appearance-error= events.
+
+#+begin_src json
+{"id":4,"op":"view-appearance",
+ "params":{"view":1,"appearance":"follow-emacs"}}
+#+end_src
 
 =view-style= accepts the same complete style object for an attached
 reflowable view.

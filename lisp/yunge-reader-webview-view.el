@@ -38,6 +38,8 @@
   requested-bounds
   bounds-pending
   publication
+  appearance
+  surface-appearance
   style
   surface-style
   zoom

@@ -694,6 +694,13 @@ VALUES is an alist containing complete, already bounded property values."
   (yunge-reader--follow-action
    (make-yunge-reader-action :type 'uri :uri uri)))
 
+(defun yunge-reader-epub--appearance-changed ()
+  "Synchronize the current EPUB view's effective appearance."
+  (when-let* ((view yunge-reader-webview--buffer-view)
+              ((not (yunge-reader-webview--view-destroyed view))))
+    (yunge-reader-webview--set-view-appearance
+     view (yunge-reader-effective-appearance))))
+
 (defun yunge-reader-epub--attach (document)
   "Attach a persistent EPUB WebView for DOCUMENT."
   (let ((handle (yunge-reader-document-handle document))
@@ -713,20 +720,24 @@ VALUES is an alist containing complete, already bounded property values."
       (yunge-reader-epub-reflow-view-mode
        (if (eq layout 'reflow) 1 -1))
       (yunge-reader-epub--update-header)
-      (yunge-reader-webview--attach-shared-publication
-       (yunge-reader-epub-handle-publication handle)
-       layout
-       :location-changed-function
-       #'yunge-reader-epub--location-changed
-       :selection-changed-function
-       #'yunge-reader-epub--selection-changed
-       :accelerator-function #'yunge-reader-epub--accelerator
-       :style style
-       :zoom (and (eq layout 'fixed) zoom)
-       :zoom-changed-function
-       (and (eq layout 'fixed) #'yunge-reader-epub--zoom-changed)
-       :scroll-bar-function #'yunge-reader-epub--scroll-bar-mode
-       :external-link-function #'yunge-reader-epub--external-link))))
+      (prog1
+          (yunge-reader-webview--attach-shared-publication
+           (yunge-reader-epub-handle-publication handle)
+           layout
+           :location-changed-function
+           #'yunge-reader-epub--location-changed
+           :selection-changed-function
+           #'yunge-reader-epub--selection-changed
+           :accelerator-function #'yunge-reader-epub--accelerator
+           :appearance (yunge-reader-effective-appearance document)
+           :style style
+           :zoom (and (eq layout 'fixed) zoom)
+           :zoom-changed-function
+           (and (eq layout 'fixed) #'yunge-reader-epub--zoom-changed)
+           :scroll-bar-function #'yunge-reader-epub--scroll-bar-mode
+           :external-link-function #'yunge-reader-epub--external-link)
+        (add-hook 'yunge-reader-appearance-change-hook
+                  #'yunge-reader-epub--appearance-changed nil t)))))
 
 (defun yunge-reader-epub--detach-complete (handle)
   "Finish one native view detach belonging to HANDLE."
@@ -738,6 +749,8 @@ VALUES is an alist containing complete, already bounded property values."
 
 (defun yunge-reader-epub--detach (document)
   "Detach the current EPUB view from DOCUMENT."
+  (remove-hook 'yunge-reader-appearance-change-hook
+               #'yunge-reader-epub--appearance-changed t)
   (let ((handle (yunge-reader-document-handle document)))
     (when yunge-reader-webview--buffer-view
       (cl-incf (yunge-reader-epub-handle-pending-detaches handle))
