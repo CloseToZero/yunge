@@ -951,6 +951,10 @@
       (setq yunge-reader-webview--buffer-view view)
       (should (eq (key-binding (kbd "<escape>"))
                   'evil-force-normal-state))
+      (evil-insert-state 1)
+      (should (eq evil-state 'insert))
+      (yunge-reader-epub--accelerator view "<escape>")
+      (should (eq evil-state 'normal))
       (dolist (key '("<escape>" "C-g"))
         (setq yunge-reader-selection
               (make-yunge-reader-selection

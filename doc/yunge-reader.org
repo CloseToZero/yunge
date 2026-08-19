@@ -52,8 +52,10 @@ motion is coalesced to its latest position while mouse release retains its
 exact endpoint.  Page text is spatially indexed when it arrives, so pointer
 hit testing inspects only nearby characters rather than scanning a whole page.
 Evil starts Reader buffers in Normal state, leaves Visual =y= as =evil-yank=,
-and retains =q= for macro recording.  Main Reader buffers do not bind =q= to
-window dismissal because a document view is persistent rather than temporary.
+and retains =q= for macro recording.  Reader-local =ESC= and =C-[= bindings
+always return Insert or Replace state to Normal, including when an EPUB child
+forwards =ESC=.  Main Reader buffers do not bind =q= to window dismissal
+because a document view is persistent rather than temporary.
 =C-g= and =ESC= clear the logical text selection and hide the active search
 highlight without discarding its query or results.  A later =n/N= resumes the
 same search and shows its highlight again.  With no Reader highlight to

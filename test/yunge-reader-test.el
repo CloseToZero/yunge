@@ -99,6 +99,24 @@
     (should (equal evil-visual-state-cursor '(nil)))
     (should-not cursor-type)))
 
+(ert-deftest yunge-reader-escape-leaves-evil-editing-states ()
+  (yunge-test-enable-evil)
+  (with-temp-buffer
+    (yunge-reader-mode)
+    (save-window-excursion
+      (switch-to-buffer (current-buffer))
+      (dolist (entry '((evil-insert-state . insert)
+                       (evil-replace-state . replace)))
+        (funcall (car entry) 1)
+        (should (eq evil-state (cdr entry)))
+        (should (eq (key-binding (kbd "<escape>"))
+                    'evil-force-normal-state))
+        (execute-kbd-macro (kbd "<escape>"))
+        (should (eq evil-state 'normal)))
+      (evil-insert-state 1)
+      (execute-kbd-macro (kbd "C-["))
+      (should (eq evil-state 'normal)))))
+
 (ert-deftest yunge-reader-disables-auto-save ()
   (with-temp-buffer
     (auto-save-mode 1)

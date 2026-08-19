@@ -480,6 +480,10 @@ Functions run in the affected Reader buffer without arguments.")
   (yunge-key-evil-define 'normal yunge-reader-mode-map
                          yunge-reader-normal-bindings)
   (yunge-key-evil-define
+   '(insert replace) yunge-reader-mode-map
+   '(("<escape>" evil-force-normal-state nil)
+     ("C-[" evil-force-normal-state nil)))
+  (yunge-key-evil-define
    'normal yunge-reader-mode-map
    '(("q" evil-record-macro nil)))
   (advice-add
