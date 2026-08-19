@@ -102,6 +102,25 @@
               (location (yunge-reader-webview--view-location view)))
     (copy-tree location)))
 
+(defun yunge-reader-reflow-smoke--surface (view)
+  "Return VIEW's current native surface, or nil."
+  (and view (yunge-reader-webview--view-surface view)))
+
+(defun yunge-reader-reflow-smoke--surface-id (view)
+  "Return VIEW's current native surface identifier, or nil."
+  (when-let* ((surface (yunge-reader-reflow-smoke--surface view)))
+    (yunge-reader-webview--surface-id surface)))
+
+(defun yunge-reader-reflow-smoke--surface-state (view)
+  "Return VIEW's current native surface state, or nil."
+  (when-let* ((surface (yunge-reader-reflow-smoke--surface view)))
+    (yunge-reader-webview--surface-state surface)))
+
+(defun yunge-reader-reflow-smoke--surface-bounds (view)
+  "Return VIEW's current native surface bounds, or nil."
+  (when-let* ((surface (yunge-reader-reflow-smoke--surface view)))
+    (yunge-reader-webview--surface-bounds surface)))
+
 (defun yunge-reader-reflow-smoke--chapter-p (location chapter)
   "Return whether LOCATION belongs to fixture CHAPTER."
   (and (yunge-reader-webview--valid-location-p location)
@@ -253,10 +272,11 @@
   "Record the two native views and their locations."
   (push
    `((name . additional)
-     (primary-surface . ,(yunge-reader-webview--view-id view))
+     (primary-surface
+      . ,(yunge-reader-reflow-smoke--surface-id view))
      (primary-location . ,(copy-tree location))
      (additional-surface
-      . ,(yunge-reader-webview--view-id additional-view))
+      . ,(yunge-reader-reflow-smoke--surface-id additional-view))
      (additional-location . ,(copy-tree additional-location)))
    yunge-reader-reflow-smoke--observations))
 
@@ -286,9 +306,9 @@
   "Record native VIEW and LOCATION under NAME."
   (push
    `((name . ,name)
-     (surface . ,(yunge-reader-webview--view-id view))
+     (surface . ,(yunge-reader-reflow-smoke--surface-id view))
      (bounds . ,(copy-tree
-                 (yunge-reader-webview--view-bounds view)))
+                 (yunge-reader-reflow-smoke--surface-bounds view)))
      (scale . ,yunge-reader-effective-scale)
      (location . ,(copy-tree location))
      (search . ,(yunge-reader-reflow-smoke--search-state))
@@ -310,9 +330,8 @@
         (list
          :phase yunge-reader-reflow-smoke--phase
          :surface-state
-         (and view
-              (yunge-reader-webview--view-surface-state view))
-         :surface (and view (yunge-reader-webview--view-id view))
+         (yunge-reader-reflow-smoke--surface-state view)
+         :surface (yunge-reader-reflow-smoke--surface-id view)
          :location (yunge-reader-reflow-smoke--location)
          :anchor yunge-reader-reflow-smoke--anchor
          :search (yunge-reader-reflow-smoke--search-state)
@@ -397,12 +416,13 @@
                              yunge-reader-document)
                             'reflow)
                         view
-                        (yunge-reader-webview--surface-ready-p view)
+                        (yunge-reader-webview--surface-ready-p
+                         (yunge-reader-reflow-smoke--surface view))
                         (yunge-reader-reflow-smoke--chapter-p location 1)
                         (= yunge-reader-effective-scale 1.0))
                    (progn
                      (setq yunge-reader-reflow-smoke--surface-id
-                           (yunge-reader-webview--view-id view)
+                           (yunge-reader-reflow-smoke--surface-id view)
                            yunge-reader-reflow-smoke--anchor
                            (copy-tree location)
                            yunge-reader-reflow-smoke--phase 'retain)
@@ -436,9 +456,7 @@
                   0.1 nil #'yunge-reader-reflow-smoke--poll)))
               ('hidden
                (if (and
-                    (eq (yunge-reader-webview--view-surface-state view)
-                        'detached)
-                    (null (yunge-reader-webview--view-id view))
+                    (null (yunge-reader-reflow-smoke--surface view))
                     (yunge-reader-reflow-smoke--same-anchor-p
                      location yunge-reader-reflow-smoke--anchor))
                    (progn
@@ -450,9 +468,12 @@
                   0.1 nil #'yunge-reader-reflow-smoke--poll)))
               ('reopened
                (if (and
-                    (yunge-reader-webview--surface-ready-p view)
-                    (numberp (yunge-reader-webview--view-id view))
-                    (not (eql (yunge-reader-webview--view-id view)
+                    (yunge-reader-webview--surface-ready-p
+                     (yunge-reader-reflow-smoke--surface view))
+                    (numberp
+                     (yunge-reader-reflow-smoke--surface-id view))
+                    (not (eql
+                          (yunge-reader-reflow-smoke--surface-id view)
                               yunge-reader-reflow-smoke--surface-id))
                     (yunge-reader-reflow-smoke--same-anchor-p
                      location yunge-reader-reflow-smoke--anchor))
@@ -460,7 +481,7 @@
                      (yunge-reader-reflow-smoke--observe
                       'reopened view location)
                      (setq yunge-reader-reflow-smoke--surface-id
-                           (yunge-reader-webview--view-id view)
+                           (yunge-reader-reflow-smoke--surface-id view)
                            yunge-reader-reflow-smoke--phase
                            'search-first)
                      (yunge-reader-search
@@ -595,7 +616,7 @@
                       (get-buffer-window (current-buffer) t)))
                  (if (and
                       reader-window
-                      (eql (yunge-reader-webview--view-id view)
+                      (eql (yunge-reader-reflow-smoke--surface-id view)
                            yunge-reader-reflow-smoke--surface-id)
                       (yunge-reader-reflow-smoke--chapter-p location 3))
                      (let ((additional-window
@@ -630,11 +651,12 @@
                       (yunge-reader-webview--surface-ready-p
                        additional-view)
                       (numberp
-                       (yunge-reader-webview--view-id
+                       (yunge-reader-reflow-smoke--surface-id
                         additional-view))
                       (not
                        (eql
-                        (yunge-reader-webview--view-id additional-view)
+                        (yunge-reader-reflow-smoke--surface-id
+                         additional-view)
                         yunge-reader-reflow-smoke--surface-id))
                       (eql
                        (yunge-reader-webview--view-publication
@@ -648,7 +670,8 @@
                      (progn
                        (setq
                         yunge-reader-reflow-smoke--additional-surface-id
-                        (yunge-reader-webview--view-id additional-view)
+                        (yunge-reader-reflow-smoke--surface-id
+                         additional-view)
                         yunge-reader-reflow-smoke--phase
                         'additional-moved)
                        (with-current-buffer
@@ -668,9 +691,10 @@
                  (if (and
                       additional-view
                       (eql
-                       (yunge-reader-webview--view-id additional-view)
+                       (yunge-reader-reflow-smoke--surface-id
+                        additional-view)
                        yunge-reader-reflow-smoke--additional-surface-id)
-                      (eql (yunge-reader-webview--view-id view)
+                      (eql (yunge-reader-reflow-smoke--surface-id view)
                            yunge-reader-reflow-smoke--surface-id)
                       (yunge-reader-reflow-smoke--same-anchor-p
                        location yunge-reader-reflow-smoke--anchor)

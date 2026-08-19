@@ -8,6 +8,16 @@
 (declare-function yunge-reader-webview--request
                   "yunge-reader-webview-service"
                   (operation parameters complete))
+
+(defun yunge-reader-webview--current-surface-id (view)
+  "Return VIEW's current native surface identifier."
+  (let* ((surface (yunge-reader-webview--view-surface view))
+         (id (and surface
+                  (yunge-reader-webview--surface-id surface))))
+    (unless (and (integerp id) (> id 0))
+      (error "EPUB view has no current native surface"))
+    id))
+
 (defun yunge-reader-webview--open-publication (path callback)
   "Open the local EPUB at PATH and invoke CALLBACK with its result."
   (unless (and (stringp path)
@@ -66,7 +76,7 @@ returned batch, and COMPLETE receives the validated native result."
     (error "Invalid EPUB selection text completion: %S" complete))
   (yunge-reader-webview--request
    "view-selection-text"
-   `((view . ,(yunge-reader-webview--view-id view))
+   `((view . ,(yunge-reader-webview--current-surface-id view))
      (selection . ,(copy-tree
                     (if (yunge-reader-webview--valid-selection-p selection)
                         selection
@@ -130,7 +140,7 @@ returned batch, and COMPLETE receives the validated native result."
     (error "Invalid EPUB search completion: %S" complete))
   (yunge-reader-webview--request
    "view-search"
-   `((view . ,(yunge-reader-webview--view-id view))
+   `((view . ,(yunge-reader-webview--current-surface-id view))
      (query . ,query)
      (case-sensitive . ,(if case-sensitive t :false))
      (direction . ,(symbol-name direction))
@@ -163,7 +173,7 @@ CALLBACK when complete."
   (yunge-reader-webview--request
    "view-open-publication"
    (append
-    `((view . ,(yunge-reader-webview--view-id view))
+    `((view . ,(yunge-reader-webview--current-surface-id view))
       (publication . ,publication)
       (appearance
        . ,(yunge-reader-webview--appearance-value appearance)))
@@ -186,7 +196,7 @@ CALLBACK when complete."
   "Apply APPEARANCE to native VIEW, then invoke CALLBACK."
   (yunge-reader-webview--request
    "view-appearance"
-   `((view . ,(yunge-reader-webview--view-id view))
+   `((view . ,(yunge-reader-webview--current-surface-id view))
      (appearance
       . ,(yunge-reader-webview--appearance-value appearance)))
    callback))
@@ -207,7 +217,7 @@ LOCATION is required only for the go-to command."
   (yunge-reader-webview--request
    "view-navigate"
    (append
-    `((view . ,(yunge-reader-webview--view-id view))
+    `((view . ,(yunge-reader-webview--current-surface-id view))
       (command . ,command))
     (when location
       `((location . ,(yunge-reader-webview--check-target location)))))
@@ -218,7 +228,7 @@ LOCATION is required only for the go-to command."
   "Apply STYLE to native VIEW, then invoke CALLBACK."
   (yunge-reader-webview--request
    "view-style"
-   `((view . ,(yunge-reader-webview--view-id view))
+   `((view . ,(yunge-reader-webview--current-surface-id view))
      (style . ,(yunge-reader-webview--check-style style)))
    callback))
 
@@ -227,7 +237,7 @@ LOCATION is required only for the go-to command."
   "Apply fixed-layout ZOOM to native VIEW, then invoke CALLBACK."
   (yunge-reader-webview--request
    "view-zoom"
-   `((view . ,(yunge-reader-webview--view-id view))
+   `((view . ,(yunge-reader-webview--current-surface-id view))
      (zoom . ,(yunge-reader-webview--fixed-zoom-value zoom)))
    callback))
 
@@ -236,7 +246,7 @@ LOCATION is required only for the go-to command."
   "Apply resolved scroll bar MODE to native VIEW, then invoke CALLBACK."
   (yunge-reader-webview--request
    "view-scroll-bars"
-   `((view . ,(yunge-reader-webview--view-id view))
+   `((view . ,(yunge-reader-webview--current-surface-id view))
      (visible
       . ,(if (eq (yunge-reader-webview--check-scroll-bar-mode mode)
                  'visible)

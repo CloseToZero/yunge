@@ -5,8 +5,8 @@
 (require 'cl-lib)
 
 (defconst yunge-reader-webview--surface-states
-  '(detached creating native-ready opening ready failed)
-  "Lifecycle states for one logical view's current native surface.")
+  '(creating native-ready opening ready failed)
+  "Lifecycle states for a current native surface.")
 
 (defvar yunge-reader-webview--next-view-id 0
   "Last logical WebView identifier allocated by Emacs.")
@@ -21,31 +21,38 @@
 (defvar-local yunge-reader-webview--buffer-view nil
   "Logical WebView record owned by the current Reader buffer.")
 
+(cl-defstruct (yunge-reader-webview--surface
+               (:constructor yunge-reader-webview--make-surface))
+  "One disposable native surface for a logical EPUB view."
+  id
+  window
+  (state 'creating)
+  native-focused
+  focus-release-pending
+  bounds
+  requested-bounds
+  bounds-pending
+  appearance
+  style
+  zoom
+  scroll-bar-mode
+  open-deadline
+  open-timer)
+
 (cl-defstruct (yunge-reader-webview--view
                (:constructor yunge-reader-webview--make-view))
   "One logical EPUB view and its disposable native surface."
-  id
-  window
   buffer
-  (surface-state 'detached)
-  native-focused
-  focus-release-pending
+  surface
   destroyed
   persistent
   owns-publication
   layout
-  bounds
-  requested-bounds
-  bounds-pending
   publication
   appearance
-  surface-appearance
   style
-  surface-style
   zoom
-  surface-zoom
   scroll-bar-mode
-  surface-scroll-bar-mode
   location
   pending-target
   outline
@@ -55,8 +62,6 @@
   selection
   search-result
   path
-  open-deadline
-  open-timer
   pending-destroys
   destroy-waiters
   destroy-finished
@@ -68,20 +73,22 @@
   scroll-bar-function
   external-link-function)
 
-(defun yunge-reader-webview--set-surface-state (view state)
-  "Set VIEW's surface STATE after validating the lifecycle value."
+(defun yunge-reader-webview--set-surface-state (surface state)
+  "Set SURFACE's STATE after validating the lifecycle value."
   (unless (memq state yunge-reader-webview--surface-states)
     (error "Invalid EPUB surface state: %S" state))
-  (setf (yunge-reader-webview--view-surface-state view) state))
+  (setf (yunge-reader-webview--surface-state surface) state))
 
-(defun yunge-reader-webview--surface-created-p (view)
-  "Return whether VIEW has a native surface that accepts requests."
-  (memq (yunge-reader-webview--view-surface-state view)
-        '(native-ready opening ready failed)))
+(defun yunge-reader-webview--surface-created-p (surface)
+  "Return whether SURFACE accepts native requests."
+  (and surface
+       (memq (yunge-reader-webview--surface-state surface)
+             '(native-ready opening ready failed))))
 
-(defun yunge-reader-webview--surface-ready-p (view)
-  "Return whether VIEW's native surface has loaded its publication."
-  (eq (yunge-reader-webview--view-surface-state view) 'ready))
+(defun yunge-reader-webview--surface-ready-p (surface)
+  "Return whether SURFACE has loaded its publication."
+  (and surface
+       (eq (yunge-reader-webview--surface-state surface) 'ready)))
 
 (provide 'yunge-reader-webview-view)
 

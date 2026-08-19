@@ -369,9 +369,11 @@ USER is non-nil when direct reader movement produced the location."
         (yunge-reader-epub--update-header)
         (when user
           (yunge-reader--detach-search-navigation))
-        (when (yunge-reader-webview--surface-ready-p view)
+        (when-let* ((surface
+                     (yunge-reader-webview--view-surface view))
+                    ((yunge-reader-webview--surface-ready-p surface)))
           (yunge-reader-record-place
-           (yunge-reader-webview--view-window view)))))))
+           (yunge-reader-webview--surface-window surface)))))))
 
 (defun yunge-reader-epub--selection-position (href cfi)
   "Return a Reader position for EPUB HREF and collapsed CFI."
@@ -542,7 +544,8 @@ USER is non-nil when direct reader movement produced the location."
   (yunge-reader-webview--sync-view view)
   (yunge-reader-epub--update-header)
   (yunge-reader-record-place
-   (yunge-reader-webview--view-window view))
+   (when-let* ((surface (yunge-reader-webview--view-surface view)))
+     (yunge-reader-webview--surface-window surface)))
   style)
 
 (defun yunge-reader-epub--fixed-zoom ()
@@ -874,9 +877,10 @@ VALUES is an alist containing complete, already bounded property values."
               (target
                (yunge-reader-epub--position-target position)))
     (let ((stable
-           (yunge-reader-webview--valid-location-p target))
+          (yunge-reader-webview--valid-location-p target))
           (ready
-           (yunge-reader-webview--surface-ready-p view)))
+           (yunge-reader-webview--surface-ready-p
+            (yunge-reader-webview--view-surface view))))
       (cond
        (stable
         (setf (yunge-reader-webview--view-location view)
@@ -909,7 +913,9 @@ VALUES is an alist containing complete, already bounded property values."
           (yunge-reader-webview--sync-view view)
           (yunge-reader-epub--update-header)
           (yunge-reader-record-place
-           (yunge-reader-webview--view-window view)))
+           (when-let* ((surface
+                        (yunge-reader-webview--view-surface view)))
+             (yunge-reader-webview--surface-window surface))))
       (unless (eq yunge-reader-zoom-mode 'manual)
         (error "Reflowable EPUB views require manual zoom mode"))
       (let* ((scale

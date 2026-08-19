@@ -24,11 +24,13 @@
 (ert-deftest yunge-reader-webview-coalesces-window-resizes ()
   (let* ((view
           (yunge-reader-webview--make-view
-           :id 7
-           :surface-state 'native-ready
-           :bounds '((x . 0) (y . 0) (width . 100) (height . 100))
-           :requested-bounds
-           '((x . 0) (y . 0) (width . 200) (height . 100))))
+           :surface
+           (yunge-reader-webview--make-surface
+            :id 7
+            :state 'native-ready
+            :bounds '((x . 0) (y . 0) (width . 100) (height . 100))
+            :requested-bounds
+            '((x . 0) (y . 0) (width . 200) (height . 100)))))
          (yunge-reader-webview--views
           (make-hash-table :test #'eql))
          requests)
@@ -38,7 +40,8 @@
           (lambda (_operation parameters complete)
             (push (cons parameters complete) requests))))
       (yunge-reader-webview--send-latest-bounds view)
-      (setf (yunge-reader-webview--view-requested-bounds view)
+      (setf (yunge-reader-webview--surface-requested-bounds
+             (yunge-reader-webview--view-surface view))
             '((x . 0) (y . 0) (width . 300) (height . 100)))
       (yunge-reader-webview--send-latest-bounds view)
       (should (= (length requests) 1))
@@ -53,11 +56,13 @@
 (ert-deftest yunge-reader-webview-ignores-obsolete-surface-bounds ()
   (let* ((view
           (yunge-reader-webview--make-view
-           :id 7
-           :surface-state 'native-ready
-           :bounds '((x . 0) (y . 0) (width . 100) (height . 100))
-           :requested-bounds
-           '((x . 0) (y . 0) (width . 200) (height . 100))))
+           :surface
+           (yunge-reader-webview--make-surface
+            :id 7
+            :state 'native-ready
+            :bounds '((x . 0) (y . 0) (width . 100) (height . 100))
+            :requested-bounds
+            '((x . 0) (y . 0) (width . 200) (height . 100)))))
          (yunge-reader-webview--views
           (make-hash-table :test #'eql))
          requests)
@@ -68,13 +73,17 @@
             (push (cons parameters complete) requests))))
       (yunge-reader-webview--send-latest-bounds view)
       (remhash 7 yunge-reader-webview--views)
-      (setf (yunge-reader-webview--view-id view) 8
-            (yunge-reader-webview--view-bounds view) nil
-            (yunge-reader-webview--view-bounds-pending view) t)
+      (setf (yunge-reader-webview--view-surface view)
+            (yunge-reader-webview--make-surface
+             :id 8 :state 'native-ready :bounds-pending t))
       (puthash 8 view yunge-reader-webview--views)
       (funcall (cdar requests) nil nil)
-      (should (yunge-reader-webview--view-bounds-pending view))
-      (should-not (yunge-reader-webview--view-bounds view))
+      (should
+       (yunge-reader-webview--surface-bounds-pending
+        (yunge-reader-webview--view-surface view)))
+      (should-not
+       (yunge-reader-webview--surface-bounds
+        (yunge-reader-webview--view-surface view)))
       (should (= (length requests) 1)))))
 
 (provide 'yunge-reader-webview-surface-test)

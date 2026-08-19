@@ -34,6 +34,12 @@
     (start . "epubcfi(/6/4!/4/2/1:0)")
     (end . "epubcfi(/6/4!/4/2/1:8)")))
 
+(defun yunge-reader-epub-test--surface
+    (id state &rest properties)
+  "Return an EPUB test surface with ID, STATE, and PROPERTIES."
+  (apply #'yunge-reader-webview--make-surface
+         :id id :state state properties))
+
 (ert-deftest yunge-reader-epub-uses-reflowable-screen-bindings ()
   (yunge-test-keymap-keys
    yunge-reader-epub-view-mode-map
@@ -978,7 +984,8 @@
            :unit (alist-get 'href selection) :offset 4))
          (view
           (yunge-reader-webview--make-view
-           :id 9
+           :surface
+           (yunge-reader-epub-test--surface 9 'ready)
            :publication 7
            :selection (copy-tree selection)))
          request
@@ -1024,7 +1031,9 @@
            :value '((href . "OPS/chapter.xhtml") (offset . 2))))
          (view
           (yunge-reader-webview--make-view
-           :id 9 :publication 7))
+           :surface
+           (yunge-reader-epub-test--surface 9 'ready)
+           :publication 7))
          request
          result
          error-data)
@@ -1090,7 +1099,9 @@
     (with-temp-buffer
       (setq yunge-reader-webview--buffer-view
             (yunge-reader-webview--make-view
-             :id 9 :publication 7))
+             :surface
+             (yunge-reader-epub-test--surface 9 'ready)
+             :publication 7))
       (cl-letf
           (((symbol-function 'yunge-reader-webview--request-search)
             (lambda (&rest _arguments) (setq requested t))))
@@ -1118,7 +1129,9 @@
     (with-temp-buffer
       (setq yunge-reader-webview--buffer-view
             (yunge-reader-webview--make-view
-             :id 9 :publication 7 :selection nil))
+             :surface
+             (yunge-reader-epub-test--surface 9 'ready)
+             :publication 7 :selection nil))
       (cl-letf
           (((symbol-function
              'yunge-reader-webview--request-selection-text)
@@ -1232,7 +1245,8 @@
         (should
          (equal (yunge-reader-webview--view-location view)
                 location))
-        (setf (yunge-reader-webview--view-surface-state view) 'ready)
+        (setf (yunge-reader-webview--view-surface view)
+              (yunge-reader-epub-test--surface 9 'ready))
         (should
          (yunge-reader-epub--restore-location nil position nil))
         (should
@@ -1262,7 +1276,8 @@
         (should
          (equal (yunge-reader-webview--view-pending-target view)
                 '((href . "OPS/chapter.xhtml#section"))))
-        (setf (yunge-reader-webview--view-surface-state view) 'ready)
+        (setf (yunge-reader-webview--view-surface view)
+              (yunge-reader-epub-test--surface 9 'ready))
         (yunge-reader-webview--dispatch-pending-target view)))
     (should
      (equal navigation
@@ -1278,9 +1293,10 @@
          (view
           (yunge-reader-webview--make-view
            :buffer buffer
-           :window window
-           :persistent t
-           :surface-state 'opening))
+           :surface
+           (yunge-reader-epub-test--surface
+            9 'opening :window window)
+           :persistent t))
          recorded)
     (unwind-protect
         (with-current-buffer buffer
@@ -1292,8 +1308,8 @@
                        (setq recorded value))))
             (yunge-reader-epub--location-changed view nil)
             (should-not recorded)
-            (setf (yunge-reader-webview--view-surface-state view)
-                  'ready)
+            (yunge-reader-webview--set-surface-state
+             (yunge-reader-webview--view-surface view) 'ready)
             (yunge-reader-epub--location-changed view nil))
           (should (eq recorded window)))
       (kill-buffer buffer))))
@@ -1303,7 +1319,9 @@
          (view
           (yunge-reader-webview--make-view
            :buffer buffer
-           :window (selected-window)
+           :surface
+           (yunge-reader-epub-test--surface
+            9 'ready :window (selected-window))
            :persistent t)))
     (unwind-protect
         (with-current-buffer buffer

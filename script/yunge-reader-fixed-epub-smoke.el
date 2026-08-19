@@ -88,6 +88,25 @@
               (location (yunge-reader-webview--view-location view)))
     (copy-tree location)))
 
+(defun yunge-reader-fixed-smoke--surface (view)
+  "Return VIEW's current native surface, or nil."
+  (and view (yunge-reader-webview--view-surface view)))
+
+(defun yunge-reader-fixed-smoke--surface-id (view)
+  "Return VIEW's current native surface identifier, or nil."
+  (when-let* ((surface (yunge-reader-fixed-smoke--surface view)))
+    (yunge-reader-webview--surface-id surface)))
+
+(defun yunge-reader-fixed-smoke--surface-bounds (view)
+  "Return VIEW's current native surface bounds, or nil."
+  (when-let* ((surface (yunge-reader-fixed-smoke--surface view)))
+    (yunge-reader-webview--surface-bounds surface)))
+
+(defun yunge-reader-fixed-smoke--surface-zoom (view)
+  "Return VIEW's current applied fixed zoom, or nil."
+  (when-let* ((surface (yunge-reader-fixed-smoke--surface view)))
+    (yunge-reader-webview--surface-zoom surface)))
+
 (defun yunge-reader-fixed-smoke--page-p (location page)
   "Return whether LOCATION belongs to fixture PAGE."
   (and (yunge-reader-webview--valid-location-p location)
@@ -106,9 +125,9 @@
   "Record the native VIEW state and LOCATION under NAME."
   (push
    `((name . ,name)
-     (surface . ,(yunge-reader-webview--view-id view))
+     (surface . ,(yunge-reader-fixed-smoke--surface-id view))
      (bounds . ,(copy-tree
-                 (yunge-reader-webview--view-bounds view)))
+                 (yunge-reader-fixed-smoke--surface-bounds view)))
      (zoom . ,yunge-reader-zoom-mode)
      (scale . ,yunge-reader-effective-scale)
      (location . ,(copy-tree location)))
@@ -122,14 +141,17 @@
 
 (defun yunge-reader-fixed-smoke--same-surface-p (view)
   "Return whether VIEW still owns the original native surface."
-  (eql (yunge-reader-webview--view-id view)
+  (eql (yunge-reader-fixed-smoke--surface-id view)
        yunge-reader-fixed-smoke--surface-id))
 
 (defun yunge-reader-fixed-smoke--bounds-settled-p (view)
   "Return whether VIEW applied its latest requested native bounds."
-  (and (not (yunge-reader-webview--view-bounds-pending view))
-       (equal (yunge-reader-webview--view-bounds view)
-              (yunge-reader-webview--view-requested-bounds view))))
+  (when-let* ((surface (yunge-reader-fixed-smoke--surface view)))
+    (and (not
+          (yunge-reader-webview--surface-bounds-pending surface))
+         (equal (yunge-reader-webview--surface-bounds surface)
+                (yunge-reader-webview--surface-requested-bounds
+                 surface)))))
 
 (defun yunge-reader-fixed-smoke--different-scale-p (left right)
   "Return whether numeric scales LEFT and RIGHT differ materially."
@@ -238,7 +260,8 @@
                              yunge-reader-document)
                             'fixed)
                         view
-                        (yunge-reader-webview--surface-ready-p view)
+                         (yunge-reader-webview--surface-ready-p
+                          (yunge-reader-fixed-smoke--surface view))
                         (yunge-reader-fixed-smoke--page-p location 1))
                    (progn
                      (unless (eq yunge-reader-zoom-mode 'fit-page)
@@ -246,7 +269,7 @@
                      (unless (numberp yunge-reader-effective-scale)
                        (error "Fixed EPUB has no effective scale"))
                      (setq yunge-reader-fixed-smoke--surface-id
-                           (yunge-reader-webview--view-id view)
+                           (yunge-reader-fixed-smoke--surface-id view)
                            yunge-reader-fixed-smoke--fit-scale
                            yunge-reader-effective-scale)
                      (yunge-reader-fixed-smoke--record 'initial location)
@@ -303,8 +326,8 @@
                (if (and
                     (yunge-reader-fixed-smoke--same-surface-p view)
                     (eq yunge-reader-zoom-mode 'fit-width)
-                    (eq (yunge-reader-webview--view-surface-zoom view)
-                        'fit-width)
+                     (eq (yunge-reader-fixed-smoke--surface-zoom view)
+                         'fit-width)
                     (yunge-reader-fixed-smoke--different-scale-p
                      yunge-reader-effective-scale
                      yunge-reader-fixed-smoke--fit-scale)
@@ -314,7 +337,8 @@
                            yunge-reader-effective-scale
                            yunge-reader-fixed-smoke--resize-bounds
                            (copy-tree
-                            (yunge-reader-webview--view-bounds view))
+                             (yunge-reader-fixed-smoke--surface-bounds
+                              view))
                            yunge-reader-fixed-smoke--phase
                            'fit-width-resize)
                      (yunge-reader-fixed-smoke--observe
@@ -327,7 +351,7 @@
                   0.1 nil #'yunge-reader-fixed-smoke--poll)))
               ('fit-width-resize
                (let ((bounds
-                      (yunge-reader-webview--view-bounds view)))
+                      (yunge-reader-fixed-smoke--surface-bounds view)))
                  (if (and
                       (yunge-reader-fixed-smoke--same-surface-p view)
                       (yunge-reader-fixed-smoke--bounds-settled-p view)
@@ -353,8 +377,8 @@
                (if (and
                     (yunge-reader-fixed-smoke--same-surface-p view)
                     (eq yunge-reader-zoom-mode 'fit-page)
-                    (eq (yunge-reader-webview--view-surface-zoom view)
-                        'fit-page)
+                     (eq (yunge-reader-fixed-smoke--surface-zoom view)
+                         'fit-page)
                     (yunge-reader-fixed-smoke--different-scale-p
                      yunge-reader-effective-scale
                      yunge-reader-fixed-smoke--fit-scale)
@@ -364,7 +388,8 @@
                            yunge-reader-effective-scale
                            yunge-reader-fixed-smoke--resize-bounds
                            (copy-tree
-                            (yunge-reader-webview--view-bounds view))
+                             (yunge-reader-fixed-smoke--surface-bounds
+                              view))
                            yunge-reader-fixed-smoke--phase
                            'fit-page-resize)
                      (yunge-reader-fixed-smoke--observe
@@ -377,7 +402,7 @@
                   0.1 nil #'yunge-reader-fixed-smoke--poll)))
               ('fit-page-resize
                (let ((bounds
-                      (yunge-reader-webview--view-bounds view)))
+                      (yunge-reader-fixed-smoke--surface-bounds view)))
                  (if (and
                       (yunge-reader-fixed-smoke--same-surface-p view)
                       (yunge-reader-fixed-smoke--bounds-settled-p view)
@@ -404,8 +429,8 @@
                     (eq yunge-reader-zoom-mode 'manual)
                     (= yunge-reader-scale 1.0)
                     (= yunge-reader-effective-scale 1.0)
-                    (= (yunge-reader-webview--view-surface-zoom view)
-                       1.0)
+                     (= (yunge-reader-fixed-smoke--surface-zoom view)
+                        1.0)
                     (yunge-reader-fixed-smoke--page-p location 1))
                    (progn
                      (yunge-reader-fixed-smoke--observe
@@ -424,7 +449,8 @@
                            (copy-tree location)
                            yunge-reader-fixed-smoke--resize-bounds
                            (copy-tree
-                            (yunge-reader-webview--view-bounds view))
+                             (yunge-reader-fixed-smoke--surface-bounds
+                              view))
                            yunge-reader-fixed-smoke--resize-not-before
                            (+ (float-time) 0.5)
                            yunge-reader-fixed-smoke--phase
@@ -441,7 +467,7 @@
                   0.1 nil #'yunge-reader-fixed-smoke--poll)))
               ('manual-resize
                (let ((bounds
-                      (yunge-reader-webview--view-bounds view)))
+                      (yunge-reader-fixed-smoke--surface-bounds view)))
                  (if (and
                       (> (float-time)
                          yunge-reader-fixed-smoke--resize-not-before)
@@ -459,8 +485,8 @@
                           yunge-reader-fixed-smoke--resize-bounds))
                       (eq yunge-reader-zoom-mode 'manual)
                       (= yunge-reader-effective-scale 1.0)
-                      (= (yunge-reader-webview--view-surface-zoom view)
-                         1.0)
+                       (= (yunge-reader-fixed-smoke--surface-zoom view)
+                          1.0)
                       (yunge-reader-fixed-smoke--same-viewport-p
                        location yunge-reader-fixed-smoke--scrolled))
                      (progn
@@ -503,11 +529,10 @@
                    (run-at-time
                     0.1 nil #'yunge-reader-fixed-smoke--poll))))
               ('hidden
-               (if (and (eq (yunge-reader-webview--view-surface-state view)
-                            'detached)
-                        (null (yunge-reader-webview--view-id view))
-                        (equal location
-                               yunge-reader-fixed-smoke--scrolled))
+               (if (and (null
+                         (yunge-reader-fixed-smoke--surface view))
+                         (equal location
+                                yunge-reader-fixed-smoke--scrolled))
                    (progn
                      (setq yunge-reader-fixed-smoke--phase 'reopened)
                      (switch-to-buffer
@@ -517,10 +542,14 @@
                  (run-at-time
                   0.1 nil #'yunge-reader-fixed-smoke--poll)))
               ('reopened
-               (if (and (yunge-reader-webview--surface-ready-p view)
-                        (numberp (yunge-reader-webview--view-id view))
-                        (not (eql (yunge-reader-webview--view-id view)
-                                  yunge-reader-fixed-smoke--surface-id))
+               (if (and
+                    (yunge-reader-webview--surface-ready-p
+                     (yunge-reader-fixed-smoke--surface view))
+                    (numberp
+                     (yunge-reader-fixed-smoke--surface-id view))
+                    (not
+                     (eql (yunge-reader-fixed-smoke--surface-id view)
+                          yunge-reader-fixed-smoke--surface-id))
                         (yunge-reader-fixed-smoke--same-viewport-p
                          location yunge-reader-fixed-smoke--scrolled))
                    (progn

@@ -126,7 +126,8 @@
       ("publication-ready"
        (when-let* ((view (gethash id yunge-reader-webview--views)))
          (yunge-reader-webview--store-view-location view message t)
-         (yunge-reader-webview--set-surface-state view 'ready)
+         (yunge-reader-webview--set-surface-state
+          (yunge-reader-webview--view-surface view) 'ready)
          (yunge-reader-webview--set-view-selection view nil)
          (yunge-reader-webview--sync-view-appearance view)
          (yunge-reader-webview--sync-view-style view)
@@ -172,7 +173,8 @@
          (unless (stringp detail)
            (error "Malformed EPUB appearance error: %S" message))
          (when-let* ((view (gethash id yunge-reader-webview--views)))
-           (setf (yunge-reader-webview--view-surface-appearance view)
+           (setf (yunge-reader-webview--surface-appearance
+                  (yunge-reader-webview--view-surface view))
                  nil))
          (display-warning 'yunge-reader detail :warning)))
       ("style-error"
@@ -180,7 +182,9 @@
          (unless (stringp detail)
            (error "Malformed EPUB style error: %S" message))
          (when-let* ((view (gethash id yunge-reader-webview--views)))
-           (setf (yunge-reader-webview--view-surface-style view) nil))
+           (setf (yunge-reader-webview--surface-style
+                  (yunge-reader-webview--view-surface view))
+                 nil))
          (display-warning 'yunge-reader detail :warning)))
       ("zoom-changed"
        (let ((scale (alist-get 'scale message)))
@@ -203,7 +207,9 @@
          (unless (stringp detail)
            (error "Malformed EPUB zoom error: %S" message))
          (when-let* ((view (gethash id yunge-reader-webview--views)))
-           (setf (yunge-reader-webview--view-surface-zoom view) nil))
+           (setf (yunge-reader-webview--surface-zoom
+                  (yunge-reader-webview--view-surface view))
+                 nil))
          (display-warning 'yunge-reader detail :warning)))
       ("scroll-bars-error"
        (let ((detail (alist-get 'message message)))
@@ -211,7 +217,8 @@
            (error "Malformed EPUB scroll bar error: %S" message))
          (when-let* ((view (gethash id yunge-reader-webview--views)))
            (setf
-            (yunge-reader-webview--view-surface-scroll-bar-mode view)
+            (yunge-reader-webview--surface-scroll-bar-mode
+             (yunge-reader-webview--view-surface view))
             nil))
          (display-warning 'yunge-reader detail :warning)))
       ("publication-error"
@@ -219,12 +226,16 @@
          (unless (stringp detail)
            (error "Malformed EPUB renderer error: %S" message))
          (when-let* ((view (gethash id yunge-reader-webview--views)))
-           (yunge-reader-webview--set-surface-state view 'failed)
-           (setf (yunge-reader-webview--view-surface-appearance view) nil
-                 (yunge-reader-webview--view-surface-style view) nil
-                 (yunge-reader-webview--view-surface-zoom view) nil
-                 (yunge-reader-webview--view-surface-scroll-bar-mode view)
-                 nil
+           (let ((surface
+                  (yunge-reader-webview--view-surface view)))
+             (yunge-reader-webview--set-surface-state surface 'failed)
+             (setf (yunge-reader-webview--surface-appearance surface) nil
+                   (yunge-reader-webview--surface-style surface) nil
+                   (yunge-reader-webview--surface-zoom surface) nil
+                   (yunge-reader-webview--surface-scroll-bar-mode
+                    surface)
+                   nil))
+           (setf
                  (yunge-reader-webview--view-pending-target view) nil
                  (yunge-reader-webview--view-outline-error view)
                  (list 'error detail))

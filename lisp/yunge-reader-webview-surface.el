@@ -53,28 +53,36 @@
 
 (defun yunge-reader-webview--surface-current-p (view id)
   "Return whether ID is VIEW's current native surface."
-  (and (integerp id)
-       (eql id (yunge-reader-webview--view-id view))
-       (eq (gethash id yunge-reader-webview--views) view)))
+  (let ((surface (yunge-reader-webview--view-surface view)))
+    (and surface
+         (integerp id)
+         (eql id (yunge-reader-webview--surface-id surface))
+         (eq (gethash id yunge-reader-webview--views) view))))
 
 (defun yunge-reader-webview--send-latest-bounds (view)
   "Send VIEW's latest requested bounds unless one is in flight."
-  (when (and (yunge-reader-webview--surface-created-p view)
-             (not (yunge-reader-webview--view-destroyed view))
-             (not (yunge-reader-webview--view-bounds-pending view)))
-    (let ((bounds (yunge-reader-webview--view-requested-bounds view)))
-      (unless (equal bounds (yunge-reader-webview--view-bounds view))
-        (let ((id (yunge-reader-webview--view-id view)))
-          (setf (yunge-reader-webview--view-bounds-pending view) t)
+  (when-let* ((surface (yunge-reader-webview--view-surface view))
+              ((yunge-reader-webview--surface-created-p surface))
+              ((not (yunge-reader-webview--view-destroyed view)))
+              ((not
+                (yunge-reader-webview--surface-bounds-pending surface))))
+    (let ((bounds
+           (yunge-reader-webview--surface-requested-bounds surface)))
+      (unless (equal bounds
+                     (yunge-reader-webview--surface-bounds surface))
+        (let ((id (yunge-reader-webview--surface-id surface)))
+          (setf (yunge-reader-webview--surface-bounds-pending surface)
+                t)
           (yunge-reader-webview--request
            "view-bounds"
            `((view . ,id) (bounds . ,bounds))
            (lambda (_result error-data)
              (when (yunge-reader-webview--surface-current-p view id)
-               (setf (yunge-reader-webview--view-bounds-pending view)
+               (setf (yunge-reader-webview--surface-bounds-pending
+                      surface)
                      nil)
                (unless error-data
-                 (setf (yunge-reader-webview--view-bounds view)
+                 (setf (yunge-reader-webview--surface-bounds surface)
                        bounds))
                (when error-data
                  (display-warning
@@ -83,12 +91,12 @@
                   :warning))
                (yunge-reader-webview--send-latest-bounds view)))))))))
 
-(defun yunge-reader-webview--cancel-open-timer (view)
-  "Cancel VIEW's renderer readiness timer."
-  (when-let* ((timer (yunge-reader-webview--view-open-timer view)))
+(defun yunge-reader-webview--cancel-open-timer (surface)
+  "Cancel SURFACE's renderer readiness timer."
+  (when-let* ((timer (yunge-reader-webview--surface-open-timer surface)))
     (when (timerp timer)
       (cancel-timer timer))
-    (setf (yunge-reader-webview--view-open-timer view) nil)))
+    (setf (yunge-reader-webview--surface-open-timer surface) nil)))
 
 (defun yunge-reader-webview--queue-surface-destroy
     (view id complete)
@@ -116,23 +124,16 @@
 (defun yunge-reader-webview--release-surface
     (view &optional complete)
   "Release VIEW's native surface while retaining its logical state."
-  (let ((id (yunge-reader-webview--view-id view))
-        (created (yunge-reader-webview--surface-created-p view)))
-    (yunge-reader-webview--cancel-open-timer view)
+  (let* ((surface (yunge-reader-webview--view-surface view))
+         (id (and surface
+                  (yunge-reader-webview--surface-id surface)))
+         (created
+          (yunge-reader-webview--surface-created-p surface)))
+    (when surface
+      (yunge-reader-webview--cancel-open-timer surface))
     (when id
       (remhash id yunge-reader-webview--views))
-    (yunge-reader-webview--set-surface-state view 'detached)
-    (setf (yunge-reader-webview--view-id view) nil
-          (yunge-reader-webview--view-window view) nil
-          (yunge-reader-webview--view-native-focused view) nil
-          (yunge-reader-webview--view-focus-release-pending view) nil
-          (yunge-reader-webview--view-surface-appearance view) nil
-          (yunge-reader-webview--view-surface-style view) nil
-          (yunge-reader-webview--view-surface-zoom view) nil
-          (yunge-reader-webview--view-surface-scroll-bar-mode view) nil
-          (yunge-reader-webview--view-bounds view) nil
-          (yunge-reader-webview--view-requested-bounds view) nil
-          (yunge-reader-webview--view-bounds-pending view) nil)
+    (setf (yunge-reader-webview--view-surface view) nil)
     (yunge-reader-webview--set-view-selection view nil)
     (cond
      ((not id)
@@ -161,64 +162,66 @@
 (defun yunge-reader-webview--open-complete
     (view id _result error-data)
   "Finish VIEW surface ID's attempt to attach its publication."
-  (when (and error-data
-             (yunge-reader-webview--surface-current-p view id))
-    (setf (yunge-reader-webview--view-surface-style view) nil
-          (yunge-reader-webview--view-surface-appearance view) nil
-          (yunge-reader-webview--view-surface-zoom view) nil
-          (yunge-reader-webview--view-surface-scroll-bar-mode view) nil))
-  (cond
-   ((not (yunge-reader-webview--surface-current-p view id)))
-   ((and error-data
-         (equal (yunge-reader-webview--open-error-code error-data)
-                "view-not-ready")
-         (< (float-time)
-            (yunge-reader-webview--view-open-deadline view)))
-    (setf
-     (yunge-reader-webview--view-open-timer view)
-     (run-at-time 0.05 nil
-                  #'yunge-reader-webview--try-open-publication view)))
-   (error-data
-    (yunge-reader-webview--set-surface-state view 'failed)
-    (yunge-reader-webview--set-buffer-message
-     view (error-message-string error-data))
-    (display-warning
-     'yunge-reader (error-message-string error-data) :warning))
-   (t
-    (yunge-reader-webview--set-buffer-message
-     view "Opening the EPUB text start..."))))
+  (let ((surface (yunge-reader-webview--view-surface view)))
+    (when (yunge-reader-webview--surface-current-p view id)
+      (when error-data
+        (setf (yunge-reader-webview--surface-style surface) nil
+              (yunge-reader-webview--surface-appearance surface) nil
+              (yunge-reader-webview--surface-zoom surface) nil
+              (yunge-reader-webview--surface-scroll-bar-mode surface)
+              nil))
+      (cond
+       ((and error-data
+             (equal (yunge-reader-webview--open-error-code error-data)
+                    "view-not-ready")
+             (< (float-time)
+                (yunge-reader-webview--surface-open-deadline surface)))
+        (setf (yunge-reader-webview--surface-open-timer surface)
+              (run-at-time
+               0.05 nil
+               #'yunge-reader-webview--try-open-publication view)))
+       (error-data
+        (yunge-reader-webview--set-surface-state surface 'failed)
+        (yunge-reader-webview--set-buffer-message
+         view (error-message-string error-data))
+        (display-warning
+         'yunge-reader (error-message-string error-data) :warning))
+       (t
+        (yunge-reader-webview--set-buffer-message
+         view "Opening the EPUB text start..."))))))
 
 (defun yunge-reader-webview--try-open-publication (view)
   "Try to attach VIEW's publication after its renderer shell loads."
-  (setf (yunge-reader-webview--view-open-timer view) nil)
-  (when (and (memq (yunge-reader-webview--view-surface-state view)
-                   '(native-ready opening))
-             (not (yunge-reader-webview--view-destroyed view))
-             (yunge-reader-webview--view-publication view))
-    (let ((id (yunge-reader-webview--view-id view)))
-      (yunge-reader-webview--set-surface-state view 'opening)
-      (setf (yunge-reader-webview--view-surface-style view)
-            (and (yunge-reader-webview--view-style view)
-                 (copy-tree
-                  (yunge-reader-webview--view-style view)))
-            (yunge-reader-webview--view-surface-appearance view)
-            (copy-tree
-             (yunge-reader-webview--view-appearance view))
-            (yunge-reader-webview--view-surface-zoom view)
-            (yunge-reader-webview--view-zoom view)
-            (yunge-reader-webview--view-surface-scroll-bar-mode view)
-            (yunge-reader-webview--view-scroll-bar-mode view))
-      (yunge-reader-webview--open-view-publication
-       view
-       (yunge-reader-webview--view-publication view)
-       (apply-partially
-        #'yunge-reader-webview--open-complete view id)
-       (yunge-reader-webview--view-location view)
-       (copy-tree
-        (yunge-reader-webview--view-appearance view))
-       (yunge-reader-webview--view-style view)
-       (yunge-reader-webview--view-zoom view)
-       (yunge-reader-webview--view-scroll-bar-mode view)))))
+  (when-let* ((surface (yunge-reader-webview--view-surface view)))
+    (setf (yunge-reader-webview--surface-open-timer surface) nil)
+    (when (and (memq (yunge-reader-webview--surface-state surface)
+                     '(native-ready opening))
+               (not (yunge-reader-webview--view-destroyed view))
+               (yunge-reader-webview--view-publication view))
+      (let ((id (yunge-reader-webview--surface-id surface)))
+        (yunge-reader-webview--set-surface-state surface 'opening)
+        (setf (yunge-reader-webview--surface-style surface)
+              (and (yunge-reader-webview--view-style view)
+                   (copy-tree
+                    (yunge-reader-webview--view-style view)))
+              (yunge-reader-webview--surface-appearance surface)
+              (copy-tree
+               (yunge-reader-webview--view-appearance view))
+              (yunge-reader-webview--surface-zoom surface)
+              (yunge-reader-webview--view-zoom view)
+              (yunge-reader-webview--surface-scroll-bar-mode surface)
+              (yunge-reader-webview--view-scroll-bar-mode view))
+        (yunge-reader-webview--open-view-publication
+         view
+         (yunge-reader-webview--view-publication view)
+         (apply-partially
+          #'yunge-reader-webview--open-complete view id)
+         (yunge-reader-webview--view-location view)
+         (copy-tree
+          (yunge-reader-webview--view-appearance view))
+         (yunge-reader-webview--view-style view)
+         (yunge-reader-webview--view-zoom view)
+         (yunge-reader-webview--view-scroll-bar-mode view))))))
 
 (defun yunge-reader-webview--destroy-obsolete-surface
     (view id)
@@ -240,12 +243,7 @@
       (yunge-reader-webview--destroy-obsolete-surface view id)))
    (error-data
     (remhash id yunge-reader-webview--views)
-    (yunge-reader-webview--set-surface-state view 'detached)
-    (setf (yunge-reader-webview--view-id view) nil
-          (yunge-reader-webview--view-window view) nil
-          (yunge-reader-webview--view-native-focused view) nil
-          (yunge-reader-webview--view-focus-release-pending view) nil
-          (yunge-reader-webview--view-requested-bounds view) nil)
+    (setf (yunge-reader-webview--view-surface view) nil)
     (yunge-reader-webview--set-buffer-message
      view (error-message-string error-data))
     (display-warning
@@ -253,24 +251,27 @@
     (unless (yunge-reader-webview--view-persistent view)
       (yunge-reader-webview--destroy-view view)))
    (t
-    (yunge-reader-webview--set-surface-state view 'native-ready)
-    (setf (yunge-reader-webview--view-bounds view)
-          created-bounds)
+    (let ((surface (yunge-reader-webview--view-surface view)))
+      (yunge-reader-webview--set-surface-state surface 'native-ready)
+      (setf (yunge-reader-webview--surface-bounds surface)
+            created-bounds))
     (yunge-reader-webview--sync-view view)
     (when (and (yunge-reader-webview--surface-current-p view id)
                (yunge-reader-webview--view-publication view))
-      (setf (yunge-reader-webview--view-open-deadline view)
+      (setf (yunge-reader-webview--surface-open-deadline
+             (yunge-reader-webview--view-surface view))
             (+ (float-time) yunge-reader-webview-open-timeout))
       (yunge-reader-webview--try-open-publication view)))))
 
 (defun yunge-reader-webview--request-create (view)
   "Ask the helper to create native VIEW."
-  (let* ((id (yunge-reader-webview--view-id view))
-         (window (yunge-reader-webview--view-window view))
+  (let* ((surface (yunge-reader-webview--view-surface view))
+         (id (yunge-reader-webview--surface-id surface))
+         (window (yunge-reader-webview--surface-window surface))
          (frame (window-frame window))
          (bounds
           (copy-tree
-           (yunge-reader-webview--view-requested-bounds view))))
+           (yunge-reader-webview--surface-requested-bounds surface))))
     (yunge-reader-webview--request
      "view-create"
      `((view . ,id)
@@ -286,7 +287,7 @@
                (eq (window-buffer window)
                    (yunge-reader-webview--view-buffer view)))
     (error "Cannot attach EPUB surface to an unrelated window"))
-  (unless (or (null (yunge-reader-webview--view-id view))
+  (unless (or (null (yunge-reader-webview--view-surface view))
               (yunge-reader-webview--view-destroyed view))
     (error "EPUB view already owns a native surface"))
   (unless (yunge-reader-webview--view-destroyed view)
@@ -296,21 +297,16 @@
           (bar-mode
            (yunge-reader-webview--resolved-scroll-bar-mode view window)))
       (yunge-reader-webview--set-view-selection view nil)
-      (yunge-reader-webview--set-surface-state view 'creating)
-      (setf (yunge-reader-webview--view-id view) id
-            (yunge-reader-webview--view-window view) window
-            (yunge-reader-webview--view-native-focused view) nil
-            (yunge-reader-webview--view-focus-release-pending view) nil
+      (setf (yunge-reader-webview--view-surface view)
+            (yunge-reader-webview--make-surface
+             :id id
+             :window window
+             :requested-bounds
+             (yunge-reader-webview--window-bounds window))
             (yunge-reader-webview--view-appearance view) appearance
-            (yunge-reader-webview--view-surface-appearance view) nil
-            (yunge-reader-webview--view-surface-style view) nil
-            (yunge-reader-webview--view-surface-zoom view) nil
             (yunge-reader-webview--view-scroll-bar-mode view)
             bar-mode
-            (yunge-reader-webview--view-surface-scroll-bar-mode view) nil
-            (yunge-reader-webview--view-outline-error view) nil
-            (yunge-reader-webview--view-requested-bounds view)
-            (yunge-reader-webview--window-bounds window))
+            (yunge-reader-webview--view-outline-error view) nil)
       (puthash id view yunge-reader-webview--views)
       (yunge-reader-webview--request-create view)))
   view)
