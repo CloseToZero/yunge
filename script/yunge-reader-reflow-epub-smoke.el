@@ -460,7 +460,10 @@
                  (yunge-reader-reflow-smoke--continue)))
               ('hidden
                (if (and
-                    (null (yunge-reader-reflow-smoke--surface view))
+                    (yunge-reader-webview--surface-ready-p
+                     (yunge-reader-reflow-smoke--surface view))
+                    (eql (yunge-reader-reflow-smoke--surface-id view)
+                         yunge-reader-reflow-smoke--surface-id)
                     (yunge-reader-reflow-smoke--same-anchor-p
                      location yunge-reader-reflow-smoke--anchor))
                    (progn
@@ -474,9 +477,9 @@
                      (yunge-reader-reflow-smoke--surface view))
                     (numberp
                      (yunge-reader-reflow-smoke--surface-id view))
-                    (not (eql
-                          (yunge-reader-reflow-smoke--surface-id view)
-                              yunge-reader-reflow-smoke--surface-id))
+                    (eql
+                     (yunge-reader-reflow-smoke--surface-id view)
+                     yunge-reader-reflow-smoke--surface-id)
                     (yunge-reader-reflow-smoke--same-anchor-p
                      location yunge-reader-reflow-smoke--anchor))
                    (progn

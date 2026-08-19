@@ -8,8 +8,7 @@
 (defmacro yunge-reader-webview-test--with-fake-process (&rest body)
   "Run BODY with an isolated fake WebView process implementation."
   (declare (indent 0) (debug t))
-  `(let ((system-type 'windows-nt)
-         (yunge-reader-webview--process nil)
+  `(let ((yunge-reader-webview--process nil)
          (yunge-reader-webview--transport nil)
          (yunge-reader-webview--next-view-id 0)
          (yunge-reader-webview--views
@@ -54,12 +53,11 @@
 
 (defun yunge-reader-webview-test--ready-message ()
   "Return one valid test ready message."
-  (copy-tree
-   '((kind . "webview-ready")
+  (let ((message
+         (copy-tree
+          '((kind . "webview-ready")
      (protocol . 1)
      (build-id . "test-build")
-     (platform . "windows")
-     (engine . "webview2")
      (available . t)
      (version . "test-version")
      (accelerators
@@ -78,7 +76,16 @@
          "view-selection-text"
          "view-set-selection"
          "view-scroll-bars" "view-status" "view-style"
-         "view-visible" "view-zoom")))))
+         "view-visible" "view-zoom"))))))
+    (setf (alist-get 'platform message)
+          (pcase system-type
+            ('windows-nt "windows")
+            ('darwin "macos"))
+          (alist-get 'engine message)
+          (pcase system-type
+            ('windows-nt "webview2")
+            ('darwin "wkwebview")))
+    message))
 
 (defun yunge-reader-webview-test--location (&optional fraction x y)
   "Return one valid EPUB test locator with optional FRACTION, X, and Y."
@@ -207,6 +214,15 @@
       (should-error
        (yunge-reader-webview--validate-ready message)
        :type 'error))))
+
+(ert-deftest yunge-reader-webview-accepts-macos-wkwebview-handshake ()
+  (let ((system-type 'darwin)
+        (message (yunge-reader-webview-test--ready-message)))
+    (setf (alist-get 'platform message) "macos"
+          (alist-get 'engine message) "wkwebview")
+    (cl-letf (((symbol-function 'yunge-reader-native--build-id)
+               (lambda () "test-build")))
+      (should-not (yunge-reader-webview--validate-ready message)))))
 
 (ert-deftest yunge-reader-webview-rejects-accelerator-contract-drift ()
   (dolist (accelerators
@@ -1683,8 +1699,9 @@
         (kill-buffer buffer)))))
 
 (ert-deftest yunge-reader-webview-recreates-a-surface-across-frames ()
-  (let* ((view
-         (yunge-reader-webview--make-view
+  (let* ((system-type 'gnu/linux)
+         (view
+          (yunge-reader-webview--make-view
            :surface
            (yunge-reader-webview-test--surface
             9 'native-ready :window 'first)
@@ -1708,6 +1725,70 @@
       (yunge-reader-webview--sync-view view)
       (should (equal (nreverse transitions) '(release second))))))
 
+(ert-deftest yunge-reader-webview-reuses-a-windows-surface-in-its-frame ()
+  ;; A non-macOS host value exercises the parent-frame-bound surface path
+  ;; without installing native-comp Windows trampolines on a macOS test host.
+  (let* ((system-type 'gnu/linux)
+         (surface
+          (yunge-reader-webview-test--surface
+           40 'ready :window 'old-window))
+         (view
+          (yunge-reader-webview--make-view
+           :surface surface :buffer (current-buffer) :persistent t))
+         (yunge-reader-webview--process 'fake-webview-process)
+         (yunge-reader-webview--views
+          (make-hash-table :test #'eql))
+         presented
+         requests
+         synchronized)
+    (puthash 40 view yunge-reader-webview--views)
+    (cl-letf (((symbol-function 'yunge-reader-webview--visible-window)
+               (lambda (_view) presented))
+              ((symbol-function 'window-live-p) (lambda (_window) t))
+              ((symbol-function 'window-frame)
+               (lambda (_window) 'same-frame))
+              ((symbol-function 'yunge-reader-webview--window-bounds)
+               (lambda (_window)
+                 '((x . 20) (y . 30) (width . 400) (height . 500))))
+              ((symbol-function
+                'yunge-reader-webview--update-scroll-bar-mode)
+               #'ignore)
+              ((symbol-function
+                'yunge-reader-webview--send-latest-bounds)
+               (lambda (value) (setq synchronized value)))
+              ((symbol-function 'process-live-p)
+               (lambda (_process) t))
+              ((symbol-function 'yunge-reader-webview--request)
+               (lambda (operation parameters _complete)
+                 (push (list operation parameters) requests)))
+              ((symbol-function 'yunge-reader-webview--release-surface)
+               (lambda (&rest _arguments)
+                 (ert-fail "Same-frame return released the surface")))
+              ((symbol-function 'yunge-reader-webview--start-surface)
+               (lambda (&rest _arguments)
+                 (ert-fail "Same-frame return recreated the surface"))))
+      (yunge-reader-webview--sync-view view)
+      (should (eq (yunge-reader-webview--view-surface view) surface))
+      (should (eq (yunge-reader-webview--surface-window surface)
+                  'old-window))
+      (should
+       (equal (mapcar #'car (reverse requests))
+              '("view-clear-selection" "view-visible")))
+      (should
+       (eq (alist-get 'visible (cadr (car requests))) :false))
+      (setq presented 'new-window)
+      (yunge-reader-webview--sync-view view))
+    (should (eq (yunge-reader-webview--view-surface view) surface))
+    (should (eq (yunge-reader-webview--surface-window surface)
+                'new-window))
+    (should (eq synchronized view))
+    (should (equal (caar requests) "view-visible"))
+    (should (alist-get 'visible (cadar requests)))
+    (should
+     (equal (mapcar #'car (reverse requests))
+            '("view-clear-selection" "view-visible"
+              "view-visible")))))
+
 (ert-deftest yunge-reader-webview-moves-before-synchronizing-focus ()
   (let (calls)
     (cl-letf (((symbol-function 'yunge-reader-webview--sync-views)
@@ -1716,6 +1797,69 @@
                (lambda (&rest _arguments) (push 'focus calls))))
       (yunge-reader-webview--window-selection-changed 'frame)
       (should (equal (nreverse calls) '(views focus))))))
+
+(ert-deftest yunge-reader-webview-hides-and-restores-macos-surfaces ()
+  (let* ((system-type 'darwin)
+         (surface
+          (yunge-reader-webview-test--surface 41 'creating))
+         (view
+          (yunge-reader-webview--make-view :surface surface))
+         (yunge-reader-webview--process 'fake-webview-process)
+         (yunge-reader-webview--views
+          (make-hash-table :test #'eql))
+         (yunge-reader-webview--logical-views
+          (make-hash-table :test #'eq))
+         (yunge-reader-webview--macos-active-p t)
+         requests
+         synchronized)
+    (puthash 41 view yunge-reader-webview--views)
+    (puthash view t yunge-reader-webview--logical-views)
+    (cl-letf (((symbol-function 'process-live-p)
+               (lambda (_process) t))
+              ((symbol-function 'yunge-reader-webview--request)
+               (lambda (operation parameters _complete)
+                 (push (list operation parameters) requests)))
+              ((symbol-function 'yunge-reader-webview--sync-views)
+               (lambda (&rest _ignored) (setq synchronized t)))
+              ((symbol-function 'yunge-reader-webview--visible-window)
+               (lambda (_view) 'window)))
+      (yunge-reader-webview--hide-macos-views)
+      (should-not yunge-reader-webview--macos-active-p)
+      (should
+       (eq (alist-get 'visible (cadr (car requests))) :false))
+      (yunge-reader-webview--raise-macos-views)
+      (should yunge-reader-webview--macos-active-p)
+      (should synchronized)
+      (should (alist-get 'visible (cadr (car requests))))
+      (should (= (length requests) 2)))))
+
+(ert-deftest yunge-reader-webview-coalesces-macos-application-focus ()
+  (let ((system-type 'darwin)
+        (yunge-reader-webview--macos-active-p nil)
+        (yunge-reader-webview--macos-focus-timer 'obsolete)
+        (states '((frame-one . nil) (frame-two . t)))
+        transitions)
+    (cl-letf (((symbol-function 'frame-list)
+               (lambda () '(frame-one frame-two)))
+              ((symbol-function 'display-graphic-p)
+               (lambda (_frame) t))
+              ((symbol-function 'frame-focus-state)
+               (lambda (frame) (alist-get frame states)))
+              ((symbol-function 'yunge-reader-webview--raise-macos-views)
+               (lambda ()
+                 (setq yunge-reader-webview--macos-active-p t)
+                 (push 'raise transitions)))
+              ((symbol-function 'yunge-reader-webview--hide-macos-views)
+               (lambda ()
+                 (setq yunge-reader-webview--macos-active-p nil)
+                 (push 'hide transitions))))
+      (yunge-reader-webview--apply-macos-focus-state)
+      (should yunge-reader-webview--macos-active-p)
+      (setq states '((frame-one . nil) (frame-two . nil)))
+      (yunge-reader-webview--apply-macos-focus-state)
+      (should-not yunge-reader-webview--macos-active-p)
+      (should (equal (nreverse transitions) '(raise hide)))
+      (should-not yunge-reader-webview--macos-focus-timer))))
 
 (ert-deftest yunge-reader-webview-destroys-a-replaced-window-view ()
   (let* ((buffer (generate-new-buffer " *webview owner*"))
@@ -1748,7 +1892,8 @@
       (kill-buffer other))))
 
 (ert-deftest yunge-reader-webview-hides-persistent-native-surfaces ()
-  (let* ((buffer (generate-new-buffer " *persistent EPUB owner*"))
+  (let* ((system-type 'darwin)
+         (buffer (generate-new-buffer " *persistent EPUB owner*"))
          (other (generate-new-buffer " *persistent EPUB replacement*"))
          (window (selected-window))
          (location (yunge-reader-webview-test--location 0.4))
@@ -1759,7 +1904,7 @@
           (yunge-reader-webview--make-view
            :surface
            (yunge-reader-webview-test--surface
-            15 'native-ready :window window
+            15 'ready :window window
             :appearance (copy-tree appearance)
             :style (copy-tree style)
             :zoom 'fit-width)
@@ -1793,7 +1938,14 @@
                   (push (list operation parameters) requests))))
             (yunge-reader-webview--sync-view view))
           (should-not (yunge-reader-webview--view-destroyed view))
-          (should-not (yunge-reader-webview--view-surface view))
+          (should
+           (= (yunge-reader-webview--surface-id
+               (yunge-reader-webview--view-surface view))
+              15))
+          (should (eq (gethash 15 yunge-reader-webview--views) view))
+          (should-not
+           (yunge-reader-webview--surface-window
+            (yunge-reader-webview--view-surface view)))
           (should (gethash view yunge-reader-webview--logical-views))
           (should (equal (yunge-reader-webview--view-location view)
                          location))
@@ -1802,7 +1954,16 @@
                   appearance))
           (should-not
            (yunge-reader-webview--view-selection view))
-          (should (equal (caar requests) "view-destroy"))
+          (should
+           (equal (mapcar #'car (reverse requests))
+                  '("view-clear-selection" "view-visible")))
+          (should
+           (eq (alist-get 'visible (cadr (car requests))) :false))
+          (should-not
+           (cl-find-if
+            (lambda (request)
+              (equal (car request) "view-destroy"))
+            requests))
           (should-not
            (cl-find-if
             (lambda (request)
@@ -1810,6 +1971,26 @@
             requests)))
       (kill-buffer buffer)
       (kill-buffer other))))
+
+(ert-deftest yunge-reader-webview-releases-hidden-failed-surfaces ()
+  (let* ((system-type 'darwin)
+         (view
+          (yunge-reader-webview--make-view
+           :surface
+           (yunge-reader-webview-test--surface 16 'failed :window 'window)
+           :buffer (current-buffer)
+           :persistent t))
+         released)
+    (cl-letf (((symbol-function 'yunge-reader-webview--visible-window)
+               (lambda (_view) nil))
+              ((symbol-function 'yunge-reader-webview--release-surface)
+               (lambda (value &optional _complete)
+                 (setq released value)))
+              ((symbol-function 'yunge-reader-webview--set-view-visible)
+               (lambda (&rest _arguments)
+                 (ert-fail "Failed surface was retained"))))
+      (yunge-reader-webview--sync-view view))
+    (should (eq released view))))
 
 (ert-deftest yunge-reader-webview-recreates-visible-persistent-surfaces ()
   (let* ((buffer (generate-new-buffer " *persistent EPUB visible*"))

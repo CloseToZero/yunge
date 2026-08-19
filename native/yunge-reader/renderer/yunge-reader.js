@@ -18,7 +18,7 @@ import {
     checkedZoom,
     colorScheme,
     encodePath,
-    READER_CHARACTER_KEYS,
+    readerKey,
     readingStyleCSS,
     sameAppearance,
     sameReadingStyle,
@@ -106,21 +106,8 @@ const postSearchResult = (request, response) => {
     }))
 }
 
-const readerCharacterKey = event => {
-    if (event.defaultPrevented || event.isComposing
-        || event.ctrlKey || event.altKey || event.metaKey
-        || event.target?.closest?.(
-            'input, textarea, select, '
-            + '[contenteditable]:not([contenteditable="false"])')) {
-        return null
-    }
-    if (event.code === 'Space') return 'SPC'
-    return READER_CHARACTER_KEYS.includes(event.key)
-        ? event.key : null
-}
-
-const relayReaderCharacterKey = event => {
-    const key = readerCharacterKey(event)
+const relayReaderKey = event => {
+    const key = readerKey(event)
     if (!key) return
     event.preventDefault()
     event.stopImmediatePropagation()
@@ -128,8 +115,8 @@ const relayReaderCharacterKey = event => {
     post('accelerator', { key })
 }
 
-const installReaderCharacterKeys = target => {
-    target.addEventListener('keydown', relayReaderCharacterKey, true)
+const installReaderKeys = target => {
+    target.addEventListener('keydown', relayReaderKey, true)
 }
 
 const installLocationActivity = (target, session) => {
@@ -144,7 +131,9 @@ const installLocationActivity = (target, session) => {
     }
 }
 
-installReaderCharacterKeys(document)
+installReaderKeys(document)
+window.addEventListener('focus', () => post('focus-gained'))
+window.addEventListener('blur', () => post('focus-lost'))
 
 const applyViewStyles = (view, appearance, style) => {
     if (view.isFixedLayout) return
@@ -1266,7 +1255,7 @@ const open = async ({
         const view = document.createElement('foliate-view')
         let session
         view.addEventListener('load', event => {
-            installReaderCharacterKeys(event.detail.doc)
+            installReaderKeys(event.detail.doc)
             installLocationActivity(event.detail.doc, session)
             installSelectionTracking(event.detail.doc, session)
             if (session) emitSelection(session, null)

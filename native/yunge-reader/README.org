@@ -77,12 +77,12 @@ real directory rather than a symbolic link.  Individual removal failures do
 not stop the scan; =failed-files= and =over-budget= let Emacs report an
 incomplete cleanup.
 
-* Windows WebView service
+* Windows and macOS WebView service
 
 Starting the same executable with =--webview= selects a separate NDJSON
 service.  It does not load PDFium or share document handles with the ordinary
-service.  Its handshake reports the installed WebView2 Runtime without
-installing or downloading it:
+service.  On Windows its handshake reports the installed WebView2 Runtime
+without installing or downloading it:
 
 #+begin_src json
 {"available":true,"build-id":"HASH",
@@ -103,6 +103,10 @@ installing or downloading it:
  "engine":"webview2","kind":"webview-ready","platform":"windows",
  "protocol":1,"version":"151.0.4129.86"}
 #+end_src
+
+On macOS the equivalent fields are ="platform":"macos"=,
+="engine":"wkwebview"=, and the system WebKit version.  WKWebView is part of
+macOS and needs no separate runtime installation.
 
 When the runtime is missing, =available= is false and =message= tells the user
 which environment to install.  The process remains responsive so
@@ -311,9 +315,10 @@ within 4,096 UTF-8 bytes.  JavaScript, Rust, and Emacs validate it
 independently.  WebView2 new windows remain denied; only Emacs may pass an
 allowlisted scheme to =browse-url=.
 
-=view-create= accepts a logical =view= ID, a live Emacs frame HWND as
-=parent=, a physical-pixel =bounds= object, and optional =visible=.  The
-current spike loads only its built-in local HTML page.
+=view-create= accepts a logical =view= ID, a live Emacs frame HWND on Windows
+or Emacs process ID on macOS as =parent=, a platform-coordinate =bounds=
+object, and optional =visible=.  Windows bounds are frame-relative physical
+pixels; macOS bounds are signed absolute screen points.
 
 #+begin_src json
 {"id":1,"op":"view-create",
@@ -500,9 +505,10 @@ Moving beyond either end is a no-op, and unsuccessful movement releases the
 renderer lock for later navigation.
 
 =<escape>=, =C-g=, Control reader keys, and non-character reader keys are
-captured by the native WebView2 accelerator event.  Reader character keys,
-including =j/k=, =J/K=, the three zoom keys, and =y=, are relayed by the trusted
-renderer because WebView2 does not classify them as accelerators.  Both paths
+captured by the native WebView2 accelerator event on Windows.  The trusted
+renderer relays the complete portable vocabulary on WKWebView and relays
+reader character keys on both engines because WebView2 does not classify them
+as accelerators.  Both paths
 write unsolicited events without request IDs:
 
 #+begin_src json
@@ -532,14 +538,24 @@ Lisp, Rust, and JavaScript keep independent allowlists and reject contract
 drift before routing a key.
 
 View IDs are independent, so multiple Reader views do not share layout or
-scroll state.  Positions must be nonnegative; dimensions must be positive and
-at most 32,768 physical pixels.  Duplicate views, unknown views, invalid HWNDs,
-unknown parameters, and unavailable runtimes return stable protocol errors.
+scroll state.  Windows positions are nonnegative frame-relative pixels;
+macOS positions are signed absolute screen coordinates.  Dimensions must be
+positive and at most 32,768 pixels.  Duplicate views, unknown views, invalid
+HWNDs or parent application PIDs, unknown parameters, and unavailable runtimes
+return stable protocol errors.
 
-The helper pumps native messages on its main thread while a background thread
-reads stdin.  =shutdown= and EOF drop every child view and publication before
-exit.  This mode is Windows-only until equivalent parent ownership is
-implemented and tested for WKWebView and WebKitGTK.
+The helper pumps Win32 or AppKit events on its main thread while a background
+thread reads stdin.  =shutdown= and EOF drop every native view and publication
+before exit.  Windows owns a cross-process child window.  AppKit does not allow
+cross-process =NSView= parenting, so macOS owns a borderless nonactivating
+companion panel and Emacs sends absolute bounds on window and frame changes.
+WebKitGTK remains future work.
+
+The WebView navigation policy admits the trusted renderer page and its
+renderer-owned =blob:= chapter documents.  WKWebView reports those blob iframe
+loads to the same navigation callback as top-level loads.  Renderer IPC keeps
+a stricter origin check and rejects every blob document, so publication
+content cannot impersonate the renderer protocol.
 
 * PDF operations
 
@@ -755,13 +771,14 @@ cargo run --example reflow_epub_fixture -- D:/tmp/yunge-reflow.epub
 #+end_src
 
 The graphical smoke opens that fixture through ordinary Reader registration,
-moves by one rendered screen, and recreates its native surface at the exact
-retained CFI.  It treats Reader warnings as failures.  The same pass searches
-one shared beacon from chapter one into chapter two, turns that result into a
-real DOM selection, copies its text through Reader, and verifies the kill
-ring.  It then loads the exact three-entry publication outline and follows its
-last destination.  Finally, a second native surface opens at the same chapter,
-moves independently to chapter one, and leaves the primary surface unchanged:
+moves by one rendered screen, and hides then reuses its native surface at the
+exact retained CFI.  It treats Reader warnings as failures.  The same pass
+searches one shared beacon from chapter one into chapter two, turns that result
+into a real DOM selection, copies its text through Reader, and verifies the
+kill ring.  It then loads the exact three-entry publication outline and follows
+its last destination.  Finally, a second native surface opens at the same
+chapter, moves independently to chapter one, and leaves the primary surface
+unchanged:
 
 #+begin_src shell
 emacs -Q --load script/yunge-reader-reflow-epub-smoke.el

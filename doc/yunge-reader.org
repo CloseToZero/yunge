@@ -84,17 +84,25 @@ current view primary.  Both commands are one-shot localleader actions.
 
 * Current EPUB slice
 
-Run =M-x yunge-reader-native-setup= once, then visit a local =.epub= file on
-graphical Windows Emacs.  The adapter is autoloaded through =auto-mode-alist=;
-=M-x yunge-reader-epub-open= is the explicit entry point.  Reader reports a
-missing WebView2 Runtime but never installs it automatically.
+Run =M-x yunge-reader-native-setup= once, then visit a local =.epub= file in
+graphical Emacs on Windows or macOS.  The adapter is autoloaded through
+=auto-mode-alist=; =M-x yunge-reader-epub-open= is the explicit entry point.
+Windows reports a missing WebView2 Runtime but never installs it automatically;
+macOS uses the system WKWebView framework.
 
 One shared native publication owns validation, metadata, archive resources,
 and its private origin.  Each Reader buffer owns an independent logical view,
-locator, native child surface, and primary or additional role.  Hiding a
-buffer releases only its child surface.  Displaying it again creates a new
-surface and restores the latest CFI without reopening the shared publication.
-The last buffer waits for every obsolete surface to finish destruction before
+locator, native surface, and primary or additional role.  Windows embeds a
+cross-process child WebView.  Since AppKit cannot attach an =NSView= across
+processes, macOS uses a borderless nonactivating WKWebView panel synchronized
+to the owning Emacs window's absolute screen rectangle.  Frame movement,
+window changes, and focus restoration keep that panel aligned.  Hiding a
+buffer hides but retains its loaded surface.  Displaying it again shows the
+same DOM and current CFI without reopening the publication.  Windows can
+reuse that child surface while the presentation stays on the same native
+frame; moving it across frames recreates it because the parent HWND changes.
+macOS surfaces use absolute coordinates and can move across frames intact.
+The last buffer destroys its retained and obsolete surfaces before
 invalidating the publication resource token.
 
 The Lisp adapter represents a surface as exactly one of =detached=,
@@ -125,7 +133,7 @@ All three scales cross linear spine-item boundaries.  =gg/G= jump to the first
 or last linear book location.  The portable commands continue to work after a
 mouse click gives the child WebView native focus.  The same focused path
 forwards =G=, =+=, =-=, ===, and =y= through the active Emacs keymaps.
-=GotFocus= selects the child surface's owning Emacs window.  Selecting another
+=focus-gained= selects the native surface's owning Emacs window.  Selecting another
 Emacs window asks any focused child to return keyboard focus to its parent, so
 ordinary Emacs bindings resume without an extra click.
 
@@ -376,8 +384,9 @@ anchor, or saved location.
 
 An embedded EPUB surface follows the active presentation.  Moving it between
 windows on one frame updates the native child bounds without reopening the
-publication.  A move across frames recreates the surface because its native
-parent changes, while the buffer-owned view retains its logical state.  A
+publication.  Windows recreates a surface when a move crosses frames because
+its native parent changes.  The helper-owned macOS panel instead moves by
+absolute screen coordinates and retains its loaded DOM across frames.  A
 passive duplicate window explains that selecting it moves the surface and
 points to the explicit Additional-view command.
 
@@ -858,11 +867,12 @@ bounds request per view may be outstanding; intermediate resize rectangles are
 coalesced into the newest value.  Surface creation retains the rectangle
 actually sent to the helper, so a body-size change before creation completes
 is reconciled instead of being mistaken for an applied native resize.  A
-formal Reader view survives window
-replacement: it destroys the obsolete child surface, retains the locator, and
-creates a fresh surface when its buffer becomes visible.  Killing the buffer
-destroys the logical view.  A manual spike remains temporary and is destroyed
-when its window stops displaying it.
+formal Reader view survives window replacement: an invisible persistent view
+retains its loaded surface and shows it again without reopening.  Windows
+replaces that surface only when the new presentation has a different parent
+frame; macOS moves it directly.  Killing the buffer destroys the logical
+view.  A manual spike remains temporary and is destroyed when its window
+stops displaying it.
 
 The renderer application and EPUB resource service use separate private
 HTTPS-equivalent origins.  Rust exposes only canonical, manifested,
@@ -878,7 +888,10 @@ that outer policy admits only the blob/data presentation sources required for
 EPUB styles, images, fonts, and media; it does not admit blob or publication
 scripts.  The outer WebView denies permissions, downloads, new windows, and
 external navigation.  Renderer IPC accepts only bounded, versioned messages
-from the renderer application origin.
+from the renderer application origin.  The navigation policy separately
+admits only renderer-owned =blob:= document URLs, which WKWebView reports for
+Foliate's script-disabled chapter frames; those blob frames are never trusted
+as IPC senders.
 
 EPUB appearance is logical-view state rather than part of reflow style.  Each
 document persists only =original= or =follow-emacs=.  Each surface resolves
@@ -898,16 +911,17 @@ For pre-paginated EPUB, authored page content remains unchanged and only the
 outer WebView canvas plus Reader-owned search overlay follows Emacs.
 
 WebView2 forwards =ESC=, =C-g=, =C-d/C-u=, and Page Down or Page Up through
-its native accelerator event.  A bounded renderer listener forwards =G=,
-=J/K=, =g=, =+=, =-=, ===, =y=, and a =SPC= fallback because WebView2 does
-not classify character keys uniformly as accelerators.  Both paths emit only
+its native accelerator event.  A bounded renderer listener forwards the same
+portable vocabulary on WKWebView, plus =G=, =J/K=, =g=, =+=, =-=, ===, =y=,
+and =SPC= on both engines.  Both paths emit only
 normalized key events; they never choose or execute commands.  Emacs resolves
 reading keys through the owning EPUB buffer's active maps.  Leader keys and
 the first =g= restore parent focus and enter Emacs's ordinary input loop.
 =ESC= and =C-g= return native focus to the parent, select the owning Emacs
 window, and focus its frame.
-WebView2 =GotFocus= and =LostFocus= events keep this native state synchronized
-with the owning logical view; an Emacs window-selection change releases a
+Renderer focus events, together with WebView2's native focus notifications,
+keep this state synchronized with the owning logical view; an Emacs
+window-selection change releases a
 focused child when its owner is no longer selected.
 
 =M-x yunge-reader-webview-stop= requests graceful shutdown and then enforces a
@@ -921,10 +935,9 @@ live renderer can retain an invalid resource token.
 
 No platform dependency is installed automatically.  Windows reports the
 detected WebView2 Runtime version or tells the user to install the runtime.
-Future macOS and Linux implementations must likewise detect WKWebView or
-WebKitGTK and report a missing environment.  The current embedding command is
-deliberately Windows-only while cross-platform parent-view ownership remains
-under evaluation.
+macOS reports its system WebKit version and uses WKWebView without a separate
+runtime download.  A future Linux implementation must detect WebKitGTK and
+provide an equivalent surface owner.
 
 * Testing
 
@@ -979,8 +992,9 @@ WebView ERT tests cover the separate handshake, strict capability validation,
 asynchronous renderer event routing, per-view EPUB locations, owning-window
 focus recovery, owning-buffer key dispatch, frame handle parsing, coalesced
 resize requests, destruction after buffer replacement, persistent surface
-release and recreation, multi-surface destruction barriers, outline waiter
-completion, and ordered publication release.  They also cover deferred and
+retention and reuse, cross-frame replacement, multi-surface destruction
+barriers, outline waiter completion, and ordered publication release.  They
+also cover deferred and
 live style updates,
 opening-time reconciliation, surface reset, and retryable failures.  EPUB
 driver tests cover registration, reflowable key
@@ -988,12 +1002,12 @@ bindings, native open result validation, shared publication ownership,
 printable place conversion, bounded outline mapping, transient href targets,
 view-local reading styles, bounded font zoom, strict zoom-state validation,
 restore timing, and primary-only place recording.
-Isolated graphical Emacs smoke tests open real EPUBs through WebView2, move one
-screen, destroy and recreate the native view, and restore the exact CFI.  The
+Isolated graphical Emacs smoke tests open real EPUBs, move one screen, hide
+and show the retained native view, and preserve the exact CFI.  The
 reflowable pass also crosses a chapter during search, copies a real DOM
 selection, follows an exact outline destination, and moves a second native
 surface without changing the primary surface.  The formal driver smoke test
-opens through =auto-mode-alist=, hides and recreates a persistent surface,
+opens through =auto-mode-alist=, hides and reuses a persistent surface,
 verifies primary place ownership, and closes the resource only after both
 views detach.
 A focused-key smoke test sends =+=, =-=, and === to a real child WebView,
@@ -1003,8 +1017,8 @@ A generated fixed-layout smoke opens LTR, RTL, and vertical-rl EPUBs through
 ordinary file registration.  Each variant starts in fit-page mode, moves from
 page one to page two and back through logical page commands, changes to manual
 scale, and moves to a nonzero viewport y coordinate.  Hiding the owning buffer
-destroys its native surface; displaying it again creates a distinct surface
-and restores the exact href, x, and y without Reader warnings.
+retains its native surface; displaying it again reuses that surface with the
+exact href, x, and y and no Reader warnings.
 The same smoke narrows and shortens the live window independently.  Fit-width
 and fit-page recompute their effective scales without replacing the native
 surface.  Manual zoom remains unchanged, and a subsequent line movement

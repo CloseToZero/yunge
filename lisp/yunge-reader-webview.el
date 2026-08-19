@@ -448,7 +448,16 @@ When REVEAL is non-nil, navigate to the result before painting it."
   (add-hook 'window-buffer-change-functions
             #'yunge-reader-webview--sync-views)
   (add-hook 'window-selection-change-functions
-            #'yunge-reader-webview--window-selection-changed))
+            #'yunge-reader-webview--window-selection-changed)
+  (when (eq system-type 'darwin)
+    (setq yunge-reader-webview--macos-active-p
+          (yunge-reader-webview--macos-focused-p))
+    (add-hook 'move-frame-functions
+              #'yunge-reader-webview--sync-views)
+    (remove-function after-focus-change-function
+                     #'yunge-reader-webview--macos-focus-changed)
+    (add-function :after after-focus-change-function
+                  #'yunge-reader-webview--macos-focus-changed)))
 
 (defun yunge-reader-webview--remove-hooks ()
   "Remove native view synchronization hooks."
@@ -459,7 +468,80 @@ When REVEAL is non-nil, navigate to the result before painting it."
   (remove-hook 'window-buffer-change-functions
                #'yunge-reader-webview--sync-views)
   (remove-hook 'window-selection-change-functions
-               #'yunge-reader-webview--window-selection-changed))
+               #'yunge-reader-webview--window-selection-changed)
+  (remove-hook 'move-frame-functions
+               #'yunge-reader-webview--sync-views)
+  (remove-function after-focus-change-function
+                   #'yunge-reader-webview--macos-focus-changed)
+  (when (timerp yunge-reader-webview--macos-focus-timer)
+    (cancel-timer yunge-reader-webview--macos-focus-timer))
+  (setq yunge-reader-webview--macos-focus-timer nil))
+
+(defun yunge-reader-webview--macos-focused-p ()
+  "Return whether any live graphical Emacs frame has input focus."
+  (and (eq system-type 'darwin)
+       (cl-some
+        (lambda (frame)
+          (and (display-graphic-p frame)
+               (eq (frame-focus-state frame) t)))
+        (frame-list))))
+
+(defun yunge-reader-webview--apply-macos-focus-state ()
+  "Apply the last coalesced macOS application focus state."
+  (setq yunge-reader-webview--macos-focus-timer nil)
+  (let ((focused (not (null (yunge-reader-webview--macos-focused-p)))))
+    (unless (eq focused yunge-reader-webview--macos-active-p)
+      (if focused
+          (yunge-reader-webview--raise-macos-views)
+        (yunge-reader-webview--hide-macos-views)))))
+
+(defun yunge-reader-webview--macos-focus-changed (&rest _ignored)
+  "Coalesce an asynchronous change to macOS frame focus."
+  (when (eq system-type 'darwin)
+    (when (timerp yunge-reader-webview--macos-focus-timer)
+      (cancel-timer yunge-reader-webview--macos-focus-timer))
+    (setq yunge-reader-webview--macos-focus-timer
+          (run-at-time
+           0.01 nil #'yunge-reader-webview--apply-macos-focus-state))))
+
+(defun yunge-reader-webview--set-view-visible (view visible)
+  "Set the current native surface for VIEW to VISIBLE.
+Creating surfaces are supported so this request can follow their already
+queued creation request."
+  (when (process-live-p yunge-reader-webview--process)
+    (when-let* ((surface (yunge-reader-webview--view-surface view))
+                (id (yunge-reader-webview--surface-id surface))
+                ((yunge-reader-webview--surface-current-p view id)))
+      (yunge-reader-webview--request
+       "view-visible"
+       `((view . ,id)
+         (visible . ,(if visible t :false)))
+       #'ignore))))
+
+(defun yunge-reader-webview--set-macos-views-visible (visible)
+  "Set current helper-owned macOS surfaces to effective VISIBLE.
+Only surfaces whose logical view is presented in an Emacs window are shown
+when VISIBLE is non-nil; hidden buffers remain hidden across app focus."
+  (when (eq system-type 'darwin)
+    (maphash
+     (lambda (view _present)
+       (yunge-reader-webview--set-view-visible
+        view
+        (and visible (yunge-reader-webview--visible-window view))))
+     yunge-reader-webview--logical-views)))
+
+(defun yunge-reader-webview--raise-macos-views ()
+  "Resynchronize and raise helper-owned panels when Emacs gains focus."
+  (when (eq system-type 'darwin)
+    (setq yunge-reader-webview--macos-active-p t)
+    (yunge-reader-webview--sync-views)
+    (yunge-reader-webview--set-macos-views-visible t)))
+
+(defun yunge-reader-webview--hide-macos-views ()
+  "Hide helper-owned panels as soon as Emacs loses focus."
+  (when (eq system-type 'darwin)
+    (setq yunge-reader-webview--macos-active-p nil)
+    (yunge-reader-webview--set-macos-views-visible nil)))
 
 (defun yunge-reader-webview--register-view (view)
   "Register logical VIEW and synchronize its native surface."
@@ -491,6 +573,41 @@ When REVEAL is non-nil, navigate to the result before painting it."
             (and surface
                  (yunge-reader-webview--surface-window surface))))
       (cond
+       ((and window surface
+             (yunge-reader-webview--view-persistent view)
+             (not (eq (yunge-reader-webview--surface-state surface)
+                      'failed))
+             (or (eq system-type 'darwin)
+                 (and current
+                      (window-live-p current)
+                      (eq (window-frame window)
+                          (window-frame current)))))
+        ;; A macOS surface uses absolute screen coordinates and can move
+        ;; across frames.  A Windows child surface can be retained only while
+        ;; its destination belongs to the same native parent frame.
+        (setf (yunge-reader-webview--surface-window surface) window)
+        (yunge-reader-webview--update-scroll-bar-mode view window)
+        (setf (yunge-reader-webview--surface-requested-bounds surface)
+              (yunge-reader-webview--window-bounds window))
+        (yunge-reader-webview--send-latest-bounds view)
+        (yunge-reader-webview--set-view-visible
+         view (or (not (eq system-type 'darwin))
+                  yunge-reader-webview--macos-active-p)))
+       ((and (not window) surface
+             (yunge-reader-webview--view-persistent view)
+             (not (eq (yunge-reader-webview--surface-state surface)
+                      'failed)))
+        ;; Hiding a buffer must not discard its loaded WebView.  macOS can
+        ;; forget the old window entirely; Windows retains it solely to check
+        ;; whether the next presentation uses the same parent frame.
+        (when (eq system-type 'darwin)
+          (setf (yunge-reader-webview--surface-window surface) nil))
+        (setf (yunge-reader-webview--surface-native-focused surface) nil
+              (yunge-reader-webview--surface-focus-release-pending surface)
+              nil)
+        (yunge-reader-webview--clear-view-selection view)
+        (yunge-reader-webview--set-view-selection view nil)
+        (yunge-reader-webview--set-view-visible view nil))
        ((and window surface (eq window current))
         (yunge-reader-webview--update-scroll-bar-mode view window)
         (setf (yunge-reader-webview--surface-requested-bounds surface)
@@ -783,8 +900,8 @@ This command is an architecture spike, not an EPUB reader yet."
   (interactive)
   (unless (display-graphic-p)
     (user-error "The WebView spike requires a graphical display"))
-  (unless (eq system-type 'windows-nt)
-    (user-error "The current WebView spike supports Windows only"))
+  (unless (memq system-type '(windows-nt darwin))
+    (user-error "The current WebView spike supports Windows and macOS"))
   (let* ((window (or window (selected-window)))
          (buffer
           (generate-new-buffer
@@ -811,8 +928,9 @@ save a durable reading position."
   (interactive "fEPUB file: ")
   (unless (display-graphic-p)
     (user-error "The EPUB WebView spike requires a graphical display"))
-  (unless (eq system-type 'windows-nt)
-    (user-error "The current EPUB WebView spike supports Windows only"))
+  (unless (memq system-type '(windows-nt darwin))
+    (user-error
+     "The current EPUB WebView spike supports Windows and macOS"))
   (setq file (expand-file-name file))
   (when (file-remote-p file)
     (user-error "The EPUB WebView spike accepts local files only"))

@@ -29,8 +29,13 @@
   :group 'yunge-reader)
 
 (defun yunge-reader-webview--frame-handle (frame)
-  "Return FRAME's native window handle as a positive integer."
-  (let ((value (frame-parameter frame 'window-id)))
+  "Return FRAME's platform parent identifier as a positive integer.
+Windows uses the frame HWND.  macOS uses the Emacs process identifier because
+the helper owns a synchronized companion panel rather than a cross-process
+NSView child."
+  (let ((value (if (eq system-type 'darwin)
+                   (emacs-pid)
+                 (frame-parameter frame 'window-id))))
     (cond
      ((and (integerp value) (> value 0)) value)
      ((and (stringp value)
@@ -43,13 +48,23 @@
       (error "Frame has no usable native window handle: %S" value)))))
 
 (defun yunge-reader-webview--window-bounds (window)
-  "Return the body bounds of WINDOW relative to its native frame."
+  "Return the platform WebView body bounds for WINDOW.
+Windows coordinates are relative to the native frame.  macOS coordinates are
+absolute screen coordinates for the helper-owned WKWebView panel."
   (pcase-let ((`(,left ,top ,right ,bottom)
                (window-body-pixel-edges window)))
-    `((x . ,left)
-      (y . ,top)
-      (width . ,(- right left))
-      (height . ,(- bottom top)))))
+    (let ((width (- right left))
+          (height (- bottom top)))
+      (when (eq system-type 'darwin)
+        (pcase-let ((`(,frame-left ,frame-top ,_ ,_)
+                     (frame-edges
+                      (window-frame window) 'native-edges)))
+          (setq left (+ frame-left left)
+                top (+ frame-top top))))
+      `((x . ,left)
+        (y . ,top)
+        (width . ,width)
+        (height . ,height)))))
 
 (defun yunge-reader-webview--surface-current-p (view id)
   "Return whether ID is VIEW's current native surface."
@@ -277,7 +292,11 @@
      `((view . ,id)
        (parent . ,(yunge-reader-webview--frame-handle frame))
        (bounds . ,bounds)
-       (visible . t))
+       (visible
+        . ,(if (or (not (eq system-type 'darwin))
+                   yunge-reader-webview--macos-active-p)
+               t
+             :false)))
      (apply-partially
       #'yunge-reader-webview--create-complete view id bounds))))
 

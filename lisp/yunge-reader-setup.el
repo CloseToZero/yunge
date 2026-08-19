@@ -83,8 +83,8 @@
                   (plist-get asset :sha256))
                  (member (plist-get asset :library)
                          '("bin/pdfium.dll"
-                           "bin/libpdfium.so"
-                           "bin/libpdfium.dylib")))
+                           "lib/libpdfium.so"
+                           "lib/libpdfium.dylib")))
       (error "Invalid PDFium asset manifest: %S" asset))
     asset))
 

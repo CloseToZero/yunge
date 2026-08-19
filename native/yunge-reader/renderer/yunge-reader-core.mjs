@@ -1,7 +1,10 @@
 // SPDX-FileCopyrightText: 2026 Chen Zhexuan
 // SPDX-License-Identifier: MIT
 
-const BOOK_ROOT = 'https://yunge-reader-book.localhost/'
+const BOOK_ROOTS = Object.freeze([
+    'https://yunge-reader-book.localhost/',
+    'yunge-reader-book://localhost/',
+])
 const MAX_EXTERNAL_URI_BYTES = 4096
 const MIN_FIXED_SCALE = 0.25
 const MAX_FIXED_SCALE = 8.0
@@ -16,8 +19,35 @@ const APPEARANCE_COLOR_KEYS = Object.freeze([
 ])
 
 export const READER_CHARACTER_KEYS = Object.freeze([
-    '+', '-', '=', 'G', 'J', 'K', 'SPC', 'g', 'j', 'k', 'y',
+    '+', '-', '=', '<escape>', '<next>', '<prior>', 'C-d', 'C-g', 'C-u',
+    'G', 'J', 'K', 'M-m', 'SPC', 'g', 'j', 'k', 'y',
 ])
+
+export const readerKey = event => {
+    if (event.defaultPrevented || event.isComposing
+        || event.target?.closest?.(
+            'input, textarea, select, '
+            + '[contenteditable]:not([contenteditable="false"])')) {
+        return null
+    }
+    if (!event.shiftKey && !event.altKey && !event.metaKey
+        && event.ctrlKey) {
+        const key = event.key.toLowerCase()
+        if (['d', 'g', 'u'].includes(key)) return `C-${key}`
+        return null
+    }
+    if (!event.shiftKey && !event.ctrlKey && !event.metaKey
+        && event.altKey) {
+        return event.code === 'KeyM' ? 'M-m' : null
+    }
+    if (event.ctrlKey || event.altKey || event.metaKey) return null
+    if (event.key === 'Escape') return '<escape>'
+    if (event.key === 'PageDown') return '<next>'
+    if (event.key === 'PageUp') return '<prior>'
+    if (event.code === 'Space') return 'SPC'
+    return READER_CHARACTER_KEYS.includes(event.key)
+        ? event.key : null
+}
 
 export const DEFAULT_STYLE = Object.freeze({
     'font-scale': 1.0,
@@ -53,7 +83,8 @@ export const encodePath = path =>
 
 export const checkedRoot = value => {
     const url = new URL(value)
-    if (url.origin !== BOOK_ROOT.slice(0, -1)
+    const root = `${url.protocol}//${url.host}/`
+    if (!BOOK_ROOTS.includes(root)
         || !/^\/[0-9a-f]{32}\/$/u.test(url.pathname)
         || url.search || url.hash || url.username || url.password) {
         throw new Error('Invalid Yunge Reader publication resource root')

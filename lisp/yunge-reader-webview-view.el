@@ -18,6 +18,12 @@
   (make-hash-table :test #'eq)
   "Live logical WebView records, including temporarily hidden views.")
 
+(defvar yunge-reader-webview--macos-active-p t
+  "Whether helper-owned macOS surfaces may currently be shown.")
+
+(defvar yunge-reader-webview--macos-focus-timer nil
+  "Timer coalescing asynchronous macOS frame-focus notifications.")
+
 (defvar-local yunge-reader-webview--buffer-view nil
   "Logical WebView record owned by the current Reader buffer.")
 

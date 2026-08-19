@@ -8,13 +8,13 @@ use std::io::{self, BufRead, Write};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
 use std::thread;
 use std::time::Duration;
+#[cfg(target_os = "windows")]
 use windows::Win32::UI::WindowsAndMessaging::{
     DispatchMessageW, MSG, PM_REMOVE, PeekMessageW, TranslateMessage,
 };
-use wry::{
-    NewWindowResponse, PermissionResponse, WebViewBuilder,
-    WebViewBuilderExtWindows,
-};
+#[cfg(target_os = "windows")]
+use wry::WebViewBuilderExtWindows;
+use wry::{NewWindowResponse, PermissionResponse, WebViewBuilder};
 use yunge_reader::epub::{Publication, PublicationLayout};
 
 use super::{BUILD_ID, Error};
@@ -22,6 +22,10 @@ use super::{BUILD_ID, Error};
 mod protocol;
 mod renderer;
 mod resources;
+#[cfg(target_os = "windows")]
+mod surface;
+#[cfg(target_os = "macos")]
+#[path = "webview/surface_macos.rs"]
 mod surface;
 
 #[cfg(test)]
@@ -30,6 +34,8 @@ use protocol::{
     ACCELERATORS, CAPABILITIES, Control, Operation, Outgoing, PROTOCOL_VERSION,
     Request, Response, ServiceError, response,
 };
+#[cfg(test)]
+use renderer::app_renderer_source_allowed;
 use renderer::{
     RendererSearchCallback, app_navigation_allowed,
     appearance_script as publication_appearance_script,
@@ -1022,9 +1028,11 @@ impl Service {
                 move |_webview_id, request, responder| {
                     resources.respond(request, responder);
                 },
-            )
-            .with_https_scheme(true)
-            .with_url(APP_URL)
+            );
+        #[cfg(target_os = "windows")]
+        let builder = builder.with_https_scheme(true);
+        let builder = builder.with_url(APP_URL);
+        let builder = builder
             .with_navigation_handler(app_navigation_allowed)
             .with_ipc_handler(move |request| {
                 if let Some(callback) =
@@ -1609,26 +1617,33 @@ fn surface_view_event(surface: SurfaceEvent) -> ViewEvent {
 }
 
 fn dependency_message(detail: &str) -> String {
-    format!(
+    #[cfg(target_os = "windows")]
+    return format!(
         concat!(
             "Microsoft Edge WebView2 Runtime is unavailable; ",
             "install it and restart Yunge Reader ({})"
         ),
-        detail
-    )
+        detail,
+    );
+    #[cfg(target_os = "macos")]
+    format!("WKWebView is unavailable; restart Yunge Reader ({detail})")
 }
 
 fn info_result(version: &Result<String, String>) -> Value {
+    #[cfg(target_os = "windows")]
+    let (platform, engine) = ("windows", "webview2");
+    #[cfg(target_os = "macos")]
+    let (platform, engine) = ("macos", "wkwebview");
     match version {
         Ok(version) => json!({
-            "platform": "windows",
-            "engine": "webview2",
+            "platform": platform,
+            "engine": engine,
             "available": true,
             "version": version,
         }),
         Err(error) => json!({
-            "platform": "windows",
-            "engine": "webview2",
+            "platform": platform,
+            "engine": engine,
             "available": false,
             "message": dependency_message(error),
         }),
@@ -1656,6 +1671,7 @@ fn write_message(
     Ok(())
 }
 
+#[cfg(target_os = "windows")]
 fn pump_messages() {
     let mut message = MSG::default();
     while unsafe { PeekMessageW(&mut message, None, 0, 0, PM_REMOVE) }.as_bool()
@@ -1665,6 +1681,11 @@ fn pump_messages() {
             DispatchMessageW(&message);
         }
     }
+}
+
+#[cfg(target_os = "macos")]
+fn pump_messages() {
+    surface::pump_messages();
 }
 
 fn write_outgoing(
@@ -1905,7 +1926,8 @@ mod tests {
         assert!(adapter.contains("post('accelerator', { key })"));
         assert!(core.contains("export const READER_CHARACTER_KEYS"));
         assert!(adapter.contains("checkedRendererAccelerators"));
-        assert!(adapter.contains("event.code === 'Space'"));
+        assert!(core.contains("event.code === 'Space'"));
+        assert!(core.contains("event.code === 'KeyM'"));
         assert!(adapter.contains("key === 'SPC' || key === 'g'"));
         assert!(adapter.contains("case 'previous-page':"));
         assert!(adapter.contains("case 'next-page':"));
@@ -2466,6 +2488,20 @@ mod tests {
             );
         }
 
+        for (event, expected) in [
+            ("focus-gained", "focus-gained"),
+            ("focus-lost", "focus-lost"),
+        ] {
+            let focus = HttpRequest::builder()
+                .uri(APP_URL)
+                .body(json!({ "protocol": 1, "event": event }).to_string())
+                .unwrap();
+            assert_eq!(
+                renderer_event_value(8, &focus),
+                json!({ "kind": "event", "event": expected, "view": 8 })
+            );
+        }
+
         for request in [
             HttpRequest::builder()
                 .uri("https://example.invalid/")
@@ -2482,13 +2518,6 @@ mod tests {
             HttpRequest::builder()
                 .uri(APP_URL)
                 .body(r#"{"protocol":1,"event":"publication-ready"}"#.into())
-                .unwrap(),
-            HttpRequest::builder()
-                .uri(APP_URL)
-                .body(
-                    r#"{"protocol":1,"event":"accelerator","key":"C-d"}"#
-                        .into(),
-                )
                 .unwrap(),
             HttpRequest::builder()
                 .uri(APP_URL)
@@ -2608,6 +2637,29 @@ mod tests {
             )
             .unwrap();
         assert!(renderer_event(9, &oversized_error).is_none());
+    }
+
+    #[test]
+    fn renderer_navigation_allows_owned_blob_without_trusting_blob_ipc() {
+        #[cfg(target_os = "windows")]
+        let blob = concat!(
+            "blob:https://yunge-reader-app.localhost/",
+            "01234567-89ab-cdef-0123-456789abcdef"
+        );
+        #[cfg(target_os = "macos")]
+        let blob = concat!(
+            "blob:yunge-reader-app://localhost/",
+            "01234567-89ab-cdef-0123-456789abcdef"
+        );
+        assert!(app_navigation_allowed(APP_BROWSER_URL.to_owned()));
+        assert!(app_navigation_allowed(blob.to_owned()));
+        assert!(!app_navigation_allowed("about:blank".to_owned()));
+        assert!(!app_navigation_allowed(
+            "blob:https://example.com/01234567-89ab-cdef".to_owned()
+        ));
+        assert!(!app_navigation_allowed(format!("{blob}/child")));
+
+        assert!(!app_renderer_source_allowed(blob));
     }
 
     #[test]

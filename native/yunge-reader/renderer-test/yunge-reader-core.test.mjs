@@ -16,6 +16,7 @@ import {
     checkedZoom,
     colorScheme,
     encodePath,
+    readerKey,
     READER_CHARACTER_KEYS,
     readingStyleCSS,
     sameAppearance,
@@ -32,6 +33,19 @@ const followAppearance = () => ({
     'search-background': '#ff7800',
 })
 
+const keyEvent = overrides => ({
+    defaultPrevented: false,
+    isComposing: false,
+    shiftKey: false,
+    ctrlKey: false,
+    altKey: false,
+    metaKey: false,
+    code: 'KeyA',
+    key: 'a',
+    target: null,
+    ...overrides,
+})
+
 test('validates renderer accelerator and path contracts', () => {
     const accelerators = [...READER_CHARACTER_KEYS]
     assert.equal(checkedRendererAccelerators(accelerators), accelerators)
@@ -44,9 +58,30 @@ test('validates renderer accelerator and path contracts', () => {
         'OPS/%E4%B8%AD%E6%96%87%20text.xhtml')
 })
 
+test('normalizes reader keyboard accelerators', () => {
+    assert.equal(readerKey(keyEvent({ ctrlKey: true, key: 'D' })), 'C-d')
+    assert.equal(readerKey(keyEvent({ altKey: true,
+        code: 'KeyM', key: 'µ' })), 'M-m')
+    assert.equal(readerKey(keyEvent({ key: 'Escape' })), '<escape>')
+    assert.equal(readerKey(keyEvent({ key: 'PageDown' })), '<next>')
+    assert.equal(readerKey(keyEvent({ key: 'PageUp' })), '<prior>')
+    assert.equal(readerKey(keyEvent({ code: 'Space', key: ' ' })), 'SPC')
+    assert.equal(readerKey(keyEvent({ key: 'j' })), 'j')
+
+    assert.equal(readerKey(keyEvent({ ctrlKey: true, key: 'x' })), null)
+    assert.equal(readerKey(keyEvent({ metaKey: true, key: 'j' })), null)
+    assert.equal(readerKey(keyEvent({ defaultPrevented: true })), null)
+    assert.equal(readerKey(keyEvent({ isComposing: true })), null)
+    assert.equal(readerKey(keyEvent({
+        target: { closest: () => ({}) },
+    })), null)
+})
+
 test('validates publication roots, view identifiers, and external URIs', () => {
     const root = `https://yunge-reader-book.localhost/${'a'.repeat(32)}/`
     assert.equal(checkedRoot(root), root)
+    const wkRoot = `yunge-reader-book://localhost/${'b'.repeat(32)}/`
+    assert.equal(checkedRoot(wkRoot), wkRoot)
     for (const invalid of [
         `${root}?query`,
         `${root}#fragment`,

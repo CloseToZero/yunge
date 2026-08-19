@@ -47,5 +47,15 @@ version = "=0.56.1"
 default-features = false
 features = ["os-webview"]
 
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "=0.6.4"
+objc2-app-kit = "=0.3.2"
+objc2-foundation = "=0.3.2"
+
+[target.'cfg(target_os = "macos")'.dependencies.wry]
+version = "=0.56.1"
+default-features = false
+features = ["os-webview"]
+
 [build-dependencies]
 sha2 = "=0.10.9"

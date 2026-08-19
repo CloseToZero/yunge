@@ -93,11 +93,11 @@
 
 ;;;###autoload
 (defun yunge-reader-webview-start ()
-  "Start the Windows WebView helper and return its process."
+  "Start the platform WebView helper and return its process."
   (interactive)
-  (unless (eq system-type 'windows-nt)
+  (unless (memq system-type '(windows-nt darwin))
     (user-error
-     "The current WebView embedding spike supports Windows only"))
+     "Yunge Reader EPUB supports WebView2 on Windows and WKWebView on macOS"))
   (if (process-live-p yunge-reader-webview--process)
       yunge-reader-webview--process
     (unless (yunge-reader-webview--program-available-p)

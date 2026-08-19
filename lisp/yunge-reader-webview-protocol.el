@@ -80,7 +80,15 @@
 
 (defun yunge-reader-webview--validate-ready (message)
   "Validate WebView helper ready MESSAGE."
-  (let ((expected (yunge-reader-native--build-id)))
+  (let ((expected (yunge-reader-native--build-id))
+        (platform
+         (pcase system-type
+           ('windows-nt "windows")
+           ('darwin "macos")))
+        (engine
+         (pcase system-type
+           ('windows-nt "webview2")
+           ('darwin "wkwebview"))))
     (unless expected
       (error "Yunge Reader native source hash is unavailable"))
     (unless
@@ -89,8 +97,9 @@
          (= (or (alist-get 'protocol message) -1)
             yunge-reader-webview-protocol-version)
          (equal (alist-get 'build-id message) expected)
-         (equal (alist-get 'platform message) "windows")
-         (equal (alist-get 'engine message) "webview2")
+         platform engine
+         (equal (alist-get 'platform message) platform)
+         (equal (alist-get 'engine message) engine)
          (equal (alist-get 'accelerators message)
                 yunge-reader-webview--accelerators)
          (cl-every

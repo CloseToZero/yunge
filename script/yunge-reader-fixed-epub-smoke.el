@@ -511,10 +511,13 @@
                     yunge-reader-fixed-smoke--replacement)
                    (yunge-reader-fixed-smoke--continue))))
               ('hidden
-               (if (and (null
-                         (yunge-reader-fixed-smoke--surface view))
-                         (equal location
-                                yunge-reader-fixed-smoke--scrolled))
+               (if (and
+                    (yunge-reader-webview--surface-ready-p
+                     (yunge-reader-fixed-smoke--surface view))
+                    (eql (yunge-reader-fixed-smoke--surface-id view)
+                         yunge-reader-fixed-smoke--surface-id)
+                    (equal location
+                           yunge-reader-fixed-smoke--scrolled))
                    (progn
                      (setq yunge-reader-fixed-smoke--phase 'reopened)
                      (switch-to-buffer
@@ -527,11 +530,10 @@
                      (yunge-reader-fixed-smoke--surface view))
                     (numberp
                      (yunge-reader-fixed-smoke--surface-id view))
-                    (not
-                     (eql (yunge-reader-fixed-smoke--surface-id view)
-                          yunge-reader-fixed-smoke--surface-id))
-                        (yunge-reader-fixed-smoke--same-viewport-p
-                         location yunge-reader-fixed-smoke--scrolled))
+                    (eql (yunge-reader-fixed-smoke--surface-id view)
+                         yunge-reader-fixed-smoke--surface-id)
+                    (yunge-reader-fixed-smoke--same-viewport-p
+                     location yunge-reader-fixed-smoke--scrolled))
                    (progn
                      (yunge-reader-fixed-smoke--record
                       'reopened location)

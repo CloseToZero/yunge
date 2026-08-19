@@ -80,6 +80,17 @@
            (format "Node exited with %S:\n%s"
                    status (buffer-string))))))))
 
+(ert-deftest yunge-reader-native-resolves-platform-pdfium-layouts ()
+  (cl-letf (((symbol-function 'yunge-reader-native-pdfium-directory)
+             (lambda () "/pdfium/7881")))
+    (dolist (case '((windows-nt . "bin/pdfium.dll")
+                    (darwin . "lib/libpdfium.dylib")
+                    (gnu/linux . "lib/libpdfium.so")))
+      (let ((system-type (car case)))
+        (should
+         (equal (yunge-reader-native-pdfium-library)
+                (expand-file-name (cdr case) "/pdfium/7881")))))))
+
 (ert-deftest yunge-reader-native-queues-until-validated-ready ()
   (yunge-reader-native-test--with-fake-process
     (let (result)

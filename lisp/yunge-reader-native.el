@@ -136,8 +136,8 @@ This must not exceed `yunge-reader-cache-max-bytes'."
   (expand-file-name
    (pcase system-type
      ('windows-nt "bin/pdfium.dll")
-     ('darwin "bin/libpdfium.dylib")
-     ('gnu/linux "bin/libpdfium.so")
+     ('darwin "lib/libpdfium.dylib")
+     ('gnu/linux "lib/libpdfium.so")
      (_ "bin/pdfium"))
    (yunge-reader-native-pdfium-directory)))
 

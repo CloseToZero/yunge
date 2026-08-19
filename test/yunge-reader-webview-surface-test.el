@@ -13,13 +13,57 @@
     '(when (featurep 'yunge-reader-webview)
        (error "Surface lifecycle loaded presentation integration")))))
 
-(ert-deftest yunge-reader-webview-parses-decimal-and-hex-frame-handles ()
-  (cl-letf (((symbol-function 'frame-parameter)
-             (lambda (_frame _parameter) "12345")))
-    (should (= (yunge-reader-webview--frame-handle 'frame) 12345)))
-  (cl-letf (((symbol-function 'frame-parameter)
-             (lambda (_frame _parameter) "0x2a")))
-    (should (= (yunge-reader-webview--frame-handle 'frame) 42))))
+(ert-deftest yunge-reader-webview-parses-decimal-and-hex-native-identifiers ()
+  ;; Any non-macOS value exercises the native frame-identifier path without
+  ;; making native-comp install Windows trampolines on a macOS test host.
+  (let ((system-type 'gnu/linux))
+    (cl-letf (((symbol-function 'frame-parameter)
+               (lambda (_frame _parameter) "12345")))
+      (should (= (yunge-reader-webview--frame-handle 'frame) 12345)))
+    (cl-letf (((symbol-function 'frame-parameter)
+               (lambda (_frame _parameter) "0x2a")))
+      (should (= (yunge-reader-webview--frame-handle 'frame) 42)))))
+
+(ert-deftest yunge-reader-webview-uses-emacs-pid-as-macos-parent ()
+  (let ((system-type 'darwin))
+    (cl-letf (((symbol-function 'emacs-pid) (lambda () 4321)))
+      (should (= (yunge-reader-webview--frame-handle 'frame) 4321)))))
+
+(ert-deftest yunge-reader-webview-uses-absolute-macos-window-bounds ()
+  (let ((system-type 'darwin))
+    (cl-letf (((symbol-function 'window-body-pixel-edges)
+               (lambda (_window) '(10 20 210 320)))
+              ((symbol-function 'window-frame)
+               (lambda (_window) 'frame))
+              ((symbol-function 'frame-edges)
+               (lambda (_frame edge-type)
+                 (should (eq edge-type 'native-edges))
+                 '(300 400 900 1000))))
+      (should
+       (equal (yunge-reader-webview--window-bounds 'window)
+              '((x . 310) (y . 420) (width . 200) (height . 300)))))))
+
+(ert-deftest yunge-reader-webview-creates-macos-surfaces-hidden-when-inactive ()
+  (let* ((system-type 'darwin)
+         (yunge-reader-webview--macos-active-p nil)
+         (surface
+          (yunge-reader-webview--make-surface
+           :id 7
+           :window 'window
+           :requested-bounds
+           '((x . 10) (y . 20) (width . 300) (height . 400))))
+         (view (yunge-reader-webview--make-view :surface surface))
+         request)
+    (cl-letf (((symbol-function 'window-frame)
+               (lambda (_window) 'frame))
+              ((symbol-function 'yunge-reader-webview--frame-handle)
+               (lambda (_frame) 1234))
+              ((symbol-function 'yunge-reader-webview--request)
+               (lambda (operation parameters complete)
+                 (setq request (list operation parameters complete)))))
+      (yunge-reader-webview--request-create view))
+    (should (equal (car request) "view-create"))
+    (should (eq (alist-get 'visible (cadr request)) :false))))
 
 (ert-deftest yunge-reader-webview-coalesces-window-resizes ()
   (let* ((view

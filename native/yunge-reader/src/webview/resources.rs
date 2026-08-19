@@ -16,17 +16,27 @@ use super::protocol::ServiceError;
 
 pub(super) const APP_PROTOCOL: &str = "yunge-reader-app";
 pub(super) const APP_URL: &str = "yunge-reader-app://localhost/index.html";
+#[cfg(target_os = "windows")]
 pub(super) const APP_BROWSER_URL: &str =
     "https://yunge-reader-app.localhost/index.html";
+#[cfg(target_os = "macos")]
+pub(super) const APP_BROWSER_URL: &str = APP_URL;
+#[cfg(target_os = "windows")]
 pub(super) const APP_BROWSER_ORIGIN: &str =
     "https://yunge-reader-app.localhost";
+#[cfg(target_os = "macos")]
+pub(super) const APP_BROWSER_ORIGIN: &str = "yunge-reader-app://localhost";
 pub(super) const BOOK_PROTOCOL: &str = "yunge-reader-book";
 pub(super) const RESOURCE_CATALOG_PATH: &str = ".yunge/resources.json";
 pub(super) const MAX_RESOURCE_REQUESTS: usize = 8;
 
+#[cfg(target_os = "windows")]
 const BOOK_BROWSER_ROOT: &str = "https://yunge-reader-book.localhost/";
+#[cfg(target_os = "macos")]
+const BOOK_BROWSER_ROOT: &str = "yunge-reader-book://localhost/";
 const MAX_RESOURCE_CATALOG_BYTES: usize = 16 * 1_024 * 1_024;
 const MAX_RESOURCE_URI_PATH_BYTES: usize = 196_605;
+#[cfg(target_os = "windows")]
 const APP_CSP: &str = concat!(
     "default-src 'none'; ",
     "script-src 'self'; ",
@@ -35,6 +45,21 @@ const APP_CSP: &str = concat!(
     "font-src blob: data:; ",
     "media-src blob: data:; ",
     "connect-src https://yunge-reader-book.localhost; ",
+    "frame-src blob:; ",
+    "object-src 'none'; ",
+    "worker-src 'none'; ",
+    "base-uri 'none'; ",
+    "form-action 'none'"
+);
+#[cfg(target_os = "macos")]
+const APP_CSP: &str = concat!(
+    "default-src 'none'; ",
+    "script-src 'self'; ",
+    "style-src 'self' blob: 'unsafe-inline'; ",
+    "img-src blob: data:; ",
+    "font-src blob: data:; ",
+    "media-src blob: data:; ",
+    "connect-src yunge-reader-book:; ",
     "frame-src blob:; ",
     "object-src 'none'; ",
     "worker-src 'none'; ",

@@ -199,7 +199,8 @@ scrolling behavior."
 
 (defun yunge-reader-epub--supported-p ()
   "Return whether the current Emacs can host the EPUB WebView."
-  (and (display-graphic-p) (eq system-type 'windows-nt)))
+  (and (display-graphic-p)
+       (memq system-type '(windows-nt darwin))))
 
 (defun yunge-reader-epub--native-error (message)
   "Return an Emacs error value containing MESSAGE."
@@ -256,7 +257,9 @@ scrolling behavior."
     (funcall
      complete nil nil
      (yunge-reader-epub--native-error
-      "EPUB reading currently requires graphical Windows Emacs")))
+      (concat
+       "EPUB reading currently requires graphical Emacs on "
+       "Windows or macOS"))))
    ((or (file-remote-p file)
         (not (file-regular-p file))
         (not (file-readable-p file)))

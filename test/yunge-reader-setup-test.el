@@ -23,6 +23,26 @@
        "https://github.com/bblanchon/pdfium-binaries/"
        "releases/download/chromium/7881/pdfium-win-x64.tgz")))))
 
+(ert-deftest yunge-reader-setup-selects-the-pinned-macos-asset-layout ()
+  (let* ((system-type 'darwin)
+         (system-configuration "aarch64-apple-darwin")
+         (manifest (yunge-reader-setup--manifest))
+         (asset (yunge-reader-setup--asset manifest)))
+    (should (equal (plist-get asset :file)
+                   "pdfium-mac-arm64.tgz"))
+    (should (equal (plist-get asset :library)
+                   "lib/libpdfium.dylib"))))
+
+(ert-deftest yunge-reader-setup-selects-the-pinned-linux-asset-layout ()
+  (let* ((system-type 'gnu/linux)
+         (system-configuration "x86_64-pc-linux-gnu")
+         (manifest (yunge-reader-setup--manifest))
+         (asset (yunge-reader-setup--asset manifest)))
+    (should (equal (plist-get asset :file)
+                   "pdfium-linux-x64.tgz"))
+    (should (equal (plist-get asset :library)
+                   "lib/libpdfium.so"))))
+
 (ert-deftest yunge-reader-setup-rejects-unsafe-archive-paths ()
   (dolist (path '("../escape" "inside/../../escape"
                   "/absolute" "C:/absolute" "inside\\escape"))
@@ -31,6 +51,22 @@
   (dolist (path '("LICENSE" "VERSION" "bin/pdfium.dll"
                   "licenses/icu/LICENSE"))
     (should (yunge-reader-setup--safe-archive-entry-p path))))
+
+(ert-deftest yunge-reader-setup-validates-the-platform-library-path ()
+  (let ((asset '(:library "lib/libpdfium.dylib")))
+    (cl-letf (((symbol-function 'yunge-reader-setup--archive-entries)
+               (lambda (_tar _archive)
+                 '("LICENSE" "VERSION" "licenses/"
+                   "licenses/pdfium.txt" "lib/libpdfium.dylib"))))
+      (should-not
+       (yunge-reader-setup--validate-archive "tar" "archive" asset)))
+    (cl-letf (((symbol-function 'yunge-reader-setup--archive-entries)
+               (lambda (_tar _archive)
+                 '("LICENSE" "VERSION" "licenses/"
+                   "licenses/pdfium.txt" "bin/libpdfium.dylib"))))
+      (should-error
+       (yunge-reader-setup--validate-archive "tar" "archive" asset)
+       :type 'error))))
 
 (ert-deftest yunge-reader-setup-hashes-file-bytes-not-its-name ()
   (let ((file (make-temp-file "yunge-reader-hash-")))

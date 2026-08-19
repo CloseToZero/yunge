@@ -87,6 +87,12 @@ enum RendererMessage {
         protocol: u32,
         uri: String,
     },
+    FocusGained {
+        protocol: u32,
+    },
+    FocusLost {
+        protocol: u32,
+    },
     Location {
         protocol: u32,
         location: EpubLocator,
@@ -402,14 +408,35 @@ pub(super) fn search_response(
 }
 
 pub(super) fn app_navigation_allowed(url: String) -> bool {
-    matches!(url.as_str(), APP_URL | APP_BROWSER_URL)
+    app_renderer_source_allowed(&url) || app_blob_navigation_allowed(&url)
+}
+
+pub(super) fn app_renderer_source_allowed(url: &str) -> bool {
+    url == APP_URL || url == APP_BROWSER_URL
+}
+
+fn app_blob_navigation_allowed(url: &str) -> bool {
+    #[cfg(target_os = "windows")]
+    const ROOTS: &[&str] = &["blob:https://yunge-reader-app.localhost/"];
+    #[cfg(target_os = "macos")]
+    const ROOTS: &[&str] = &["blob:yunge-reader-app://localhost/"];
+    ROOTS.iter().any(|root| {
+        let Some(identifier) = url.strip_prefix(root) else {
+            return false;
+        };
+        !identifier.is_empty()
+            && identifier.len() <= 128
+            && identifier
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
+    })
 }
 
 pub(super) fn search_callback(
     view: u64,
     request: &HttpRequest<String>,
 ) -> Option<RendererSearchCallback> {
-    if !app_navigation_allowed(request.uri().to_string())
+    if !app_renderer_source_allowed(&request.uri().to_string())
         || request.body().len() > MAX_RENDERER_MESSAGE_BYTES
     {
         return None;
@@ -440,7 +467,7 @@ pub(super) fn event(
     view: u64,
     request: &HttpRequest<String>,
 ) -> Option<ViewEvent> {
-    if !app_navigation_allowed(request.uri().to_string())
+    if !app_renderer_source_allowed(&request.uri().to_string())
         || request.body().len() > MAX_RENDERER_MESSAGE_BYTES
     {
         return None;
@@ -465,6 +492,18 @@ pub(super) fn event(
                 return None;
             }
             ViewEventPayload::ExternalLink { uri }
+        }
+        RendererMessage::FocusGained { protocol } => {
+            if protocol != PROTOCOL_VERSION {
+                return None;
+            }
+            ViewEventPayload::FocusGained
+        }
+        RendererMessage::FocusLost { protocol } => {
+            if protocol != PROTOCOL_VERSION {
+                return None;
+            }
+            ViewEventPayload::FocusLost
         }
         RendererMessage::Location {
             protocol,
