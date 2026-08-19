@@ -148,11 +148,14 @@ large, platform-managed state and may require administrator access.
 
 ** Required programs
 
-The =latex= and =dvisvgm= backend requires these commands on =exec-path=:
+The rendering backend requires these commands on =exec-path=:
 
 - =latex= compiles a temporary document to DVI.
 - =dvisvgm= converts DVI pages to SVG.
-- =kpsewhich= locates TeX files for diagnostics.
+
+The setup command, package diagnostics, and conditional integration tests also
+use =kpsewhich= to locate TeX files.  It is not called while rendering a
+preview.
 
 The backend resolves the engine and converter before creating render work or
 starting a process.  When either is unavailable, automatic previews remain
