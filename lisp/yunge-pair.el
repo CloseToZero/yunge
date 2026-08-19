@@ -55,6 +55,12 @@
     ("『" . "』"))
   "Chinese punctuation pairs used in Org prose.")
 
+(defconst yunge-pair--org-spaced-latex-pairs
+  '(("\\(" . "\\)")
+    ("\\[" . "\\]")
+    ("\\{" . "\\}"))
+  "LaTeX pairs whose first inner space expands to two spaces in Org.")
+
 (defun yunge-pair--org-literal-context-p (_id action _context)
   "Return non-nil when Org markup pairing would alter literal text.
 ACTION is the Smartparens operation being considered."
@@ -104,11 +110,13 @@ ACTION is the Smartparens operation being considered."
       (self-insert-command 1)
     (let* ((expression (sp-get-enclosing-sexp))
            (open (plist-get expression :op))
+           (pair (assoc open yunge-pair--org-spaced-latex-pairs))
            (close (plist-get expression :cl))
            (beginning (plist-get expression :beg))
            (end (plist-get expression :end)))
-      (if (and (member open '("\\(" "\\["))
-               close beginning end
+      (if (and pair
+               (equal close (cdr pair))
+               beginning end
                (= (point) (+ beginning (length open)))
                (= (point) (- end (length close))))
           (progn
@@ -144,8 +152,10 @@ than one character, such as `\\)' and `\\]'."
   (when (derived-mode-p 'org-mode)
     (when-let* ((expression (sp-get-enclosing-sexp))
                 (open (plist-get expression :op))
-                ((member open '("\\(" "\\[")))
+                (pair
+                 (assoc open yunge-pair--org-spaced-latex-pairs))
                 (close (plist-get expression :cl))
+                ((equal close (cdr pair)))
                 (beginning (plist-get expression :beg))
                 (end (plist-get expression :end))
                 (inside-beginning (+ beginning (length open)))
@@ -197,8 +207,8 @@ than one character, such as `\\)' and `\\]'."
 
 (defun yunge-pair--setup-org-pairs ()
   "Configure Org-specific pairs."
-  (sp-local-pair 'org-mode "\\(" "\\)")
-  (sp-local-pair 'org-mode "\\[" "\\]")
+  (dolist (pair yunge-pair--org-spaced-latex-pairs)
+    (sp-local-pair 'org-mode (car pair) (cdr pair)))
   (sp-local-pair
    'org-mode "*" "*"
    :unless '(sp-point-after-word-p
