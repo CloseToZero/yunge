@@ -117,9 +117,6 @@ When the helper is unavailable, synchronization falls back to Emacs."
 (defvar fangcun--native-watch-process nil
   "Process monitoring Fangcun yiyus, or nil.")
 
-(defvar fangcun--native-watch-output ""
-  "Incomplete output from the Fangcun native monitor.")
-
 (defvar fangcun--native-watch-yiyus nil
   "Signature of yiyus watched by the native monitor.")
 
@@ -1138,7 +1135,6 @@ When NO-MESSAGE is non-nil, do not report synchronization results."
                  'fangcun-intentional-stop t)
     (delete-process fangcun--native-watch-process))
   (setq fangcun--native-watch-process nil
-        fangcun--native-watch-output ""
         fangcun--native-watch-yiyus nil))
 
 (defun fangcun--schedule-native-events ()
@@ -1193,38 +1189,42 @@ When NO-MESSAGE is non-nil, do not report synchronization results."
 
 (defun fangcun--native-watch-filter (process output)
   "Collect and handle complete NDJSON lines in native monitor OUTPUT."
-  (setq fangcun--native-watch-output
-        (concat fangcun--native-watch-output output))
-  (let (newline)
-    (while (setq newline
-                 (string-match "\n" fangcun--native-watch-output))
-      (let ((line
-             (string-trim-right
-              (substring fangcun--native-watch-output 0 newline)
-              "\r")))
-        (setq fangcun--native-watch-output
-              (substring fangcun--native-watch-output (1+ newline)))
-        (unless (string-empty-p line)
-          (condition-case error-data
-              (fangcun--handle-native-message process line)
-            (fangcun-native-helper-outdated
-             (when (eq process fangcun--native-watch-process)
+  (when (eq process fangcun--native-watch-process)
+    (process-put
+     process 'fangcun-output
+     (concat (or (process-get process 'fangcun-output) "") output))
+    (let (newline)
+      (while
+          (and
+           (eq process fangcun--native-watch-process)
+           (setq newline
+                 (string-match
+                  "\n" (process-get process 'fangcun-output))))
+        (let* ((pending (process-get process 'fangcun-output))
+               (line
+                (string-trim-right
+                 (substring pending 0 newline) "\r")))
+          (process-put process 'fangcun-output
+                       (substring pending (1+ newline)))
+          (unless (string-empty-p line)
+            (condition-case error-data
+                (fangcun--handle-native-message process line)
+              (fangcun-native-helper-outdated
                (fangcun--stop-native-watch)
-               (fangcun--build-native-helper)))
-            (error
-             (display-warning
-              'fangcun
-              (format "Invalid native monitor output: %s"
-                      (error-message-string error-data))
-              :warning)
-             (fangcun--queue-native-full-sync))))))))
+               (fangcun--build-native-helper))
+              (error
+               (display-warning
+                'fangcun
+                (format "Invalid native monitor output: %s"
+                        (error-message-string error-data))
+                :warning)
+               (fangcun--queue-native-full-sync)))))))))
 
 (defun fangcun--native-watch-sentinel (process _event)
   "Recover when native monitor PROCESS exits unexpectedly."
   (when (and (memq (process-status process) '(exit signal failed))
              (eq process fangcun--native-watch-process))
-    (setq fangcun--native-watch-process nil
-          fangcun--native-watch-output "")
+    (setq fangcun--native-watch-process nil)
     (unless (process-get process 'fangcun-intentional-stop)
       (if (and fangcun--session-active-p
                (< fangcun--native-restart-count 1))
@@ -1243,17 +1243,16 @@ When NO-MESSAGE is non-nil, do not report synchronization results."
       (unless (and (process-live-p fangcun--native-watch-process)
                    (equal signature fangcun--native-watch-yiyus))
         (fangcun--stop-native-watch)
-        (setq fangcun--native-watch-output ""
-              fangcun--native-watch-yiyus signature)
+        (setq fangcun--native-watch-yiyus signature)
         (condition-case error-data
             (setq fangcun--native-watch-process
                   (make-process
                    :name "fangcun-watch"
                    :command
                    (cons
-                     (fangcun--native-helper-program)
-                     (fangcun--native-command-arguments
-                      "watch" yiyus))
+                    (fangcun--native-helper-program)
+                    (fangcun--native-command-arguments
+                     "watch" yiyus))
                    :coding 'utf-8-unix
                    :connection-type 'pipe
                    :noquery t
@@ -1268,11 +1267,11 @@ When NO-MESSAGE is non-nil, do not report synchronization results."
 
 (defun fangcun--native-build-sentinel (process _event)
   "Start native monitoring when helper build PROCESS succeeds."
-  (when (memq (process-status process) '(exit signal failed))
-    (when (eq process fangcun--native-build-process)
-      (setq fangcun--native-build-process nil))
+  (when (and (memq (process-status process) '(exit signal failed))
+             (eq process fangcun--native-build-process))
+    (setq fangcun--native-build-process nil)
     (if (and (zerop (process-exit-status process))
-              (fangcun--native-helper-available-p))
+             (fangcun--native-helper-available-p))
         (progn
           (message "Built Fangcun native helper")
           (when fangcun--session-active-p

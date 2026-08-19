@@ -1157,6 +1157,23 @@
     (should-not watch-started)
     (should (member "Built Fangcun native helper" messages))))
 
+(ert-deftest fangcun-native-ignores-an-obsolete-build-completion ()
+  (let ((fangcun--native-build-process 'current-build)
+        reacted)
+    (cl-letf (((symbol-function 'process-status)
+               (lambda (_process) 'exit))
+              ((symbol-function 'process-exit-status)
+               (lambda (_process) 0))
+              ((symbol-function 'fangcun--native-helper-available-p)
+               (lambda ()
+                 (setq reacted t)))
+              ((symbol-function 'fangcun--native-warning)
+               (lambda (&rest _arguments)
+                 (setq reacted t))))
+      (fangcun--native-build-sentinel 'old-build "finished\n"))
+    (should (eq fangcun--native-build-process 'current-build))
+    (should-not reacted)))
+
 (ert-deftest fangcun-native-build-displays-compilation-buffer ()
   (let ((fangcun--native-build-process nil)
         (target (make-temp-file "fangcun-build-target-" t))
@@ -1236,6 +1253,29 @@
       (should (= (hash-table-count
                   fangcun--native-pending-files)
                  2)))))
+
+(ert-deftest fangcun-native-monitor-output-belongs-to-its-process ()
+  (let ((fangcun--native-watch-process 'current-monitor)
+        (properties (make-hash-table :test #'equal))
+        handled)
+    (cl-letf (((symbol-function 'process-get)
+               (lambda (process property)
+                 (gethash (cons process property) properties)))
+              ((symbol-function 'process-put)
+               (lambda (process property value)
+                 (puthash (cons process property) value properties)))
+              ((symbol-function 'fangcun--handle-native-message)
+               (lambda (process line)
+                 (push (cons process line) handled))))
+      (fangcun--native-watch-filter 'current-monitor "partial")
+      (setq fangcun--native-watch-process 'new-monitor)
+      (fangcun--native-watch-filter 'current-monitor " stale\n")
+      (fangcun--native-watch-filter 'new-monitor "fresh\n"))
+    (should
+     (equal
+      (gethash (cons 'current-monitor 'fangcun-output) properties)
+      "partial"))
+    (should (equal handled '((new-monitor . "fresh"))))))
 
 (ert-deftest fangcun-first-use-synchronizes-once ()
   (fangcun-test-with-notes
