@@ -128,6 +128,11 @@ forwards =G=, =+=, =-=, ===, and =y= through the active Emacs keymaps.
 =GotFocus= selects the child surface's owning Emacs window.  Selecting another
 Emacs window asks any focused child to return keyboard focus to its parent, so
 ordinary Emacs bindings resume without an extra click.
+
+Native wheel movement remains within the current reflowable spine item until
+it reaches a vertical boundary.  Continued input then enters the adjacent
+linear item once, while a gesture latch consumes the remaining touchpad or
+wheel momentum so one gesture cannot skip chapters.
 Pressing =SPC=, =M-m=, or the first =g= in a focused child also returns native
 focus, then queues the key through Emacs itself.  Leader and =g= prefix
 sequences therefore continue through the ordinary active maps instead of

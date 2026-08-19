@@ -1979,6 +1979,12 @@ mod tests {
         .unwrap();
         assert!(paginator.contains("prev(distance, smooth = true)"));
         assert!(paginator.contains("#scrollPrev(distance, smooth = true)"));
+        assert!(paginator.contains("new CustomEvent('boundary-scroll'"));
+        assert!(paginator.contains("if (this.#wheelLatched)"));
+        assert!(
+            paginator
+                .contains("doc.addEventListener('wheel', this.#wheelListener")
+        );
         let view =
             std::str::from_utf8(app_asset("foliate-js/view.js").unwrap().1)
                 .unwrap();

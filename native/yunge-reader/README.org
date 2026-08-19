@@ -488,6 +488,9 @@ backward movement enters the preceding page at its bottom.  These movements
 retain unscaled viewport coordinates across manual zoom and fit-mode resize.
 Repeated fixed and reflowable commands share the same bounded navigation
 queue.
+Reflowable wheel movement remains native within the current spine item.  At
+its top or bottom, continued input schedules the adjacent screen once and
+consumes the rest of that wheel gesture so momentum cannot skip chapters.
 Native wheel movement remains inside an overflowing fixed page.  Wheel input
 that continues at its vertical boundary schedules the corresponding screen
 command, while a gesture latch suppresses momentum from turning or entering

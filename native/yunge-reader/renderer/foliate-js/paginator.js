@@ -447,6 +447,10 @@ export class Paginator extends HTMLElement {
     #scrollBounds
     #touchState
     #touchScrolled
+    #wheelDocument
+    #wheelLatched = false
+    #wheelListener
+    #wheelTimer
     #lastVisibleRange
     constructor() {
         super()
@@ -569,11 +573,22 @@ export class Paginator extends HTMLElement {
             }
         }, 250))
 
+        this.#wheelListener = this.#onWheel.bind(this)
+        this.addEventListener('wheel', this.#wheelListener, {
+            passive: false,
+        })
+
         const opts = { passive: false }
         this.addEventListener('touchstart', this.#onTouchStart.bind(this), opts)
         this.addEventListener('touchmove', this.#onTouchMove.bind(this), opts)
         this.addEventListener('touchend', this.#onTouchEnd.bind(this))
         this.addEventListener('load', ({ detail: { doc } }) => {
+            this.#wheelDocument?.removeEventListener(
+                'wheel', this.#wheelListener)
+            this.#wheelDocument = doc
+            doc.addEventListener('wheel', this.#wheelListener, {
+                passive: false,
+            })
             doc.addEventListener('touchstart', this.#onTouchStart.bind(this), opts)
             doc.addEventListener('touchmove', this.#onTouchMove.bind(this), opts)
             doc.addEventListener('touchend', this.#onTouchEnd.bind(this))
@@ -794,6 +809,29 @@ export class Paginator extends HTMLElement {
     }
     get pages() {
         return Math.round(this.viewSize / this.size)
+    }
+    #onWheel(event) {
+        if (!this.scrolled || !Number.isFinite(event.deltaY)
+            || Math.abs(event.deltaY) <= Math.abs(event.deltaX)) return
+        if (this.#wheelTimer) clearTimeout(this.#wheelTimer)
+        this.#wheelTimer = setTimeout(() => {
+            this.#wheelTimer = null
+            this.#wheelLatched = false
+        }, 180)
+        if (this.#wheelLatched) {
+            event.preventDefault()
+            return
+        }
+        const limit = Math.max(0, this.viewSize - this.size)
+        const direction = Math.sign(event.deltaY)
+        const boundary = direction < 0
+            ? this.start <= 0.5 : this.start >= limit - 0.5
+        if (!boundary) return
+        event.preventDefault()
+        this.#wheelLatched = true
+        this.dispatchEvent(new CustomEvent('boundary-scroll', {
+            detail: { direction },
+        }))
     }
     scrollBy(dx, dy) {
         const delta = this.#vertical ? dy : dx
@@ -1133,6 +1171,10 @@ export class Paginator extends HTMLElement {
         this.#view.document.defaultView.focus()
     }
     destroy() {
+        if (this.#wheelTimer) clearTimeout(this.#wheelTimer)
+        this.removeEventListener('wheel', this.#wheelListener)
+        this.#wheelDocument?.removeEventListener(
+            'wheel', this.#wheelListener)
         this.#observer.unobserve(this)
         this.#view.destroy()
         this.#view = null
