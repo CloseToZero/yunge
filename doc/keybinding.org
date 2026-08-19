@@ -344,6 +344,8 @@ Shared reader bindings are:
 
 Reader view administration remains under the mode-local leader:
 
+- ~SPC m a d~ sets the current book's appearance, ~SPC m a D~ sets the
+  format default, and ~SPC m a u~ restores inheritance from that default.
 - ~SPC m v~ creates an additional view from the current stable place.
 - ~SPC m p~ makes the current view primary.
 - In reflowable EPUB views, ~SPC m l +/-~ changes line height,

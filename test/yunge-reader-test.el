@@ -62,6 +62,9 @@
      ("n" . yunge-reader-search-next)
      ("o" . yunge-reader-outline)
      ("q" . evil-record-macro)
+     ("SPC m a D" . yunge-reader-set-default-appearance)
+     ("SPC m a d" . yunge-reader-set-document-appearance)
+     ("SPC m a u" . yunge-reader-unset-document-appearance)
      ("SPC m p" . yunge-reader-make-primary)
      ("SPC m v" . yunge-reader-new-view)
      ("y" . yunge-reader-copy-selection)
@@ -73,8 +76,14 @@
    'yunge-reader-mode "g" '(("r" nil "refresh")))
   (yunge-test-which-key-prefix-bindings
    'yunge-reader-mode "SPC m"
-   '(("p" nil "make primary")
+   '(("a" nil "+appearance")
+     ("p" nil "make primary")
      ("v" nil "new view")))
+  (yunge-test-which-key-prefix-bindings
+   'yunge-reader-mode "SPC m a"
+   '(("D" nil "set format default")
+     ("d" nil "set book")
+     ("u" nil "inherit default")))
   (yunge-test-evil-visual-keys
    'yunge-reader-mode
    '(("y" . evil-yank))))

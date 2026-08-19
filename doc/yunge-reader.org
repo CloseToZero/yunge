@@ -408,6 +408,8 @@ of the format.  An explicit override survives default changes and is shared by
 all logical views of the same document.  Use
 =yunge-reader-set-document-appearance= to create one and
 =yunge-reader-unset-document-appearance= to restore inheritance.
+The same commands are available under =SPC m a=: =d= sets the current book,
+=D= sets the format default, and =u= restores inheritance.
 
 Appearance overrides are durable user preferences rather than recency data.
 They persist through =savehist= separately from bounded saved places and are

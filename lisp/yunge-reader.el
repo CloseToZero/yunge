@@ -383,8 +383,20 @@ document contents.")
   "Hook run after the current Reader view's effective appearance changes.
 Functions run in the affected Reader buffer without arguments.")
 
+(defconst yunge-reader-appearance-bindings
+  '(("d" yunge-reader-set-document-appearance "set book")
+    ("D" yunge-reader-set-default-appearance "set format default")
+    ("u" yunge-reader-unset-document-appearance "inherit default")))
+
+(defvar-keymap yunge-reader-appearance-map
+  :doc "Keymap for Reader appearance commands.")
+
+(yunge-key-define yunge-reader-appearance-map
+                  yunge-reader-appearance-bindings)
+
 (defconst yunge-reader-command-bindings
-  '(("p" yunge-reader-make-primary "make primary")
+  `(("a" ,yunge-reader-appearance-map "appearance")
+    ("p" yunge-reader-make-primary "make primary")
     ("v" yunge-reader-new-view "new view")))
 
 (defvar-keymap yunge-reader-command-map
@@ -479,6 +491,8 @@ Functions run in the affected Reader buffer without arguments.")
         (yunge-reader--hide-evil-cursor)))))
 
 (with-eval-after-load 'which-key
+  (yunge-key-add-which-key-descriptions
+   yunge-reader-appearance-map yunge-reader-appearance-bindings)
   (yunge-key-add-which-key-descriptions
    yunge-reader-command-map yunge-reader-command-bindings))
 
