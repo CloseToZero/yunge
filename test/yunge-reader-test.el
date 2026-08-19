@@ -18,6 +18,13 @@
    :zoom-mode (or zoom-mode 'fit-width)
    :scale (or scale 1.0)))
 
+(defun yunge-reader-test--mark (driver unit &optional offset)
+  "Return printable Reader mark data for DRIVER at UNIT and OFFSET."
+  (list
+   :version yunge-reader-mark-version
+   :driver driver
+   :position (list :unit unit :offset offset :x nil :y nil)))
+
 (defun yunge-reader-test--buffer (name)
   "Return a new Reader buffer named NAME."
   (let ((buffer (generate-new-buffer name)))
@@ -37,7 +44,9 @@
      ("W" . yunge-reader-fit-width)
      ("C-g" . yunge-reader-keyboard-quit)
      ("<escape>" . yunge-reader-escape)
+     ("'a" . yunge-reader-goto-mark)
      ("gr" . yunge-reader-refresh)
+     ("ma" . yunge-reader-set-mark)
      ("n" . yunge-reader-search-next)
      ("o" . yunge-reader-outline)
      ("q" . undefined)
@@ -58,7 +67,9 @@
      ("N" . yunge-reader-search-previous)
      ("P" . yunge-reader-fit-page)
      ("W" . yunge-reader-fit-width)
+     ("'a" . yunge-reader-goto-mark)
      ("gr" . yunge-reader-refresh)
+     ("ma" . yunge-reader-set-mark)
      ("n" . yunge-reader-search-next)
      ("o" . yunge-reader-outline)
      ("q" . evil-record-macro)
@@ -1142,6 +1153,159 @@
                     yunge-reader-saved-places)
             '("three.pdf" "two.pdf")))))
 
+(ert-deftest yunge-reader-marks-are-document-local-copied-and-bounded ()
+  (let* ((yunge-reader-mark-document-limit 2)
+         (yunge-reader-saved-marks nil)
+         (driver
+          (yunge-reader--make-driver :name 'test :close-function #'ignore))
+         (one (expand-file-name "one.pdf"))
+         (two (expand-file-name "two.pdf"))
+         (three (expand-file-name "three.pdf"))
+         (mark (yunge-reader-test--mark 'test 1 "start")))
+    (yunge-reader--store-mark one ?a mark)
+    (setf (plist-get (plist-get mark :position) :unit) 'mutated)
+    (yunge-reader--store-mark one ?b (yunge-reader-test--mark 'test 2))
+    (should
+     (equal
+      (mapcar #'car
+              (cdr (assoc (yunge-reader--place-file-key one)
+                          yunge-reader-saved-marks)))
+      '(98 97)))
+    (should
+     (= (plist-get
+         (plist-get (yunge-reader--saved-mark one driver ?a) :position)
+         :unit)
+        1))
+    (yunge-reader--store-mark two ?a (yunge-reader-test--mark 'test 3))
+    (yunge-reader--store-mark three ?a (yunge-reader-test--mark 'test 4))
+    (should
+     (equal
+      (mapcar (lambda (entry) (file-name-nondirectory (car entry)))
+              yunge-reader-saved-marks)
+      '("three.pdf" "two.pdf")))
+    (should-not (yunge-reader--saved-mark one driver ?a))
+    (should-error
+     (yunge-reader--store-mark two ?A mark)
+     :type 'error)))
+
+(ert-deftest yunge-reader-mark-commands-use-stable-position-and-current-zoom ()
+  (let* ((file (expand-file-name "marked.pdf"))
+         (key (yunge-reader--place-file-key file))
+         (yunge-reader-saved-marks nil)
+         (yunge-reader-saved-places nil)
+         (yunge-reader-drivers nil)
+         (current (make-yunge-reader-position :unit 1 :offset "source"))
+         buffer)
+    (unwind-protect
+        (save-window-excursion
+          (setq buffer (generate-new-buffer " *reader-marks*"))
+          (switch-to-buffer buffer)
+          (set-window-parameter
+           (selected-window) 'yunge-jump-history nil)
+          (yunge-reader-mode)
+          (let ((driver
+                 (yunge-reader-register-driver
+                  'test
+                  :match #'ignore :open #'ignore :close #'ignore
+                  :request #'ignore
+                  :location (lambda (_document _window) current)
+                  :restore
+                  (lambda (_document position _window)
+                    (setq current position)
+                    t))))
+            (setq yunge-reader-document
+                  (make-yunge-reader-document
+                   :file file :driver driver :layout 'fixed)
+                  yunge-reader--place-recording-enabled t
+                  yunge-reader-zoom-mode 'manual
+                  yunge-reader-scale 2.0)
+            (let ((inhibit-message t))
+              (should (eq (yunge-reader-set-mark ?a) ?a)))
+            (let ((mark (yunge-reader--saved-mark file driver ?a)))
+              (should mark)
+              (should-not (plist-member mark :zoom-mode))
+              (should-not (plist-member mark :scale)))
+            (setq current (make-yunge-reader-position :unit 5 :offset "later")
+                  yunge-reader-zoom-mode 'fit-width
+                  yunge-reader-scale 1.0)
+            (should (yunge-reader-goto-mark ?a)))
+          (should (= (yunge-reader-position-unit current) 1))
+          (should (equal (yunge-reader-position-offset current) "source"))
+          (should (eq yunge-reader-zoom-mode 'fit-width))
+          (should (= yunge-reader-scale 1.0))
+          (should
+           (= (plist-get
+               (plist-get
+                (cdr (assoc key yunge-reader-saved-places)) :position)
+               :unit)
+              1))
+          (let* ((history
+                  (window-parameter
+                   (selected-window) 'yunge-jump-history))
+                 (entry
+                  (car (yunge-jump-history--history-entries history)))
+                 (place
+                  (plist-get
+                   (yunge-jump-history--entry-value entry) :place)))
+            (should
+             (= (plist-get (plist-get place :position) :unit) 5)))
+          (should-error (yunge-reader-goto-mark ?b) :type 'user-error)
+          (should-error (yunge-reader-set-mark ?A) :type 'user-error))
+      (when (buffer-live-p buffer)
+        (kill-buffer buffer)))))
+
+(ert-deftest yunge-reader-mark-jumps-preserve-deferred-source-history ()
+  (let* ((file (expand-file-name "marked.epub"))
+         (yunge-reader-saved-marks nil)
+         (yunge-reader-saved-places nil)
+         (yunge-reader-drivers nil)
+         (current (make-yunge-reader-position :unit "chapter-one"))
+         requested
+         buffer)
+    (unwind-protect
+        (save-window-excursion
+          (setq buffer (generate-new-buffer " *reader-deferred-mark*"))
+          (switch-to-buffer buffer)
+          (set-window-parameter
+           (selected-window) 'yunge-jump-history nil)
+          (yunge-reader-mode)
+          (let ((driver
+                 (yunge-reader-register-driver
+                  'test
+                  :match #'ignore :open #'ignore :close #'ignore
+                  :request #'ignore
+                  :location (lambda (_document _window) current)
+                  :restore
+                  (lambda (_document position _window)
+                    (setq requested position)
+                    :deferred))))
+            (setq yunge-reader-document
+                  (make-yunge-reader-document
+                   :file file :driver driver :layout 'reflow)
+                  yunge-reader--place-recording-enabled t)
+            (yunge-reader--store-mark
+             file ?a (yunge-reader-test--mark 'test "chapter-two"))
+            (should (eq (yunge-reader-goto-mark ?a) :deferred)))
+          (should
+           (equal (yunge-reader-position-unit requested) "chapter-two"))
+          (should
+           (equal (yunge-reader-position-unit current) "chapter-one"))
+          (should-not yunge-reader-saved-places)
+          (let* ((history
+                  (window-parameter
+                   (selected-window) 'yunge-jump-history))
+                 (entry
+                  (car (yunge-jump-history--history-entries history)))
+                 (place
+                  (plist-get
+                   (yunge-jump-history--entry-value entry) :place)))
+            (should
+             (equal
+              (plist-get (plist-get place :position) :unit)
+              "chapter-one"))))
+      (when (buffer-live-p buffer)
+        (kill-buffer buffer)))))
+
 (ert-deftest yunge-reader-resolves-durable-appearance-overrides ()
   (let* ((file (expand-file-name "appearance.epub"))
          (driver
@@ -1207,7 +1371,10 @@
                 (cons missing 'missing-place)))
          (yunge-reader-saved-appearance-overrides
           (list (cons missing 'original)
-                (cons existing 'follow-emacs))))
+                (cons existing 'follow-emacs)))
+         (yunge-reader-saved-marks
+          (list (cons existing '((97 . existing-mark)))
+                (cons missing '((98 . missing-mark))))))
     (unwind-protect
         (let ((inhibit-message t))
           (yunge-reader-cleanup-missing-document-state)
@@ -1216,7 +1383,11 @@
                   (list (cons existing 'existing-place))))
           (should
            (equal yunge-reader-saved-appearance-overrides
-                  (list (cons existing 'follow-emacs)))))
+                  (list (cons existing 'follow-emacs))))
+          (should
+           (equal yunge-reader-saved-marks
+                  (list
+                   (cons existing '((97 . existing-mark)))))))
       (when (file-exists-p existing)
         (delete-file existing)))))
 

@@ -111,7 +111,7 @@ const relayReaderKey = event => {
     if (!key) return
     event.preventDefault()
     event.stopImmediatePropagation()
-    if ((key === 'SPC' || key === 'g') && event.repeat) return
+    if (["'", 'SPC', 'g', 'm'].includes(key) && event.repeat) return
     post('accelerator', { key })
 }
 

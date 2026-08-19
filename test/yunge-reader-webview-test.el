@@ -61,9 +61,9 @@
      (available . t)
      (version . "test-version")
      (accelerators
-      . ("+" "-" "=" "<escape>" "<next>" "<prior>"
+      . ("'" "+" "-" "=" "<escape>" "<next>" "<prior>"
          "C-d" "C-g" "C-u" "G" "J" "K" "M-m" "SPC"
-         "g" "j" "k" "y"))
+         "g" "j" "k" "m" "y"))
      (capabilities
       . ("publication-close" "publication-info" "publication-open"
           "publication-resources" "view-appearance" "view-bounds"
@@ -227,9 +227,9 @@
 (ert-deftest yunge-reader-webview-rejects-accelerator-contract-drift ()
   (dolist (accelerators
            '(nil
-             ("+" "-" "=" "<escape>" "<next>" "<prior>"
+             ("'" "+" "-" "=" "<escape>" "<next>" "<prior>"
               "C-d" "C-g" "C-u" "G" "J" "K" "M-m" "SPC"
-              "g" "j" "k")))
+              "g" "j" "k" "m")))
     (let ((message (yunge-reader-webview-test--ready-message)))
       (setf (alist-get 'accelerators message) accelerators)
       (should-error
@@ -1172,7 +1172,7 @@
               (((symbol-function
                  'yunge-reader-webview--focus-owning-window)
                 (lambda (value) (setq focused value))))
-            (dolist (key '("SPC" "M-m" "g"))
+            (dolist (key '("'" "SPC" "M-m" "g" "m"))
               (setq unread-command-events nil
                     focused nil)
               (yunge-reader-webview--handle-event

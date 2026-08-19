@@ -19,8 +19,8 @@ const APPEARANCE_COLOR_KEYS = Object.freeze([
 ])
 
 export const READER_CHARACTER_KEYS = Object.freeze([
-    '+', '-', '=', '<escape>', '<next>', '<prior>', 'C-d', 'C-g', 'C-u',
-    'G', 'J', 'K', 'M-m', 'SPC', 'g', 'j', 'k', 'y',
+    "'", '+', '-', '=', '<escape>', '<next>', '<prior>', 'C-d', 'C-g',
+    'C-u', 'G', 'J', 'K', 'M-m', 'SPC', 'g', 'j', 'k', 'm', 'y',
 ])
 
 export const readerKey = event => {

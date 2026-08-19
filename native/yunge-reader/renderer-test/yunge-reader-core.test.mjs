@@ -67,6 +67,8 @@ test('normalizes reader keyboard accelerators', () => {
     assert.equal(readerKey(keyEvent({ key: 'PageUp' })), '<prior>')
     assert.equal(readerKey(keyEvent({ code: 'Space', key: ' ' })), 'SPC')
     assert.equal(readerKey(keyEvent({ key: 'j' })), 'j')
+    assert.equal(readerKey(keyEvent({ code: 'KeyM', key: 'm' })), 'm')
+    assert.equal(readerKey(keyEvent({ code: 'Quote', key: "'" })), "'")
 
     assert.equal(readerKey(keyEvent({ ctrlKey: true, key: 'x' })), null)
     assert.equal(readerKey(keyEvent({ metaKey: true, key: 'j' })), null)

@@ -27,6 +27,7 @@ The current PDF adapter provides:
 - bounded internal and external page links with local hit testing;
 - bounded password prompting with short-lived in-memory credential reuse;
 - versioned per-document places with zoom-aware PDF viewport restoration;
+- persistent lowercase document marks with exact PDF and EPUB positions;
 - window-local back and forward history for semantic Reader jumps;
 - immutable render keys, stale-response rejection, and bounded disk cache
   eviction;
@@ -42,7 +43,9 @@ refresh, =+/-= to zoom, === to reset zoom, and =W/P= to fit width or page.  PDF
 views use =J/K= for the next or previous page, =gg/G= for the first or last
 page, =gp= for a page prompt, =RET= for a visible link prompt, and Page Down
 or Page Up for screen scrolling.  =C-d/C-u= scroll by half a screen in
-pixels, while =j/k= scroll by one screen line.  Mouse-1 clears an existing
+pixels, while =j/k= scroll by one screen line.  =ma= sets document mark =a=,
+and ='a= visits it.  Marks accept lowercase letters =a-z=; uppercase letters
+are intentionally unbound.  Mouse-1 clears an existing
 text selection, dragging highlights text immediately, and Ctrl-Mouse-1
 follows a link when hit.  Pointer motion outside a page image does not extend
 the selection until it returns to a page.  Reader handles the initial mouse-down
@@ -141,10 +144,10 @@ Native wheel movement remains within the current reflowable spine item until
 it reaches a vertical boundary.  Continued input then enters the adjacent
 linear item once, while a gesture latch consumes the remaining touchpad or
 wheel momentum so one gesture cannot skip chapters.
-Pressing =SPC=, =M-m=, or the first =g= in a focused child also returns native
-focus, then queues the key through Emacs itself.  Leader and =g= prefix
-sequences therefore continue through the ordinary active maps instead of
-being copied into the renderer.
+Pressing =SPC=, =M-m=, or the first =g=, =m=, or ='= in a focused child also
+returns native focus, then queues the key through Emacs itself.  Leader,
+navigation, and mark prefix sequences therefore continue through the ordinary
+active maps instead of being copied into the renderer.
 =o= displays the bounded EPUB 3 navigation or EPUB 2 NCX outline through the
 same persistent per-view outline UI used by fixed-layout documents.
 
@@ -416,6 +419,15 @@ A driver that supports places supplies location and restore functions as a
 pair.  EPUB uses that contract without storing an Emacs buffer point, and
 later reflowable drivers can do the same.
 
+Reader marks are a separate persistent, document-local namespace.  =m= plus a
+lowercase letter stores that document's current stable position, and ='= plus
+the same letter restores it.  Multiple logical views of one document share
+the marks.  A mark contains only a format version, driver name, and printable
+position; it deliberately omits zoom and surface state, so visiting it keeps
+the current view's scale and layout.  Each document has at most the 26
+lowercase marks, and the most recently modified document sets are bounded by
+=yunge-reader-mark-document-limit=.  Uppercase marks are not accepted.
+
 Document appearance has a separate inheritance chain.  Each format reads its
 default from =yunge-reader-default-appearances=; both PDF and EPUB default to
 =original=.  A document without an explicit override inherits that value, so
@@ -430,10 +442,10 @@ The same commands are available under =SPC m a=: =d= sets the current book,
 Appearance overrides are durable user preferences rather than recency data.
 They persist through =savehist= separately from bounded saved places and are
 not evicted automatically.  The explicit
-=yunge-reader-cleanup-missing-document-state= command removes both places and
-appearance overrides whose files no longer exist.  It never runs on a timer,
-because a temporarily disconnected volume must not silently lose book
-preferences.
+=yunge-reader-cleanup-missing-document-state= command removes places,
+appearance overrides, and mark sets whose files no longer exist.  It never
+runs on a timer, because a temporarily disconnected volume must not silently
+lose book preferences or marks.
 
 A restore result of =:deferred= means that the driver accepted a transient
 navigation target but cannot yet provide its durable destination.  The core
@@ -451,9 +463,10 @@ later traversal.
 
 Reader targets use the same window-local =C-o/C-i= history as ordinary
 buffers.  PDF and EPUB =gg/G= commands, PDF =gp=, and successful search result
-and outline changes create semantic jumps.  =J/K= paging, Page Up or Page
-Down, =C-d/C-u=, mouse wheel movement, and ordinary scrolling do not fill the
-history.
+and outline changes create semantic jumps.  A successful ='a= mark jump also
+records its source, including when an EPUB restore completes asynchronously.
+=J/K= paging, Page Up or Page Down, =C-d/C-u=, mouse wheel movement, and
+ordinary scrolling do not fill the history.
 
 If a target Reader buffer was killed, traversal reopens the document
 asynchronously in a hidden buffer.  It replaces the jump window only after the
@@ -913,10 +926,11 @@ outer WebView canvas plus Reader-owned search overlay follows Emacs.
 WebView2 forwards =ESC=, =C-g=, =C-d/C-u=, and Page Down or Page Up through
 its native accelerator event.  A bounded renderer listener forwards the same
 portable vocabulary on WKWebView, plus =G=, =J/K=, =g=, =+=, =-=, ===, =y=,
-and =SPC= on both engines.  Both paths emit only
+=m=, ='=, and =SPC= on both engines.  Both paths emit only
 normalized key events; they never choose or execute commands.  Emacs resolves
 reading keys through the owning EPUB buffer's active maps.  Leader keys and
-the first =g= restore parent focus and enter Emacs's ordinary input loop.
+the first =g=, =m=, or ='= restore parent focus and enter Emacs's ordinary
+input loop.
 =ESC= and =C-g= return native focus to the parent, select the owning Emacs
 window, and focus its frame.
 Renderer focus events, together with WebView2's native focus notifications,

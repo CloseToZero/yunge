@@ -74,9 +74,13 @@
   "Resolved display modes for an EPUB spine-item scroll bar.")
 
 (defconst yunge-reader-webview--accelerators
-  '("+" "-" "=" "<escape>" "<next>" "<prior>" "C-d" "C-g" "C-u"
-    "G" "J" "K" "M-m" "SPC" "g" "j" "k" "y")
+  '("'" "+" "-" "=" "<escape>" "<next>" "<prior>" "C-d" "C-g"
+    "C-u" "G" "J" "K" "M-m" "SPC" "g" "j" "k" "m" "y")
   "Normalized keys accepted from the WebView helper.")
+
+(defconst yunge-reader-webview--owning-accelerators
+  '("'" "M-m" "SPC" "g" "m")
+  "WebView accelerators that continue through Emacs's input loop.")
 
 (defun yunge-reader-webview--validate-ready (message)
   "Validate WebView helper ready MESSAGE."

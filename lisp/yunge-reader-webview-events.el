@@ -101,7 +101,8 @@
                      ((buffer-live-p buffer)))
            (with-current-buffer buffer
              (condition-case error-data
-                 (if (member key '("SPC" "M-m" "g"))
+                 (if (member
+                      key yunge-reader-webview--owning-accelerators)
                      (yunge-reader-webview--relay-owning-key view key)
                    (when-let*
                        ((function

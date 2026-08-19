@@ -16,6 +16,9 @@
 (defvar yunge-reader-saved-appearance-overrides nil
   "Durable Yunge Reader appearance overrides.")
 
+(defvar yunge-reader-saved-marks nil
+  "Durable document-local Yunge Reader marks.")
+
 ;; Keep each history useful without allowing it to grow without bound.
 (setq history-length 1000
       history-delete-duplicates t)
@@ -26,6 +29,8 @@
              'yunge-reader-saved-places)
 (add-to-list 'savehist-additional-variables
              'yunge-reader-saved-appearance-overrides)
+(add-to-list 'savehist-additional-variables
+             'yunge-reader-saved-marks)
 (savehist-mode 1)
 
 (setq recentf-max-saved-items 1000

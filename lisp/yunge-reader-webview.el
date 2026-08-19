@@ -391,7 +391,7 @@ When REVEAL is non-nil, navigate to the result before painting it."
 
 (defun yunge-reader-webview--relay-owning-key (view key)
   "Return focus from VIEW and enqueue normalized Emacs KEY."
-  (unless (member key '("SPC" "M-m" "g"))
+  (unless (member key yunge-reader-webview--owning-accelerators)
     (error "Invalid WebView owning key: %s" key))
   (yunge-reader-webview--focus-owning-window view)
   (setq unread-command-events

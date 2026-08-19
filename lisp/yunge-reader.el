@@ -76,6 +76,11 @@
   :type '(integer :tag "Places" 1)
   :group 'yunge-reader)
 
+(defcustom yunge-reader-mark-document-limit 1000
+  "Maximum number of documents whose named Reader marks are retained."
+  :type '(integer :tag "Documents" 1)
+  :group 'yunge-reader)
+
 (defcustom yunge-reader-default-appearances
   '((pdf . original)
     (epub . original))
@@ -99,6 +104,9 @@ An omitted format also defaults to `original'."
 
 (defconst yunge-reader-place-version 1
   "Current durable Reader place format version.")
+
+(defconst yunge-reader-mark-version 1
+  "Current durable Reader named-mark format version.")
 
 (defconst yunge-reader-appearances '(original follow-emacs)
   "Appearance values accepted by Reader documents.")
@@ -260,6 +268,11 @@ Each entry maps a canonical file name to versioned, printable place data.")
   "Durable Reader appearance overrides.
 Each entry maps a canonical file name to `original' or `follow-emacs'.")
 
+(defvar yunge-reader-saved-marks nil
+  "Durable document-local Reader marks.
+Each entry maps a canonical file name to an alist of lowercase characters and
+versioned, printable stable positions.")
+
 (defvar-local yunge-reader-document nil
   "Document displayed by the current reader buffer.")
 
@@ -405,6 +418,18 @@ Functions run in the affected Reader buffer without arguments.")
 (yunge-key-define yunge-reader-command-map
                   yunge-reader-command-bindings)
 
+(defvar-keymap yunge-reader-set-mark-map
+  :doc "Keymap for setting document-local Reader marks.")
+
+(defvar-keymap yunge-reader-goto-mark-map
+  :doc "Keymap for visiting document-local Reader marks.")
+
+(dolist (character (number-sequence ?a ?z))
+  (define-key yunge-reader-set-mark-map (vector character)
+              #'yunge-reader-set-mark)
+  (define-key yunge-reader-goto-mark-map (vector character)
+              #'yunge-reader-goto-mark))
+
 (defconst yunge-reader-normal-bindings
   `(("+" yunge-reader-zoom-in "zoom in")
     ("-" yunge-reader-zoom-out "zoom out")
@@ -414,6 +439,8 @@ Functions run in the affected Reader buffer without arguments.")
     ("P" yunge-reader-fit-page "fit page")
     ("W" yunge-reader-fit-width "fit width")
     ("gr" yunge-reader-refresh "refresh")
+    ("'" ,yunge-reader-goto-mark-map "jump mark")
+    ("m" ,yunge-reader-set-mark-map "set mark")
     ("n" yunge-reader-search-next "next match")
     ("o" yunge-reader-outline "outline")
     ("y" yunge-reader-copy-selection "copy selection")
@@ -432,6 +459,8 @@ Functions run in the affected Reader buffer without arguments.")
   "C-g" #'yunge-reader-keyboard-quit
   "<escape>" #'yunge-reader-escape
   "g r" #'yunge-reader-refresh
+  "'" yunge-reader-goto-mark-map
+  "m" yunge-reader-set-mark-map
   "n" #'yunge-reader-search-next
   "o" #'yunge-reader-outline
   "q" #'undefined
@@ -641,24 +670,31 @@ DOCUMENT defaults to the document in the current Reader buffer."
 
 (defun yunge-reader-cleanup-missing-document-state ()
   "Forget saved state for document files that no longer exist.
-This removes both durable places and explicit appearance overrides.  A file
-on a disconnected volume is considered missing, so this command is never run
-automatically."
+This removes durable places, explicit appearance overrides, and named marks.
+A file on a disconnected volume is considered missing, so this command is
+never run automatically."
   (interactive)
   (let ((place-count (length yunge-reader-saved-places))
         (appearance-count
-         (length yunge-reader-saved-appearance-overrides)))
+         (length yunge-reader-saved-appearance-overrides))
+        (mark-count (length yunge-reader-saved-marks)))
     (setq yunge-reader-saved-places
           (yunge-reader--existing-document-state-entries
            yunge-reader-saved-places)
           yunge-reader-saved-appearance-overrides
           (yunge-reader--existing-document-state-entries
-           yunge-reader-saved-appearance-overrides))
+           yunge-reader-saved-appearance-overrides)
+          yunge-reader-saved-marks
+          (yunge-reader--existing-document-state-entries
+           yunge-reader-saved-marks))
     (message
-     "Removed %d saved places and %d appearance overrides"
+     (concat
+      "Removed %d saved places, %d appearance overrides, "
+      "and %d mark sets")
      (- place-count (length yunge-reader-saved-places))
      (- appearance-count
-        (length yunge-reader-saved-appearance-overrides)))))
+        (length yunge-reader-saved-appearance-overrides))
+     (- mark-count (length yunge-reader-saved-marks)))))
 
 (defun yunge-reader--document-key (file driver)
   "Return the registry key for FILE opened through DRIVER."
@@ -1106,6 +1142,59 @@ An explicit override on the current book remains unchanged."
                       yunge-reader-saved-places)
               nil))))
 
+(defun yunge-reader--mark-character-p (character)
+  "Return whether CHARACTER names one document-local Reader mark."
+  (and (integerp character) (<= ?a character ?z)))
+
+(defun yunge-reader--mark-data-p (mark driver)
+  "Return whether MARK is valid durable data for DRIVER."
+  (and (listp mark)
+       (equal (plist-get mark :version) yunge-reader-mark-version)
+       (eq (plist-get mark :driver) (yunge-reader-driver-name driver))
+       (yunge-reader--position-data-p (plist-get mark :position))))
+
+(defun yunge-reader--make-mark-data (driver position)
+  "Return printable mark data for DRIVER at POSITION."
+  (list
+   :version yunge-reader-mark-version
+   :driver (yunge-reader-driver-name driver)
+   :position (yunge-reader--position-data position)))
+
+(defun yunge-reader--store-mark (file character mark)
+  "Store document-local CHARACTER MARK for FILE as the most recent set."
+  (unless (yunge-reader--mark-character-p character)
+    (error "Invalid Reader mark character: %S" character))
+  (let* ((key (yunge-reader--place-file-key file))
+         (marks (copy-tree (cdr (assoc key yunge-reader-saved-marks)) t)))
+    (setq marks
+          (cons
+           (cons character (copy-tree mark t))
+           (seq-remove
+            (lambda (entry) (eq (car-safe entry) character))
+            marks))
+          yunge-reader-saved-marks
+          (cons
+           (cons key marks)
+           (seq-remove
+            (lambda (entry) (equal (car-safe entry) key))
+            yunge-reader-saved-marks)))
+    (when (> (length yunge-reader-saved-marks)
+             yunge-reader-mark-document-limit)
+      (setcdr
+       (nthcdr (1- yunge-reader-mark-document-limit)
+               yunge-reader-saved-marks)
+       nil))
+    (copy-tree mark t)))
+
+(defun yunge-reader--saved-mark (file driver character)
+  "Return FILE's valid DRIVER mark CHARACTER, or nil."
+  (when (yunge-reader--mark-character-p character)
+    (let* ((key (yunge-reader--place-file-key file))
+           (marks (cdr (assoc key yunge-reader-saved-marks)))
+           (mark (cdr (assq character marks))))
+      (when (yunge-reader--mark-data-p mark driver)
+        (copy-tree mark t)))))
+
 (defun yunge-reader--presentation-window-p (window)
   "Return whether WINDOW presents the current Reader buffer."
   (and (window-live-p window)
@@ -1236,6 +1325,63 @@ Only the primary view's active presentation may replace the durable place."
     (when accepted
       (yunge-reader--detach-search-navigation))
     accepted))
+
+(defun yunge-reader--interactive-mark-character ()
+  "Return the lowercase mark represented by `last-command-event'."
+  (let ((character (event-basic-type last-command-event)))
+    (unless (yunge-reader--mark-character-p character)
+      (user-error "Reader marks use lowercase letters a-z"))
+    character))
+
+(defun yunge-reader-set-mark (character)
+  "Set document-local Reader mark CHARACTER at the current stable position."
+  (interactive (list (yunge-reader--interactive-mark-character)))
+  (unless (yunge-reader--mark-character-p character)
+    (user-error "Reader marks use lowercase letters a-z"))
+  (unless yunge-reader-document
+    (user-error "This Reader buffer has no open document"))
+  (unless (and yunge-reader--place-recording-enabled
+               (not yunge-reader--restoring-place))
+    (user-error "The current Reader position is not stable yet"))
+  (let ((window (yunge-reader--place-window)))
+    (unless window
+      (user-error "The Reader buffer is not displayed in a live window"))
+    (let* ((driver
+            (yunge-reader-document-driver yunge-reader-document))
+           (position (yunge-reader--current-position window)))
+      (unless position
+        (user-error "The Reader driver has no stable current position"))
+      (yunge-reader--store-mark
+       (yunge-reader-document-file yunge-reader-document)
+       character
+       (yunge-reader--make-mark-data driver position))
+      (message "Reader mark %c set" character)
+      character)))
+
+(defun yunge-reader-goto-mark (character)
+  "Visit document-local Reader mark CHARACTER using the current view style."
+  (interactive (list (yunge-reader--interactive-mark-character)))
+  (unless (yunge-reader--mark-character-p character)
+    (user-error "Reader marks use lowercase letters a-z"))
+  (unless yunge-reader-document
+    (user-error "This Reader buffer has no open document"))
+  (let* ((driver (yunge-reader-document-driver yunge-reader-document))
+         (file (yunge-reader-document-file yunge-reader-document))
+         (mark (yunge-reader--saved-mark file driver character))
+         (window (yunge-reader--place-window)))
+    (unless mark
+      (user-error "Reader mark %c is not set" character))
+    (unless window
+      (user-error "The Reader buffer is not displayed in a live window"))
+    (let* ((position
+            (yunge-reader--position-from-data
+             (plist-get mark :position)))
+           (accepted
+            (yunge-reader--restore-live-place
+             (yunge-reader--make-place driver position) window)))
+      (unless accepted
+        (user-error "The Reader driver rejected mark %c" character))
+      accepted)))
 
 (defun yunge-reader--restore-open-place ()
   "Build the opened view, restore its pending place, and permit writes."
@@ -2802,6 +2948,7 @@ Ask the active driver for text when the selection does not already carry it."
  :visit #'yunge-reader--visit-jump-target)
 
 (yunge-jump-history-track-command 'yunge-reader--follow-outline-item)
+(yunge-jump-history-track-command 'yunge-reader-goto-mark)
 
 (provide 'yunge-reader)
 

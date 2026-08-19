@@ -1928,7 +1928,7 @@ mod tests {
         assert!(adapter.contains("checkedRendererAccelerators"));
         assert!(core.contains("event.code === 'Space'"));
         assert!(core.contains("event.code === 'KeyM'"));
-        assert!(adapter.contains("key === 'SPC' || key === 'g'"));
+        assert!(adapter.contains("[\"'\", 'SPC', 'g', 'm'].includes(key)"));
         assert!(adapter.contains("case 'previous-page':"));
         assert!(adapter.contains("case 'next-page':"));
         assert!(adapter.contains("case 'previous-line':"));
@@ -2757,7 +2757,7 @@ mod tests {
         assert!(script.contains(r#""content-width":720"#));
         assert!(script.contains(r#""side-padding":7.0"#));
         assert!(script.contains(r#""scrollBars":false"#));
-        assert!(script.contains(r#""rendererAccelerators":["+","-","=""#));
+        assert!(script.contains(r#""rendererAccelerators":["'","+","-","=""#));
         assert!(!script.contains("eval"));
 
         let fixed_script = publication_open_script(

@@ -7,11 +7,11 @@ use serde_json::Value;
 use super::ViewEvent;
 
 pub(super) const PROTOCOL_VERSION: u32 = 1;
-pub(super) const ACCELERATORS: [&str; 18] = [
-    "+", "-", "=", "<escape>", "<next>", "<prior>", "C-d", "C-g", "C-u", "G",
-    "J", "K", "M-m", "SPC", "g", "j", "k", "y",
+pub(super) const ACCELERATORS: [&str; 20] = [
+    "'", "+", "-", "=", "<escape>", "<next>", "<prior>", "C-d", "C-g", "C-u",
+    "G", "J", "K", "M-m", "SPC", "g", "j", "k", "m", "y",
 ];
-pub(super) const RENDERER_ACCELERATORS: [&str; 18] = ACCELERATORS;
+pub(super) const RENDERER_ACCELERATORS: [&str; 20] = ACCELERATORS;
 pub(super) const CAPABILITIES: [&str; 24] = [
     "publication-close",
     "publication-info",
