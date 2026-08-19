@@ -567,33 +567,38 @@
                (yunge-reader-webview--view-surface view))
               appearance)))))
 
-(ert-deftest yunge-reader-webview-appearance-failure-is-retryable ()
-  (let* ((appearance (yunge-reader-webview-test--follow-appearance))
+(ert-deftest yunge-reader-webview-surface-value-failure-is-retryable ()
+  (let* ((requested '((font-scale . 1.25)))
+         (newer '((font-scale . 1.5)))
+         (surface (yunge-reader-webview-test--surface 23 'ready))
          (view
           (yunge-reader-webview--make-view
-           :surface
-           (yunge-reader-webview-test--surface 23 'ready)
-           :publication 8
-           :appearance appearance))
+           :surface surface :publication 8))
          (yunge-reader-webview--views
           (make-hash-table :test #'eql))
-         warning
-         complete)
+         warnings
+         completions)
     (puthash 23 view yunge-reader-webview--views)
-    (cl-letf
-        (((symbol-function
-           'yunge-reader-webview--set-native-view-appearance)
-          (lambda (_view _appearance callback)
-            (setq complete callback)))
-         ((symbol-function 'display-warning)
-          (lambda (&rest value) (setq warning value))))
-      (yunge-reader-webview--sync-view-appearance view)
-      (should complete)
-      (funcall complete nil '(error "appearance failed")))
-    (should-not
-     (yunge-reader-webview--surface-appearance
-      (yunge-reader-webview--view-surface view)))
-    (should (equal (cadr warning) "appearance failed"))))
+    (cl-letf (((symbol-function 'display-warning)
+               (lambda (&rest value) (push value warnings))))
+      (dolist (desired (list requested newer))
+        (yunge-reader-webview--sync-surface-value
+         view desired
+         #'yunge-reader-webview--surface-style
+         (lambda (value applied)
+           (setf (yunge-reader-webview--surface-style value)
+                 applied))
+         (lambda (_value _style complete)
+           (push complete completions))))
+      (should (equal (yunge-reader-webview--surface-style surface)
+                     newer))
+      (funcall (cadr completions) nil '(error "older failed"))
+      (should (equal (yunge-reader-webview--surface-style surface)
+                     newer))
+      (funcall (car completions) nil '(error "latest failed")))
+    (should-not (yunge-reader-webview--surface-style surface))
+    (should (equal (mapcar #'cadr warnings)
+                   '("latest failed" "older failed")))))
 
 (ert-deftest yunge-reader-webview-refreshes-appearance-for-current-window ()
   (let* ((buffer (generate-new-buffer " *EPUB appearance owner*"))
@@ -719,32 +724,6 @@
              (yunge-reader-webview--view-surface view))
             style))))
 
-(ert-deftest yunge-reader-webview-style-failure-is-retryable ()
-  (let* ((style (yunge-reader-webview-test--style))
-         (view
-          (yunge-reader-webview--make-view
-           :surface
-           (yunge-reader-webview-test--surface 25 'ready)
-           :publication 8 :style style))
-         (yunge-reader-webview--views
-          (make-hash-table :test #'eql))
-         warning
-         complete)
-    (puthash 25 view yunge-reader-webview--views)
-    (cl-letf
-        (((symbol-function
-           'yunge-reader-webview--set-native-view-style)
-          (lambda (_view _style callback) (setq complete callback)))
-         ((symbol-function 'display-warning)
-          (lambda (&rest value) (setq warning value))))
-      (yunge-reader-webview--sync-view-style view)
-      (should complete)
-      (funcall complete nil '(error "style failed")))
-    (should-not
-     (yunge-reader-webview--surface-style
-      (yunge-reader-webview--view-surface view)))
-    (should (equal (cadr warning) "style failed"))))
-
 (ert-deftest yunge-reader-webview-defers-hidden-fixed-zoom ()
   (let* ((view
           (yunge-reader-webview--make-view
@@ -770,32 +749,6 @@
        (eq (yunge-reader-webview--surface-zoom
             (yunge-reader-webview--view-surface view))
            'fit-width)))))
-
-(ert-deftest yunge-reader-webview-fixed-zoom-failure-is-retryable ()
-  (let* ((view
-          (yunge-reader-webview--make-view
-           :surface
-           (yunge-reader-webview-test--surface 28 'ready)
-           :layout 'fixed
-           :publication 8 :zoom 1.5))
-         (yunge-reader-webview--views
-          (make-hash-table :test #'eql))
-         warning
-         complete)
-    (puthash 28 view yunge-reader-webview--views)
-    (cl-letf
-        (((symbol-function
-           'yunge-reader-webview--set-native-view-zoom)
-          (lambda (_view _zoom callback) (setq complete callback)))
-         ((symbol-function 'display-warning)
-          (lambda (&rest value) (setq warning value))))
-      (yunge-reader-webview--sync-view-zoom view)
-      (should complete)
-      (funcall complete nil '(error "zoom failed")))
-    (should-not
-     (yunge-reader-webview--surface-zoom
-      (yunge-reader-webview--view-surface view)))
-    (should (equal (cadr warning) "zoom failed"))))
 
 (ert-deftest yunge-reader-webview-reconciles-scroll-bars ()
   (let* ((view
