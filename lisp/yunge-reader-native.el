@@ -125,6 +125,15 @@ This must not exceed `yunge-reader-cache-max-bytes'."
            (when (eq system-type 'windows-nt) ".exe"))
    (yunge-reader-native--cargo-target-directory)))
 
+(defun yunge-reader-native-module-file ()
+  "Return the expected platform WebView module file."
+  (expand-file-name
+   (pcase system-type
+     ('windows-nt "release/yunge_reader_module.dll")
+     ('darwin "release/libyunge_reader_module.dylib")
+     (_ "release/libyunge_reader_module.so"))
+   (yunge-reader-native--cargo-target-directory)))
+
 (defun yunge-reader-native-pdfium-directory ()
   "Return the installed directory for the pinned PDFium API."
   (expand-file-name
@@ -155,9 +164,11 @@ This must not exceed `yunge-reader-cache-max-bytes'."
           build-id)))))
 
 (defun yunge-reader-native--available-p ()
-  "Return whether the native helper and PDFium library are available."
+  "Return whether the required native Reader artifacts are available."
   (and (file-executable-p (yunge-reader-native-program))
-       (file-regular-p (yunge-reader-native-pdfium-library))))
+       (file-regular-p (yunge-reader-native-pdfium-library))
+       (or (not (memq system-type '(darwin windows-nt)))
+           (file-regular-p (yunge-reader-native-module-file)))))
 
 (defun yunge-reader-native--cancel-timer (symbol)
   "Cancel the timer stored in SYMBOL and set SYMBOL to nil."
@@ -634,7 +645,7 @@ When NOTIFY is non-nil, report successful cleanup in the echo area."
        :error))))
 
 (defun yunge-reader-native--start-build ()
-  "Build the native helper asynchronously and run its smoke test."
+  "Build native components asynchronously and run the PDF smoke test."
   (when (process-live-p yunge-reader-native--build-process)
     (user-error "Yunge Reader native helper is already being built"))
   (let ((cargo (executable-find "cargo")))
@@ -663,12 +674,12 @@ When NOTIFY is non-nil, report successful cleanup in the echo area."
              :noquery t
              :sentinel #'yunge-reader-native--build-sentinel))
       (display-buffer buffer)
-      (message "Building Yunge Reader native helper...")
+      (message "Building Yunge Reader native components...")
       yunge-reader-native--build-process)))
 
 ;;;###autoload
 (defun yunge-reader-native-setup ()
-  "Install PDFium, build the native helper, and run a smoke test.
+  "Install PDFium, build native components, and run a smoke test.
 Normal document opening never downloads or compiles dependencies implicitly."
   (interactive)
   (require 'yunge-reader-setup)

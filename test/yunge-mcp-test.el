@@ -141,25 +141,29 @@
       (should-error (yunge-mcp-server-dispatch) :type 'user-error))))
 
 (ert-deftest yunge-mcp-registers-json-without-losing-other-settings ()
-  (let ((file (make-temp-file "yunge-mcp-json-")))
+  (let ((file (make-temp-file "yunge-mcp-json-"))
+        (state (make-temp-file "yunge-mcp-state-" t)))
     (unwind-protect
         (progn
           (with-temp-file file
             (insert
              "{\"theme\":\"dark\",\"mcpServers\":{"
              "\"other\":{\"command\":\"other\"}}}"))
-          (let ((yunge-var-directory "C:/state/"))
-            (yunge-mcp--register-json file :mcpServers))
-          (let* ((configuration (yunge-mcp--json-read-object file))
-                 (servers (plist-get configuration :mcpServers)))
-            (should (equal (plist-get configuration :theme) "dark"))
-            (should
-             (equal (plist-get (plist-get servers :other) :command)
-                    "other"))
-            (should
-             (equal (plist-get (plist-get servers :yunge) :command)
-                    "c:/state/yunge-mcp/bin/yunge-mcp.exe"))))
-      (delete-file file))))
+          (let* ((yunge-var-directory
+                  (file-name-as-directory state))
+                 (program (yunge-mcp-program)))
+            (yunge-mcp--register-json file :mcpServers)
+            (let* ((configuration (yunge-mcp--json-read-object file))
+                   (servers (plist-get configuration :mcpServers)))
+              (should (equal (plist-get configuration :theme) "dark"))
+              (should
+               (equal (plist-get (plist-get servers :other) :command)
+                      "other"))
+              (should
+               (equal (plist-get (plist-get servers :yunge) :command)
+                      program)))))
+      (delete-file file)
+      (delete-directory state t))))
 
 (ert-deftest yunge-mcp-agent-display-names-ignore-input-case ()
   (should (eq (yunge-mcp--agent-from-display-name "codex") 'codex))
@@ -168,7 +172,8 @@
        'claude-code)))
 
 (ert-deftest yunge-mcp-replaces-only-its-codex-section ()
-  (let ((file (make-temp-file "yunge-mcp-codex-")))
+  (let ((file (make-temp-file "yunge-mcp-codex-"))
+        (state (make-temp-file "yunge-mcp-state-" t)))
     (unwind-protect
         (progn
           (with-temp-file file
@@ -176,7 +181,8 @@
              "model = \"gpt\"\n\n"
              "[mcp_servers.yunge]\ncommand = \"old\"\n\n"
              "[mcp_servers.other]\ncommand = \"other\"\n"))
-          (let ((yunge-var-directory "C:/state/"))
+          (let ((yunge-var-directory
+                 (file-name-as-directory state)))
             (cl-letf (((symbol-function 'yunge-mcp--codex-config-file)
                        (lambda () file)))
               (yunge-mcp--register-codex)))
@@ -188,10 +194,16 @@
                        "command = \"other\"" contents))
               (should (string-match-p
                        (regexp-quote
-                        "command = \"c:/state/yunge-mcp/bin/")
+                        (concat
+                         "command = "
+                         (yunge-mcp--toml-string
+                          (let ((yunge-var-directory
+                                 (file-name-as-directory state)))
+                            (yunge-mcp-program)))))
                        contents))
               (should-not (string-match-p "command = \"old\"" contents)))))
-      (delete-file file))))
+      (delete-file file)
+      (delete-directory state t))))
 
 (ert-deftest yunge-mcp-registers-selected-agents-when-not-installed ()
   (let ((directory (make-temp-file "yunge-mcp-agents-" t))

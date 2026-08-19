@@ -57,6 +57,31 @@ OFFSET and CHARACTER-LIMIT are the corresponding request bounds."
      (list 'error
            (format "Malformed EPUB selection text result: %S" result))))))
 
+(defun yunge-reader-webview--current-selection-complete
+    (complete result error-data)
+  "Validate the current EPUB selection RESULT and invoke COMPLETE."
+  (cond
+   (error-data
+    (funcall complete nil error-data))
+   ((or (null result)
+        (yunge-reader-webview--valid-selection-p result))
+    (funcall complete (and result (copy-tree result)) nil))
+   (t
+    (funcall
+     complete nil
+     (list 'error
+           (format "Malformed current EPUB selection: %S" result))))))
+
+(defun yunge-reader-webview--request-current-selection (view complete)
+  "Read VIEW's live DOM selection and invoke COMPLETE."
+  (unless (functionp complete)
+    (error "Invalid current EPUB selection completion: %S" complete))
+  (yunge-reader-webview--request
+   "view-current-selection"
+   `((view . ,(yunge-reader-webview--current-surface-id view)))
+   (apply-partially
+    #'yunge-reader-webview--current-selection-complete complete)))
+
 (defun yunge-reader-webview--request-selection-text
     (view selection offset character-limit complete)
   "Request one text batch for SELECTION in native VIEW.

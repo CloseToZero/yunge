@@ -7,30 +7,45 @@
 (require 'yunge-reader-webview-events)
 (require 'yunge-reader-webview-protocol)
 
+(declare-function yunge-reader-module-pump "yunge-reader-module" ())
+(declare-function yunge-reader-module-request
+                  "yunge-reader-module" (line))
+(declare-function yunge-reader-module-running-p
+                  "yunge-reader-module" ())
+(declare-function yunge-reader-module-start
+                  "yunge-reader-module" (pipe-process))
+(declare-function yunge-reader-module-stop "yunge-reader-module" ())
+
 (defcustom yunge-reader-webview-stop-timeout 1.0
-  "Seconds allowed for graceful WebView helper shutdown."
+  "Seconds allowed for graceful WebView module shutdown."
   :type 'number
   :group 'yunge-reader)
 
-(defconst yunge-reader-webview--log-buffer-name
-  "*Yunge Reader WebView log*"
-  "Name of the WebView helper diagnostic buffer.")
-
 (defvar yunge-reader-webview--process nil
-  "Running WebView helper process, or nil.")
+  "Pipe process connected to the in-process WebView module, or nil.")
 
 (defvar yunge-reader-webview--transport nil
-  "NDJSON transport bound to the current WebView helper process.")
+  "NDJSON transport bound to the current WebView module pipe.")
 
 (defvar yunge-reader-webview--force-stop-timer nil
-  "Timer enforcing the graceful WebView shutdown deadline.")
+  "Timer enforcing the graceful WebView module shutdown deadline.")
 
 (defvar yunge-reader-webview-service-stopped-hook nil
-  "Hook run after the current WebView helper service stops.")
+  "Hook run after the current WebView module service stops.")
 
 (defun yunge-reader-webview--program-available-p ()
-  "Return whether the native helper executable is available."
-  (file-executable-p (yunge-reader-native-program)))
+  "Return whether the native WebView module is available."
+  (file-regular-p (yunge-reader-native-module-file)))
+
+(defun yunge-reader-webview--ensure-module ()
+  "Load the native WebView module if necessary."
+  (unless (fboundp 'yunge-reader-module-start)
+    (module-load (yunge-reader-native-module-file)))
+  (unless (and (fboundp 'yunge-reader-module-start)
+               (fboundp 'yunge-reader-module-request)
+               (fboundp 'yunge-reader-module-pump)
+               (fboundp 'yunge-reader-module-stop))
+    (error "Yunge Reader WebView module did not define its API")))
 
 (defun yunge-reader-webview--cancel-force-stop ()
   "Cancel the outstanding forced-stop timer."
@@ -53,7 +68,7 @@
     (yunge-reader-webview-stop t)))
 
 (defun yunge-reader-webview--make-transport ()
-  "Return a fresh transport for one WebView helper process."
+  "Return a fresh transport for one WebView module session."
   (yunge-reader-transport--make-session
    :label "Yunge Reader WebView"
    :validate-ready #'yunge-reader-webview--validate-ready
@@ -80,10 +95,13 @@
              (eq process yunge-reader-webview--process))
     (let ((intentional
            (process-get process 'yunge-reader-webview-intentional-stop)))
+      (when (and (fboundp 'yunge-reader-module-running-p)
+                 (yunge-reader-module-running-p))
+        (ignore-errors (yunge-reader-module-stop)))
       (setq yunge-reader-webview--process nil)
       (yunge-reader-webview--cancel-force-stop)
       (yunge-reader-webview--fail-callbacks
-       "The Yunge Reader WebView helper stopped")
+       "The Yunge Reader WebView module stopped")
       (run-hooks 'yunge-reader-webview-service-stopped-hook)
       (unless intentional
         (display-warning
@@ -91,9 +109,20 @@
          "Yunge Reader WebView service stopped unexpectedly"
          :warning)))))
 
+(defun yunge-reader-webview--module-filter (process output)
+  "Route module channel OUTPUT and service wakeups for PROCESS."
+  (yunge-reader-transport--filter process output)
+  (when (and (eq process yunge-reader-webview--process)
+             (fboundp 'yunge-reader-module-pump))
+    (yunge-reader-module-pump)))
+
+(defun yunge-reader-webview--module-send-line (_process line)
+  "Send one protocol LINE to the in-process WebView module."
+  (yunge-reader-module-request line))
+
 ;;;###autoload
 (defun yunge-reader-webview-start ()
-  "Start the platform WebView helper and return its process."
+  "Start the in-process platform WebView service and return its pipe."
   (interactive)
   (unless (memq system-type '(windows-nt darwin))
     (user-error
@@ -103,32 +132,32 @@
     (unless (yunge-reader-webview--program-available-p)
       (user-error
        (concat
-        "Yunge Reader native helper is unavailable; "
+        "Yunge Reader native module is unavailable; "
         "run M-x yunge-reader-native-setup")))
-    (let ((log
-           (get-buffer-create yunge-reader-webview--log-buffer-name)))
-      (with-current-buffer log
-        (let ((inhibit-read-only t))
-          (erase-buffer)))
-      (setq yunge-reader-webview--transport
-            (yunge-reader-webview--make-transport))
-      (let ((process
-             (make-process
-              :name "yunge-reader-webview"
-              :command (list (yunge-reader-native-program) "--webview")
-              :connection-type 'pipe
-              :coding 'utf-8-unix
-              :noquery t
-              :stderr log
-              :filter #'yunge-reader-transport--filter
-              :sentinel #'yunge-reader-webview--sentinel)))
-        (yunge-reader-transport--bind
-         yunge-reader-webview--transport process)
-        (process-put process 'yunge-reader-webview-intentional-stop nil)
-        (setq yunge-reader-webview--process process)
-        (when (called-interactively-p 'interactive)
-          (message "Starting Yunge Reader WebView service..."))
-        process))))
+    (yunge-reader-webview--ensure-module)
+    (setq yunge-reader-webview--transport
+          (yunge-reader-webview--make-transport))
+    (let ((process
+           (make-pipe-process
+            :name "yunge-reader-webview"
+            :coding 'utf-8-unix
+            :noquery t
+            :filter #'yunge-reader-webview--module-filter
+            :sentinel #'yunge-reader-webview--sentinel)))
+      (yunge-reader-transport--bind
+       yunge-reader-webview--transport process
+       #'yunge-reader-webview--module-send-line)
+      (process-put process 'yunge-reader-webview-intentional-stop nil)
+      (setq yunge-reader-webview--process process)
+      (condition-case error-data
+          (yunge-reader-module-start process)
+        (error
+         (setq yunge-reader-webview--process nil)
+         (delete-process process)
+         (signal (car error-data) (cdr error-data))))
+      (when (called-interactively-p 'interactive)
+        (message "Starting Yunge Reader WebView service..."))
+      process)))
 
 (defun yunge-reader-webview--request (operation parameters complete)
   "Send WebView OPERATION with PARAMETERS and call COMPLETE."
@@ -142,7 +171,7 @@
 
 ;;;###autoload
 (defun yunge-reader-webview-stop (&optional force)
-  "Stop the WebView helper.
+  "Stop the in-process WebView service.
 Without FORCE, request graceful shutdown and enforce a deadline."
   (interactive "P")
   (if (not (process-live-p yunge-reader-webview--process))
@@ -155,8 +184,17 @@ Without FORCE, request graceful shutdown and enforce a deadline."
     (let ((process yunge-reader-webview--process))
       (process-put process 'yunge-reader-webview-intentional-stop t)
       (if force
-          (delete-process process)
-        (yunge-reader-webview--request "shutdown" nil #'ignore)
+          (progn
+            (when (fboundp 'yunge-reader-module-stop)
+              (yunge-reader-module-stop))
+            (delete-process process))
+        (yunge-reader-webview--request
+         "shutdown" nil
+         (lambda (_result _error-data)
+           (when (and (eq process yunge-reader-webview--process)
+                      (process-live-p process))
+             (yunge-reader-module-stop)
+             (delete-process process))))
         (yunge-reader-webview--cancel-force-stop)
         (setq yunge-reader-webview--force-stop-timer
               (run-at-time
@@ -166,6 +204,8 @@ Without FORCE, request graceful shutdown and enforce a deadline."
                             (process-live-p child))
                    (process-put
                     child 'yunge-reader-webview-intentional-stop t)
+                   (when (fboundp 'yunge-reader-module-stop)
+                     (yunge-reader-module-stop))
                    (delete-process child)))
                process)))
       (when (called-interactively-p 'interactive)
@@ -176,10 +216,12 @@ Without FORCE, request graceful shutdown and enforce a deadline."
       process)))
 
 (defun yunge-reader-webview--shutdown-for-emacs-exit ()
-  "Terminate the WebView helper without delaying Emacs exit."
+  "Terminate the WebView module without delaying Emacs exit."
   (when (process-live-p yunge-reader-webview--process)
     (process-put yunge-reader-webview--process
                  'yunge-reader-webview-intentional-stop t)
+    (when (fboundp 'yunge-reader-module-stop)
+      (yunge-reader-module-stop))
     (delete-process yunge-reader-webview--process)))
 
 (add-hook 'kill-emacs-hook

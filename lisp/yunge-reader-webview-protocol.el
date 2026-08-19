@@ -7,7 +7,7 @@
 (require 'yunge-reader-native)
 
 (define-error 'yunge-reader-webview-native-error
-  "The Yunge Reader WebView helper reported an error")
+  "The Yunge Reader native WebView service reported an error")
 
 (defconst yunge-reader-webview-protocol-version 1
   "WebView protocol version understood by this client.")
@@ -76,14 +76,14 @@
 (defconst yunge-reader-webview--accelerators
   '("'" "+" "-" "=" "<escape>" "<next>" "<prior>" "C-d" "C-g"
     "C-u" "G" "J" "K" "M-m" "SPC" "g" "j" "k" "m" "y")
-  "Normalized keys accepted from the WebView helper.")
+  "Normalized keys accepted from the native WebView service.")
 
 (defconst yunge-reader-webview--owning-accelerators
   '("'" "M-m" "SPC" "g" "m")
   "WebView accelerators that continue through Emacs's input loop.")
 
 (defun yunge-reader-webview--validate-ready (message)
-  "Validate WebView helper ready MESSAGE."
+  "Validate native WebView service ready MESSAGE."
   (let ((expected (yunge-reader-native--build-id))
         (platform
          (pcase system-type
@@ -115,14 +115,16 @@
             "view-destroy" "view-events" "view-focus"
             "view-focus-parent" "view-info"
             "view-navigate" "view-open-publication"
+            "view-parent"
             "view-search"
             "view-search-result"
+            "view-current-selection"
             "view-selection-text"
             "view-set-selection"
             "view-scroll-bars" "view-status" "view-style"
             "view-visible" "view-zoom")))
       (error
-       "Incompatible Yunge Reader WebView helper: %S"
+       "Incompatible Yunge Reader native WebView service: %S"
        message))))
 
 (defun yunge-reader-webview--response-error (message)
@@ -132,7 +134,7 @@
      'yunge-reader-webview-native-error
      (or (alist-get 'code object) "webview-error")
      (or (alist-get 'message object)
-         "The Yunge Reader WebView helper failed"))))
+         "The Yunge Reader native WebView service failed"))))
 
 (defun yunge-reader-webview--valid-location-p (location)
   "Return non-nil when LOCATION is a bounded EPUB locator."

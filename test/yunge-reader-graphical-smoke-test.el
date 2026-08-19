@@ -43,8 +43,22 @@
                    (yunge-reader-graphical-smoke-context-helper context)
                    (expand-file-name
                     (concat
-                     "native/yunge-reader/target/release/yunge-reader"
+                     "var/yunge-reader/cargo-target/release/yunge-reader"
                      (if (eq system-type 'windows-nt) ".exe" ""))
+                    yunge-test-root)))
+          (should (equal
+                   (yunge-reader-graphical-smoke-context-module context)
+                   (expand-file-name
+                    (pcase system-type
+                      ('windows-nt
+                       (concat "var/yunge-reader/cargo-target/release/"
+                               "yunge_reader_module.dll"))
+                      ('darwin
+                       (concat "var/yunge-reader/cargo-target/release/"
+                               "libyunge_reader_module.dylib"))
+                      (_
+                       (concat "var/yunge-reader/cargo-target/release/"
+                               "libyunge_reader_module.so")))
                     yunge-test-root)))
           (should (equal
                    (yunge-reader-graphical-smoke-context-log-file context)

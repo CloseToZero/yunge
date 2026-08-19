@@ -62,6 +62,8 @@ const MAX_TOC_HREF_BYTES = 3072
 const MAX_TOC_TITLE_BYTES = 1024
 const MAX_TOC_TOTAL_TEXT_BYTES = 384 * 1024
 const MAX_VIEWPORT_COORDINATE = 1000000
+const LAYOUT_SETTLE_TIMEOUT_MS = 100
+const IMAGE_DECODE_TIMEOUT_MS = 1000
 const LOCATION_DELAY_MS = 75
 const USER_MOVEMENT_WINDOW_MS = 1000
 const SELECTION_TEXT_ERROR_MESSAGES = Object.freeze({
@@ -83,7 +85,7 @@ let generation = 0
 let current = null
 
 const post = (event, {
-    message, location, outline, selection, key, uri, user, scale,
+    message, location, outline, selection, key, repeat, uri, user, scale,
 } = {}) => {
     const payload = { protocol: 1, event }
     if (message) payload.message = String(message).slice(0, 4096)
@@ -91,6 +93,7 @@ const post = (event, {
     if (outline) payload.outline = outline
     if (selection !== undefined) payload.selection = selection
     if (key) payload.key = key
+    if (typeof repeat === 'boolean') payload.repeat = repeat
     if (uri) payload.uri = uri
     if (typeof user === 'boolean') payload.user = user
     if (typeof scale === 'number') payload.scale = scale
@@ -111,8 +114,7 @@ const relayReaderKey = event => {
     if (!key) return
     event.preventDefault()
     event.stopImmediatePropagation()
-    if (["'", 'SPC', 'g', 'm'].includes(key) && event.repeat) return
-    post('accelerator', { key })
+    post('accelerator', { key, repeat: event.repeat })
 }
 
 const installReaderKeys = target => {
@@ -685,8 +687,31 @@ const initialTargets = book => {
     return targets
 }
 
-const nextFrame = () => new Promise(resolve =>
-    requestAnimationFrame(() => requestAnimationFrame(resolve)))
+const settleWithin = (promise, timeout) => new Promise(resolve => {
+    let timer = null
+    let settled = false
+    const finish = () => {
+        if (settled) return
+        settled = true
+        if (timer !== null) clearTimeout(timer)
+        resolve()
+    }
+    timer = setTimeout(finish, timeout)
+    Promise.resolve(promise).then(finish, finish)
+})
+
+const nextFrame = () => new Promise(resolve => {
+    let timer = null
+    let settled = false
+    const finish = () => {
+        if (settled) return
+        settled = true
+        if (timer !== null) clearTimeout(timer)
+        resolve()
+    }
+    timer = setTimeout(finish, LAYOUT_SETTLE_TIMEOUT_MS)
+    requestAnimationFrame(() => requestAnimationFrame(finish))
+})
 
 const documentHasVisibleText = doc => {
     const walker = doc.createTreeWalker(doc.body, NodeFilter.SHOW_TEXT)
@@ -708,10 +733,18 @@ const sectionIsVisible = async view => {
     const contents = view.renderer?.getContents?.() ?? []
     const doc = contents[0]?.doc
     if (!doc?.body) return false
-    const images = Array.from(doc.images).slice(0, MAX_MEDIA_CANDIDATES)
-    await Promise.allSettled(images.map(image => image.decode()))
-    await nextFrame()
     if (documentHasVisibleText(doc)) return true
+    const images = Array.from(doc.images).slice(0, MAX_MEDIA_CANDIDATES)
+    if (images.some(image => image.naturalWidth > 0
+        && image.getClientRects().length > 0)) return true
+    await Promise.allSettled(images.map(image => {
+        try {
+            return settleWithin(image.decode(), IMAGE_DECODE_TIMEOUT_MS)
+        } catch {
+            return undefined
+        }
+    }))
+    await nextFrame()
     if (images.some(image => image.naturalWidth > 0
         && image.getClientRects().length > 0)) return true
     const media = Array.from(doc.body.querySelectorAll('svg, video, audio'))
@@ -729,12 +762,16 @@ const resolvedTarget = (view, target) => {
     return resolved
 }
 
-const showTarget = async (view, target) => {
+const displayTarget = async (view, target) => {
     const resolved = resolvedTarget(view, target)
     await view.renderer.goTo(resolved)
     if (!await sectionIsVisible(view)) {
         throw new Error('EPUB target has no visible content')
     }
+}
+
+const showTarget = async (view, target) => {
+    await displayTarget(view, target)
     view.history.pushState(target)
 }
 
@@ -752,6 +789,11 @@ const showFirstVisibleSection = async (view, book) => {
 }
 
 const showLocation = async (view, location) => {
+    try {
+        await displayTarget(view, location.href)
+    } catch (error) {
+        console.warn(error)
+    }
     const targets = [
         [location.cfi, true],
         [location.href, false],
@@ -859,6 +901,15 @@ const selectionFromDocument = (session, doc) => {
     })
 }
 
+const selectionFromView = session => {
+    if (!session) return null
+    for (const { doc } of session.view.renderer.getContents()) {
+        const selection = selectionFromDocument(session, doc)
+        if (selection) return selection
+    }
+    return null
+}
+
 const queueSelection = (session, doc) => {
     if (current !== session) return
     session.selectionDocument = doc
@@ -897,6 +948,7 @@ const installSelectionTracking = (doc, session) => {
     }
     doc.addEventListener('pointerup', finishPointerSelection)
     doc.addEventListener('pointercancel', finishPointerSelection)
+    doc.addEventListener('mouseup', finishPointerSelection)
     doc.addEventListener('selectionchange', () => {
         if (!pointerSelecting) queueSelection(session, doc)
     })
@@ -969,8 +1021,13 @@ const selectionText = request => {
     try {
         const { viewID, selection, offset, characterLimit }
             = checkedSelectionTextRequest(request)
-        if (!current || current.viewID !== viewID
-            || !sameSelection(current.selection, selection)) {
+        if (!current || current.viewID !== viewID) {
+            selectionTextError(
+                'selection-no-longer-current',
+                'EPUB selection is no longer current')
+        }
+        const liveSelection = selectionFromView(current)
+        if (!sameSelection(liveSelection, selection)) {
             selectionTextError(
                 'selection-no-longer-current',
                 'EPUB selection is no longer current')
@@ -1611,7 +1668,17 @@ const setSelection = request => {
     }
 }
 
+const currentSelection = ({ view: viewID }) => {
+    viewID = checkedView(viewID)
+    if (!current || current.viewID !== viewID) {
+        throw new Error('EPUB view is not open')
+    }
+    return selectionFromView(current)
+}
+
 globalThis.yungeReader = Object.freeze({
-    clearSelection, navigate, open, search, selectionText, setScrollBars,
-    setAppearance, setSearchResult, setSelection, setStyle, setZoom,
+    clearSelection, currentSelection, navigate, open, search, selectionText,
+    setAppearance, setScrollBars, setSearchResult, setSelection, setStyle,
+    setZoom,
 })
+post('shell-ready')

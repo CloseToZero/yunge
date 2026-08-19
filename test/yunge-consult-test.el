@@ -61,6 +61,12 @@
   (require 'which-key)
   (require 'consult-autoloads)
   (yunge-test-load-package-config 'yunge-consult)
+  (require 'consult)
+
+  (should
+   (advice-member-p
+    #'yunge-consult--suppress-reader-file-preview
+    'consult--file-preview))
 
   (yunge-test-evil-normal-keys
    'fundamental-mode
@@ -117,6 +123,30 @@
                      yunge-consult-project-search-symbol))
     (should-not (evil-get-command-property command :jump))
     (should-not (evil-get-command-property command :repeat t))))
+
+(ert-deftest yunge-consult-suppresses-reader-file-previews ()
+  (yunge-test-enable-evil)
+  (require 'consult)
+  (yunge-test-load-package-config 'yunge-consult)
+  (let (actions)
+    (let ((state
+           (yunge-consult--suppress-reader-file-preview
+            (lambda (&rest _arguments)
+              (lambda (action candidate)
+                (push (list action candidate) actions))))))
+      (funcall state 'preview "/tmp/book.epub")
+      (funcall state 'preview "/tmp/PAPER.PDF")
+      (funcall state 'preview "/tmp/notes.txt")
+      (funcall state 'return "/tmp/book.epub")
+      (funcall state 'exit nil)
+      (should
+       (equal
+        (nreverse actions)
+        '((preview nil)
+          (preview nil)
+          (preview "/tmp/notes.txt")
+          (return "/tmp/book.epub")
+          (exit nil)))))))
 
 (ert-deftest yunge-consult-prefers-the-selected-window-history ()
   (require 'consult)

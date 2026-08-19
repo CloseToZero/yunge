@@ -164,6 +164,27 @@
        (numberp right)
        (> (abs (- left right)) 0.01)))
 
+(defun yunge-reader-fixed-smoke--diagnostic ()
+  "Return bounded state for the current fixed-layout smoke."
+  (when (buffer-live-p yunge-reader-fixed-smoke--buffer)
+    (with-current-buffer yunge-reader-fixed-smoke--buffer
+      (let* ((view yunge-reader-webview--buffer-view)
+             (surface (yunge-reader-fixed-smoke--surface view)))
+        (list
+         :phase yunge-reader-fixed-smoke--phase
+         :layout (and yunge-reader-document
+                      (yunge-reader-document-layout
+                       yunge-reader-document))
+         :surface-state
+         (and surface (yunge-reader-webview--surface-state surface))
+         :surface (and surface
+                       (yunge-reader-webview--surface-id surface))
+         :bounds (and surface
+                      (yunge-reader-webview--surface-bounds surface))
+         :zoom (and surface
+                    (yunge-reader-webview--surface-zoom surface))
+         :location (yunge-reader-fixed-smoke--location))))))
+
 (defun yunge-reader-fixed-smoke--cleanup-temporary-root ()
   "Remove the temporary directory owned by this smoke."
   (yunge-reader-graphical-smoke-cleanup
@@ -224,6 +245,8 @@
            :variant yunge-reader-fixed-smoke--variant
            :value (and (not failure) value)
            :error failure
+           :state (and failure
+                       (yunge-reader-fixed-smoke--diagnostic))
            :locations (nreverse yunge-reader-fixed-smoke--locations)
            :observations
            (nreverse yunge-reader-fixed-smoke--observations)
@@ -581,7 +604,8 @@
           yunge-reader-fixed-smoke--variant
           yunge-reader-fixed-smoke--file))
         (set-frame-size nil 900 700 t)
-        (set-frame-parameter nil 'visibility nil)
+        (make-frame-visible)
+        (select-frame-set-input-focus (selected-frame))
         (setq yunge-reader-fixed-smoke--buffer
               (find-file-noselect yunge-reader-fixed-smoke--file))
         (switch-to-buffer yunge-reader-fixed-smoke--buffer)

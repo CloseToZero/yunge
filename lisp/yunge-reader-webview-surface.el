@@ -24,18 +24,17 @@
                   "yunge-reader-webview" (view))
 
 (defcustom yunge-reader-webview-open-timeout 5.0
-  "Seconds allowed for the WebView renderer shell to become ready."
+  "Seconds allowed for the WebView renderer to finish opening an EPUB.
+The native backends queue the open script until their renderer page is ready;
+this deadline covers EPUB parsing and the final publication-ready callback."
   :type 'number
   :group 'yunge-reader)
 
 (defun yunge-reader-webview--frame-handle (frame)
   "Return FRAME's platform parent identifier as a positive integer.
-Windows uses the frame HWND.  macOS uses the Emacs process identifier because
-the helper owns a synchronized companion panel rather than a cross-process
-NSView child."
-  (let ((value (if (eq system-type 'darwin)
-                   (emacs-pid)
-                 (frame-parameter frame 'window-id))))
+Windows exposes the frame HWND.  macOS exposes an opaque Emacs frame ID; the
+in-process module binds the selected key window when it creates the surface."
+  (let ((value (frame-parameter frame 'window-id)))
     (cond
      ((and (integerp value) (> value 0)) value)
      ((and (stringp value)
@@ -48,23 +47,24 @@ NSView child."
       (error "Frame has no usable native window handle: %S" value)))))
 
 (defun yunge-reader-webview--window-bounds (window)
-  "Return the platform WebView body bounds for WINDOW.
-Windows coordinates are relative to the native frame.  macOS coordinates are
-absolute screen coordinates for the helper-owned WKWebView panel."
+  "Return frame-relative WebView body bounds for WINDOW."
   (pcase-let ((`(,left ,top ,right ,bottom)
                (window-body-pixel-edges window)))
     (let ((width (- right left))
           (height (- bottom top)))
-      (when (eq system-type 'darwin)
-        (pcase-let ((`(,frame-left ,frame-top ,_ ,_)
-                     (frame-edges
-                      (window-frame window) 'native-edges)))
-          (setq left (+ frame-left left)
-                top (+ frame-top top))))
       `((x . ,left)
         (y . ,top)
         (width . ,width)
         (height . ,height)))))
+
+(defun yunge-reader-webview--frame-bounds (frame)
+  "Return FRAME's outer position and native content size, if placed."
+  (pcase-let ((`(,left ,top) (frame-position frame)))
+    (when (and (integerp left) (integerp top))
+      `((x . ,left)
+        (y . ,top)
+        (width . ,(frame-pixel-width frame))
+        (height . ,(frame-pixel-height frame))))))
 
 (defun yunge-reader-webview--surface-current-p (view id)
   "Return whether ID is VIEW's current native surface."
@@ -168,12 +168,6 @@ absolute screen coordinates for the helper-owned WKWebView panel."
       (yunge-reader-webview--queue-surface-destroy
        view id complete)))))
 
-(defun yunge-reader-webview--open-error-code (error-data)
-  "Return the stable helper code in ERROR-DATA, if present."
-  (and (eq (car-safe error-data)
-           'yunge-reader-webview-native-error)
-       (cadr error-data)))
-
 (defun yunge-reader-webview--open-complete
     (view id _result error-data)
   "Finish VIEW surface ID's attempt to attach its publication."
@@ -186,15 +180,6 @@ absolute screen coordinates for the helper-owned WKWebView panel."
               (yunge-reader-webview--surface-scroll-bar-mode surface)
               nil))
       (cond
-       ((and error-data
-             (equal (yunge-reader-webview--open-error-code error-data)
-                    "view-not-ready")
-             (< (float-time)
-                (yunge-reader-webview--surface-open-deadline surface)))
-        (setf (yunge-reader-webview--surface-open-timer surface)
-              (run-at-time
-               0.05 nil
-               #'yunge-reader-webview--try-open-publication view)))
        (error-data
         (yunge-reader-webview--set-surface-state surface 'failed)
         (yunge-reader-webview--set-buffer-message
@@ -203,10 +188,27 @@ absolute screen coordinates for the helper-owned WKWebView panel."
          'yunge-reader (error-message-string error-data) :warning))
        (t
         (yunge-reader-webview--set-buffer-message
-         view "Opening the EPUB text start..."))))))
+         view "Opening the EPUB text start...")
+        (yunge-reader-webview--cancel-open-timer surface)
+        (when (eq (yunge-reader-webview--surface-state surface) 'opening)
+          (setf (yunge-reader-webview--surface-open-timer surface)
+                (run-at-time
+                 yunge-reader-webview-open-timeout nil
+                 #'yunge-reader-webview--open-watchdog view))))))))
+
+(defun yunge-reader-webview--open-watchdog (view)
+  "Fail VIEW when its renderer does not finish opening."
+  (when-let* ((surface (yunge-reader-webview--view-surface view)))
+    (setf (yunge-reader-webview--surface-open-timer surface) nil)
+    (when (and (eq (yunge-reader-webview--surface-state surface) 'opening)
+               (not (yunge-reader-webview--view-destroyed view)))
+      (let ((message "Timed out while opening the EPUB renderer"))
+        (yunge-reader-webview--set-surface-state surface 'failed)
+        (yunge-reader-webview--set-buffer-message view message)
+        (display-warning 'yunge-reader message :warning)))))
 
 (defun yunge-reader-webview--try-open-publication (view)
-  "Try to attach VIEW's publication after its renderer shell loads."
+  "Attach VIEW's publication to its native renderer."
   (when-let* ((surface (yunge-reader-webview--view-surface view)))
     (setf (yunge-reader-webview--surface-open-timer surface) nil)
     (when (and (memq (yunge-reader-webview--surface-state surface)
@@ -273,9 +275,6 @@ absolute screen coordinates for the helper-owned WKWebView panel."
     (yunge-reader-webview--sync-view view)
     (when (and (yunge-reader-webview--surface-current-p view id)
                (yunge-reader-webview--view-publication view))
-      (setf (yunge-reader-webview--surface-open-deadline
-             (yunge-reader-webview--view-surface view))
-            (+ (float-time) yunge-reader-webview-open-timeout))
       (yunge-reader-webview--try-open-publication view)))))
 
 (defun yunge-reader-webview--request-create (view)
@@ -291,14 +290,48 @@ absolute screen coordinates for the helper-owned WKWebView panel."
      "view-create"
      `((view . ,id)
        (parent . ,(yunge-reader-webview--frame-handle frame))
+       (frame . ,(yunge-reader-webview--frame-bounds frame))
        (bounds . ,bounds)
-       (visible
-        . ,(if (or (not (eq system-type 'darwin))
-                   yunge-reader-webview--macos-active-p)
-               t
-             :false)))
+       (visible . t))
      (apply-partially
       #'yunge-reader-webview--create-complete view id bounds))))
+
+(defun yunge-reader-webview--parent-complete
+    (view id window bounds _result error-data)
+  "Finish moving VIEW surface ID to WINDOW with BOUNDS."
+  (when (yunge-reader-webview--surface-current-p view id)
+    (let ((surface (yunge-reader-webview--view-surface view)))
+      (when (eq (yunge-reader-webview--surface-window surface) window)
+        (if error-data
+            (progn
+              (display-warning
+               'yunge-reader (error-message-string error-data) :warning)
+              (yunge-reader-webview--release-surface view)
+              (when (and (window-live-p window)
+                         (eq (window-buffer window)
+                             (yunge-reader-webview--view-buffer view)))
+                (yunge-reader-webview--start-surface view window)))
+          (setf (yunge-reader-webview--surface-bounds surface) bounds))))))
+
+(defun yunge-reader-webview--set-surface-parent (view window)
+  "Move VIEW's created native surface into live WINDOW."
+  (let* ((surface (yunge-reader-webview--view-surface view))
+         (id (yunge-reader-webview--surface-id surface))
+         (frame (window-frame window))
+         (bounds (yunge-reader-webview--window-bounds window)))
+    (setf (yunge-reader-webview--surface-window surface) window
+          (yunge-reader-webview--surface-requested-bounds surface) bounds
+          (yunge-reader-webview--surface-bounds surface) bounds
+          (yunge-reader-webview--surface-bounds-pending surface) nil)
+    (yunge-reader-webview--request
+     "view-parent"
+     `((view . ,id)
+       (parent . ,(yunge-reader-webview--frame-handle frame))
+       (frame . ,(yunge-reader-webview--frame-bounds frame))
+       (bounds . ,bounds))
+     (apply-partially
+      #'yunge-reader-webview--parent-complete
+      view id window bounds))))
 
 (defun yunge-reader-webview--start-surface (view window)
   "Create VIEW's native surface in live WINDOW."

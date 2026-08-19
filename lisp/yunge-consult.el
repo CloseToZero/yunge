@@ -10,6 +10,7 @@
 (declare-function evil-exit-visual-state "evil-states" (&optional later buffer))
 (declare-function consult--buffer-pair "consult")
 (declare-function consult--buffer-query "consult")
+(declare-function consult--file-preview "consult")
 (declare-function consult-grep "consult" (&optional dir initial))
 (declare-function consult-ripgrep "consult" (&optional dir initial))
 
@@ -41,6 +42,29 @@
 (defconst yunge-consult-navigation-commands
   '(consult-bookmark consult-buffer consult-imenu consult-line
     consult-line-multi consult-recent-file consult-grep consult-ripgrep))
+
+(defconst yunge-consult-reader-file-extensions '("epub" "pdf")
+  "File extensions whose costly Reader previews are suppressed.")
+
+(defun yunge-consult--reader-file-p (file)
+  "Return whether FILE is handled as a costly Reader preview."
+  (and (stringp file)
+       (member (downcase (or (file-name-extension file) ""))
+               yunge-consult-reader-file-extensions)))
+
+(defun yunge-consult--suppress-reader-file-preview
+    (original &rest arguments)
+  "Prevent ORIGINAL from previewing unopened PDF and EPUB candidates.
+Passing nil also clears an existing ordinary file preview when selection moves
+to a Reader candidate.  Return and exit actions retain their original
+candidate so Consult's normal accepted-file action still opens it once."
+  (let ((state (apply original arguments)))
+    (lambda (action candidate)
+      (funcall state action
+               (if (and (eq action 'preview)
+                        (yunge-consult--reader-file-p candidate))
+                   nil
+                 candidate)))))
 
 (defun yunge-consult--previous-window-buffer (&optional window)
   "Return the most recent live buffer previously shown in WINDOW."
@@ -160,6 +184,13 @@
   ;; has loaded.
   (eval-after-load 'consult
     '(progn
+       (unless
+           (advice-member-p
+            #'yunge-consult--suppress-reader-file-preview
+            'consult--file-preview)
+         (advice-add
+          'consult--file-preview :around
+          #'yunge-consult--suppress-reader-file-preview))
        (consult-customize
         consult-source-buffer :items #'yunge-consult--buffer-items)
        (consult-customize

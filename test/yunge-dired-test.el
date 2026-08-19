@@ -199,7 +199,12 @@
 
 (ert-deftest yunge-dired-windows-reveal-uses-api-for-many-files ()
   (require 'yunge-dired)
-  (let ((yunge-config-directory "C:/Config Dir/")
+  (let* ((yunge-config-directory
+          (file-name-as-directory
+           (expand-file-name "Config Dir" temporary-file-directory)))
+         (script
+          (expand-file-name "script/yunge-reveal.ps1"
+                            yunge-config-directory))
         arguments)
     (cl-letf (((symbol-function 'executable-find)
                (lambda (_program) "pwsh"))
@@ -218,7 +223,7 @@
        (equal
         command
         (concat
-         "& 'c:/Config Dir/script/yunge-reveal.ps1' "
+         "& " (yunge-dired--powershell-literal script) " "
          "'D:/测试/first file.txt' 'D:/测试/second''s.txt'"))))))
 
 (ert-deftest yunge-dired-windows-reveal-falls-back-without-powershell ()

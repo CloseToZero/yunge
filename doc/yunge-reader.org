@@ -93,19 +93,25 @@ graphical Emacs on Windows or macOS.  The adapter is autoloaded through
 Windows reports a missing WebView2 Runtime but never installs it automatically;
 macOS uses the system WKWebView framework.
 
+EPUB runs through an Emacs dynamic module.  The module constructs WKWebView
+directly through =objc2-web-kit= on macOS and a WebView2 controller directly
+through =webview2-com= on Windows.  Each is a real in-process child of the
+owning frame.  The backing buffer explains passive duplicate presentations;
+selecting one reparents the same loaded child view there.
+
+Consult does not preview unopened PDF or EPUB candidates.  Selecting one clears
+any preceding ordinary file preview, and confirmation opens the Reader buffer
+once through the normal file action.  This avoids starting either native
+backend from transient minibuffer selection.
+
 One shared native publication owns validation, metadata, archive resources,
 and its private origin.  Each Reader buffer owns an independent logical view,
-locator, native surface, and primary or additional role.  Windows embeds a
-cross-process child WebView.  Since AppKit cannot attach an =NSView= across
-processes, macOS uses a borderless nonactivating WKWebView panel synchronized
-to the owning Emacs window's absolute screen rectangle.  Frame movement,
-window changes, and focus restoration keep that panel aligned.  Hiding a
-buffer hides but retains its loaded surface.  Displaying it again shows the
-same DOM and current CFI without reopening the publication.  Windows can
-reuse that child surface while the presentation stays on the same native
-frame; moving it across frames recreates it because the parent HWND changes.
-macOS surfaces use absolute coordinates and can move across frames intact.
-The last buffer destroys its retained and obsolete surfaces before
+locator, native surface, and primary or additional role.  Both platforms use
+frame-relative child bounds.  Hiding a buffer hides but retains its loaded
+surface.  Displaying it again shows the same DOM and current CFI without
+reopening the publication.  Moving a presentation across frames reparents the
+same native child and retains its renderer session on both WebView2 and
+WKWebView.  The last buffer destroys its retained and obsolete surfaces before
 invalidating the publication resource token.
 
 The Lisp adapter represents a surface as exactly one of =detached=,
@@ -134,20 +140,23 @@ animation.  =C-d/C-u= and Page Down or Page Up move by reflowed screens, while
 =J/K= use semantic page commands that have the same reflowed presentation.
 All three scales cross linear spine-item boundaries.  =gg/G= jump to the first
 or last linear book location.  The portable commands continue to work after a
-mouse click gives the child WebView native focus.  The same focused path
-forwards =G=, =+=, =-=, ===, and =y= through the active Emacs keymaps.
-=focus-gained= selects the native surface's owning Emacs window.  Selecting another
-Emacs window asks any focused child to return keyboard focus to its parent, so
-ordinary Emacs bindings resume without an extra click.
+mouse click gives the child WebView native focus.  Native and renderer
+accelerator events route the bounded Reader vocabulary through the active
+Emacs keymaps.  =focus-gained= selects the native surface's owning Emacs
+window.  Selecting another Emacs window asks any focused child to return
+keyboard focus to its parent, so ordinary Emacs bindings resume without an
+extra click.
 
 Native wheel movement remains within the current reflowable spine item until
 it reaches a vertical boundary.  Continued input then enters the adjacent
 linear item once, while a gesture latch consumes the remaining touchpad or
 wheel momentum so one gesture cannot skip chapters.
-Pressing =SPC=, =M-m=, or the first =g=, =m=, or ='= in a focused child also
+Pressing =SPC=, =M-m=, or the first =g=, =m=, or ='= in a focused child
 returns native focus, then queues the key through Emacs itself.  Leader,
-navigation, and mark prefix sequences therefore continue through the ordinary
-active maps instead of being copied into the renderer.
+navigation, and mark prefix sequences therefore remain ordinary Emacs input
+rather than being copied into the renderer.  The renderer reports native
+repeat state without interpreting it; Lisp discards repeats only for these
+focus-owning prefix keys.
 =o= displays the bounded EPUB 3 navigation or EPUB 2 NCX outline through the
 same persistent per-view outline UI used by fixed-layout documents.
 
@@ -246,11 +255,13 @@ fallbacks still report the renderer's resolved location.
 
 Chromium remains the only visual EPUB selection layer.  A settled same-spine
 range maps its canonical href and collapsed CFI endpoints into Reader's
-logical selection.  =y= asks the trusted renderer for the exact current
-=Range.toString()= text in bounded Unicode batches, then publishes it through
-Reader's normal kill-ring path only after every batch succeeds.  A stale,
-cleared, malformed, or oversized range fails instead of copying unrelated or
-truncated text.  Native =C-c= remains available to WebView2.
+logical selection.  =y= first snapshots the live DOM range, so copying does
+not depend on a preceding =selectionchange= or pointer event.  It then asks
+the trusted renderer for that exact =Range.toString()= text in bounded Unicode
+batches and publishes it through Reader's normal kill-ring path only after
+every batch succeeds.  A stale, cleared, malformed, or oversized range fails
+instead of copying unrelated or truncated text.  Native =C-c= remains
+available to WebView2.
 
 An ordinary click lets Chromium collapse the DOM range and clears only the
 logical text selection; it does not hide a Reader search highlight.  Focused
@@ -307,11 +318,11 @@ The implementation is divided into thirteen pieces:
 - =yunge-reader-webview-view.el= owns logical view records, surface state, and
   the registries that keep them independent from disposable native surfaces.
 - =yunge-reader-webview-renderer.el= maps validated EPUB operations onto
-  WebView helper requests and checks their bounded asynchronous results.
+  WebView module requests and checks their bounded asynchronous results.
 - =yunge-reader-webview-events.el= validates asynchronous renderer events and
   routes them to logical view state and the owning Emacs presentation.
-- =yunge-reader-webview-service.el= owns the helper process, transport,
-  diagnostics, shutdown deadline, and stopped-service notification.
+- =yunge-reader-webview-service.el= owns the dynamic-module service, pipe
+  transport, shutdown deadline, and stopped-service notification.
 - =yunge-reader-webview-surface.el= owns child-surface identifiers, native
   parent geometry, creation, renderer attachment, resize coalescing, and
   asynchronous release barriers.
@@ -320,12 +331,12 @@ The implementation is divided into thirteen pieces:
 - =yunge-reader-epub.el= maps shared EPUB publications and reflowable
   locations onto the Reader driver interface.
 
-The native WebView helper keeps request decoding, stable operation names,
+The native WebView service keeps request decoding, stable operation names,
 response envelopes, and protocol errors in =src/webview/protocol.rs=.  The
-service remains responsible for executing those typed operations and
-coordinating the publication, renderer, resource, and surface components.
-Unsupported operations are therefore rejected at the protocol boundary before
-they can reach native resources.
+=module/= crate exposes that service to Emacs; the executable remains solely
+the PDF helper.  Typed operations coordinate
+the publication, renderer, resource, and surface components; unsupported
+operations are rejected before they can reach native resources.
 
 =src/webview/surface.rs= owns the validated parent-window adapter, child
 WebView construction, bounds, visibility, load state, focus, routed
@@ -343,10 +354,10 @@ EPUB resource-serving authority.
 
 =src/webview/resources.rs= owns embedded renderer assets, both private
 origins and their content-security policy, opaque publication tokens, the
-token-to-publication store, bounded concurrent resource requests, normalized
-EPUB paths, and HTTP response construction.  The service retains publication
-IDs and live-view close ordering, but cannot inspect the resource store or its
-locks and counters.
+token-to-publication store, normalized EPUB paths, and HTTP response
+construction.  The direct platform callbacks answer synchronously while ZIP
+access remains serialized.  The service retains publication IDs and live-view
+close ordering, but cannot inspect the resource store or its archive locks.
 
 PDF selection and search geometry uses one compound SVG path per page and
 highlight kind.  Overlapping glyph bounds therefore share one opacity pass
@@ -387,11 +398,10 @@ anchor, or saved location.
 
 An embedded EPUB surface follows the active presentation.  Moving it between
 windows on one frame updates the native child bounds without reopening the
-publication.  Windows recreates a surface when a move crosses frames because
-its native parent changes.  The helper-owned macOS panel instead moves by
-absolute screen coordinates and retains its loaded DOM across frames.  A
-passive duplicate window explains that selecting it moves the surface and
-points to the explicit Additional-view command.
+publication.  Moving it across frames uses =view-parent= to reparent the same
+WebView2 child HWND or WKWebView host =NSView=, retaining the loaded DOM and
+locator.  A passive duplicate window explains that selecting it moves the
+surface and points to the explicit Additional-view command.
 
 Opening a document declares one of two layouts:
 
@@ -763,12 +773,12 @@ validates all four.  Request IDs match asynchronous responses to callbacks.  A
 crash fails all outstanding callbacks with a native-session error and permits
 at most one automatic restart while a component retains the service.
 
-The PDF and WebView helpers share one transport implementation for NDJSON
+The PDF helper and WebView module share one transport implementation for NDJSON
 framing, handshake queues, request identifiers, response routing, and pending
-callback failure.  Each helper still owns its handshake validation, error
-mapping, events, readiness metadata, and process lifetime policy.  A transport
-session is bound to the process that created it, so stale output cannot consume
-callbacks belonging to a replacement process.
+callback failure.  Each service still owns its handshake validation, error
+mapping, events, readiness metadata, and lifetime policy.  A transport session
+is bound to its process or module pipe, so stale output cannot consume callbacks
+belonging to a replacement session.
 
 Each helper start receives an opaque Emacs-side session identity.  A PDF
 document handle pairs that identity with its process-local numeric handle.
@@ -809,7 +819,8 @@ and arm64 assets on Windows, Linux, and macOS.  Setup performs these steps:
    licenses into staging.
 6. Parse and verify the four-component upstream version.
 7. Atomically publish under =var/yunge-reader/pdfium/7881/=.
-8. Build the locked Rust helper and load PDFium in a smoke test.
+8. Build the locked Rust helper and WebView module, then load PDFium in a
+   smoke test.
 
 An invalid prior installation is renamed for inspection rather than deleted.
 Normal document opening never downloads or compiles dependencies implicitly.
@@ -827,7 +838,7 @@ selection, and annotation conformance tests.
 
 * Reflowable WebView and EPUB driver
 
-The EPUB architecture spike uses a second mode of the Rust helper on Windows.
+The EPUB architecture uses the Rust dynamic module on Windows and macOS.
 =M-x yunge-reader-webview-spike= places the empty renderer shell over the
 selected Emacs window body.  =M-x yunge-reader-webview-epub-spike= validates a
 local EPUB, opens it through that shell, and displays a visible text start in
@@ -859,9 +870,11 @@ immutable result for every view.  Point, folding, focus, and the selected
 jump target remain view-local.  Destroying a view completes any pending
 outline waiter with an error instead of leaving the shared request pending.
 
-Attaching a publication may supply an initial locator.  The renderer tries its
-CFI, then href, then fraction; when none resolves to visible content it opens
-the normal visible text start.  =M-x yunge-reader-webview-previous-screen= and
+Attaching a publication may supply an initial locator.  The renderer first
+loads its href, then resolves the exact CFI in that live chapter, with href and
+fraction fallbacks; when none resolves to visible content it opens the normal
+visible text start.  This avoids waiting on a range anchor while its chapter
+frame is still being created.  =M-x yunge-reader-webview-previous-screen= and
 =M-x yunge-reader-webview-next-screen= exercise bounded semantic navigation.
 They remain unbound protocol diagnostics.  The EPUB driver exposes the same
 operations as =J/K=, =C-d/C-u=, and Page Down or Page Up.
@@ -874,24 +887,33 @@ selection in Lisp.  Image rendering remains appropriate for fixed-layout
 documents, but it is not the primary EPUB representation.
 
 Each logical Reader view receives its own numeric native view and WebView
-instance.  Emacs sends the frame window ID plus the body pixel rectangle.
+instance.  Emacs sends the frame identifier, its resolved geometry, and the
+frame-relative body pixel rectangle.
 Window size, state, and buffer changes resynchronize that rectangle.  Only one
 bounds request per view may be outstanding; intermediate resize rectangles are
 coalesced into the newest value.  Surface creation retains the rectangle
-actually sent to the helper, so a body-size change before creation completes
+actually sent to the module, so a body-size change before creation completes
 is reconciled instead of being mistaken for an applied native resize.  A
 formal Reader view survives window replacement: an invisible persistent view
 retains its loaded surface and shows it again without reopening.  Windows
-replaces that surface only when the new presentation has a different parent
-frame; macOS moves it directly.  Killing the buffer destroys the logical
-view.  A manual spike remains temporary and is destroyed when its window
-stops displaying it.
+and macOS both reparent that same surface when the new presentation belongs to
+a different frame.  Killing the buffer destroys the logical view.  A manual
+spike remains temporary and is destroyed when its window stops displaying it.
 
 The renderer application and EPUB resource service use separate private
 HTTPS-equivalent origins.  Rust exposes only canonical, manifested,
 browser-safe resources, and each publication receives a random 128-bit token.
 Closing the publication invalidates that token.  Renderer assets are embedded
-in the helper and covered by its exact source build ID.
+in the native component and covered by its exact source build ID.
+
+Both direct backends answer resource callbacks synchronously.  In particular,
+forwarding a WKURLSchemeTask callback from a worker can leave WebKit waiting
+for its system timeout before the first chapter frame loads.  ZIP access
+remains serialized on both platforms.  The renderer accepts visible text
+before waiting for media and bounds both frame settling and image decoding.
+It explicitly announces when its module API is ready, so the native backends
+can release queued scripts without polling page-load state.  Lisp retains one
+publication-ready deadline so =opening= cannot last indefinitely.
 
 EPUB scripts are rejected by the publication loader, and both reflowable and
 fixed-layout Foliate frames omit =allow-scripts=.  A document policy also
@@ -924,13 +946,12 @@ For pre-paginated EPUB, authored page content remains unchanged and only the
 outer WebView canvas plus Reader-owned search overlay follows Emacs.
 
 WebView2 forwards =ESC=, =C-g=, =C-d/C-u=, and Page Down or Page Up through
-its native accelerator event.  A bounded renderer listener forwards the same
-portable vocabulary on WKWebView, plus =G=, =J/K=, =g=, =+=, =-=, ===, =y=,
-=m=, ='=, and =SPC= on both engines.  Both paths emit only
-normalized key events; they never choose or execute commands.  Emacs resolves
-reading keys through the owning EPUB buffer's active maps.  Leader keys and
-the first =g=, =m=, or ='= restore parent focus and enter Emacs's ordinary
-input loop.
+its native accelerator event, while the renderer forwards its bounded
+character vocabulary.  On macOS the renderer forwards the complete bounded
+reader-key vocabulary through the same accelerator protocol.  Both paths
+report only a normalized key and native repeat state.  Emacs resolves these
+reading and prefix keys through the owning EPUB buffer's active maps, and
+suppresses repeated owning-prefix events there rather than in JavaScript.
 =ESC= and =C-g= return native focus to the parent, select the owning Emacs
 window, and focus its frame.
 Renderer focus events, together with WebView2's native focus notifications,
@@ -939,9 +960,9 @@ window-selection change releases a
 focused child when its owner is no longer selected.
 
 =M-x yunge-reader-webview-stop= requests graceful shutdown and then enforces a
-deadline; a prefix argument terminates it immediately.  Emacs exit also ends
-the process.  The ordinary PDF helper and the WebView helper are separate
-process instances, so testing reflow does not interrupt open PDF documents.
+deadline; a prefix argument terminates it immediately.  Emacs exit also drops
+the module service.  The ordinary PDF helper remains a separate process, so
+testing reflow does not interrupt open PDF documents.
 Destroying an owned EPUB spike view releases its publication only after native
 view destruction completes.  The formal driver additionally waits for every
 current or obsolete child surface before closing a shared publication, so no
@@ -1006,7 +1027,7 @@ WebView ERT tests cover the separate handshake, strict capability validation,
 asynchronous renderer event routing, per-view EPUB locations, owning-window
 focus recovery, owning-buffer key dispatch, frame handle parsing, coalesced
 resize requests, destruction after buffer replacement, persistent surface
-retention and reuse, cross-frame replacement, multi-surface destruction
+retention and reuse, cross-frame reparenting, multi-surface destruction
 barriers, outline waiter completion, and ordered publication release.  They
 also cover deferred and
 live style updates,
@@ -1019,8 +1040,9 @@ restore timing, and primary-only place recording.
 Isolated graphical Emacs smoke tests open real EPUBs, move one screen, hide
 and show the retained native view, and preserve the exact CFI.  The
 reflowable pass also crosses a chapter during search, copies a real DOM
-selection, follows an exact outline destination, and moves a second native
-surface without changing the primary surface.  The formal driver smoke test
+selection, follows an exact outline destination, reparents the same surface
+to a second Emacs frame, and navigates it without changing its ID.  The formal
+driver smoke test
 opens through =auto-mode-alist=, hides and reuses a persistent surface,
 verifies primary place ownership, and closes the resource only after both
 views detach.

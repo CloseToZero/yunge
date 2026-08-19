@@ -84,6 +84,16 @@
                    (kbd "<drag-mouse-1>"))
        #'ignore)))
 
+(ert-deftest yunge-reader-pdf-keeps-copy-in-the-shared-emacs-keymap ()
+  (should-not
+   (lookup-key yunge-reader-pdf-view-mode-map (kbd "y")))
+  (with-temp-buffer
+    (yunge-reader-mode)
+    (yunge-reader-pdf-view-mode 1)
+    (should
+     (eq (key-binding (kbd "y"))
+         #'yunge-reader-copy-selection))))
+
 (ert-deftest yunge-reader-pdf-tracks-only-semantic-page-jumps ()
   (dolist (command
            '(yunge-reader-pdf-first-page

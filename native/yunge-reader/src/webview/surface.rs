@@ -1,14 +1,14 @@
 // SPDX-FileCopyrightText: 2026 Chen Zhexuan
 // SPDX-License-Identifier: MIT
 
+use http::Request as HttpRequest;
 use serde::{Deserialize, Serialize};
 use std::num::NonZeroIsize;
-use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
 use webview2_com::Microsoft::Web::WebView2::Win32::{
     COREWEBVIEW2_KEY_EVENT_KIND, COREWEBVIEW2_KEY_EVENT_KIND_KEY_DOWN,
     COREWEBVIEW2_KEY_EVENT_KIND_SYSTEM_KEY_DOWN,
+    COREWEBVIEW2_PHYSICAL_KEY_STATUS,
 };
 use webview2_com::{
     AcceleratorKeyPressedEventHandler, FocusChangedEventHandler,
@@ -19,14 +19,13 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{
     VK_SPACE,
 };
 use windows::Win32::UI::WindowsAndMessaging::IsWindow;
-use wry::dpi::{PhysicalPosition, PhysicalSize};
-use wry::raw_window_handle::{
-    HandleError, HasWindowHandle, RawWindowHandle, Win32WindowHandle,
-    WindowHandle,
-};
-use wry::{PageLoadEvent, Rect, WebView, WebViewBuilder, WebViewExtWindows};
 
-use super::protocol::{ACCELERATORS, ServiceError};
+use super::protocol::{ACCELERATORS, ServiceError, control_accelerator};
+use super::resources::ResourceService;
+
+#[path = "surface_windows/webview.rs"]
+mod webview;
+use webview::NativeWebView;
 
 const ESCAPE_VIRTUAL_KEY: u32 = 0x1b;
 const MAX_VIEW_EXTENT: u32 = 32_768;
@@ -43,20 +42,27 @@ pub(super) struct Bounds {
 pub(super) struct ParentWindow(NonZeroIsize);
 
 pub(super) struct NativeSurface {
-    webview: WebView,
+    webview: NativeWebView,
     accelerator_token: i64,
     got_focus_token: i64,
     lost_focus_token: i64,
-    loaded: Arc<AtomicBool>,
     bounds: Bounds,
     visible: bool,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum SurfaceEvent {
-    Accelerator { view: u64, key: &'static str },
-    FocusGained { view: u64 },
-    FocusLost { view: u64 },
+    Accelerator {
+        view: u64,
+        key: &'static str,
+        repeat: bool,
+    },
+    FocusGained {
+        view: u64,
+    },
+    FocusLost {
+        view: u64,
+    },
 }
 
 type EventHandler = Arc<dyn Fn(SurfaceEvent) + Send + Sync>;
@@ -85,13 +91,6 @@ impl Bounds {
         }
         Ok(self)
     }
-
-    fn rect(self) -> Rect {
-        Rect {
-            position: PhysicalPosition::new(self.x, self.y).into(),
-            size: PhysicalSize::new(self.width, self.height).into(),
-        }
-    }
 }
 
 impl ParentWindow {
@@ -117,53 +116,33 @@ impl ParentWindow {
         }
         Ok(Self(value))
     }
-}
 
-impl HasWindowHandle for ParentWindow {
-    fn window_handle(&self) -> Result<WindowHandle<'_>, HandleError> {
-        let handle = Win32WindowHandle::new(self.0);
-        let raw = RawWindowHandle::Win32(handle);
-        // SAFETY: `ParentWindow::new' checks that the HWND names a live
-        // window. Pinned Wry copies only the HWND on its Windows child path;
-        // this private adapter is not exposed to other raw-handle consumers.
-        Ok(unsafe { WindowHandle::borrow_raw(raw) })
+    pub(super) fn current(
+        value: u64,
+        _frame: Option<Bounds>,
+    ) -> Result<Self, ServiceError> {
+        Self::new(value)
     }
 }
 
 impl NativeSurface {
-    pub(super) fn create<'a>(
-        builder: WebViewBuilder<'a>,
-        parent: &'a ParentWindow,
+    pub(super) fn create(
+        parent: &ParentWindow,
         view: u64,
         bounds: Bounds,
         visible: bool,
+        resources: ResourceService,
+        on_ipc: impl Fn(HttpRequest<String>) + Send + Sync + 'static,
         on_event: impl Fn(SurfaceEvent) + Send + Sync + 'static,
     ) -> Result<Self, ServiceError> {
         let bounds = bounds.validate()?;
-        let loaded = Arc::new(AtomicBool::new(false));
-        let load_state = Arc::clone(&loaded);
-        let build = || {
-            builder
-                .with_bounds(bounds.rect())
-                .with_focused(false)
-                .with_visible(visible)
-                .with_on_page_load_handler(move |event, _url| {
-                    if matches!(event, PageLoadEvent::Finished) {
-                        load_state.store(true, Ordering::Release);
-                    }
-                })
-                .build_as_child(parent)
-        };
-        let webview = catch_unwind(AssertUnwindSafe(build))
-            .map_err(|_| {
-                ServiceError::new(
-                    "view-create-failed",
-                    "WebView creation panicked for the supplied parent window",
-                )
-            })?
-            .map_err(|error| {
-                ServiceError::new("view-create-failed", error.to_string())
-            })?;
+        let webview = NativeWebView::create(
+            HWND(parent.0.get() as _),
+            bounds,
+            visible,
+            resources,
+            on_ipc,
+        )?;
         let on_event: EventHandler = Arc::new(on_event);
         let accelerator_token =
             install_accelerator_handler(&webview, view, Arc::clone(&on_event))?;
@@ -174,14 +153,21 @@ impl NativeSurface {
             accelerator_token,
             got_focus_token,
             lost_focus_token,
-            loaded,
             bounds,
             visible,
         })
     }
 
-    pub(super) fn webview(&self) -> &WebView {
-        &self.webview
+    pub(super) fn evaluate_script(&self, script: &str) -> Result<(), String> {
+        self.webview.evaluate_script(script)
+    }
+
+    pub(super) fn evaluate_script_with_callback(
+        &self,
+        script: &str,
+        callback: impl FnOnce(String) + Send + 'static,
+    ) -> Result<(), String> {
+        self.webview.evaluate_script_with_callback(script, callback)
     }
 
     pub(super) fn set_bounds(
@@ -189,11 +175,23 @@ impl NativeSurface {
         bounds: Bounds,
     ) -> Result<Bounds, ServiceError> {
         let bounds = bounds.validate()?;
-        self.webview.set_bounds(bounds.rect()).map_err(|error| {
+        self.webview.set_bounds(bounds).map_err(|error| {
             ServiceError::new("view-update-failed", error.to_string())
         })?;
         self.bounds = bounds;
         Ok(bounds)
+    }
+
+    pub(super) fn set_parent(
+        &mut self,
+        parent: ParentWindow,
+        bounds: Bounds,
+    ) -> Result<Bounds, ServiceError> {
+        let bounds = bounds.validate()?;
+        self.webview.set_parent(HWND(parent.0.get() as _)).map_err(
+            |error| ServiceError::new("view-update-failed", error.to_string()),
+        )?;
+        self.set_bounds(bounds)
     }
 
     pub(super) fn set_visible(
@@ -220,7 +218,7 @@ impl NativeSurface {
     }
 
     pub(super) fn loaded(&self) -> bool {
-        self.loaded.load(Ordering::Acquire)
+        self.webview.loaded()
     }
 
     pub(super) fn bounds(&self) -> Bounds {
@@ -230,6 +228,10 @@ impl NativeSurface {
     pub(super) fn visible(&self) -> bool {
         self.visible
     }
+}
+
+pub(super) fn webview_version() -> Result<String, String> {
+    webview::webview_version()
 }
 
 impl Drop for NativeSurface {
@@ -264,14 +266,13 @@ fn routed_key(
         None
     } else if alt {
         (!control && key == u32::from(b'M')).then_some("M-m")
+    } else if control {
+        u8::try_from(key).ok().and_then(control_accelerator)
     } else {
-        match (key, control) {
-            (key, false) if key == u32::from(VK_SPACE.0) => Some("SPC"),
-            (key, true) if key == u32::from(b'G') => Some("C-g"),
-            (key, true) if key == u32::from(b'D') => Some("C-d"),
-            (key, true) if key == u32::from(b'U') => Some("C-u"),
-            (key, false) if key == u32::from(VK_NEXT.0) => Some("<next>"),
-            (key, false) if key == u32::from(VK_PRIOR.0) => Some("<prior>"),
+        match key {
+            key if key == u32::from(VK_SPACE.0) => Some("SPC"),
+            key if key == u32::from(VK_NEXT.0) => Some("<next>"),
+            key if key == u32::from(VK_PRIOR.0) => Some("<prior>"),
             _ => None,
         }
     };
@@ -286,7 +287,7 @@ fn key_state(key: VIRTUAL_KEY) -> bool {
 }
 
 fn install_accelerator_handler(
-    webview: &WebView,
+    webview: &NativeWebView,
     view: u64,
     on_event: EventHandler,
 ) -> Result<i64, ServiceError> {
@@ -297,11 +298,13 @@ fn install_accelerator_handler(
             };
             let mut kind = COREWEBVIEW2_KEY_EVENT_KIND::default();
             let mut key = 0;
+            let mut status = COREWEBVIEW2_PHYSICAL_KEY_STATUS::default();
             // SAFETY: WebView2 owns the callback arguments for the duration
             // of this callback and initializes both out parameters.
             unsafe {
                 args.KeyEventKind(&mut kind)?;
                 args.VirtualKey(&mut key)?;
+                args.PhysicalKeyStatus(&mut status)?;
                 let routed = routed_key(
                     kind,
                     key,
@@ -311,7 +314,11 @@ fn install_accelerator_handler(
                 );
                 if let Some(key) = routed {
                     args.SetHandled(true)?;
-                    on_event(SurfaceEvent::Accelerator { view, key });
+                    on_event(SurfaceEvent::Accelerator {
+                        view,
+                        key,
+                        repeat: status.WasKeyDown.as_bool(),
+                    });
                 }
             }
             Ok(())
@@ -332,7 +339,7 @@ fn install_accelerator_handler(
 }
 
 fn install_focus_handlers(
-    webview: &WebView,
+    webview: &NativeWebView,
     view: u64,
     on_event: EventHandler,
 ) -> Result<(i64, i64), ServiceError> {

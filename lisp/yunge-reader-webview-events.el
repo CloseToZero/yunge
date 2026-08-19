@@ -20,6 +20,8 @@
                   "yunge-reader-webview" (view message))
 (declare-function yunge-reader-webview--set-view-selection
                   "yunge-reader-webview" (view selection))
+(declare-function yunge-reader-webview--cancel-open-timer
+                  "yunge-reader-webview-surface" (surface))
 (declare-function yunge-reader-webview--store-view-location
                   "yunge-reader-webview" (view message &optional quiet))
 (declare-function yunge-reader-webview--store-view-outline
@@ -39,10 +41,10 @@
 (defvar yunge-reader-webview--process)
 
 (defconst yunge-reader-webview--passive-buffer-message
-  (concat "This EPUB view is active in another window.\n\n"
+  (concat "Native EPUB content is attached to one Emacs window at a time.\n\n"
           "Select this window to move the EPUB view here.\n"
           "Use SPC m v for an independent Additional view.")
-  "Message visible behind an active EPUB surface in passive windows.")
+  "Message visible behind a passive EPUB surface.")
 
 (defun yunge-reader-webview--event-location (message)
   "Return the validated EPUB locator carried by event MESSAGE."
@@ -93,31 +95,36 @@
       (error "Malformed Yunge Reader WebView event: %S" message))
     (pcase event
       ("accelerator"
-       (let ((key (alist-get 'key message)))
-         (unless (member key yunge-reader-webview--accelerators)
+       (let ((key (alist-get 'key message))
+             (repeat (alist-get 'repeat message)))
+         (unless (and (member key yunge-reader-webview--accelerators)
+                      (assq 'repeat message)
+                      (memq repeat '(nil t)))
            (error "Malformed WebView accelerator event: %S" message))
-         (when-let* ((view (gethash id yunge-reader-webview--views))
-                     (buffer (yunge-reader-webview--view-buffer view))
-                     ((buffer-live-p buffer)))
-           (with-current-buffer buffer
-             (condition-case error-data
-                 (if (member
-                      key yunge-reader-webview--owning-accelerators)
-                     (yunge-reader-webview--relay-owning-key view key)
-                   (when-let*
-                       ((function
-                         (yunge-reader-webview--view-accelerator-function
-                          view)))
-                     (funcall function view key)))
-               (quit nil)
-               (error
-                (display-warning
-                 'yunge-reader
-                 (format "Could not run EPUB key %s: %s"
-                         key (error-message-string error-data))
-                 :warning))))
-           (when (member key '("C-g" "<escape>"))
-             (yunge-reader-webview--focus-owning-window view)))))
+         (unless (and repeat
+                      (member key yunge-reader-webview--owning-accelerators))
+           (when-let* ((view (gethash id yunge-reader-webview--views))
+                       (buffer (yunge-reader-webview--view-buffer view))
+                       ((buffer-live-p buffer)))
+             (with-current-buffer buffer
+               (condition-case error-data
+                   (if (member
+                        key yunge-reader-webview--owning-accelerators)
+                       (yunge-reader-webview--relay-owning-key view key)
+                     (when-let*
+                         ((function
+                           (yunge-reader-webview--view-accelerator-function
+                            view)))
+                       (funcall function view key)))
+                 (quit nil)
+                 (error
+                  (display-warning
+                   'yunge-reader
+                   (format "Could not run EPUB key %s: %s"
+                           key (error-message-string error-data))
+                   :warning))))
+             (when (member key '("C-g" "<escape>"))
+               (yunge-reader-webview--focus-owning-window view))))))
       ("focus-gained"
        (when-let* ((view (gethash id yunge-reader-webview--views)))
          (yunge-reader-webview--record-native-focus view t)))
@@ -126,6 +133,8 @@
          (yunge-reader-webview--record-native-focus view nil)))
       ("publication-ready"
        (when-let* ((view (gethash id yunge-reader-webview--views)))
+         (yunge-reader-webview--cancel-open-timer
+          (yunge-reader-webview--view-surface view))
          (yunge-reader-webview--store-view-location view message t)
          (yunge-reader-webview--set-surface-state
           (yunge-reader-webview--view-surface view) 'ready)

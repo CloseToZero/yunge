@@ -12,7 +12,9 @@
   label
   root
   manifest
+  target-directory
   helper
+  module
   temporary-root
   log-file)
 
@@ -27,18 +29,29 @@ LOG-ENVIRONMENT-VARIABLE optionally names a diagnostic log file."
   (let* ((root
           (file-name-as-directory
            (expand-file-name ".." script-directory)))
+         (target-directory
+          (expand-file-name
+           "var/yunge-reader/cargo-target" root))
          (helper
           (expand-file-name
-           (concat
-            "native/yunge-reader/target/release/yunge-reader"
-            (if (eq system-type 'windows-nt) ".exe" ""))
-           root)))
+           (concat "release/yunge-reader"
+                   (if (eq system-type 'windows-nt) ".exe" ""))
+           target-directory))
+         (module
+          (expand-file-name
+           (pcase system-type
+             ('windows-nt "release/yunge_reader_module.dll")
+             ('darwin "release/libyunge_reader_module.dylib")
+             (_ "release/libyunge_reader_module.so"))
+           target-directory)))
     (yunge-reader-graphical-smoke--make-context
      :label label
      :root root
      :manifest
      (expand-file-name "native/yunge-reader/Cargo.toml" root)
+     :target-directory target-directory
      :helper helper
+     :module module
      :temporary-root (make-temp-file temporary-prefix t)
      :log-file (getenv log-environment-variable))))
 
@@ -100,7 +113,7 @@ LOG-ENVIRONMENT-VARIABLE optionally names a diagnostic log file."
         (kill-buffer buffer)))))
 
 (defun yunge-reader-graphical-smoke-build-helper (context)
-  "Build and validate the release helper for smoke CONTEXT.
+  "Build and validate the release native workspace for smoke CONTEXT.
 Return the Cargo executable used for the build."
   (let ((cargo
          (or (executable-find "cargo")
@@ -108,14 +121,23 @@ Return the Cargo executable used for the build."
     (yunge-reader-graphical-smoke-run-process
      context cargo
      (list
-      "build" "--release" "--manifest-path"
-      (yunge-reader-graphical-smoke-context-manifest context)))
+      "build" "--release" "--locked" "--workspace"
+      "--manifest-path"
+      (yunge-reader-graphical-smoke-context-manifest context)
+      "--target-dir"
+      (yunge-reader-graphical-smoke-context-target-directory context)))
     (unless
         (file-executable-p
          (yunge-reader-graphical-smoke-context-helper context))
       (error
        "Native helper was not built: %s"
        (yunge-reader-graphical-smoke-context-helper context)))
+    (unless
+        (file-regular-p
+         (yunge-reader-graphical-smoke-context-module context))
+      (error
+       "Native module was not built: %s"
+       (yunge-reader-graphical-smoke-context-module context)))
     cargo))
 
 (defun yunge-reader-graphical-smoke-cleanup (context)

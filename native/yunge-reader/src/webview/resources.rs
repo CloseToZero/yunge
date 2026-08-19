@@ -1,16 +1,13 @@
 // SPDX-FileCopyrightText: 2026 Chen Zhexuan
 // SPDX-License-Identifier: MIT
 
+use crate::epub::{EpubError, Publication, PublicationLayout};
 use getrandom::getrandom;
+use http::{Method, Request as HttpRequest, Response as HttpResponse};
 use serde_json::{Value, json};
 use std::borrow::Cow;
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
-use std::thread;
-use wry::RequestAsyncResponder;
-use wry::http::{Method, Request as HttpRequest, Response as HttpResponse};
-use yunge_reader::epub::{EpubError, Publication, PublicationLayout};
 
 use super::protocol::ServiceError;
 
@@ -28,10 +25,12 @@ pub(super) const APP_BROWSER_ORIGIN: &str =
 pub(super) const APP_BROWSER_ORIGIN: &str = "yunge-reader-app://localhost";
 pub(super) const BOOK_PROTOCOL: &str = "yunge-reader-book";
 pub(super) const RESOURCE_CATALOG_PATH: &str = ".yunge/resources.json";
-pub(super) const MAX_RESOURCE_REQUESTS: usize = 8;
 
 #[cfg(target_os = "windows")]
 const BOOK_BROWSER_ROOT: &str = "https://yunge-reader-book.localhost/";
+#[cfg(target_os = "windows")]
+pub(super) const BOOK_BROWSER_ORIGIN: &str =
+    "https://yunge-reader-book.localhost";
 #[cfg(target_os = "macos")]
 const BOOK_BROWSER_ROOT: &str = "yunge-reader-book://localhost/";
 const MAX_RESOURCE_CATALOG_BYTES: usize = 16 * 1_024 * 1_024;
@@ -96,10 +95,7 @@ type SharedPublications = Arc<Mutex<PublicationStore>>;
 #[derive(Clone, Default)]
 pub(super) struct ResourceService {
     publications: SharedPublications,
-    active_requests: Arc<AtomicUsize>,
 }
-
-pub(super) struct ResourcePermit(Arc<AtomicUsize>);
 
 impl PublicationStore {
     fn insert(
@@ -191,33 +187,11 @@ impl ResourceService {
         Ok(publication.publication.metadata().layout)
     }
 
-    pub(super) fn respond(
-        &self,
-        request: HttpRequest<Vec<u8>>,
-        responder: RequestAsyncResponder,
-    ) {
-        let Some(permit) =
-            ResourcePermit::acquire(Arc::clone(&self.active_requests))
-        else {
-            responder.respond(resource_error_response(
-                503,
-                "too many EPUB resource requests",
-            ));
-            return;
-        };
-        let publications = Arc::clone(&self.publications);
-        thread::spawn(move || {
-            responder.respond(resource_response(&publications, request));
-            drop(permit);
-        });
-    }
-
-    #[cfg(test)]
     pub(super) fn response(
         &self,
         request: HttpRequest<Vec<u8>>,
-    ) -> HttpResponse<Vec<u8>> {
-        resource_response(&self.publications, request)
+    ) -> HttpResponse<Cow<'static, [u8]>> {
+        resource_response(&self.publications, request).map(Cow::Owned)
     }
 
     pub(super) fn clear(&self) -> Result<(), ServiceError> {
@@ -232,32 +206,6 @@ impl ResourceService {
                 "the publication store is unavailable",
             )
         })
-    }
-}
-
-impl ResourcePermit {
-    pub(super) fn acquire(active: Arc<AtomicUsize>) -> Option<Self> {
-        let mut current = active.load(Ordering::Acquire);
-        loop {
-            if current >= MAX_RESOURCE_REQUESTS {
-                return None;
-            }
-            match active.compare_exchange_weak(
-                current,
-                current + 1,
-                Ordering::AcqRel,
-                Ordering::Acquire,
-            ) {
-                Ok(_) => return Some(Self(active)),
-                Err(updated) => current = updated,
-            }
-        }
-    }
-}
-
-impl Drop for ResourcePermit {
-    fn drop(&mut self) {
-        self.0.fetch_sub(1, Ordering::AcqRel);
     }
 }
 
@@ -460,7 +408,7 @@ fn resource_body_response(
 }
 
 pub(super) fn resource_request_target(
-    uri: &wry::http::Uri,
+    uri: &http::Uri,
 ) -> Result<(String, String), &'static str> {
     if uri.scheme_str() != Some(BOOK_PROTOCOL) {
         return Err("invalid EPUB resource scheme");

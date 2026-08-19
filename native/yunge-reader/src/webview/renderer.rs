@@ -1,9 +1,9 @@
 // SPDX-FileCopyrightText: 2026 Chen Zhexuan
 // SPDX-License-Identifier: MIT
 
+use http::Request as HttpRequest;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use wry::http::Request as HttpRequest;
 
 use super::protocol::{PROTOCOL_VERSION, RENDERER_ACCELERATORS, Response};
 use super::resources::{APP_BROWSER_URL, APP_URL};
@@ -78,6 +78,7 @@ enum RendererMessage {
     Accelerator {
         protocol: u32,
         key: String,
+        repeat: bool,
     },
     AppearanceError {
         protocol: u32,
@@ -115,6 +116,9 @@ enum RendererMessage {
         protocol: u32,
         message: String,
     },
+    ShellReady {
+        protocol: u32,
+    },
     Selection {
         protocol: u32,
         #[serde(default, deserialize_with = "deserialize_present_option")]
@@ -132,6 +136,20 @@ enum RendererMessage {
         protocol: u32,
         message: String,
     },
+}
+
+pub(super) fn shell_ready(request: &HttpRequest<String>) -> bool {
+    if !app_renderer_source_allowed(&request.uri().to_string())
+        || request.body().len() > MAX_RENDERER_MESSAGE_BYTES
+    {
+        return false;
+    }
+    matches!(
+        serde_json::from_str(request.body()),
+        Ok(RendererMessage::ShellReady {
+            protocol: PROTOCOL_VERSION
+        })
+    )
 }
 
 fn valid_external_uri(value: &str) -> bool {
@@ -280,6 +298,29 @@ pub(super) fn selection_text_response(
         }
     };
     Response::failure(Some(id), code, error.message)
+}
+
+pub(super) fn current_selection_response(id: u64, value: &str) -> Response {
+    if value.len() > MAX_EPUB_SELECTION_RESULT_BYTES {
+        return invalid_selection_result(
+            id,
+            "EPUB current selection exceeds its byte limit",
+        );
+    }
+    let selection: Option<EpubSelection> = match serde_json::from_str(value) {
+        Ok(selection) => selection,
+        Err(error) => {
+            return invalid_selection_result(
+                id,
+                format!("invalid EPUB current selection: {error}"),
+            );
+        }
+    };
+    let selection = match selection.map(EpubSelection::validate).transpose() {
+        Ok(selection) => selection,
+        Err(error) => return invalid_selection_result(id, error.message),
+    };
+    Response::success(id, json!(selection))
 }
 
 fn invalid_search_result(id: u64, detail: impl Into<String>) -> Response {
@@ -474,13 +515,17 @@ pub(super) fn event(
     }
     let message: RendererMessage = serde_json::from_str(request.body()).ok()?;
     let payload = match message {
-        RendererMessage::Accelerator { protocol, key } => {
+        RendererMessage::Accelerator {
+            protocol,
+            key,
+            repeat,
+        } => {
             if protocol != PROTOCOL_VERSION
                 || !RENDERER_ACCELERATORS.contains(&key.as_str())
             {
                 return None;
             }
-            ViewEventPayload::Accelerator { key }
+            ViewEventPayload::Accelerator { key, repeat }
         }
         RendererMessage::AppearanceError { protocol, message } => {
             ViewEventPayload::AppearanceError {
@@ -546,6 +591,7 @@ pub(super) fn event(
                 message: checked_renderer_error(protocol, message)?,
             }
         }
+        RendererMessage::ShellReady { .. } => return None,
         RendererMessage::Selection {
             protocol,
             selection,
@@ -672,6 +718,12 @@ pub(super) fn set_selection_script(
     }))
     .expect("selection payload is serializable");
     format!("void globalThis.yungeReader.setSelection({payload});")
+}
+
+pub(super) fn current_selection_script(view: u64) -> String {
+    let payload = serde_json::to_string(&json!({ "view": view }))
+        .expect("current selection payload is serializable");
+    format!("globalThis.yungeReader.currentSelection({payload});")
 }
 
 pub(super) fn selection_text_script(

@@ -50,6 +50,7 @@
      ("G" . yunge-reader-epub-last-location)
      ("J" . yunge-reader-epub-next-page)
      ("K" . yunge-reader-epub-previous-page)
+     ("y" . yunge-reader-epub-copy-selection)
      ("gg" . yunge-reader-epub-first-location))))
 
 (ert-deftest yunge-reader-epub-keeps-layout-under-local-leader ()
@@ -89,6 +90,7 @@
        ("G" . yunge-reader-epub-last-location)
        ("J" . yunge-reader-epub-next-page)
        ("K" . yunge-reader-epub-previous-page)
+       ("y" . yunge-reader-epub-copy-selection)
        ("gg" . yunge-reader-epub-first-location)
        ("+" . yunge-reader-zoom-in)
        ("-" . yunge-reader-zoom-out)
@@ -783,7 +785,7 @@
         (should (eq (cadr called) command))
         (should (eq (caddr called) (current-buffer))))
       (cl-letf
-          (((symbol-function 'yunge-reader-copy-selection)
+          (((symbol-function 'yunge-reader-epub-copy-selection)
             (lambda ()
               (interactive)
               (setq called (list 'copied (current-buffer))))))
@@ -890,6 +892,78 @@
             (should-not echoed-clear))
           (should-not yunge-reader-selection)
           (should yunge-reader-search-highlight-visible))
+      (kill-buffer buffer))))
+
+(ert-deftest yunge-reader-epub-copy-reads-the-live-native-selection ()
+  (let* ((buffer (generate-new-buffer " *EPUB live copy*"))
+         (view
+          (yunge-reader-webview--make-view
+           :surface (yunge-reader-epub-test--surface 7 'ready)
+           :buffer buffer
+           :selection-changed-function
+           #'yunge-reader-epub--selection-changed))
+         requested
+         completion
+         copied)
+    (unwind-protect
+        (with-current-buffer buffer
+          (yunge-reader-mode)
+          (yunge-reader-epub-view-mode 1)
+          (setq yunge-reader-webview--buffer-view view)
+          (cl-letf
+              (((symbol-function
+                 'yunge-reader-webview--current-ready-view)
+                (lambda () view))
+               ((symbol-function
+                 'yunge-reader-webview--request-current-selection)
+                (lambda (actual complete)
+                  (setq requested actual
+                        completion complete)))
+               ((symbol-function 'yunge-reader-copy-selection)
+                (lambda ()
+                  (setq copied (copy-tree yunge-reader-selection)))))
+            (yunge-reader-epub-copy-selection)
+            (should (eq requested view))
+            (should yunge-reader--copy-pending)
+            (funcall completion
+                     (yunge-reader-epub-test--selection) nil)
+            (should-not yunge-reader--copy-pending)
+            (should copied)
+            (should
+             (equal (yunge-reader-webview--view-selection view)
+                    (yunge-reader-epub-test--selection)))))
+      (kill-buffer buffer))))
+
+(ert-deftest yunge-reader-epub-copy-rejects-a-stale-live-selection ()
+  (let* ((buffer (generate-new-buffer " *EPUB stale live copy*"))
+         (view
+          (yunge-reader-webview--make-view
+           :surface (yunge-reader-epub-test--surface 7 'ready)
+           :buffer buffer
+           :selection-changed-function
+           #'yunge-reader-epub--selection-changed))
+         completion
+         copied)
+    (unwind-protect
+        (with-current-buffer buffer
+          (yunge-reader-mode)
+          (yunge-reader-epub-view-mode 1)
+          (setq yunge-reader-webview--buffer-view view)
+          (cl-letf
+              (((symbol-function
+                 'yunge-reader-webview--current-ready-view)
+                (lambda () view))
+               ((symbol-function
+                 'yunge-reader-webview--request-current-selection)
+                (lambda (_view complete) (setq completion complete)))
+               ((symbol-function 'yunge-reader-copy-selection)
+                (lambda () (setq copied t))))
+            (yunge-reader-epub-copy-selection)
+            (cl-incf yunge-reader--copy-generation)
+            (funcall completion
+                     (yunge-reader-epub-test--selection) nil)
+            (should-not copied)
+            (should yunge-reader--copy-pending)))
       (kill-buffer buffer))))
 
 (ert-deftest yunge-reader-epub-clears-native-selection-from-reader ()

@@ -91,6 +91,18 @@
          (equal (yunge-reader-native-pdfium-library)
                 (expand-file-name (cdr case) "/pdfium/7881")))))))
 
+(ert-deftest yunge-reader-native-resolves-platform-module-layouts ()
+  (cl-letf (((symbol-function
+              'yunge-reader-native--cargo-target-directory)
+             (lambda () "/reader-target")))
+    (dolist (case '((windows-nt . "release/yunge_reader_module.dll")
+                    (darwin . "release/libyunge_reader_module.dylib")
+                    (gnu/linux . "release/libyunge_reader_module.so")))
+      (let ((system-type (car case)))
+        (should
+         (equal (yunge-reader-native-module-file)
+                (expand-file-name (cdr case) "/reader-target")))))))
+
 (ert-deftest yunge-reader-native-queues-until-validated-ready ()
   (yunge-reader-native-test--with-fake-process
     (let (result)

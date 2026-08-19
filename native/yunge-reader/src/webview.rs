@@ -1,21 +1,13 @@
 // SPDX-FileCopyrightText: 2026 Chen Zhexuan
 // SPDX-License-Identifier: MIT
 
+use crate::epub::{Publication, PublicationLayout};
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::{Value, json};
 use std::collections::HashMap;
-use std::io::{self, BufRead, Write};
-use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
+use std::io::Write;
+use std::sync::mpsc::{self, Receiver, Sender};
 use std::thread;
-use std::time::Duration;
-#[cfg(target_os = "windows")]
-use windows::Win32::UI::WindowsAndMessaging::{
-    DispatchMessageW, MSG, PM_REMOVE, PeekMessageW, TranslateMessage,
-};
-#[cfg(target_os = "windows")]
-use wry::WebViewBuilderExtWindows;
-use wry::{NewWindowResponse, PermissionResponse, WebViewBuilder};
-use yunge_reader::epub::{Publication, PublicationLayout};
 
 use super::{BUILD_ID, Error};
 
@@ -34,12 +26,11 @@ use protocol::{
     ACCELERATORS, CAPABILITIES, Control, Operation, Outgoing, PROTOCOL_VERSION,
     Request, Response, ServiceError, response,
 };
-#[cfg(test)]
-use renderer::app_renderer_source_allowed;
 use renderer::{
-    RendererSearchCallback, app_navigation_allowed,
-    appearance_script as publication_appearance_script,
+    RendererSearchCallback, appearance_script as publication_appearance_script,
     clear_selection_script as publication_clear_selection_script,
+    current_selection_response as renderer_current_selection_response,
+    current_selection_script as publication_current_selection_script,
     event as renderer_event,
     navigation_script as publication_navigation_script,
     open_script as publication_open_script,
@@ -55,12 +46,15 @@ use renderer::{
     zoom_script as publication_zoom_script,
 };
 #[cfg(test)]
-use resources::{
-    APP_BROWSER_ORIGIN, APP_BROWSER_URL, MAX_RESOURCE_REQUESTS,
-    RESOURCE_CATALOG_PATH, ResourcePermit, app_asset, resource_request_target,
+use renderer::{
+    app_navigation_allowed, app_renderer_source_allowed,
+    shell_ready as renderer_shell_ready,
 };
+use resources::ResourceService;
+#[cfg(test)]
 use resources::{
-    APP_PROTOCOL, APP_URL, BOOK_PROTOCOL, ResourceService, app_response,
+    APP_BROWSER_ORIGIN, APP_BROWSER_URL, APP_URL, BOOK_PROTOCOL,
+    RESOURCE_CATALOG_PATH, app_asset, app_response, resource_request_target,
 };
 use surface::{Bounds, NativeSurface, ParentWindow, SurfaceEvent};
 
@@ -92,8 +86,6 @@ const MAX_EPUB_FIXED_SCALE: f64 = 8.0;
 const MAX_EPUB_VIEWPORT_COORDINATE: f64 = 1_000_000.0;
 const MAX_RENDERER_MESSAGE_BYTES: usize = 1_024 * 1_024;
 const MAX_RENDERER_ERROR_BYTES: usize = 4 * 1_024;
-const MESSAGE_PUMP_INTERVAL: Duration = Duration::from_millis(8);
-
 #[derive(Debug, Serialize)]
 struct ViewEvent {
     kind: &'static str,
@@ -117,6 +109,7 @@ impl ViewEvent {
 enum ViewEventPayload {
     Accelerator {
         key: String,
+        repeat: bool,
     },
     AppearanceError {
         message: String,
@@ -162,9 +155,21 @@ enum ViewEventPayload {
 struct CreateParams {
     view: u64,
     parent: u64,
+    #[serde(default)]
+    frame: Option<Bounds>,
     bounds: Bounds,
     #[serde(default = "default_visible")]
     visible: bool,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ParentParams {
+    view: u64,
+    parent: u64,
+    #[serde(default)]
+    frame: Option<Bounds>,
+    bounds: Bounds,
 }
 
 #[derive(Debug, Deserialize)]
@@ -510,8 +515,6 @@ struct VisibleParams {
 struct EmptyParams {}
 
 enum Incoming {
-    Request(Request),
-    Invalid(String),
     RendererSearch(RendererSearchCallback),
 }
 
@@ -924,7 +927,7 @@ impl Service {
             views: HashMap::new(),
             resources: ResourceService::default(),
             next_publication: 1,
-            version: wry::webview_version().map_err(|error| error.to_string()),
+            version: surface::webview_version(),
             outgoing_sender,
             incoming_sender,
             pending_searches: HashMap::new(),
@@ -1013,47 +1016,32 @@ impl Service {
                 dependency_message(message),
             ));
         }
-        let parent = ParentWindow::new(params.parent)?;
+        let parent = ParentWindow::current(params.parent, params.frame)?;
         let resources = self.resources.clone();
         let renderer_events = self.outgoing_sender.clone();
         let renderer_callbacks = self.incoming_sender.clone();
         let view_id = params.view;
-        let builder = WebViewBuilder::new()
-            .with_custom_protocol(
-                APP_PROTOCOL.into(),
-                move |_webview_id, request| app_response(request),
-            )
-            .with_asynchronous_custom_protocol(
-                BOOK_PROTOCOL.into(),
-                move |_webview_id, request, responder| {
-                    resources.respond(request, responder);
-                },
-            );
-        #[cfg(target_os = "windows")]
-        let builder = builder.with_https_scheme(true);
-        let builder = builder.with_url(APP_URL);
-        let builder = builder
-            .with_navigation_handler(app_navigation_allowed)
-            .with_ipc_handler(move |request| {
-                if let Some(callback) =
-                    renderer_search_callback(view_id, &request)
-                {
-                    let _ = renderer_callbacks
-                        .send(Incoming::RendererSearch(callback));
-                } else if let Some(event) = renderer_event(view_id, &request) {
-                    let _ = renderer_events.send(Outgoing::Event(event));
-                }
-            })
-            .with_permission_handler(|_| PermissionResponse::Deny)
-            .with_new_window_req_handler(|_, _| NewWindowResponse::Deny)
-            .with_download_started_handler(|_, _| false);
         let surface_events = self.outgoing_sender.clone();
         let surface = NativeSurface::create(
-            builder,
             &parent,
             params.view,
             params.bounds,
             params.visible,
+            resources,
+            move |request| {
+                if let Some(callback) =
+                    renderer_search_callback(view_id, &request)
+                {
+                    if renderer_callbacks
+                        .send(Incoming::RendererSearch(callback))
+                        .is_ok()
+                    {
+                        let _ = renderer_events.send(Outgoing::Wake);
+                    }
+                } else if let Some(event) = renderer_event(view_id, &request) {
+                    let _ = renderer_events.send(Outgoing::Event(event));
+                }
+            },
             move |event| {
                 let _ = surface_events
                     .send(Outgoing::Event(surface_view_event(event)));
@@ -1080,6 +1068,16 @@ impl Service {
             .view_mut(params.view)?
             .surface
             .set_bounds(params.bounds)?;
+        Ok(json!({ "view": params.view, "bounds": bounds }))
+    }
+
+    fn set_parent(&mut self, params: Value) -> Result<Value, ServiceError> {
+        let params: ParentParams = Self::parse(params)?;
+        let parent = ParentWindow::current(params.parent, params.frame)?;
+        let bounds = self
+            .view_mut(params.view)?
+            .surface
+            .set_parent(parent, params.bounds)?;
         Ok(json!({ "view": params.view, "bounds": bounds }))
     }
 
@@ -1111,7 +1109,6 @@ impl Service {
         let script = publication_clear_selection_script(params.view);
         self.view(params.view)?
             .surface
-            .webview()
             .evaluate_script(&script)
             .map_err(|error| {
                 ServiceError::new("view-update-failed", error.to_string())
@@ -1130,12 +1127,9 @@ impl Service {
             ));
         }
         let script = publication_set_selection_script(params.view, &selection);
-        view.surface
-            .webview()
-            .evaluate_script(&script)
-            .map_err(|error| {
-                ServiceError::new("view-update-failed", error.to_string())
-            })?;
+        view.surface.evaluate_script(&script).map_err(|error| {
+            ServiceError::new("view-update-failed", error.to_string())
+        })?;
         Ok(json!({ "view": params.view, "selection": true }))
     }
 
@@ -1158,7 +1152,6 @@ impl Service {
         let script = publication_selection_text_script(&params);
         let sender = self.outgoing_sender.clone();
         view.surface
-            .webview()
             .evaluate_script_with_callback(&script, move |value| {
                 let response = renderer_selection_text_response(
                     id,
@@ -1170,6 +1163,32 @@ impl Service {
             })
             .map_err(|error| {
                 ServiceError::new("selection-text-failed", error.to_string())
+            })?;
+        Ok(())
+    }
+
+    fn current_selection(
+        &self,
+        id: u64,
+        params: Value,
+    ) -> Result<(), ServiceError> {
+        let params = Self::parse::<ViewParams>(params)?;
+        let view = self.view(params.view)?;
+        if view.publication.is_none() {
+            return Err(ServiceError::new(
+                "view-has-no-publication",
+                format!("view {} has no attached publication", params.view),
+            ));
+        }
+        let script = publication_current_selection_script(params.view);
+        let sender = self.outgoing_sender.clone();
+        view.surface
+            .evaluate_script_with_callback(&script, move |value| {
+                let response = renderer_current_selection_response(id, &value);
+                let _ = sender.send(Outgoing::Response(response));
+            })
+            .map_err(|error| {
+                ServiceError::new("current-selection-failed", error.to_string())
             })?;
         Ok(())
     }
@@ -1192,11 +1211,7 @@ impl Service {
         let view_id = params.view;
         let script = publication_search_script(id, &params);
         self.pending_searches.insert(id, params);
-        if let Err(error) = self
-            .view(view_id)?
-            .surface
-            .webview()
-            .evaluate_script(&script)
+        if let Err(error) = self.view(view_id)?.surface.evaluate_script(&script)
         {
             self.pending_searches.remove(&id);
             return Err(ServiceError::new("search-failed", error.to_string()));
@@ -1226,12 +1241,9 @@ impl Service {
             selection.as_ref(),
             params.reveal,
         );
-        view.surface
-            .webview()
-            .evaluate_script(&script)
-            .map_err(|error| {
-                ServiceError::new("view-update-failed", error.to_string())
-            })?;
+        view.surface.evaluate_script(&script).map_err(|error| {
+            ServiceError::new("view-update-failed", error.to_string())
+        })?;
         Ok(json!({
             "view": params.view,
             "selection": selection.is_some(),
@@ -1260,13 +1272,7 @@ impl Service {
             params.location.map(EpubLocator::validate).transpose()?;
         let style = params.style.map(EpubStyle::validate).transpose()?;
         let zoom = params.zoom.map(EpubZoom::validate).transpose()?;
-        let view = self.view(params.view)?;
-        if !view.surface.loaded() {
-            return Err(ServiceError::new(
-                "view-not-ready",
-                format!("view {} has not finished loading", params.view),
-            ));
-        }
+        self.view(params.view)?;
         let layout = self.resources.layout(params.publication)?;
         let (style, zoom) = view_layout_options(layout, style, zoom)?;
         let resource_root = self.resources.resource_root(params.publication)?;
@@ -1281,7 +1287,6 @@ impl Service {
         );
         self.view(params.view)?
             .surface
-            .webview()
             .evaluate_script(&script)
             .map_err(|error| {
                 ServiceError::new(
@@ -1311,12 +1316,9 @@ impl Service {
         }
         let script =
             publication_appearance_script(params.view, &params.appearance);
-        view.surface
-            .webview()
-            .evaluate_script(&script)
-            .map_err(|error| {
-                ServiceError::new("view-update-failed", error.to_string())
-            })?;
+        view.surface.evaluate_script(&script).map_err(|error| {
+            ServiceError::new("view-update-failed", error.to_string())
+        })?;
         Ok(json!({
             "view": params.view,
             "appearance": params.appearance,
@@ -1357,12 +1359,9 @@ impl Service {
             params.command,
             location.as_ref(),
         );
-        view.surface
-            .webview()
-            .evaluate_script(&script)
-            .map_err(|error| {
-                ServiceError::new("view-update-failed", error.to_string())
-            })?;
+        view.surface.evaluate_script(&script).map_err(|error| {
+            ServiceError::new("view-update-failed", error.to_string())
+        })?;
         Ok(json!({
             "view": params.view,
             "command": params.command,
@@ -1388,12 +1387,9 @@ impl Service {
             ));
         }
         let script = publication_style_script(params.view, &style);
-        view.surface
-            .webview()
-            .evaluate_script(&script)
-            .map_err(|error| {
-                ServiceError::new("view-update-failed", error.to_string())
-            })?;
+        view.surface.evaluate_script(&script).map_err(|error| {
+            ServiceError::new("view-update-failed", error.to_string())
+        })?;
         Ok(json!({
             "view": params.view,
             "style": style,
@@ -1419,12 +1415,9 @@ impl Service {
             ));
         }
         let script = publication_zoom_script(params.view, &zoom);
-        view.surface
-            .webview()
-            .evaluate_script(&script)
-            .map_err(|error| {
-                ServiceError::new("view-update-failed", error.to_string())
-            })?;
+        view.surface.evaluate_script(&script).map_err(|error| {
+            ServiceError::new("view-update-failed", error.to_string())
+        })?;
         Ok(json!({
             "view": params.view,
             "zoom": zoom,
@@ -1445,12 +1438,9 @@ impl Service {
         }
         let script =
             publication_scroll_bars_script(params.view, params.visible);
-        view.surface
-            .webview()
-            .evaluate_script(&script)
-            .map_err(|error| {
-                ServiceError::new("view-update-failed", error.to_string())
-            })?;
+        view.surface.evaluate_script(&script).map_err(|error| {
+            ServiceError::new("view-update-failed", error.to_string())
+        })?;
         Ok(json!({
             "view": params.view,
             "visible": params.visible,
@@ -1532,11 +1522,16 @@ impl Service {
         }
         if matches!(
             operation,
-            Operation::ViewSearch | Operation::ViewSelectionText
+            Operation::ViewSearch
+                | Operation::ViewCurrentSelection
+                | Operation::ViewSelectionText
         ) {
             let result = match operation {
                 Operation::ViewSearch => {
                     self.search(request.id, request.params)
+                }
+                Operation::ViewCurrentSelection => {
+                    self.current_selection(request.id, request.params)
                 }
                 Operation::ViewSelectionText => {
                     self.selection_text(request.id, request.params)
@@ -1571,6 +1566,7 @@ impl Service {
             Operation::ViewOpenPublication => {
                 self.open_view_publication(request.params)
             }
+            Operation::ViewParent => self.set_parent(request.params),
             Operation::ViewStyle => self.set_view_style(request.params),
             Operation::ViewZoom => self.set_view_zoom(request.params),
             Operation::ViewScrollBars => {
@@ -1583,6 +1579,7 @@ impl Service {
             Operation::ViewDestroy => self.destroy(request.params),
             Operation::Shutdown
             | Operation::ViewSearch
+            | Operation::ViewCurrentSelection
             | Operation::ViewSelectionText => {
                 unreachable!("handled protocol operation")
             }
@@ -1601,10 +1598,11 @@ fn unknown_view(id: u64) -> ServiceError {
 
 fn surface_view_event(surface: SurfaceEvent) -> ViewEvent {
     match surface {
-        SurfaceEvent::Accelerator { view, key } => ViewEvent::new(
+        SurfaceEvent::Accelerator { view, key, repeat } => ViewEvent::new(
             view,
             ViewEventPayload::Accelerator {
                 key: key.to_owned(),
+                repeat,
             },
         ),
         SurfaceEvent::FocusGained { view } => {
@@ -1671,98 +1669,96 @@ fn write_message(
     Ok(())
 }
 
-#[cfg(target_os = "windows")]
-fn pump_messages() {
-    let mut message = MSG::default();
-    while unsafe { PeekMessageW(&mut message, None, 0, 0, PM_REMOVE) }.as_bool()
-    {
-        unsafe {
-            let _ = TranslateMessage(&message);
-            DispatchMessageW(&message);
-        }
-    }
-}
-
-#[cfg(target_os = "macos")]
-fn pump_messages() {
-    surface::pump_messages();
-}
-
-fn write_outgoing(
-    receiver: &Receiver<Outgoing>,
-    output: &mut impl Write,
+fn write_outgoing_message(
+    mut output: impl Write,
+    message: &Outgoing,
 ) -> Result<(), Error> {
-    while let Ok(message) = receiver.try_recv() {
-        write_message(&mut *output, &message)?;
+    if matches!(message, Outgoing::Wake) {
+        output.write_all(b"\n")?;
+        output.flush()?;
+        return Ok(());
     }
-    Ok(())
+    write_message(output, message)
 }
 
-pub(super) fn serve() -> Result<(), Error> {
-    let (sender, receiver) = mpsc::channel();
-    let (outgoing_sender, outgoing_receiver) = mpsc::channel();
-    let service_sender = sender.clone();
-    thread::spawn(move || {
-        for line in io::stdin().lock().lines() {
-            let incoming = match line {
-                Ok(line) if line.trim().is_empty() => continue,
-                Ok(line) => match Request::decode(&line) {
-                    Ok(request) => Incoming::Request(request),
-                    Err(error) => Incoming::Invalid(error.to_string()),
-                },
-                Err(error) => Incoming::Invalid(error.to_string()),
-            };
-            if sender.send(incoming).is_err() {
-                break;
-            }
-        }
-    });
+pub struct EmbeddedService {
+    service: Service,
+    incoming_receiver: Receiver<Incoming>,
+    outgoing_sender: Sender<Outgoing>,
+}
 
-    let mut service = Service::new(outgoing_sender, service_sender);
-    let stdout = io::stdout();
-    let mut output = stdout.lock();
-    write_message(&mut output, &ready_message(&service.version))?;
-    loop {
-        pump_messages();
-        write_outgoing(&outgoing_receiver, &mut output)?;
-        let incoming = match receiver.recv_timeout(MESSAGE_PUMP_INTERVAL) {
-            Ok(incoming) => incoming,
-            Err(RecvTimeoutError::Timeout) => continue,
-            Err(RecvTimeoutError::Disconnected) => break,
-        };
-        let (response, control) = match incoming {
-            Incoming::Request(request) => service.handle(request),
-            Incoming::Invalid(message) => (
-                Some(Response::failure(None, "invalid-request", message)),
+impl EmbeddedService {
+    pub fn start(
+        mut output: impl Write + Send + 'static,
+    ) -> Result<Self, Error> {
+        let (incoming_sender, incoming_receiver) = mpsc::channel();
+        let (outgoing_sender, outgoing_receiver) = mpsc::channel();
+        let service = Service::new(outgoing_sender.clone(), incoming_sender);
+        let ready = ready_message(&service.version);
+        thread::Builder::new()
+            .name("yunge-reader-module-output".into())
+            .spawn(move || {
+                if write_message(&mut output, &ready).is_err() {
+                    return;
+                }
+                while let Ok(message) = outgoing_receiver.recv() {
+                    if write_outgoing_message(&mut output, &message).is_err() {
+                        break;
+                    }
+                }
+            })?;
+        Ok(Self {
+            service,
+            incoming_receiver,
+            outgoing_sender,
+        })
+    }
+
+    pub fn request(&mut self, line: &str) -> Result<(), Error> {
+        self.pump()?;
+        let (response, _control) = match Request::decode(line) {
+            Ok(request) => self.service.handle(request),
+            Err(error) => (
+                Some(Response::failure(None, "invalid-request", error)),
                 Control::Continue,
             ),
-            Incoming::RendererSearch(callback) => {
-                (service.complete_search(callback), Control::Continue)
-            }
         };
         if let Some(response) = response {
-            write_message(&mut output, &response)?;
+            self.outgoing_sender.send(Outgoing::Response(response))?;
         }
-        write_outgoing(&outgoing_receiver, &mut output)?;
-        if control == Control::Shutdown {
-            break;
-        }
+        Ok(())
     }
-    service.views.clear();
-    let _ = service.resources.clear();
-    pump_messages();
-    Ok(())
+
+    pub fn pump(&mut self) -> Result<(), Error> {
+        while let Ok(incoming) = self.incoming_receiver.try_recv() {
+            let response = match incoming {
+                Incoming::RendererSearch(callback) => {
+                    self.service.complete_search(callback)
+                }
+            };
+            if let Some(response) = response {
+                self.outgoing_sender.send(Outgoing::Response(response))?;
+            }
+        }
+        Ok(())
+    }
+}
+
+impl Drop for EmbeddedService {
+    fn drop(&mut self) {
+        self.service.views.clear();
+        let _ = self.service.resources.clear();
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use http::{Method, Request as HttpRequest};
     use std::fs::{self, File};
     use std::io::Write;
     use std::path::PathBuf;
-    use std::sync::Arc;
-    use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
-    use wry::http::{Method, Request as HttpRequest};
+    use std::sync::atomic::{AtomicU64, Ordering};
     use zip::write::SimpleFileOptions;
     use zip::{CompressionMethod, ZipWriter};
 
@@ -1923,12 +1919,16 @@ mod tests {
         let core =
             std::str::from_utf8(app_asset("yunge-reader-core.mjs").unwrap().1)
                 .unwrap();
-        assert!(adapter.contains("post('accelerator', { key })"));
+        assert!(
+            adapter
+                .contains("post('accelerator', { key, repeat: event.repeat })")
+        );
+        assert!(adapter.contains("post('shell-ready')"));
         assert!(core.contains("export const READER_CHARACTER_KEYS"));
         assert!(adapter.contains("checkedRendererAccelerators"));
         assert!(core.contains("event.code === 'Space'"));
         assert!(core.contains("event.code === 'KeyM'"));
-        assert!(adapter.contains("[\"'\", 'SPC', 'g', 'm'].includes(key)"));
+        assert!(!adapter.contains("[\"'\", 'SPC', 'g', 'm'].includes(key)"));
         assert!(adapter.contains("case 'previous-page':"));
         assert!(adapter.contains("case 'next-page':"));
         assert!(adapter.contains("case 'previous-line':"));
@@ -1972,12 +1972,33 @@ mod tests {
         assert!(adapter.contains("view.renderer.addEventListener('relocate'"));
         assert!(adapter.contains("pendingStyle"));
         assert!(adapter.contains("requestAnimationFrame("));
+        assert!(adapter.contains("LAYOUT_SETTLE_TIMEOUT_MS"));
+        assert!(adapter.contains("IMAGE_DECODE_TIMEOUT_MS"));
+        assert!(adapter.contains("settleWithin(image.decode()"));
+        let visible_text = adapter
+            .find("if (documentHasVisibleText(doc)) return true")
+            .unwrap();
+        let image_decode = adapter.find("settleWithin(image.decode()").unwrap();
+        assert!(visible_text < image_decode);
+        assert!(!adapter.contains(
+            "Promise.allSettled(images.map(image => image.decode()))"
+        ));
         assert!(adapter.contains("post('style-error'"));
         assert!(adapter.contains("post('zoom-changed', { scale })"));
         assert!(adapter.contains("installSelectionTracking"));
+        assert!(!adapter.contains("key === 'y'"));
+        assert!(
+            adapter
+                .contains("const liveSelection = selectionFromView(current)")
+        );
+        assert!(adapter.contains("return selectionFromView(current)"));
+        assert!(
+            !adapter.contains("sameSelection(current.selection, selection)")
+        );
+        assert!(adapter.contains("globalThis.yungeReader = Object.freeze({"));
+        assert!(adapter.contains("clearSelection, currentSelection, navigate"));
         assert!(adapter.contains(
-            "clearSelection, navigate, open, search, selectionText, \
-             setScrollBars"
+            "doc.addEventListener('mouseup', finishPointerSelection)"
         ));
         assert!(adapter.contains("selectedRange"));
         assert!(adapter.contains("Array.from(text)"));
@@ -1985,10 +2006,8 @@ mod tests {
         assert!(adapter.contains("search, selectionText"));
         assert!(adapter.contains("fromRangeEndpoints("));
         assert!(adapter.contains("searchResultRevision"));
-        assert!(
-            adapter
-                .contains("setSearchResult, setSelection, setStyle, setZoom")
-        );
+        assert!(adapter.contains("setSearchResult, setSelection, setStyle"));
+        assert!(adapter.contains("setZoom,"));
         let search =
             std::str::from_utf8(app_asset("foliate-js/search.js").unwrap().1)
                 .unwrap();
@@ -2048,6 +2067,23 @@ mod tests {
         assert!(
             paginator.contains("finally {\n            this.#locked = false")
         );
+    }
+
+    #[test]
+    fn macos_surface_is_only_an_embedded_emacs_child() {
+        let source = include_str!("webview/surface_macos.rs");
+        let direct = include_str!("webview/surface_macos/webview.rs");
+        assert!(!source.contains("NSPanel"));
+        assert!(!source.contains("NSRunningApplication"));
+        assert!(!source.contains("pump_messages"));
+        assert!(source.contains("parent.content.addSubview(&host.0)"));
+        assert!(direct.contains("WKWebView::initWithFrame_configuration"));
+        assert!(!direct.contains("keyDown:"));
+        assert!(!direct.contains("mouseDown:"));
+        assert!(!direct.contains("mouseUp:"));
+        assert!(!direct.contains("key_target"));
+        assert!(!direct.contains("activateIgnoringOtherApps"));
+        assert!(!direct.contains("NSApplicationActivationPolicy"));
     }
 
     #[test]
@@ -2125,7 +2161,10 @@ mod tests {
                 .unwrap()
                 .contains("script-src 'none'")
         );
-        assert_eq!(resource.body(), b"<html><body>Chapter</body></html>");
+        assert_eq!(
+            resource.body().as_ref(),
+            b"<html><body>Chapter</body></html>"
+        );
 
         let head = service.resources.response(
             HttpRequest::builder()
@@ -2250,6 +2289,18 @@ mod tests {
 
     #[test]
     fn renderer_ipc_accepts_only_owned_bounded_messages() {
+        let shell = HttpRequest::builder()
+            .uri(APP_BROWSER_URL)
+            .body(r#"{"protocol":1,"event":"shell-ready"}"#.into())
+            .unwrap();
+        assert!(renderer_shell_ready(&shell));
+        assert!(renderer_event(7, &shell).is_none());
+        let invalid_shell = HttpRequest::builder()
+            .uri("https://example.invalid/")
+            .body(shell.body().clone())
+            .unwrap();
+        assert!(!renderer_shell_ready(&invalid_shell));
+
         let ready = HttpRequest::builder()
             .uri(APP_BROWSER_URL)
             .body(
@@ -2473,6 +2524,7 @@ mod tests {
                 "protocol": 1,
                 "event": "accelerator",
                 "key": key,
+                "repeat": false,
             })
             .to_string();
             let accelerator =
@@ -2484,9 +2536,29 @@ mod tests {
                     "event": "accelerator",
                     "view": 8,
                     "key": key,
+                    "repeat": false,
                 })
             );
         }
+
+        let repeated = HttpRequest::builder()
+            .uri(APP_URL)
+            .body(
+                r#"{"protocol":1,"event":"accelerator",
+                    "key":"SPC","repeat":true}"#
+                    .into(),
+            )
+            .unwrap();
+        assert_eq!(
+            renderer_event_value(8, &repeated),
+            json!({
+                "kind": "event",
+                "event": "accelerator",
+                "view": 8,
+                "key": "SPC",
+                "repeat": true,
+            })
+        );
 
         for (event, expected) in [
             ("focus-gained", "focus-gained"),
@@ -2518,6 +2590,20 @@ mod tests {
             HttpRequest::builder()
                 .uri(APP_URL)
                 .body(r#"{"protocol":1,"event":"publication-ready"}"#.into())
+                .unwrap(),
+            HttpRequest::builder()
+                .uri(APP_URL)
+                .body(
+                    r#"{"protocol":1,"event":"accelerator","key":"j"}"#.into(),
+                )
+                .unwrap(),
+            HttpRequest::builder()
+                .uri(APP_URL)
+                .body(
+                    r#"{"protocol":1,"event":"accelerator",
+                        "key":"j","repeat":0}"#
+                        .into(),
+                )
                 .unwrap(),
             HttpRequest::builder()
                 .uri(APP_URL)
@@ -2854,6 +2940,12 @@ mod tests {
         assert!(set_selection.contains(r#""href":"OPS/chapter.xhtml""#));
         assert!(!set_selection.contains("eval"));
 
+        let current_selection = publication_current_selection_script(4);
+        assert_eq!(
+            current_selection,
+            r#"globalThis.yungeReader.currentSelection({"view":4});"#
+        );
+
         let selection_text =
             publication_selection_text_script(&ViewSelectionTextParams {
                 view: 4,
@@ -3103,6 +3195,31 @@ mod tests {
             }))
             .is_err()
         );
+    }
+
+    #[test]
+    fn renderer_current_selection_is_strictly_validated() {
+        let empty = renderer_current_selection_response(6, "null");
+        assert!(empty.ok);
+        assert!(empty.result.unwrap().is_null());
+
+        let response = renderer_current_selection_response(
+            7,
+            r#"{"href":"OPS/chapter.xhtml","start":"epubcfi(/6/4!/4/2/1:0)","end":"epubcfi(/6/4!/4/2/1:7)"}"#,
+        );
+        assert!(response.ok);
+        assert_eq!(response.result.unwrap()["href"], "OPS/chapter.xhtml");
+
+        for invalid in [
+            r#"{"href":"","start":"epubcfi(/6/4!)","end":"epubcfi(/6/4!)"}"#,
+            r#"{"href":"OPS/chapter.xhtml","start":"bad","end":"bad"}"#,
+            r#"{"href":"OPS/chapter.xhtml"}"#,
+            r#"false"#,
+        ] {
+            let response = renderer_current_selection_response(8, invalid);
+            assert!(!response.ok);
+            assert_eq!(response.error.unwrap().code, "invalid-renderer-result");
+        }
     }
 
     #[test]
@@ -3364,6 +3481,7 @@ mod tests {
             SurfaceEvent::Accelerator {
                 view: 4,
                 key: "<escape>",
+                repeat: false,
             },
         )))
         .unwrap();
@@ -3374,6 +3492,7 @@ mod tests {
                 "event": "accelerator",
                 "view": 4,
                 "key": "<escape>",
+                "repeat": false,
             })
         );
 
@@ -3679,16 +3798,5 @@ mod tests {
             oversized.validate().unwrap_err().code,
             "invalid-epub-outline"
         );
-    }
-
-    #[test]
-    fn resource_request_permits_are_bounded_and_released() {
-        let active = Arc::new(AtomicUsize::new(0));
-        let permits: Vec<_> = (0..MAX_RESOURCE_REQUESTS)
-            .map(|_| ResourcePermit::acquire(Arc::clone(&active)).unwrap())
-            .collect();
-        assert!(ResourcePermit::acquire(Arc::clone(&active)).is_none());
-        drop(permits);
-        assert!(ResourcePermit::acquire(active).is_some());
     }
 }

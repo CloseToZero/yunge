@@ -128,6 +128,7 @@ scrolling behavior."
     ("G" yunge-reader-epub-last-location "last location")
     ("J" yunge-reader-epub-next-page "next page")
     ("K" yunge-reader-epub-previous-page "previous page")
+    ("y" yunge-reader-epub-copy-selection "copy selection")
     ("gg" yunge-reader-epub-first-location "first location"))
   "Normal-state bindings for EPUB views.")
 
@@ -145,6 +146,7 @@ scrolling behavior."
   "K" #'yunge-reader-epub-previous-page
   "<next>" #'yunge-reader-epub-next-screen
   "<prior>" #'yunge-reader-epub-previous-screen
+  "y" #'yunge-reader-epub-copy-selection
   "g g" #'yunge-reader-epub-first-location)
 
 (define-minor-mode yunge-reader-epub-view-mode
@@ -409,6 +411,48 @@ USER is non-nil when direct reader movement produced the location."
              yunge-reader-webview--buffer-view)
     (yunge-reader-webview--clear-view-selection
      yunge-reader-webview--buffer-view)))
+
+(defun yunge-reader-epub--copy-current-selection-complete
+    (buffer view generation selection error-data)
+  "Continue an EPUB copy after reading VIEW's current SELECTION."
+  (when (buffer-live-p buffer)
+    (with-current-buffer buffer
+      (when (= generation yunge-reader--copy-generation)
+        (setq yunge-reader--copy-pending nil)
+        (cond
+         ((not (eq view yunge-reader-webview--buffer-view))
+          (message "The EPUB view changed before its selection was read"))
+         (error-data
+          (display-warning
+           'yunge-reader
+           (format "Could not read EPUB selection: %s"
+                   (error-message-string error-data))
+           :warning))
+         (t
+          (yunge-reader-webview--set-view-selection view selection)
+          (if selection
+              (yunge-reader-copy-selection)
+            (message "There is no document selection"))))))))
+
+(defun yunge-reader-epub-copy-selection ()
+  "Read and copy the current native EPUB text selection."
+  (interactive)
+  (if yunge-reader--copy-pending
+      (message "Document selection is still being copied")
+    (let ((view (yunge-reader-webview--current-ready-view))
+          (buffer (current-buffer))
+          (generation (cl-incf yunge-reader--copy-generation)))
+      (setq yunge-reader--copy-pending t)
+      (message "Reading document selection...")
+      (condition-case error-data
+          (yunge-reader-webview--request-current-selection
+           view
+           (apply-partially
+            #'yunge-reader-epub--copy-current-selection-complete
+            buffer view generation))
+        (error
+         (setq yunge-reader--copy-pending nil)
+         (signal (car error-data) (cdr error-data)))))))
 
 (defun yunge-reader-epub--search-result-changed ()
   "Synchronize the current Reader search result with the EPUB surface."

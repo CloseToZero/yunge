@@ -18,9 +18,13 @@
   'yunge-reader-transport-ready
   "Process property recording a completed transport handshake.")
 
+(defconst yunge-reader-transport--send-function-property
+  'yunge-reader-transport-send-function
+  "Process property containing an alternate line sender.")
+
 (cl-defstruct (yunge-reader-transport--session
                (:constructor yunge-reader-transport--make-session))
-  "Request state and protocol adapters for one helper process."
+  "Request state and protocol adapters for one native service."
   label
   validate-ready
   ready-function
@@ -31,11 +35,16 @@
   outbound
   (next-id 0))
 
-(defun yunge-reader-transport--bind (session process)
-  "Bind fresh transport SESSION to PROCESS."
+(defun yunge-reader-transport--bind
+    (session process &optional send-function)
+  "Bind fresh transport SESSION to PROCESS.
+SEND-FUNCTION, when non-nil, receives PROCESS and one complete line instead
+of writing that line to the process input pipe."
   (process-put process yunge-reader-transport--session-property session)
   (process-put process yunge-reader-transport--output-property "")
   (process-put process yunge-reader-transport--ready-property nil)
+  (process-put process yunge-reader-transport--send-function-property
+               send-function)
   process)
 
 (defun yunge-reader-transport--bound-p (session process)
@@ -56,8 +65,12 @@
   (process-put process yunge-reader-transport--ready-property t))
 
 (defun yunge-reader-transport--send-line (process line)
-  "Send one protocol LINE to helper PROCESS."
-  (process-send-string process (concat line "\n")))
+  "Send one protocol LINE through transport PROCESS."
+  (if-let* ((function
+             (process-get
+              process yunge-reader-transport--send-function-property)))
+      (funcall function process line)
+    (process-send-string process (concat line "\n"))))
 
 (defun yunge-reader-transport--flush (session process)
   "Send SESSION's queued requests to ready PROCESS in FIFO order."

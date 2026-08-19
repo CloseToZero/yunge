@@ -1,8 +1,9 @@
 #+title: Yunge Reader native protocol
 
-The helper is a child process owned by Emacs.  Emacs and the helper exchange
-UTF-8 newline-delimited JSON over stdin and stdout.  Standard output is
-reserved for protocol messages; diagnostics use standard error.
+The PDF helper is a child process owned by Emacs and exchanges UTF-8
+newline-delimited JSON over stdin and stdout.  The EPUB service uses the same
+request and event protocol through an Emacs dynamic-module pipe.  EPUB native
+views exist only in the Emacs process; the executable has no WebView mode.
 
 * Environment
 
@@ -79,10 +80,10 @@ incomplete cleanup.
 
 * Windows and macOS WebView service
 
-Starting the same executable with =--webview= selects a separate NDJSON
-service.  It does not load PDFium or share document handles with the ordinary
-service.  On Windows its handshake reports the installed WebView2 Runtime
-without installing or downloading it:
+Loading =yunge-reader-module= starts an in-process NDJSON service.  It does not
+load PDFium or share document handles with the ordinary helper.  On Windows
+its handshake reports the installed WebView2 Runtime without installing or
+downloading it:
 
 #+begin_src json
 {"available":true,"build-id":"HASH",
@@ -91,8 +92,9 @@ without installing or downloading it:
                  "view-clear-selection","view-create",
                  "view-destroy","view-events","view-focus",
                  "view-focus-parent","view-info","view-navigate",
-                 "view-open-publication","view-search",
+                 "view-open-publication","view-parent","view-search",
                  "view-search-result",
+                 "view-current-selection",
                  "view-selection-text",
                  "view-set-selection",
                  "view-scroll-bars","view-status","view-style",
@@ -109,7 +111,7 @@ On macOS the equivalent fields are ="platform":"macos"=,
 macOS and needs no separate runtime installation.
 
 When the runtime is missing, =available= is false and =message= tells the user
-which environment to install.  The process remains responsive so
+which environment to install.  The service remains responsive so
 =view-info= and =shutdown= still work.
 
 =publication-open= accepts an absolute local EPUB path.  Rust validates and
@@ -133,12 +135,14 @@ the publication before a renderer view is created.
            "resource-root":"yunge-reader-book://TOKEN/",...}}
 #+end_src
 
-Every child WebView registers =yunge-reader-book= as an asynchronous HTTPS
-custom protocol.  A request below =resource-root= reads only a normalized ZIP
+Every child WebView registers =yunge-reader-book= as a private HTTPS-equivalent
+custom protocol.  Both direct backends resolve resources in their native
+request callbacks.  In particular, replying to WKURLSchemeTask from a worker
+can defer the first chapter until WebKit's system timeout.  A request below
+=resource-root= reads only a normalized ZIP
 entry belonging to that random 128-bit publication token.  Closing the
-publication invalidates the token.  At most eight resource requests may be
-active, each expanded response is limited to 128 MiB, and ZIP access remains
-serialized per process.
+publication invalidates the token.  Each expanded response is limited to 128
+MiB, and ZIP access remains serialized per process.
 
 Only =GET= and =HEAD= are accepted.  Query strings, absolute paths, encoded
 separators, dot components, missing entries, resources absent from the OPF
@@ -153,6 +157,12 @@ The built-in child page opens the validated publication through its private
 resource origin.  Its bundled, script-disabled Foliate renderer provides CSS
 layout, native text selection, links, relocation events, and semantic screen
 navigation without exposing the local EPUB path.
+
+The module constructs the platform WebView directly in the Emacs process.  On
+macOS a retained host =NSView= and WKWebView are inserted below the owning
+frame's content view; on Windows a WebView2 controller remains a child of the
+owning frame HWND.  There is no helper application or companion panel to
+activate, raise, hide, or align.
 
 =view-open-publication= attaches an open publication to a child view.  It
 accepts an optional stable locator, a required appearance, and a required
@@ -316,30 +326,42 @@ independently.  WebView2 new windows remain denied; only Emacs may pass an
 allowlisted scheme to =browse-url=.
 
 =view-create= accepts a logical =view= ID, a live Emacs frame HWND on Windows
-or Emacs process ID on macOS as =parent=, a platform-coordinate =bounds=
-object, and optional =visible=.  Windows bounds are frame-relative physical
-pixels; macOS bounds are signed absolute screen points.
+or opaque Emacs frame ID on macOS as =parent=, an optional outer =frame=
+descriptor used to resolve the macOS =NSWindow=, a frame-relative =bounds=
+object, and optional =visible=.
 
 #+begin_src json
 {"id":1,"op":"view-create",
  "params":{"view":1,"parent":1902902,
-           "bounds":{"x":968,"y":0,"width":944,"height":988},
+           "frame":{"x":120,"y":80,"width":920,"height":700},
+           "bounds":{"x":10,"y":16,"width":900,"height":630},
            "visible":true}}
 #+end_src
 
 =view-bounds= moves or resizes one child, =view-visible= changes its
 visibility, =view-focus= gives it native focus, and =view-focus-parent= gives
-focus back to its parent.  =view-clear-selection= asks the trusted renderer to
-remove the active publication DOM selection, and =view-destroy= removes the
-child.  =view-status= reports whether the built-in page finished loading,
-together with the last accepted bounds and visibility.
+focus back to its parent.  =view-parent= reparents the same loaded child to a
+different Emacs frame and accepts the new parent, frame descriptor, and body
+bounds.  It does not reopen the publication.  =view-clear-selection= asks the
+trusted renderer to remove the active publication DOM selection, and
+=view-destroy= removes the child.  =view-status= reports whether the renderer
+shell announced that its API is ready, together with the last accepted bounds
+and visibility.  Both native backends hold early scripts until that explicit
+announcement rather than polling WebKit or relying on page-load timing.
 
-The helper emits =focus-gained= and =focus-lost= from WebView2's controller
-events.  Emacs selects the surface's owning window on entry and requests
-=view-focus-parent= when another Emacs window becomes selected.
-=SPC=, =M-m=, and the first =g=, =m=, or ='= also return focus before Emacs
-queues the normalized key, so the native child does not need to reproduce
-Emacs prefix-map state.
+The service emits =focus-gained= and =focus-lost= from WebView2's controller
+or the trusted renderer.  Emacs selects the surface's owning window on entry
+and requests =view-focus-parent= when another Emacs window becomes selected.
+=C-d=, =C-g=, and =C-u= are routed by WebView2's accelerator callback on
+Windows.  On macOS the trusted renderer relays the same bounded reader-key
+vocabulary through the common accelerator protocol.  The standalone protocol
+fallback keeps a bounded control-key route because it has no in-process Emacs
+view.
+The platform layer reports only a normalized key and its native repeat state.
+Emacs owns prefix-map policy: =SPC=, =M-m=, and the first =g=, =m=, or ='=
+return focus before Emacs queues the key, while their repeated keydown events
+are ignored.  JavaScript and the native child do not reproduce Emacs command
+or prefix-map state.
 
 Chromium paints EPUB text selection directly inside the current Foliate spine;
 Yunge does not build a second highlight layer.  Once pointer or keyboard
@@ -374,6 +396,19 @@ pending programmatic range instead of allowing it to overwrite newer input:
                         "start":"epubcfi(/6/4!/4/2/1:0)",
                         "end":"epubcfi(/6/4!/4/2/1:7)"}}}
 {"id":4,"ok":true,"result":{"view":1,"selection":true}}
+#+end_src
+
+=view-current-selection= snapshots the live DOM selection rather than relying
+on a preceding browser event.  It returns either one validated same-spine
+range or null.  The EPUB =y= command uses this asynchronous operation first,
+then asks =view-selection-text= to copy that exact range.
+
+#+begin_src json
+{"id":4,"op":"view-current-selection","params":{"view":1}}
+{"id":4,"ok":true,
+ "result":{"href":"OPS/chapter.xhtml",
+           "start":"epubcfi(/6/4!/4/2/1:0)",
+           "end":"epubcfi(/6/4!/4/2/1:7)"}}
 #+end_src
 
 =view-selection-text= resolves only the exact selection still owned by the
@@ -465,10 +500,10 @@ from the new stable reading location.  A dismissal cancels only the delayed
 reveal and hides transient paint, retaining the current search run.
 
 Emacs maps the same href and CFI endpoints into Reader's logical selection.
-Focused =y= is a normalized renderer key event that reaches the owning
-buffer's active keymaps; Reader then drives these bounded batches and updates
-the kill ring only after the complete selection succeeds.  Native =C-c= is
-not intercepted and remains available to WebView2.
+On both native backends, focused =y= is a normalized renderer key event that
+reaches the owning buffer's active keymaps.  Reader then drives these bounded
+batches and updates the kill ring only after the complete selection succeeds.
+Native =C-c= is not intercepted and remains available to WebView2.
 
 =view-navigate= accepts =previous-page=, =next-page=, =previous-line=,
 =next-line=, =previous-screen=, =next-screen=, =first=, =last=, or =go-to=.
@@ -506,52 +541,52 @@ renderer lock for later navigation.
 
 =<escape>=, =C-g=, Control reader keys, and non-character reader keys are
 captured by the native WebView2 accelerator event on Windows.  The trusted
-renderer relays the complete portable vocabulary on WKWebView and relays
-reader character keys on both engines because WebView2 does not classify them
-as accelerators.  Both paths
-write unsolicited events without request IDs:
+renderer relays reader character keys on WebView2 because it does not classify
+them as accelerators, and relays the complete bounded reader-key vocabulary on
+macOS.  Protocol routes write unsolicited events without request IDs:
 
 #+begin_src json
-{"kind":"event","event":"accelerator","key":"<escape>","view":1}
-{"kind":"event","event":"accelerator","key":"C-g","view":1}
-{"kind":"event","event":"accelerator","key":"C-d","view":1}
-{"kind":"event","event":"accelerator","key":"j","view":1}
-{"kind":"event","event":"accelerator","key":"J","view":1}
-{"kind":"event","event":"accelerator","key":"+","view":1}
-{"kind":"event","event":"accelerator","key":"y","view":1}
-{"kind":"event","event":"accelerator","key":"m","view":1}
-{"kind":"event","event":"accelerator","key":"'","view":1}
-{"kind":"event","event":"accelerator","key":"SPC","view":1}
-{"kind":"event","event":"accelerator","key":"M-m","view":1}
+{"kind":"event","event":"accelerator","key":"<escape>","repeat":false,"view":1}
+{"kind":"event","event":"accelerator","key":"C-g","repeat":false,"view":1}
+{"kind":"event","event":"accelerator","key":"C-d","repeat":false,"view":1}
+{"kind":"event","event":"accelerator","key":"j","repeat":false,"view":1}
+{"kind":"event","event":"accelerator","key":"J","repeat":false,"view":1}
+{"kind":"event","event":"accelerator","key":"+","repeat":false,"view":1}
+{"kind":"event","event":"accelerator","key":"y","repeat":false,"view":1}
+{"kind":"event","event":"accelerator","key":"m","repeat":false,"view":1}
+{"kind":"event","event":"accelerator","key":"'","repeat":false,"view":1}
+{"kind":"event","event":"accelerator","key":"SPC","repeat":false,"view":1}
+{"kind":"event","event":"accelerator","key":"M-m","repeat":false,"view":1}
 {"kind":"event","event":"focus-gained","view":1}
 {"kind":"event","event":"focus-lost","view":1}
 #+end_src
 
-The helper accepts only =j=, =k=, =J=, =K=, =g=, =m=, ='=, =+=, =-=, ===,
+The service accepts only =j=, =k=, =J=, =K=, =g=, =m=, ='=, =+=, =-=, ===,
 =y=, =SPC=, =M-m=, =C-d=, =C-u=, =C-g=, =<escape>=, =<next>=, and =<prior>=.
-It never interprets them as commands.  Emacs resolves reading keys through the
-owning EPUB buffer's active maps.  Leader and Reader prefix keys return focus
-and re-enter Emacs's input loop; after =<escape>= or =C-g=, the child also
-returns focus to its owning Emacs window.
+It never interprets them as commands.  Emacs resolves reading keys and repeat
+policy through the owning EPUB buffer's active maps.  Leader and Reader prefix
+keys return focus and re-enter Emacs's input loop; after =<escape>= or =C-g=,
+the child also returns focus to its owning Emacs window.
 
-The ready handshake carries that exact normalized accelerator list.  Rust also
-passes the renderer-owned subset to JavaScript when opening a publication.
-Lisp, Rust, and JavaScript keep independent allowlists and reject contract
-drift before routing a key.
+The ready handshake carries that exact normalized accelerator list for
+WebView2 and standalone protocol routing.  Rust also passes the renderer-owned
+subset to JavaScript when opening a publication.  Lisp, Rust, and JavaScript
+keep independent allowlists and reject contract drift before routing a key.
 
 View IDs are independent, so multiple Reader views do not share layout or
 scroll state.  Windows positions are nonnegative frame-relative pixels;
-macOS positions are signed absolute screen coordinates.  Dimensions must be
+macOS permits signed frame-relative coordinates for transient clipped
+layouts.  Dimensions must be
 positive and at most 32,768 pixels.  Duplicate views, unknown views, invalid
-HWNDs or parent application PIDs, unknown parameters, and unavailable runtimes
+HWNDs or ambiguous macOS frames, unknown parameters, and unavailable runtimes
 return stable protocol errors.
 
-The helper pumps Win32 or AppKit events on its main thread while a background
-thread reads stdin.  =shutdown= and EOF drop every native view and publication
-before exit.  Windows owns a cross-process child window.  AppKit does not allow
-cross-process =NSView= parenting, so macOS owns a borderless nonactivating
-companion panel and Emacs sends absolute bounds on window and frame changes.
-WebKitGTK remains future work.
+The dynamic module executes view operations on Emacs's UI thread.  Asynchronous
+renderer callbacks wake its pipe, and that filter pumps completed protocol
+work without calling Lisp from a WebKit or WebView2 callback thread.
+=shutdown= drops every native view and publication.  Both platforms retain
+real in-process children and reparent the native NSView or HWND directly when
+an active presentation crosses frames.  WebKitGTK remains future work.
 
 The WebView navigation policy admits the trusted renderer page and its
 renderer-owned =blob:= chapter documents.  WKWebView reports those blob iframe
@@ -778,12 +813,12 @@ exact retained CFI.  It treats Reader warnings as failures.  The same pass
 searches one shared beacon from chapter one into chapter two, turns that result
 into a real DOM selection, copies its text through Reader, and verifies the
 kill ring.  It then loads the exact three-entry publication outline and follows
-its last destination.  Finally, a second native surface opens at the same
-chapter, moves independently to chapter one, and leaves the primary surface
-unchanged:
+its last destination.  Finally, it reparents the same loaded surface to a
+second Emacs frame, verifies that its native ID and chapter-three locator are
+unchanged, and navigates it back to chapter one:
 
 #+begin_src shell
-emacs -Q --load script/yunge-reader-reflow-epub-smoke.el
+emacs -Q --load "$PWD/script/yunge-reader-reflow-epub-smoke.el"
 #+end_src
 
 The fixed and reflow fixture examples share one deterministic EPUB ZIP and
@@ -817,13 +852,14 @@ The =rtl= variant changes spine progression and document direction.  The
 vertical writing without depending on a copyrighted book.
 
 In a graphical Emacs with a supported native backend, the isolated smoke
-launcher builds the release helper, generates all three variants under a
-system temporary directory, and opens each through ordinary Reader file
-registration.  It resizes the live native surface in fit-width, fit-page, and
-manual modes, stops the helper between variants, and removes the fixtures:
+launcher builds the release helper and module, generates all three variants
+under a system temporary directory, and opens each through ordinary Reader
+file registration.  It resizes the live native surface in fit-width, fit-page,
+and manual modes, restarts the module service between variants, and removes
+the fixtures:
 
 #+begin_src shell
-emacs -Q --load script/yunge-reader-fixed-epub-smoke.el
+emacs -Q --load "$PWD/script/yunge-reader-fixed-epub-smoke.el"
 #+end_src
 
 * Graphical PDF smoke
@@ -838,5 +874,5 @@ unmodified and kill without a save query, then removes its fixture and render
 cache:
 
 #+begin_src shell
-emacs -Q --load script/yunge-reader-pdf-smoke.el
+emacs -Q --load "$PWD/script/yunge-reader-pdf-smoke.el"
 #+end_src

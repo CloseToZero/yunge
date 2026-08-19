@@ -32,9 +32,8 @@ export const readerKey = event => {
     }
     if (!event.shiftKey && !event.altKey && !event.metaKey
         && event.ctrlKey) {
-        const key = event.key.toLowerCase()
-        if (['d', 'g', 'u'].includes(key)) return `C-${key}`
-        return null
+        const key = `C-${event.key.toLowerCase()}`
+        return READER_CHARACTER_KEYS.includes(key) ? key : null
     }
     if (!event.shiftKey && !event.ctrlKey && !event.metaKey
         && event.altKey) {

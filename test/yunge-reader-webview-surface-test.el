@@ -24,28 +24,40 @@
                (lambda (_frame _parameter) "0x2a")))
       (should (= (yunge-reader-webview--frame-handle 'frame) 42)))))
 
-(ert-deftest yunge-reader-webview-uses-emacs-pid-as-macos-parent ()
+(ert-deftest yunge-reader-webview-uses-frame-id-as-macos-parent ()
   (let ((system-type 'darwin))
-    (cl-letf (((symbol-function 'emacs-pid) (lambda () 4321)))
+    (cl-letf (((symbol-function 'frame-parameter)
+               (lambda (_frame parameter)
+                 (should (eq parameter 'window-id))
+                 "4321")))
       (should (= (yunge-reader-webview--frame-handle 'frame) 4321)))))
 
-(ert-deftest yunge-reader-webview-uses-absolute-macos-window-bounds ()
+(ert-deftest yunge-reader-webview-uses-relative-macos-window-bounds ()
   (let ((system-type 'darwin))
     (cl-letf (((symbol-function 'window-body-pixel-edges)
-               (lambda (_window) '(10 20 210 320)))
-              ((symbol-function 'window-frame)
-               (lambda (_window) 'frame))
-              ((symbol-function 'frame-edges)
-               (lambda (_frame edge-type)
-                 (should (eq edge-type 'native-edges))
-                 '(300 400 900 1000))))
+               (lambda (_window) '(10 20 210 320))))
       (should
        (equal (yunge-reader-webview--window-bounds 'window)
-              '((x . 310) (y . 420) (width . 200) (height . 300)))))))
+              '((x . 10) (y . 20) (width . 200) (height . 300)))))))
 
-(ert-deftest yunge-reader-webview-creates-macos-surfaces-hidden-when-inactive ()
+(ert-deftest yunge-reader-webview-describes-the-parent-frame ()
+  (cl-letf (((symbol-function 'frame-position)
+             (lambda (_frame) '(30 40)))
+            ((symbol-function 'frame-pixel-width)
+             (lambda (_frame) 900))
+            ((symbol-function 'frame-pixel-height)
+             (lambda (_frame) 700)))
+    (should
+     (equal (yunge-reader-webview--frame-bounds 'frame)
+            '((x . 30) (y . 40) (width . 900) (height . 700))))))
+
+(ert-deftest yunge-reader-webview-omits-an-unplaced-parent-frame ()
+  (cl-letf (((symbol-function 'frame-position)
+             (lambda (_frame) '(nil nil))))
+    (should-not (yunge-reader-webview--frame-bounds 'frame))))
+
+(ert-deftest yunge-reader-webview-creates-macos-surfaces-visible-in-frame ()
   (let* ((system-type 'darwin)
-         (yunge-reader-webview--macos-active-p nil)
          (surface
           (yunge-reader-webview--make-surface
            :id 7
@@ -58,12 +70,66 @@
                (lambda (_window) 'frame))
               ((symbol-function 'yunge-reader-webview--frame-handle)
                (lambda (_frame) 1234))
+              ((symbol-function 'yunge-reader-webview--frame-bounds)
+               (lambda (_frame)
+                 '((x . 30) (y . 40) (width . 900) (height . 700))))
               ((symbol-function 'yunge-reader-webview--request)
                (lambda (operation parameters complete)
                  (setq request (list operation parameters complete)))))
       (yunge-reader-webview--request-create view))
     (should (equal (car request) "view-create"))
-    (should (eq (alist-get 'visible (cadr request)) :false))))
+    (should
+     (equal (alist-get 'frame (cadr request))
+            '((x . 30) (y . 40) (width . 900) (height . 700))))
+    (should (eq (alist-get 'visible (cadr request)) t))))
+
+(ert-deftest yunge-reader-webview-reparents-a-created-surface ()
+  (let* ((surface
+          (yunge-reader-webview--make-surface
+           :id 7
+           :state 'ready
+           :window 'old-window
+           :bounds '((x . 0) (y . 0) (width . 100) (height . 100))))
+         (view (yunge-reader-webview--make-view :surface surface))
+         request)
+    (cl-letf (((symbol-function 'window-frame)
+               (lambda (_window) 'frame))
+              ((symbol-function 'yunge-reader-webview--window-bounds)
+               (lambda (_window)
+                 '((x . 10) (y . 20) (width . 300) (height . 400))))
+              ((symbol-function 'yunge-reader-webview--frame-handle)
+               (lambda (_frame) 1234))
+              ((symbol-function 'yunge-reader-webview--frame-bounds)
+               (lambda (_frame)
+                 '((x . 30) (y . 40) (width . 900) (height . 700))))
+              ((symbol-function 'yunge-reader-webview--request)
+               (lambda (operation parameters complete)
+                 (setq request (list operation parameters complete)))))
+      (yunge-reader-webview--set-surface-parent view 'new-window))
+    (should (equal (car request) "view-parent"))
+    (should (= (alist-get 'parent (cadr request)) 1234))
+    (should
+     (equal (alist-get 'bounds (cadr request))
+            '((x . 10) (y . 20) (width . 300) (height . 400))))
+    (should (eq (yunge-reader-webview--surface-window surface)
+                'new-window))
+    (should (= (yunge-reader-webview--surface-id surface) 7))))
+
+(ert-deftest yunge-reader-webview-bounds-renderer-open-times-out ()
+  (let* ((surface
+          (yunge-reader-webview--make-surface
+           :id 7 :state 'opening))
+         (view
+          (yunge-reader-webview--make-view
+           :surface surface :buffer (current-buffer)))
+         warning)
+    (cl-letf (((symbol-function
+                'yunge-reader-webview--set-buffer-message)
+               (lambda (_view message) (setq warning message)))
+              ((symbol-function 'display-warning) #'ignore))
+      (yunge-reader-webview--open-watchdog view))
+    (should (eq (yunge-reader-webview--surface-state surface) 'failed))
+    (should (equal warning "Timed out while opening the EPUB renderer"))))
 
 (ert-deftest yunge-reader-webview-coalesces-window-resizes ()
   (let* ((view

@@ -1,29 +1,20 @@
+// SPDX-FileCopyrightText: 2020-2024 Tauri Programme within The Commons Conservancy
 // SPDX-FileCopyrightText: 2026 Chen Zhexuan
 // SPDX-License-Identifier: MIT
 
+use http::Request as HttpRequest;
 use objc2::rc::Retained;
 use objc2::{MainThreadMarker, MainThreadOnly};
-use objc2_app_kit::{
-    NSApplication, NSApplicationActivationOptions,
-    NSApplicationActivationPolicy, NSBackingStoreType, NSEventMask, NSPanel,
-    NSRunningApplication, NSScreen, NSView, NSWindowCollectionBehavior,
-    NSWindowStyleMask,
-};
-use objc2_foundation::{NSDate, NSDefaultRunLoopMode, NSPoint, NSRect, NSSize};
+use objc2_app_kit::{NSApplication, NSResponder, NSScreen, NSView, NSWindow};
+use objc2_foundation::{NSPoint, NSRect, NSSize};
 use serde::{Deserialize, Serialize};
-use std::ffi::c_void;
-use std::panic::{AssertUnwindSafe, catch_unwind};
-use std::ptr::NonNull;
-use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
-use wry::dpi::{LogicalPosition, LogicalSize};
-use wry::raw_window_handle::{
-    AppKitWindowHandle, HandleError, HasWindowHandle, RawWindowHandle,
-    WindowHandle,
-};
-use wry::{PageLoadEvent, Rect, WebView, WebViewBuilder};
 
 use super::protocol::ServiceError;
+use super::resources::ResourceService;
+
+#[path = "surface_macos/webview.rs"]
+mod webview;
+use webview::NativeWebView;
 
 const MAX_VIEW_EXTENT: u32 = 32_768;
 
@@ -36,18 +27,21 @@ pub(super) struct Bounds {
     pub(super) height: u32,
 }
 
+#[derive(Clone)]
 pub(super) struct ParentWindow {
-    application: Retained<NSRunningApplication>,
+    window: Retained<NSWindow>,
+    content: Retained<NSView>,
+    responder: Option<Retained<NSResponder>>,
 }
 
+#[derive(Clone)]
 struct HostView(Retained<NSView>);
 
 pub(super) struct NativeSurface {
-    // Keep the webview before its host panel so it is released first.
-    webview: WebView,
-    panel: Retained<NSPanel>,
+    // Keep the webview before its native host so it is released first.
+    webview: NativeWebView,
+    host: HostView,
     parent: ParentWindow,
-    loaded: Arc<AtomicBool>,
     bounds: Bounds,
     visible: bool,
 }
@@ -55,9 +49,17 @@ pub(super) struct NativeSurface {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[allow(dead_code)]
 pub(super) enum SurfaceEvent {
-    Accelerator { view: u64, key: &'static str },
-    FocusGained { view: u64 },
-    FocusLost { view: u64 },
+    Accelerator {
+        view: u64,
+        key: &'static str,
+        repeat: bool,
+    },
+    FocusGained {
+        view: u64,
+    },
+    FocusLost {
+        view: u64,
+    },
 }
 
 impl Bounds {
@@ -87,82 +89,119 @@ impl Bounds {
         Ok(self)
     }
 
-    fn webview_rect(self) -> Rect {
-        Rect {
-            position: LogicalPosition::new(0, 0).into(),
-            size: LogicalSize::new(self.width, self.height).into(),
-        }
+    fn webview_rect(self) -> NSRect {
+        NSRect::new(
+            NSPoint::new(0.0, 0.0),
+            NSSize::new(f64::from(self.width), f64::from(self.height)),
+        )
     }
 
-    fn panel_rect(self, mtm: MainThreadMarker) -> Result<NSRect, ServiceError> {
-        let primary =
-            NSScreen::screens(mtm).firstObject().ok_or_else(|| {
-                ServiceError::new(
-                    "view-create-failed",
-                    "macOS did not report a primary screen",
-                )
-            })?;
-        let primary_frame = primary.frame();
-        let primary_top = primary_frame.origin.y + primary_frame.size.height;
-        Ok(NSRect::new(
+    fn embedded_rect(self, content: &NSView) -> NSRect {
+        let content_height = content.bounds().size.height;
+        NSRect::new(
             NSPoint::new(
                 f64::from(self.x),
-                primary_top - f64::from(self.y) - f64::from(self.height),
+                content_height - f64::from(self.y) - f64::from(self.height),
             ),
             NSSize::new(f64::from(self.width), f64::from(self.height)),
-        ))
+        )
     }
 }
 
 impl ParentWindow {
-    pub(super) fn new(value: u64) -> Result<Self, ServiceError> {
-        let pid = i32::try_from(value).map_err(|_| {
+    pub(super) fn current(
+        _value: u64,
+        frame: Option<Bounds>,
+    ) -> Result<Self, ServiceError> {
+        let mtm = MainThreadMarker::new().ok_or_else(|| {
             ServiceError::new(
-                "invalid-parent-window",
-                "parent application PID does not fit this process",
+                "view-create-failed",
+                "WKWebView surfaces must be created on the main thread",
             )
         })?;
-        if pid <= 0 {
-            return Err(ServiceError::new(
+        let application = NSApplication::sharedApplication(mtm);
+        let windows = application.windows();
+        let candidates: Vec<_> = windows
+            .iter()
+            .filter(|window| {
+                window.canBecomeMainWindow() && window.contentView().is_some()
+            })
+            .collect();
+        let matched = frame.and_then(|expected| {
+            let primary = NSScreen::screens(mtm).firstObject()?;
+            let primary_frame = primary.frame();
+            let primary_top =
+                primary_frame.origin.y + primary_frame.size.height;
+            let mut matching = candidates
+                .iter()
+                .filter(|window| frame_matches(window, expected, primary_top));
+            let candidate = matching.next()?.clone();
+            matching.next().is_none().then_some(candidate)
+        });
+        let window = matched
+            .or_else(|| {
+                (frame.is_none()).then(|| application.keyWindow()).flatten()
+            })
+            .or_else(|| {
+                (frame.is_none())
+                    .then(|| application.mainWindow())
+                    .flatten()
+            })
+            .or_else(|| (candidates.len() == 1).then(|| candidates[0].clone()))
+            .ok_or_else(|| {
+                ServiceError::new(
+                    "invalid-parent-window",
+                    concat!(
+                        "Emacs has no unambiguous frame for the EPUB ",
+                        "surface"
+                    ),
+                )
+            })?;
+        let content = window.contentView().ok_or_else(|| {
+            ServiceError::new(
                 "invalid-parent-window",
-                "parent application PID must be positive",
-            ));
-        }
-        let application =
-            NSRunningApplication::runningApplicationWithProcessIdentifier(pid)
-                .ok_or_else(|| {
-                    ServiceError::new(
-                        "invalid-parent-window",
-                        "parent application PID is not running",
-                    )
-                })?;
-        Ok(Self { application })
+                "the selected Emacs frame has no content view",
+            )
+        })?;
+        let responder = window.firstResponder();
+        Ok(Self {
+            window,
+            content,
+            responder,
+        })
     }
 }
 
-impl HasWindowHandle for HostView {
-    fn window_handle(&self) -> Result<WindowHandle<'_>, HandleError> {
-        let pointer = NonNull::new(
-            Retained::<NSView>::as_ptr(&self.0)
-                .cast::<c_void>()
-                .cast_mut(),
-        )
-        .expect("retained NSView is non-null");
-        let raw = RawWindowHandle::AppKit(AppKitWindowHandle::new(pointer));
-        // SAFETY: The retained NSView outlives the borrowed handle and Wry
-        // copies the pointer while constructing the child WKWebView.
-        Ok(unsafe { WindowHandle::borrow_raw(raw) })
-    }
+fn frame_matches(
+    window: &NSWindow,
+    expected: Bounds,
+    primary_top: f64,
+) -> bool {
+    let Some(content) = window.contentView() else {
+        return false;
+    };
+    let content_size = content.bounds().size;
+    let frame = window.frame();
+    let top = primary_top - frame.origin.y - frame.size.height;
+    close_to(content_size.width, f64::from(expected.width), 4.0)
+        && close_to(content_size.height, f64::from(expected.height), 4.0)
+        && close_to(frame.origin.x, f64::from(expected.x), 4.0)
+        && close_to(top, f64::from(expected.y), 64.0)
+}
+
+fn close_to(left: f64, right: f64, tolerance: f64) -> bool {
+    (left - right).abs() <= tolerance
 }
 
 impl NativeSurface {
-    pub(super) fn create<'a>(
-        builder: WebViewBuilder<'a>,
-        parent: &'a ParentWindow,
-        _view: u64,
+    pub(super) fn create(
+        parent: &ParentWindow,
+        view: u64,
         bounds: Bounds,
         visible: bool,
-        _on_event: impl Fn(SurfaceEvent) + Send + Sync + 'static,
+        resources: ResourceService,
+        on_ipc: impl Fn(HttpRequest<String>) + Send + Sync + 'static,
+        on_event: impl Fn(SurfaceEvent) + Send + Sync + 'static,
     ) -> Result<Self, ServiceError> {
         let bounds = bounds.validate()?;
         let mtm = MainThreadMarker::new().ok_or_else(|| {
@@ -171,74 +210,34 @@ impl NativeSurface {
                 "WKWebView surfaces must be created on the main thread",
             )
         })?;
-        let application = NSApplication::sharedApplication(mtm);
-        let _ = application
-            .setActivationPolicy(NSApplicationActivationPolicy::Accessory);
-        let panel = NSPanel::initWithContentRect_styleMask_backing_defer(
-            NSPanel::alloc(mtm),
-            bounds.panel_rect(mtm)?,
-            NSWindowStyleMask::Borderless
-                | NSWindowStyleMask::NonactivatingPanel,
-            NSBackingStoreType::Buffered,
-            false,
-        );
-        panel.setFloatingPanel(true);
-        panel.setBecomesKeyOnlyIfNeeded(true);
-        panel.setHasShadow(false);
-        panel.setCollectionBehavior(
-            NSWindowCollectionBehavior::Transient
-                | NSWindowCollectionBehavior::FullScreenAuxiliary,
-        );
-        panel.setAcceptsMouseMovedEvents(true);
-        let host = HostView(panel.contentView().ok_or_else(|| {
-            ServiceError::new(
-                "view-create-failed",
-                "macOS did not create a content view for the EPUB panel",
-            )
-        })?);
-        let loaded = Arc::new(AtomicBool::new(false));
-        let load_state = Arc::clone(&loaded);
-        let build = || {
-            builder
-                .with_bounds(bounds.webview_rect())
-                .with_focused(false)
-                .with_visible(visible)
-                .with_on_page_load_handler(move |event, _url| {
-                    if matches!(event, PageLoadEvent::Finished) {
-                        load_state.store(true, Ordering::Release);
-                    }
-                })
-                .build_as_child(&host)
-        };
-        let webview = catch_unwind(AssertUnwindSafe(build))
-            .map_err(|_| {
-                ServiceError::new(
-                    "view-create-failed",
-                    "WKWebView creation panicked for the EPUB panel",
-                )
-            })?
-            .map_err(|error| {
-                ServiceError::new("view-create-failed", error.to_string())
-            })?;
-        if visible {
-            panel.orderFrontRegardless();
-        } else {
-            panel.orderOut(None);
-        }
+        let host = HostView(NSView::initWithFrame(
+            NSView::alloc(mtm),
+            bounds.embedded_rect(&parent.content),
+        ));
+        host.0.setHidden(!visible);
+        parent.content.addSubview(&host.0);
+        let webview =
+            NativeWebView::create(&host.0, view, resources, on_ipc, on_event)?;
+        webview.set_frame(bounds.webview_rect());
         Ok(Self {
             webview,
-            panel,
-            parent: ParentWindow {
-                application: parent.application.clone(),
-            },
-            loaded,
+            host,
+            parent: parent.clone(),
             bounds,
             visible,
         })
     }
 
-    pub(super) fn webview(&self) -> &WebView {
-        &self.webview
+    pub(super) fn evaluate_script(&self, script: &str) -> Result<(), String> {
+        self.webview.evaluate_script(script)
+    }
+
+    pub(super) fn evaluate_script_with_callback(
+        &self,
+        script: &str,
+        callback: impl FnOnce(String) + Send + 'static,
+    ) -> Result<(), String> {
+        self.webview.evaluate_script_with_callback(script, callback)
     }
 
     pub(super) fn set_bounds(
@@ -246,21 +245,31 @@ impl NativeSurface {
         bounds: Bounds,
     ) -> Result<Bounds, ServiceError> {
         let bounds = bounds.validate()?;
-        let mtm = MainThreadMarker::new().ok_or_else(|| {
+        self.host
+            .0
+            .setFrame(bounds.embedded_rect(&self.parent.content));
+        self.webview.set_frame(bounds.webview_rect());
+        self.bounds = bounds;
+        Ok(bounds)
+    }
+
+    pub(super) fn set_parent(
+        &mut self,
+        parent: ParentWindow,
+        bounds: Bounds,
+    ) -> Result<Bounds, ServiceError> {
+        let bounds = bounds.validate()?;
+        MainThreadMarker::new().ok_or_else(|| {
             ServiceError::new(
                 "view-update-failed",
-                "WKWebView bounds must be changed on the main thread",
+                "WKWebView parent must be changed on the main thread",
             )
         })?;
-        self.panel.setFrame_display(bounds.panel_rect(mtm)?, true);
-        self.webview
-            .set_bounds(bounds.webview_rect())
-            .map_err(|error| {
-                ServiceError::new("view-update-failed", error.to_string())
-            })?;
-        if self.visible {
-            self.panel.orderFrontRegardless();
-        }
+        self.host.0.removeFromSuperview();
+        self.host.0.setFrame(bounds.embedded_rect(&parent.content));
+        parent.content.addSubview(&self.host.0);
+        self.webview.set_frame(bounds.webview_rect());
+        self.parent = parent;
         self.bounds = bounds;
         Ok(bounds)
     }
@@ -269,38 +278,39 @@ impl NativeSurface {
         &mut self,
         visible: bool,
     ) -> Result<(), ServiceError> {
-        self.webview.set_visible(visible).map_err(|error| {
-            ServiceError::new("view-update-failed", error.to_string())
-        })?;
-        if visible {
-            self.panel.orderFrontRegardless();
-        } else {
-            self.panel.orderOut(None);
-        }
+        self.host.0.setHidden(!visible);
         self.visible = visible;
         Ok(())
     }
 
     pub(super) fn focus(&self) -> Result<(), ServiceError> {
-        self.panel.makeKeyAndOrderFront(None);
-        self.webview.focus().map_err(|error| {
-            ServiceError::new("view-focus-failed", error.to_string())
-        })
+        if self.webview.focus() {
+            Ok(())
+        } else {
+            Err(ServiceError::new(
+                "view-focus-failed",
+                "macOS could not focus the EPUB WKWebView",
+            ))
+        }
     }
 
     pub(super) fn focus_parent(&self) -> Result<(), ServiceError> {
-        self.webview.focus_parent().map_err(|error| {
-            ServiceError::new("view-focus-failed", error.to_string())
-        })?;
-        let _ = self
+        if self
             .parent
-            .application
-            .activateWithOptions(NSApplicationActivationOptions::empty());
-        Ok(())
+            .window
+            .makeFirstResponder(self.parent.responder.as_deref())
+        {
+            Ok(())
+        } else {
+            Err(ServiceError::new(
+                "view-focus-failed",
+                "macOS could not restore the Emacs first responder",
+            ))
+        }
     }
 
     pub(super) fn loaded(&self) -> bool {
-        self.loaded.load(Ordering::Acquire)
+        self.webview.loaded()
     }
 
     pub(super) fn bounds(&self) -> Bounds {
@@ -312,38 +322,19 @@ impl NativeSurface {
     }
 }
 
-impl Drop for NativeSurface {
-    fn drop(&mut self) {
-        self.panel.orderOut(None);
-    }
+pub(super) fn webview_version() -> Result<String, String> {
+    webview::webview_version()
 }
 
-pub(super) fn pump_messages() {
-    let Some(mtm) = MainThreadMarker::new() else {
-        return;
-    };
-    let application = NSApplication::sharedApplication(mtm);
-    let expiration = NSDate::distantPast();
-    // SAFETY: Foundation exposes this process-lifetime run-loop mode as an
-    // immutable external NSString.
-    let run_loop_mode = unsafe { NSDefaultRunLoopMode };
-    while let Some(event) = application
-        .nextEventMatchingMask_untilDate_inMode_dequeue(
-            NSEventMask::Any,
-            Some(&expiration),
-            run_loop_mode,
-            true,
-        )
-    {
-        application.sendEvent(&event);
+impl Drop for NativeSurface {
+    fn drop(&mut self) {
+        self.host.0.removeFromSuperview();
     }
-    application.updateWindows();
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
     #[test]
     fn bounds_reject_empty_and_extreme_rectangles() {
         for bounds in [

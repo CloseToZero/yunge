@@ -12,7 +12,18 @@ pub(super) const ACCELERATORS: [&str; 20] = [
     "G", "J", "K", "M-m", "SPC", "g", "j", "k", "m", "y",
 ];
 pub(super) const RENDERER_ACCELERATORS: [&str; 20] = ACCELERATORS;
-pub(super) const CAPABILITIES: [&str; 24] = [
+
+#[cfg(any(target_os = "windows", test))]
+pub(super) fn control_accelerator(key: u8) -> Option<&'static str> {
+    ACCELERATORS.iter().copied().find(|accelerator| {
+        let bytes = accelerator.as_bytes();
+        bytes.len() == 3
+            && bytes[0] == b'C'
+            && bytes[1] == b'-'
+            && bytes[2].eq_ignore_ascii_case(&key)
+    })
+}
+pub(super) const CAPABILITIES: [&str; 26] = [
     "publication-close",
     "publication-info",
     "publication-open",
@@ -28,8 +39,10 @@ pub(super) const CAPABILITIES: [&str; 24] = [
     "view-info",
     "view-navigate",
     "view-open-publication",
+    "view-parent",
     "view-search",
     "view-search-result",
+    "view-current-selection",
     "view-selection-text",
     "view-set-selection",
     "view-scroll-bars",
@@ -62,9 +75,11 @@ pub(super) enum Operation {
     ViewNavigate,
     ViewSearch,
     ViewSearchResult,
+    ViewCurrentSelection,
     ViewSelectionText,
     ViewSetSelection,
     ViewOpenPublication,
+    ViewParent,
     ViewStyle,
     ViewScrollBars,
     ViewVisible,
@@ -94,9 +109,11 @@ impl Request {
             "view-navigate" => Operation::ViewNavigate,
             "view-search" => Operation::ViewSearch,
             "view-search-result" => Operation::ViewSearchResult,
+            "view-current-selection" => Operation::ViewCurrentSelection,
             "view-selection-text" => Operation::ViewSelectionText,
             "view-set-selection" => Operation::ViewSetSelection,
             "view-open-publication" => Operation::ViewOpenPublication,
+            "view-parent" => Operation::ViewParent,
             "view-style" => Operation::ViewStyle,
             "view-scroll-bars" => Operation::ViewScrollBars,
             "view-visible" => Operation::ViewVisible,
@@ -164,6 +181,7 @@ impl Response {
 pub(super) enum Outgoing {
     Response(Response),
     Event(ViewEvent),
+    Wake,
 }
 
 #[derive(Debug)]
@@ -201,7 +219,10 @@ pub(super) fn response(
 mod tests {
     use serde_json::json;
 
-    use super::{ACCELERATORS, Operation, RENDERER_ACCELERATORS, Request};
+    use super::{
+        ACCELERATORS, Operation, RENDERER_ACCELERATORS, Request,
+        control_accelerator,
+    };
 
     #[test]
     fn renderer_accelerators_are_in_the_public_contract() {
@@ -210,6 +231,14 @@ mod tests {
                 .iter()
                 .all(|key| ACCELERATORS.contains(key))
         );
+    }
+
+    #[test]
+    fn control_accelerators_are_derived_from_the_public_contract() {
+        assert_eq!(control_accelerator(b'd'), Some("C-d"));
+        assert_eq!(control_accelerator(b'G'), Some("C-g"));
+        assert_eq!(control_accelerator(b'u'), Some("C-u"));
+        assert_eq!(control_accelerator(b'x'), None);
     }
 
     #[test]
@@ -242,6 +271,12 @@ mod tests {
         )
         .unwrap();
         assert_eq!(request.operation().unwrap(), Operation::ViewAppearance);
+
+        let request = Request::decode(
+            r#"{"id":12,"op":"view-parent","params":{"view":3}}"#,
+        )
+        .unwrap();
+        assert_eq!(request.operation().unwrap(), Operation::ViewParent);
     }
 
     #[test]

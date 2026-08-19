@@ -25,10 +25,22 @@
            (lambda () t))
           ((symbol-function 'yunge-reader-native--build-id)
            (lambda () "test-build"))
-          ((symbol-function 'make-process)
+          ((symbol-function 'yunge-reader-webview--ensure-module)
+           #'ignore)
+          ((symbol-function 'make-pipe-process)
            (lambda (&rest _arguments)
              (setq live t)
              'fake-webview-process))
+          ((symbol-function 'yunge-reader-module-start)
+           (lambda (_process) t))
+          ((symbol-function 'yunge-reader-module-request)
+           (lambda (line) (push line sent)))
+          ((symbol-function 'yunge-reader-module-pump)
+           (lambda () t))
+          ((symbol-function 'yunge-reader-module-running-p)
+           (lambda () live))
+          ((symbol-function 'yunge-reader-module-stop)
+           (lambda () (setq live nil)))
           ((symbol-function 'process-live-p)
            (lambda (process)
              (and live (eq process 'fake-webview-process))))
@@ -43,9 +55,6 @@
           ((symbol-function 'process-get)
            (lambda (process property)
              (gethash (cons process property) properties)))
-          ((symbol-function 'process-send-string)
-           (lambda (_process string)
-             (push string sent)))
           ((symbol-function 'delete-process)
            (lambda (_process)
              (setq live nil))))
@@ -71,8 +80,10 @@
          "view-destroy" "view-events" "view-focus"
          "view-focus-parent" "view-info"
          "view-navigate" "view-open-publication"
+         "view-parent"
          "view-search"
          "view-search-result"
+         "view-current-selection"
          "view-selection-text"
          "view-set-selection"
          "view-scroll-bars" "view-status" "view-style"
@@ -345,7 +356,51 @@
          ((text . "a") (total . 1) (done . t) (extra . t))))
     (should-not
      (yunge-reader-webview--valid-selection-text-result-p
-      result 0 2))))
+     result 0 2))))
+
+(ert-deftest yunge-reader-webview-requests-current-epub-selection ()
+  (yunge-reader-webview-test--with-fake-process
+    (yunge-reader-webview-start)
+    (yunge-reader-webview--handle-message
+     'fake-webview-process
+     (yunge-reader-webview-test--ready-message))
+    (let ((view
+           (yunge-reader-webview--make-view
+            :surface
+            (yunge-reader-webview-test--surface 9 'ready))))
+      (yunge-reader-webview--request-current-selection view #'ignore)
+      (let* ((request
+              (json-parse-string (car sent) :object-type 'alist))
+             (params (alist-get 'params request)))
+        (should (equal (alist-get 'op request)
+                       "view-current-selection"))
+        (should (= (alist-get 'view params) 9))))))
+
+(ert-deftest yunge-reader-webview-validates-current-epub-selection ()
+  (let (result error-data)
+    (yunge-reader-webview--current-selection-complete
+     (lambda (value error)
+       (setq result value
+             error-data error))
+     (yunge-reader-webview-test--selection) nil)
+    (should (equal result (yunge-reader-webview-test--selection)))
+    (should-not error-data)
+    (setq result 'unset
+          error-data 'unset)
+    (yunge-reader-webview--current-selection-complete
+     (lambda (value error)
+       (setq result value
+             error-data error))
+     nil nil)
+    (should-not result)
+    (should-not error-data)
+    (yunge-reader-webview--current-selection-complete
+     (lambda (value error)
+       (setq result value
+             error-data error))
+     '((href . "OPS/chapter.xhtml")) nil)
+    (should-not result)
+    (should (eq (car error-data) 'error))))
 
 (ert-deftest yunge-reader-webview-requests-bounded-selection-text ()
   (yunge-reader-webview-test--with-fake-process
@@ -1006,6 +1061,7 @@
          `((kind . "event")
            (event . "accelerator")
            (view . 8)
+           (repeat . nil)
            (key . ,key)))))
     (should (equal (nreverse routed) '("<escape>" "C-g")))
     (should (eq selected window))
@@ -1113,8 +1169,66 @@
              `((kind . "event")
                (event . "accelerator")
                (view . 9)
+               (repeat . nil)
                (key . ,key)))
             (should (equal routed (list view key buffer)))))
+      (kill-buffer buffer))))
+
+(ert-deftest yunge-reader-webview-drops-repeated-owning-prefix-keys ()
+  (let* ((buffer (generate-new-buffer " *webview repeated prefix*"))
+         (view
+          (yunge-reader-webview--make-view
+           :surface
+           (yunge-reader-webview-test--surface 11 'ready)
+           :buffer buffer))
+         (yunge-reader-webview--process 'fake-webview-process)
+         (yunge-reader-webview--views
+          (make-hash-table :test #'eql))
+         (unread-command-events nil)
+         focused)
+    (unwind-protect
+        (progn
+          (puthash 11 view yunge-reader-webview--views)
+          (cl-letf
+              (((symbol-function
+                 'yunge-reader-webview--focus-owning-window)
+                (lambda (value) (setq focused value))))
+            (dolist (key '("'" "SPC" "M-m" "g" "m"))
+              (yunge-reader-webview--handle-event
+               'fake-webview-process
+               `((kind . "event")
+                 (event . "accelerator")
+                 (view . 11)
+                 (repeat . t)
+                 (key . ,key))))
+            (should-not focused)
+            (should-not unread-command-events)))
+      (kill-buffer buffer))))
+
+(ert-deftest yunge-reader-webview-keeps-repeated-direct-keys ()
+  (let* (routed
+         (buffer (generate-new-buffer " *webview repeated direct*"))
+         (view
+          (yunge-reader-webview--make-view
+           :surface
+           (yunge-reader-webview-test--surface 9 'ready)
+           :buffer buffer
+           :accelerator-function
+           (lambda (_view key) (setq routed key))))
+         (yunge-reader-webview--process 'fake-webview-process)
+         (yunge-reader-webview--views
+          (make-hash-table :test #'eql)))
+    (unwind-protect
+        (progn
+          (puthash 9 view yunge-reader-webview--views)
+          (yunge-reader-webview--handle-event
+           'fake-webview-process
+           '((kind . "event")
+             (event . "accelerator")
+             (view . 9)
+             (repeat . t)
+             (key . "j")))
+          (should (equal routed "j")))
       (kill-buffer buffer))))
 
 (ert-deftest yunge-reader-webview-routes-external-links-to-owning-buffer ()
@@ -1180,6 +1294,7 @@
                `((kind . "event")
                  (event . "accelerator")
                  (view . 11)
+                 (repeat . nil)
                  (key . ,key)))
               (should (eq focused view))
               (should
@@ -1197,8 +1312,29 @@
       '((kind . "event")
         (event . "accelerator")
         (view . 9)
+        (repeat . nil)
         (key . "z")))
      :type 'error)))
+
+(ert-deftest yunge-reader-webview-rejects-malformed-key-repeat-state ()
+  (let ((yunge-reader-webview--process 'fake-webview-process)
+        (yunge-reader-webview--views
+         (make-hash-table :test #'eql)))
+    (dolist
+        (message
+         '(((kind . "event")
+            (event . "accelerator")
+            (view . 9)
+            (key . "j"))
+           ((kind . "event")
+            (event . "accelerator")
+            (view . 9)
+            (repeat . 1)
+            (key . "j"))))
+      (should-error
+       (yunge-reader-webview--handle-event
+        'fake-webview-process message)
+       :type 'error))))
 
 (ert-deftest yunge-reader-webview-events-do-not-consume-callbacks ()
   (yunge-reader-webview-test--with-fake-process
@@ -1214,12 +1350,14 @@
          '((kind . "event")
            (event . "accelerator")
            (view . 3)
+           (repeat . nil)
            (key . "C-g"))))
       (should (equal handled
                      '(fake-webview-process
                        ((kind . "event")
                         (event . "accelerator")
                         (view . 3)
+                        (repeat . nil)
                         (key . "C-g")))))
       (should (zerop
                (hash-table-count
@@ -1698,7 +1836,7 @@
       (when (buffer-live-p buffer)
         (kill-buffer buffer)))))
 
-(ert-deftest yunge-reader-webview-recreates-a-surface-across-frames ()
+(ert-deftest yunge-reader-webview-reparents-a-surface-across-frames ()
   (let* ((system-type 'gnu/linux)
          (view
           (yunge-reader-webview--make-view
@@ -1706,7 +1844,7 @@
            (yunge-reader-webview-test--surface
             9 'native-ready :window 'first)
            :buffer (current-buffer)))
-         transitions)
+         moved)
     (cl-letf
         (((symbol-function 'yunge-reader-webview--visible-window)
           (lambda (_view) 'second))
@@ -1714,16 +1852,22 @@
          ((symbol-function 'window-frame)
           (lambda (window)
             (if (eq window 'first) 'first-frame 'second-frame)))
-         ((symbol-function 'yunge-reader-webview--release-surface)
-          (lambda (value &optional _complete)
-            (should (eq value view))
-            (push 'release transitions)))
-         ((symbol-function 'yunge-reader-webview--start-surface)
+         ((symbol-function 'yunge-reader-webview--set-surface-parent)
           (lambda (value window)
             (should (eq value view))
-            (push window transitions))))
+            (setq moved window)))
+         ((symbol-function
+           'yunge-reader-webview--update-scroll-bar-mode)
+          #'ignore)
+         ((symbol-function 'yunge-reader-webview--release-surface)
+          (lambda (value window)
+            (ignore value window)
+            (ert-fail "Cross-frame move released the surface")))
+         ((symbol-function 'yunge-reader-webview--start-surface)
+          (lambda (&rest _arguments)
+            (ert-fail "Cross-frame move recreated the surface"))))
       (yunge-reader-webview--sync-view view)
-      (should (equal (nreverse transitions) '(release second))))))
+      (should (eq moved 'second)))))
 
 (ert-deftest yunge-reader-webview-reuses-a-windows-surface-in-its-frame ()
   ;; A non-macOS host value exercises the parent-frame-bound surface path
@@ -1797,69 +1941,6 @@
                (lambda (&rest _arguments) (push 'focus calls))))
       (yunge-reader-webview--window-selection-changed 'frame)
       (should (equal (nreverse calls) '(views focus))))))
-
-(ert-deftest yunge-reader-webview-hides-and-restores-macos-surfaces ()
-  (let* ((system-type 'darwin)
-         (surface
-          (yunge-reader-webview-test--surface 41 'creating))
-         (view
-          (yunge-reader-webview--make-view :surface surface))
-         (yunge-reader-webview--process 'fake-webview-process)
-         (yunge-reader-webview--views
-          (make-hash-table :test #'eql))
-         (yunge-reader-webview--logical-views
-          (make-hash-table :test #'eq))
-         (yunge-reader-webview--macos-active-p t)
-         requests
-         synchronized)
-    (puthash 41 view yunge-reader-webview--views)
-    (puthash view t yunge-reader-webview--logical-views)
-    (cl-letf (((symbol-function 'process-live-p)
-               (lambda (_process) t))
-              ((symbol-function 'yunge-reader-webview--request)
-               (lambda (operation parameters _complete)
-                 (push (list operation parameters) requests)))
-              ((symbol-function 'yunge-reader-webview--sync-views)
-               (lambda (&rest _ignored) (setq synchronized t)))
-              ((symbol-function 'yunge-reader-webview--visible-window)
-               (lambda (_view) 'window)))
-      (yunge-reader-webview--hide-macos-views)
-      (should-not yunge-reader-webview--macos-active-p)
-      (should
-       (eq (alist-get 'visible (cadr (car requests))) :false))
-      (yunge-reader-webview--raise-macos-views)
-      (should yunge-reader-webview--macos-active-p)
-      (should synchronized)
-      (should (alist-get 'visible (cadr (car requests))))
-      (should (= (length requests) 2)))))
-
-(ert-deftest yunge-reader-webview-coalesces-macos-application-focus ()
-  (let ((system-type 'darwin)
-        (yunge-reader-webview--macos-active-p nil)
-        (yunge-reader-webview--macos-focus-timer 'obsolete)
-        (states '((frame-one . nil) (frame-two . t)))
-        transitions)
-    (cl-letf (((symbol-function 'frame-list)
-               (lambda () '(frame-one frame-two)))
-              ((symbol-function 'display-graphic-p)
-               (lambda (_frame) t))
-              ((symbol-function 'frame-focus-state)
-               (lambda (frame) (alist-get frame states)))
-              ((symbol-function 'yunge-reader-webview--raise-macos-views)
-               (lambda ()
-                 (setq yunge-reader-webview--macos-active-p t)
-                 (push 'raise transitions)))
-              ((symbol-function 'yunge-reader-webview--hide-macos-views)
-               (lambda ()
-                 (setq yunge-reader-webview--macos-active-p nil)
-                 (push 'hide transitions))))
-      (yunge-reader-webview--apply-macos-focus-state)
-      (should yunge-reader-webview--macos-active-p)
-      (setq states '((frame-one . nil) (frame-two . nil)))
-      (yunge-reader-webview--apply-macos-focus-state)
-      (should-not yunge-reader-webview--macos-active-p)
-      (should (equal (nreverse transitions) '(raise hide)))
-      (should-not yunge-reader-webview--macos-focus-timer))))
 
 (ert-deftest yunge-reader-webview-destroys-a-replaced-window-view ()
   (let* ((buffer (generate-new-buffer " *webview owner*"))
@@ -1943,9 +2024,10 @@
                (yunge-reader-webview--view-surface view))
               15))
           (should (eq (gethash 15 yunge-reader-webview--views) view))
-          (should-not
-           (yunge-reader-webview--surface-window
-            (yunge-reader-webview--view-surface view)))
+          (should
+           (eq (yunge-reader-webview--surface-window
+                (yunge-reader-webview--view-surface view))
+               window))
           (should (gethash view yunge-reader-webview--logical-views))
           (should (equal (yunge-reader-webview--view-location view)
                          location))

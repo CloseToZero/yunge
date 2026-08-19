@@ -1,0 +1,16 @@
+# SPDX-FileCopyrightText: 2026 Chen Zhexuan
+# SPDX-License-Identifier: MIT
+
+[package]
+name = "yunge-reader-module"
+version = "0.1.0"
+edition = "2024"
+publish = false
+license = "MIT"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+emacs = { version = "=0.21.0", features = ["emacs-28"] }
+yunge-reader = { path = ".." }

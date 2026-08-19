@@ -32,8 +32,10 @@ fn main() {
         root.join("Cargo.lock"),
         root.join("Cargo.toml"),
         root.join("build.rs"),
+        root.join("module/Cargo.toml"),
         root.join("pdfium-manifest.eld"),
     ];
+    source_files(&root.join("module/src"), &mut files);
     source_files(&source, &mut files);
     source_files(&root.join("renderer"), &mut files);
     files.sort();
@@ -41,6 +43,7 @@ fn main() {
     println!("cargo:rerun-if-changed=Cargo.lock");
     println!("cargo:rerun-if-changed=Cargo.toml");
     println!("cargo:rerun-if-changed=build.rs");
+    println!("cargo:rerun-if-changed=module");
     println!("cargo:rerun-if-changed=pdfium-manifest.eld");
     println!("cargo:rerun-if-changed=renderer");
     println!("cargo:rerun-if-changed=src");
