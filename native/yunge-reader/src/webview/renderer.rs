@@ -13,7 +13,8 @@ use super::{
     MAX_EPUB_EXTERNAL_URI_BYTES, MAX_EPUB_SEARCH_RESULT_BYTES,
     MAX_EPUB_SELECTION_CHARACTERS, MAX_EPUB_SELECTION_RESULT_BYTES,
     MAX_RENDERER_ERROR_BYTES, MAX_RENDERER_MESSAGE_BYTES, NavigationCommand,
-    SearchDirection, ViewEvent, ViewSearchParams, ViewSelectionTextParams,
+    SearchDirection, ViewEvent, ViewEventPayload, ViewSearchParams,
+    ViewSelectionTextParams,
 };
 
 #[derive(Debug, Deserialize)]
@@ -72,43 +73,59 @@ struct RendererSearchResult {
 }
 
 #[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct RendererMessage {
-    protocol: u32,
-    event: RendererEvent,
-    #[serde(default)]
-    message: Option<String>,
-    #[serde(default)]
-    location: Option<EpubLocator>,
-    #[serde(default)]
-    outline: Option<EpubOutline>,
-    #[serde(default, deserialize_with = "deserialize_present_option")]
-    selection: Option<Option<EpubSelection>>,
-    #[serde(default)]
-    key: Option<String>,
-    #[serde(default)]
-    uri: Option<String>,
-    #[serde(default)]
-    user: Option<bool>,
-    #[serde(default)]
-    scale: Option<f64>,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "kebab-case")]
-enum RendererEvent {
-    Accelerator,
-    AppearanceError,
-    ExternalLink,
-    Location,
-    NavigationError,
-    PublicationError,
-    PublicationReady,
-    ScrollBarsError,
-    Selection,
-    StyleError,
-    ZoomChanged,
-    ZoomError,
+#[serde(tag = "event", rename_all = "kebab-case", deny_unknown_fields)]
+enum RendererMessage {
+    Accelerator {
+        protocol: u32,
+        key: String,
+    },
+    AppearanceError {
+        protocol: u32,
+        message: String,
+    },
+    ExternalLink {
+        protocol: u32,
+        uri: String,
+    },
+    Location {
+        protocol: u32,
+        location: EpubLocator,
+        user: bool,
+    },
+    NavigationError {
+        protocol: u32,
+        message: String,
+    },
+    PublicationError {
+        protocol: u32,
+        message: String,
+    },
+    PublicationReady {
+        protocol: u32,
+        location: EpubLocator,
+        outline: EpubOutline,
+    },
+    ScrollBarsError {
+        protocol: u32,
+        message: String,
+    },
+    Selection {
+        protocol: u32,
+        #[serde(default, deserialize_with = "deserialize_present_option")]
+        selection: Option<Option<EpubSelection>>,
+    },
+    StyleError {
+        protocol: u32,
+        message: String,
+    },
+    ZoomChanged {
+        protocol: u32,
+        scale: f64,
+    },
+    ZoomError {
+        protocol: u32,
+        message: String,
+    },
 }
 
 fn valid_external_uri(value: &str) -> bool {
@@ -412,6 +429,13 @@ pub(super) fn search_callback(
     })
 }
 
+fn checked_renderer_error(protocol: u32, message: String) -> Option<String> {
+    (protocol == PROTOCOL_VERSION
+        && !message.is_empty()
+        && message.len() <= MAX_RENDERER_ERROR_BYTES)
+        .then_some(message)
+}
+
 pub(super) fn event(
     view: u64,
     request: &HttpRequest<String>,
@@ -422,245 +446,99 @@ pub(super) fn event(
         return None;
     }
     let message: RendererMessage = serde_json::from_str(request.body()).ok()?;
-    if message.protocol != PROTOCOL_VERSION
-        || message
-            .message
-            .as_ref()
-            .is_some_and(|value| value.len() > MAX_RENDERER_ERROR_BYTES)
-    {
-        return None;
-    }
-    let user = match &message.event {
-        RendererEvent::Location => Some(message.user?),
-        _ => {
-            if message.user.is_some() {
+    let payload = match message {
+        RendererMessage::Accelerator { protocol, key } => {
+            if protocol != PROTOCOL_VERSION
+                || !RENDERER_ACCELERATORS.contains(&key.as_str())
+            {
                 return None;
             }
-            None
+            ViewEventPayload::Accelerator { key }
+        }
+        RendererMessage::AppearanceError { protocol, message } => {
+            ViewEventPayload::AppearanceError {
+                message: checked_renderer_error(protocol, message)?,
+            }
+        }
+        RendererMessage::ExternalLink { protocol, uri } => {
+            if protocol != PROTOCOL_VERSION || !valid_external_uri(&uri) {
+                return None;
+            }
+            ViewEventPayload::ExternalLink { uri }
+        }
+        RendererMessage::Location {
+            protocol,
+            location,
+            user,
+        } => {
+            if protocol != PROTOCOL_VERSION {
+                return None;
+            }
+            ViewEventPayload::Location {
+                location: location.validate().ok()?,
+                user,
+            }
+        }
+        RendererMessage::NavigationError { protocol, message } => {
+            ViewEventPayload::NavigationError {
+                message: checked_renderer_error(protocol, message)?,
+            }
+        }
+        RendererMessage::PublicationError { protocol, message } => {
+            ViewEventPayload::PublicationError {
+                message: checked_renderer_error(protocol, message)?,
+            }
+        }
+        RendererMessage::PublicationReady {
+            protocol,
+            location,
+            outline,
+        } => {
+            if protocol != PROTOCOL_VERSION {
+                return None;
+            }
+            ViewEventPayload::PublicationReady {
+                location: location.validate().ok()?,
+                outline: outline.validate().ok()?,
+            }
+        }
+        RendererMessage::ScrollBarsError { protocol, message } => {
+            ViewEventPayload::ScrollBarsError {
+                message: checked_renderer_error(protocol, message)?,
+            }
+        }
+        RendererMessage::Selection {
+            protocol,
+            selection,
+        } => {
+            if protocol != PROTOCOL_VERSION {
+                return None;
+            }
+            let selection =
+                selection?.map(EpubSelection::validate).transpose().ok()?;
+            ViewEventPayload::Selection { selection }
+        }
+        RendererMessage::StyleError { protocol, message } => {
+            ViewEventPayload::StyleError {
+                message: checked_renderer_error(protocol, message)?,
+            }
+        }
+        RendererMessage::ZoomChanged { protocol, scale } => {
+            if protocol != PROTOCOL_VERSION
+                || !scale.is_finite()
+                || scale <= 0.0
+            {
+                return None;
+            }
+            ViewEventPayload::ZoomChanged { scale }
+        }
+        RendererMessage::ZoomError { protocol, message } => {
+            ViewEventPayload::ZoomError {
+                message: checked_renderer_error(protocol, message)?,
+            }
         }
     };
-    let scale = match &message.event {
-        RendererEvent::ZoomChanged => {
-            let scale = message.scale?;
-            if !scale.is_finite() || scale <= 0.0 {
-                return None;
-            }
-            Some(scale)
-        }
-        _ => {
-            if message.scale.is_some() {
-                return None;
-            }
-            None
-        }
-    };
-    let (event, detail, location, outline, selection, key, uri) = match message
-        .event
-    {
-        RendererEvent::Accelerator => {
-            if message.message.is_some()
-                || message.location.is_some()
-                || message.outline.is_some()
-                || message.selection.is_some()
-                || message.uri.is_some()
-            {
-                return None;
-            }
-            let key = message
-                .key
-                .filter(|key| RENDERER_ACCELERATORS.contains(&key.as_str()))?;
-            ("accelerator", None, None, None, None, Some(key), None)
-        }
-        RendererEvent::ExternalLink => {
-            if message.message.is_some()
-                || message.location.is_some()
-                || message.outline.is_some()
-                || message.selection.is_some()
-                || message.key.is_some()
-            {
-                return None;
-            }
-            let uri = message.uri.filter(|value| valid_external_uri(value))?;
-            ("external-link", None, None, None, None, None, Some(uri))
-        }
-        RendererEvent::Location => {
-            if message.message.is_some()
-                || message.outline.is_some()
-                || message.selection.is_some()
-                || message.key.is_some()
-                || message.uri.is_some()
-            {
-                return None;
-            }
-            let location = message.location?.validate().ok()?;
-            ("location", None, Some(location), None, None, None, None)
-        }
-        RendererEvent::NavigationError => {
-            if message.location.is_some()
-                || message.outline.is_some()
-                || message.selection.is_some()
-                || message.key.is_some()
-                || message.uri.is_some()
-            {
-                return None;
-            }
-            let detail = message.message.filter(|value| !value.is_empty())?;
-            (
-                "navigation-error",
-                Some(detail),
-                None,
-                None,
-                None,
-                None,
-                None,
-            )
-        }
-        RendererEvent::PublicationReady => {
-            if message.message.is_some()
-                || message.selection.is_some()
-                || message.key.is_some()
-                || message.uri.is_some()
-            {
-                return None;
-            }
-            let location = message.location?.validate().ok()?;
-            let outline = message.outline?.validate().ok()?;
-            (
-                "publication-ready",
-                None,
-                Some(location),
-                Some(outline),
-                None,
-                None,
-                None,
-            )
-        }
-        RendererEvent::PublicationError => {
-            if message.location.is_some()
-                || message.outline.is_some()
-                || message.selection.is_some()
-                || message.key.is_some()
-                || message.uri.is_some()
-            {
-                return None;
-            }
-            let detail = message.message.filter(|value| !value.is_empty())?;
-            (
-                "publication-error",
-                Some(detail),
-                None,
-                None,
-                None,
-                None,
-                None,
-            )
-        }
-        RendererEvent::Selection => {
-            if message.message.is_some()
-                || message.location.is_some()
-                || message.outline.is_some()
-                || message.key.is_some()
-                || message.uri.is_some()
-            {
-                return None;
-            }
-            let selection = message
-                .selection?
-                .map(EpubSelection::validate)
-                .transpose()
-                .ok()?;
-            ("selection", None, None, None, Some(selection), None, None)
-        }
-        RendererEvent::ScrollBarsError => {
-            if message.location.is_some()
-                || message.outline.is_some()
-                || message.selection.is_some()
-                || message.key.is_some()
-                || message.uri.is_some()
-            {
-                return None;
-            }
-            let detail = message.message.filter(|value| !value.is_empty())?;
-            (
-                "scroll-bars-error",
-                Some(detail),
-                None,
-                None,
-                None,
-                None,
-                None,
-            )
-        }
-        RendererEvent::AppearanceError => {
-            if message.location.is_some()
-                || message.outline.is_some()
-                || message.selection.is_some()
-                || message.key.is_some()
-                || message.uri.is_some()
-            {
-                return None;
-            }
-            let detail = message.message.filter(|value| !value.is_empty())?;
-            (
-                "appearance-error",
-                Some(detail),
-                None,
-                None,
-                None,
-                None,
-                None,
-            )
-        }
-        RendererEvent::StyleError => {
-            if message.location.is_some()
-                || message.outline.is_some()
-                || message.selection.is_some()
-                || message.key.is_some()
-                || message.uri.is_some()
-            {
-                return None;
-            }
-            let detail = message.message.filter(|value| !value.is_empty())?;
-            ("style-error", Some(detail), None, None, None, None, None)
-        }
-        RendererEvent::ZoomChanged => {
-            if message.message.is_some()
-                || message.location.is_some()
-                || message.outline.is_some()
-                || message.selection.is_some()
-                || message.key.is_some()
-                || message.uri.is_some()
-            {
-                return None;
-            }
-            ("zoom-changed", None, None, None, None, None, None)
-        }
-        RendererEvent::ZoomError => {
-            if message.location.is_some()
-                || message.outline.is_some()
-                || message.selection.is_some()
-                || message.key.is_some()
-                || message.uri.is_some()
-            {
-                return None;
-            }
-            let detail = message.message.filter(|value| !value.is_empty())?;
-            ("zoom-error", Some(detail), None, None, None, None, None)
-        }
-    };
-    Some(ViewEvent {
-        kind: "event",
-        event,
-        view,
-        message: detail,
-        location,
-        outline,
-        selection,
-        key,
-        uri,
-        user,
-        scale,
-    })
+    Some(ViewEvent::new(view, payload))
 }
 
 pub(super) fn open_script(

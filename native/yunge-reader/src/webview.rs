@@ -91,24 +91,64 @@ const MESSAGE_PUMP_INTERVAL: Duration = Duration::from_millis(8);
 #[derive(Debug, Serialize)]
 struct ViewEvent {
     kind: &'static str,
-    event: &'static str,
     view: u64,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    message: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    location: Option<EpubLocator>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    outline: Option<EpubOutline>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    selection: Option<Option<EpubSelection>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    key: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    uri: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    user: Option<bool>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    scale: Option<f64>,
+    #[serde(flatten)]
+    payload: ViewEventPayload,
+}
+
+impl ViewEvent {
+    fn new(view: u64, payload: ViewEventPayload) -> Self {
+        Self {
+            kind: "event",
+            view,
+            payload,
+        }
+    }
+}
+
+#[derive(Debug, Serialize)]
+#[serde(tag = "event", rename_all = "kebab-case")]
+enum ViewEventPayload {
+    Accelerator {
+        key: String,
+    },
+    AppearanceError {
+        message: String,
+    },
+    ExternalLink {
+        uri: String,
+    },
+    FocusGained,
+    FocusLost,
+    Location {
+        location: EpubLocator,
+        user: bool,
+    },
+    NavigationError {
+        message: String,
+    },
+    PublicationError {
+        message: String,
+    },
+    PublicationReady {
+        location: EpubLocator,
+        outline: EpubOutline,
+    },
+    ScrollBarsError {
+        message: String,
+    },
+    Selection {
+        selection: Option<EpubSelection>,
+    },
+    StyleError {
+        message: String,
+    },
+    ZoomChanged {
+        scale: f64,
+    },
+    ZoomError {
+        message: String,
+    },
 }
 
 #[derive(Debug, Deserialize)]
@@ -1552,25 +1592,19 @@ fn unknown_view(id: u64) -> ServiceError {
 }
 
 fn surface_view_event(surface: SurfaceEvent) -> ViewEvent {
-    let (event, view, key) = match surface {
-        SurfaceEvent::Accelerator { view, key } => {
-            ("accelerator", view, Some(key.to_owned()))
+    match surface {
+        SurfaceEvent::Accelerator { view, key } => ViewEvent::new(
+            view,
+            ViewEventPayload::Accelerator {
+                key: key.to_owned(),
+            },
+        ),
+        SurfaceEvent::FocusGained { view } => {
+            ViewEvent::new(view, ViewEventPayload::FocusGained)
         }
-        SurfaceEvent::FocusGained { view } => ("focus-gained", view, None),
-        SurfaceEvent::FocusLost { view } => ("focus-lost", view, None),
-    };
-    ViewEvent {
-        kind: "event",
-        event,
-        view,
-        message: None,
-        location: None,
-        outline: None,
-        selection: None,
-        key,
-        uri: None,
-        user: None,
-        scale: None,
+        SurfaceEvent::FocusLost { view } => {
+            ViewEvent::new(view, ViewEventPayload::FocusLost)
+        }
     }
 }
 
@@ -1808,6 +1842,30 @@ mod tests {
             response.expect("operation returns an immediate response"),
             control,
         )
+    }
+
+    fn renderer_event_value(view: u64, request: &HttpRequest<String>) -> Value {
+        serde_json::to_value(
+            renderer_event(view, request).expect("valid renderer event"),
+        )
+        .unwrap()
+    }
+
+    fn assert_renderer_error_event(
+        view: u64,
+        request: &HttpRequest<String>,
+        event: &str,
+        message: &str,
+    ) {
+        assert_eq!(
+            renderer_event_value(view, request),
+            json!({
+                "kind": "event",
+                "event": event,
+                "view": view,
+                "message": message,
+            })
+        );
     }
 
     #[test]
@@ -2174,32 +2232,25 @@ mod tests {
                 .into(),
             )
             .unwrap();
-        let event = renderer_event(7, &ready).unwrap();
-        assert_eq!(event.event, "publication-ready");
-        assert_eq!(event.view, 7);
-        assert!(event.message.is_none());
-        assert!(event.selection.is_none());
-        assert!(event.key.is_none());
-        assert!(event.uri.is_none());
         assert_eq!(
-            event.outline,
-            Some(EpubOutline {
-                items: vec![EpubOutlineItem {
-                    title: "Chapter".into(),
-                    depth: 0,
-                    href: Some("OPS/chapter.xhtml#start".into()),
-                }],
-                truncated: false,
-            })
-        );
-        assert_eq!(
-            event.location,
-            Some(EpubLocator {
-                cfi: "epubcfi(/6/4)".into(),
-                href: "OPS/chapter.xhtml".into(),
-                fraction: Some(0.25),
-                x: None,
-                y: None,
+            renderer_event_value(7, &ready),
+            json!({
+                "kind": "event",
+                "event": "publication-ready",
+                "view": 7,
+                "location": {
+                    "cfi": "epubcfi(/6/4)",
+                    "href": "OPS/chapter.xhtml",
+                    "fraction": 0.25,
+                },
+                "outline": {
+                    "items": [{
+                        "title": "Chapter",
+                        "depth": 0,
+                        "href": "OPS/chapter.xhtml#start",
+                    }],
+                    "truncated": false,
+                },
             })
         );
 
@@ -2215,13 +2266,19 @@ mod tests {
                 .into(),
             )
             .unwrap();
-        let event = renderer_event(7, &location).unwrap();
-        assert_eq!(event.event, "location");
-        assert_eq!(event.user, Some(true));
-        assert_eq!(event.location.unwrap().fraction, None);
-        assert!(event.outline.is_none());
-        assert!(event.selection.is_none());
-        assert!(event.uri.is_none());
+        assert_eq!(
+            renderer_event_value(7, &location),
+            json!({
+                "kind": "event",
+                "event": "location",
+                "view": 7,
+                "location": {
+                    "cfi": "epubcfi(/6/6)",
+                    "href": "OPS/next.xhtml",
+                },
+                "user": true,
+            })
+        );
 
         let external_link = HttpRequest::builder()
             .uri(APP_URL)
@@ -2231,11 +2288,15 @@ mod tests {
                     .into(),
             )
             .unwrap();
-        let event = renderer_event(7, &external_link).unwrap();
-        assert_eq!(event.event, "external-link");
-        assert_eq!(event.uri.as_deref(), Some("https://example.com/reference"));
-        assert!(event.location.is_none());
-        assert!(event.selection.is_none());
+        assert_eq!(
+            renderer_event_value(7, &external_link),
+            json!({
+                "kind": "event",
+                "event": "external-link",
+                "view": 7,
+                "uri": "https://example.com/reference",
+            })
+        );
 
         let selection = HttpRequest::builder()
             .uri(APP_URL)
@@ -2249,15 +2310,18 @@ mod tests {
                 .into(),
             )
             .unwrap();
-        let event = renderer_event(7, &selection).unwrap();
-        assert_eq!(event.event, "selection");
         assert_eq!(
-            event.selection,
-            Some(Some(EpubSelection {
-                href: "OPS/chapter.xhtml".into(),
-                start: "epubcfi(/6/4!/4/2/1:0)".into(),
-                end: "epubcfi(/6/4!/4/2/1:7)".into(),
-            }))
+            renderer_event_value(7, &selection),
+            json!({
+                "kind": "event",
+                "event": "selection",
+                "view": 7,
+                "selection": {
+                    "href": "OPS/chapter.xhtml",
+                    "start": "epubcfi(/6/4!/4/2/1:0)",
+                    "end": "epubcfi(/6/4!/4/2/1:7)",
+                },
+            })
         );
 
         let selection_clear = HttpRequest::builder()
@@ -2266,8 +2330,15 @@ mod tests {
                 r#"{"protocol":1,"event":"selection","selection":null}"#.into(),
             )
             .unwrap();
-        let event = renderer_event(7, &selection_clear).unwrap();
-        assert_eq!(event.selection, Some(None));
+        assert_eq!(
+            renderer_event_value(7, &selection_clear),
+            json!({
+                "kind": "event",
+                "event": "selection",
+                "view": 7,
+                "selection": null,
+            })
+        );
 
         let error = HttpRequest::builder()
             .uri(APP_URL)
@@ -2277,13 +2348,22 @@ mod tests {
                     .into(),
             )
             .unwrap();
-        let event = renderer_event(8, &error).unwrap();
-        assert_eq!(event.event, "publication-error");
-        assert_eq!(event.message.as_deref(), Some("bad EPUB"));
-        assert!(event.location.is_none());
-        assert!(event.outline.is_none());
-        assert!(event.selection.is_none());
-        assert!(event.key.is_none());
+        assert_renderer_error_event(8, &error, "publication-error", "bad EPUB");
+
+        let navigation_error = HttpRequest::builder()
+            .uri(APP_URL)
+            .body(
+                r#"{"protocol":1,"event":"navigation-error",
+                    "message":"bad target"}"#
+                    .into(),
+            )
+            .unwrap();
+        assert_renderer_error_event(
+            8,
+            &navigation_error,
+            "navigation-error",
+            "bad target",
+        );
 
         let appearance_error = HttpRequest::builder()
             .uri(APP_URL)
@@ -2293,11 +2373,12 @@ mod tests {
                     .into(),
             )
             .unwrap();
-        let event = renderer_event(8, &appearance_error).unwrap();
-        assert_eq!(event.event, "appearance-error");
-        assert_eq!(event.message.as_deref(), Some("bad appearance"));
-        assert!(event.location.is_none());
-        assert!(event.selection.is_none());
+        assert_renderer_error_event(
+            8,
+            &appearance_error,
+            "appearance-error",
+            "bad appearance",
+        );
 
         let style_error = HttpRequest::builder()
             .uri(APP_URL)
@@ -2307,13 +2388,12 @@ mod tests {
                     .into(),
             )
             .unwrap();
-        let event = renderer_event(8, &style_error).unwrap();
-        assert_eq!(event.event, "style-error");
-        assert_eq!(event.message.as_deref(), Some("bad style"));
-        assert!(event.location.is_none());
-        assert!(event.outline.is_none());
-        assert!(event.selection.is_none());
-        assert!(event.key.is_none());
+        assert_renderer_error_event(
+            8,
+            &style_error,
+            "style-error",
+            "bad style",
+        );
 
         let zoom_changed = HttpRequest::builder()
             .uri(APP_URL)
@@ -2321,11 +2401,15 @@ mod tests {
                 r#"{"protocol":1,"event":"zoom-changed","scale":1.25}"#.into(),
             )
             .unwrap();
-        let event = renderer_event(8, &zoom_changed).unwrap();
-        assert_eq!(event.event, "zoom-changed");
-        assert_eq!(event.scale, Some(1.25));
-        assert!(event.message.is_none());
-        assert!(event.location.is_none());
+        assert_eq!(
+            renderer_event_value(8, &zoom_changed),
+            json!({
+                "kind": "event",
+                "event": "zoom-changed",
+                "view": 8,
+                "scale": 1.25,
+            })
+        );
 
         let zoom_error = HttpRequest::builder()
             .uri(APP_URL)
@@ -2335,11 +2419,7 @@ mod tests {
                     .into(),
             )
             .unwrap();
-        let event = renderer_event(8, &zoom_error).unwrap();
-        assert_eq!(event.event, "zoom-error");
-        assert_eq!(event.message.as_deref(), Some("bad zoom"));
-        assert!(event.scale.is_none());
-        assert!(event.location.is_none());
+        assert_renderer_error_event(8, &zoom_error, "zoom-error", "bad zoom");
 
         let scroll_bars_error = HttpRequest::builder()
             .uri(APP_URL)
@@ -2349,13 +2429,12 @@ mod tests {
                     .into(),
             )
             .unwrap();
-        let event = renderer_event(8, &scroll_bars_error).unwrap();
-        assert_eq!(event.event, "scroll-bars-error");
-        assert_eq!(event.message.as_deref(), Some("bad scroll bars"));
-        assert!(event.location.is_none());
-        assert!(event.outline.is_none());
-        assert!(event.selection.is_none());
-        assert!(event.key.is_none());
+        assert_renderer_error_event(
+            8,
+            &scroll_bars_error,
+            "scroll-bars-error",
+            "bad scroll bars",
+        );
 
         for key in RENDERER_ACCELERATORS {
             let payload = json!({
@@ -2364,17 +2443,17 @@ mod tests {
                 "key": key,
             })
             .to_string();
-            let accelerator = HttpRequest::builder()
-                .uri(APP_URL)
-                .body(payload.into())
-                .unwrap();
-            let event = renderer_event(8, &accelerator).unwrap();
-            assert_eq!(event.event, "accelerator");
-            assert_eq!(event.key.as_deref(), Some(key));
-            assert!(event.location.is_none());
-            assert!(event.outline.is_none());
-            assert!(event.selection.is_none());
-            assert!(event.message.is_none());
+            let accelerator =
+                HttpRequest::builder().uri(APP_URL).body(payload).unwrap();
+            assert_eq!(
+                renderer_event_value(8, &accelerator),
+                json!({
+                    "kind": "event",
+                    "event": "accelerator",
+                    "view": 8,
+                    "key": key,
+                })
+            );
         }
 
         for request in [
@@ -2506,6 +2585,19 @@ mod tests {
             )
             .unwrap();
         assert!(renderer_event(9, &oversized_link).is_none());
+
+        let oversized_error = HttpRequest::builder()
+            .uri(APP_URL)
+            .body(
+                json!({
+                    "protocol": 1,
+                    "event": "navigation-error",
+                    "message": "x".repeat(MAX_RENDERER_ERROR_BYTES + 1),
+                })
+                .to_string(),
+            )
+            .unwrap();
+        assert!(renderer_event(9, &oversized_error).is_none());
     }
 
     #[test]
@@ -3213,20 +3305,28 @@ mod tests {
             },
         )))
         .unwrap();
-        assert_eq!(event["kind"], "event");
-        assert_eq!(event["event"], "accelerator");
-        assert_eq!(event["view"], 4);
-        assert_eq!(event["key"], "<escape>");
-        assert!(event.get("id").is_none());
+        assert_eq!(
+            event,
+            json!({
+                "kind": "event",
+                "event": "accelerator",
+                "view": 4,
+                "key": "<escape>",
+            })
+        );
 
         let focus = serde_json::to_value(Outgoing::Event(surface_view_event(
             SurfaceEvent::FocusGained { view: 4 },
         )))
         .unwrap();
-        assert_eq!(focus["kind"], "event");
-        assert_eq!(focus["event"], "focus-gained");
-        assert_eq!(focus["view"], 4);
-        assert!(focus.get("key").is_none());
+        assert_eq!(
+            focus,
+            json!({
+                "kind": "event",
+                "event": "focus-gained",
+                "view": 4,
+            })
+        );
     }
 
     #[test]
