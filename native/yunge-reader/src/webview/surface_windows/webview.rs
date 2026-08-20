@@ -2,9 +2,7 @@
 // SPDX-FileCopyrightText: 2026 Chen Zhexuan
 // SPDX-License-Identifier: MIT
 
-use http::{Request as HttpRequest, Response as HttpResponse};
-use std::borrow::Cow;
-use std::fmt::Write as _;
+use http::Request as HttpRequest;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
@@ -15,8 +13,7 @@ use webview2_com::{
     CreateCoreWebView2EnvironmentCompletedHandler,
     ExecuteScriptCompletedHandler, NavigationStartingEventHandler,
     NewWindowRequestedEventHandler, PermissionRequestedEventHandler,
-    WebMessageReceivedEventHandler, WebResourceRequestedEventHandler,
-    take_pwstr,
+    WebMessageReceivedEventHandler, take_pwstr,
 };
 use windows::Win32::Foundation::{
     E_POINTER, E_UNEXPECTED, HINSTANCE, HWND, LPARAM, LRESULT, RECT, WPARAM,
@@ -25,23 +22,17 @@ use windows::Win32::Graphics::Gdi::HBRUSH;
 use windows::Win32::System::Com::{COINIT_APARTMENTTHREADED, CoInitializeEx};
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::Input::KeyboardAndMouse::SetFocus;
-use windows::Win32::UI::Shell::SHCreateMemStream;
 use windows::Win32::UI::WindowsAndMessaging::{
     CS_HREDRAW, CS_VREDRAW, CreateWindowExW, DefWindowProcW, DestroyWindow,
     GW_CHILD, GetWindow, HCURSOR, HICON, HWND_TOP, RegisterClassExW, SW_HIDE,
     SW_SHOW, SWP_ASYNCWINDOWPOS, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOOWNERZORDER,
-    SWP_NOSIZE, SWP_NOZORDER, SetParent, SetWindowPos, ShowWindow,
-    WINDOW_EX_STYLE, WM_SETFOCUS, WNDCLASSEXW, WS_CHILD, WS_CLIPCHILDREN,
-    WS_VISIBLE,
+    SWP_NOSIZE, SWP_NOZORDER, SetWindowPos, ShowWindow, WINDOW_EX_STYLE,
+    WM_SETFOCUS, WNDCLASSEXW, WS_CHILD, WS_CLIPCHILDREN, WS_VISIBLE,
 };
 use windows::core::{HSTRING, Interface, PCWSTR, PWSTR, w};
 
 use super::super::protocol::ServiceError;
-use super::super::renderer::{app_navigation_allowed, shell_ready};
-use super::super::resources::{
-    APP_BROWSER_ORIGIN, APP_BROWSER_URL, APP_PROTOCOL, BOOK_BROWSER_ORIGIN,
-    BOOK_PROTOCOL, ResourceService, app_response,
-};
+use super::super::renderer::{RendererOrigin, shell_ready_for};
 use super::Bounds;
 
 const IPC_SCRIPT: &str = concat!(
@@ -64,7 +55,6 @@ struct HandlerTokens {
     web_message: i64,
     new_window: i64,
     permission: i64,
-    resource: i64,
 }
 
 pub(super) struct NativeWebView {
@@ -72,27 +62,34 @@ pub(super) struct NativeWebView {
     hwnd: HWND,
     controller: ICoreWebView2Controller,
     webview: ICoreWebView2,
-    _environment: ICoreWebView2Environment,
     tokens: HandlerTokens,
     loaded: Arc<AtomicBool>,
     pending: PendingScripts,
 }
 
-impl NativeWebView {
-    pub(super) fn create(
-        parent: HWND,
-        bounds: Bounds,
-        visible: bool,
-        resources: ResourceService,
-        on_ipc: impl Fn(HttpRequest<String>) + Send + Sync + 'static,
-    ) -> Result<Self, ServiceError> {
+pub(super) struct NativeEnvironment(ICoreWebView2Environment);
+
+impl NativeEnvironment {
+    pub(super) fn create() -> Result<Self, ServiceError> {
         unsafe {
             let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
         }
+        create_environment().map(Self)
+    }
+}
+
+impl NativeWebView {
+    pub(super) fn create(
+        environment: &NativeEnvironment,
+        parent: HWND,
+        bounds: Bounds,
+        visible: bool,
+        renderer: RendererOrigin,
+        on_ipc: impl Fn(HttpRequest<String>) + Send + Sync + 'static,
+    ) -> Result<Self, ServiceError> {
         let hwnd = create_container(parent, bounds, visible)?;
         let result = (|| {
-            let environment = create_environment()?;
-            let controller = create_controller(hwnd, &environment)?;
+            let controller = create_controller(hwnd, &environment.0)?;
             let webview =
                 unsafe { controller.CoreWebView2().map_err(create_error)? };
             configure(&webview)?;
@@ -102,8 +99,7 @@ impl NativeWebView {
             let pending = Arc::new(Mutex::new(Some(Vec::new())));
             let tokens = install_handlers(
                 &webview,
-                &environment,
-                resources,
+                renderer.clone(),
                 Arc::new(on_ipc),
                 Arc::clone(&loaded),
                 Arc::clone(&pending),
@@ -119,7 +115,7 @@ impl NativeWebView {
                     .map_err(create_error)?;
                 controller.SetIsVisible(visible).map_err(create_error)?;
                 webview
-                    .Navigate(&HSTRING::from(APP_BROWSER_URL))
+                    .Navigate(&HSTRING::from(renderer.url()))
                     .map_err(create_error)?;
             }
             Ok(Self {
@@ -127,7 +123,6 @@ impl NativeWebView {
                 hwnd,
                 controller,
                 webview,
-                _environment: environment,
                 tokens,
                 loaded,
                 pending,
@@ -166,15 +161,6 @@ impl NativeWebView {
             )
             .map_err(|error| error.to_string())?;
         }
-        Ok(())
-    }
-
-    pub(super) fn set_parent(&self, parent: HWND) -> Result<(), String> {
-        unsafe {
-            SetParent(self.hwnd, Some(parent))
-                .map_err(|error| error.to_string())?;
-        }
-        *self.parent.lock().map_err(|_| "parent lock failed")? = parent;
         Ok(())
     }
 
@@ -257,9 +243,6 @@ impl Drop for NativeWebView {
             let _ = self
                 .webview
                 .remove_PermissionRequested(self.tokens.permission);
-            let _ = self
-                .webview
-                .remove_WebResourceRequested(self.tokens.resource);
             let _ = self.controller.Close();
             let _ = DestroyWindow(self.hwnd);
         }
@@ -371,14 +354,14 @@ fn add_document_script(
 
 fn install_handlers(
     webview: &ICoreWebView2,
-    environment: &ICoreWebView2Environment,
-    resources: ResourceService,
+    renderer: RendererOrigin,
     on_ipc: Arc<dyn Fn(HttpRequest<String>) + Send + Sync>,
     loaded: Arc<AtomicBool>,
     pending: PendingScripts,
 ) -> Result<HandlerTokens, ServiceError> {
     let mut tokens = HandlerTokens::default();
     unsafe {
+        let navigation_renderer = renderer.clone();
         webview
             .add_NavigationStarting(
                 &NavigationStartingEventHandler::create(Box::new(
@@ -388,7 +371,10 @@ fn install_handlers(
                         };
                         let mut uri = PWSTR::null();
                         args.Uri(&mut uri)?;
-                        args.SetCancel(!app_navigation_allowed(take_pwstr(uri)))
+                        args.SetCancel(
+                            !navigation_renderer
+                                .navigation_allowed(&take_pwstr(uri)),
+                        )
                     },
                 )),
                 &mut tokens.navigation_starting,
@@ -397,6 +383,7 @@ fn install_handlers(
 
         let message_pending = Arc::clone(&pending);
         let message_loaded = Arc::clone(&loaded);
+        let message_renderer = renderer;
         webview
             .add_WebMessageReceived(
                 &WebMessageReceivedEventHandler::create(Box::new(
@@ -415,7 +402,7 @@ fn install_handlers(
                             .uri(take_pwstr(source))
                             .body(take_pwstr(body))
                         {
-                            if shell_ready(&request) {
+                            if shell_ready_for(&message_renderer, &request) {
                                 message_loaded.store(true, Ordering::Release);
                                 let scripts = message_pending
                                     .lock()
@@ -467,97 +454,8 @@ fn install_handlers(
                 &mut tokens.permission,
             )
             .map_err(create_error)?;
-
-        add_resource_filter(webview, APP_BROWSER_ORIGIN)?;
-        add_resource_filter(webview, BOOK_BROWSER_ORIGIN)?;
-        let environment = environment.clone();
-        webview
-            .add_WebResourceRequested(
-                &WebResourceRequestedEventHandler::create(Box::new(
-                    move |_webview, args| {
-                        let Some(args) = args else {
-                            return Ok(());
-                        };
-                        let request = args.Request()?;
-                        let mut uri = PWSTR::null();
-                        let mut method = PWSTR::null();
-                        request.Uri(&mut uri)?;
-                        request.Method(&mut method)?;
-                        let browser_uri = take_pwstr(uri);
-                        let Some(uri) = protocol_uri(&browser_uri) else {
-                            return Ok(());
-                        };
-                        let request = match HttpRequest::builder()
-                            .uri(uri.as_str())
-                            .method(take_pwstr(method).as_str())
-                            .body(Vec::new())
-                        {
-                            Ok(request) => request,
-                            Err(_) => return Ok(()),
-                        };
-                        let response = if uri.starts_with(APP_PROTOCOL) {
-                            app_response(request)
-                        } else {
-                            resources.response(request)
-                        };
-                        let response =
-                            web_resource_response(&environment, &response)?;
-                        args.SetResponse(&response)
-                    },
-                )),
-                &mut tokens.resource,
-            )
-            .map_err(create_error)?;
     }
     Ok(tokens)
-}
-
-unsafe fn add_resource_filter(
-    webview: &ICoreWebView2,
-    origin: &str,
-) -> Result<(), ServiceError> {
-    unsafe {
-        webview
-            .AddWebResourceRequestedFilter(
-                &HSTRING::from(format!("{origin}/*")),
-                COREWEBVIEW2_WEB_RESOURCE_CONTEXT_ALL,
-            )
-            .map_err(create_error)
-    }
-}
-
-fn protocol_uri(uri: &str) -> Option<String> {
-    if let Some(path) = uri.strip_prefix(APP_BROWSER_ORIGIN) {
-        Some(format!("{APP_PROTOCOL}://localhost{path}"))
-    } else {
-        uri.strip_prefix(BOOK_BROWSER_ORIGIN)
-            .map(|path| format!("{BOOK_PROTOCOL}://localhost{path}"))
-    }
-}
-
-unsafe fn web_resource_response(
-    environment: &ICoreWebView2Environment,
-    response: &HttpResponse<Cow<'static, [u8]>>,
-) -> windows::core::Result<ICoreWebView2WebResourceResponse> {
-    let mut headers = String::new();
-    for (name, value) in response.headers() {
-        if let Ok(value) = value.to_str() {
-            let _ = writeln!(headers, "{name}: {value}");
-        }
-    }
-    unsafe {
-        let stream = (!response.body().is_empty())
-            .then(|| SHCreateMemStream(Some(response.body())))
-            .flatten();
-        environment.CreateWebResourceResponse(
-            stream.as_ref(),
-            i32::from(response.status().as_u16()),
-            &HSTRING::from(
-                response.status().canonical_reason().unwrap_or("OK"),
-            ),
-            &HSTRING::from(headers),
-        )
-    }
 }
 
 fn execute_script(

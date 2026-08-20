@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: MIT
 
 use block2::{DynBlock, RcBlock};
-use http::{Request as HttpRequest, Response as HttpResponse};
+use http::Request as HttpRequest;
 use objc2::rc::Retained;
 use objc2::runtime::{AnyObject, NSObject, ProtocolObject};
 use objc2::{
@@ -12,17 +12,14 @@ use objc2::{
 };
 use objc2_app_kit::{NSAutoresizingMaskOptions, NSView};
 use objc2_foundation::{
-    NSData, NSError, NSHTTPURLResponse, NSJSONSerialization,
-    NSJSONWritingOptions, NSMutableDictionary, NSObjectProtocol, NSString,
-    NSURL, NSURLRequest, NSUTF8StringEncoding,
+    NSError, NSJSONSerialization, NSJSONWritingOptions, NSObjectProtocol,
+    NSString, NSURL, NSURLRequest, NSUTF8StringEncoding,
 };
 use objc2_web_kit::{
     WKNavigationAction, WKNavigationActionPolicy, WKNavigationDelegate,
-    WKScriptMessage, WKScriptMessageHandler, WKURLSchemeHandler,
-    WKURLSchemeTask, WKUserContentController, WKUserScript,
-    WKUserScriptInjectionTime, WKWebView, WKWebViewConfiguration,
+    WKScriptMessage, WKScriptMessageHandler, WKUserContentController,
+    WKUserScript, WKUserScriptInjectionTime, WKWebView, WKWebViewConfiguration,
 };
-use std::borrow::Cow;
 use std::cell::RefCell;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::rc::Rc;
@@ -30,10 +27,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use super::super::protocol::ServiceError;
-use super::super::renderer::{app_navigation_allowed, shell_ready};
-use super::super::resources::{
-    APP_PROTOCOL, APP_URL, BOOK_PROTOCOL, ResourceService, app_response,
-};
+use super::super::renderer::{RendererOrigin, shell_ready_for};
 use super::SurfaceEvent;
 
 const IPC_HANDLER: &str = "ipc";
@@ -44,11 +38,6 @@ const IPC_SCRIPT: &str = r#"Object.defineProperty(window, 'ipc', {
 });"#;
 
 type IpcHandler = Arc<dyn Fn(HttpRequest<String>) + Send + Sync>;
-type ResponseHandler = Arc<
-    dyn Fn(HttpRequest<Vec<u8>>) -> HttpResponse<Cow<'static, [u8]>>
-        + Send
-        + Sync,
->;
 type ScriptCallback = Box<dyn FnOnce(String) + Send>;
 
 struct PendingScript {
@@ -58,52 +47,12 @@ struct PendingScript {
 
 type PendingScripts = Rc<RefCell<Option<Vec<PendingScript>>>>;
 
-struct SchemeHandlerIvars {
-    response: ResponseHandler,
-}
-
-define_class!(
-    #[unsafe(super(NSObject))]
-    #[thread_kind = MainThreadOnly]
-    #[ivars = SchemeHandlerIvars]
-    struct SchemeHandler;
-
-    unsafe impl NSObjectProtocol for SchemeHandler {}
-
-    unsafe impl WKURLSchemeHandler for SchemeHandler {
-        #[unsafe(method(webView:startURLSchemeTask:))]
-        fn start_task(
-            &self,
-            _webview: &WKWebView,
-            task: &ProtocolObject<dyn WKURLSchemeTask>,
-        ) {
-            respond_to_scheme_task(self, task);
-        }
-
-        #[unsafe(method(webView:stopURLSchemeTask:))]
-        fn stop_task(
-            &self,
-            _webview: &WKWebView,
-            _task: &ProtocolObject<dyn WKURLSchemeTask>,
-        ) {
-        }
-    }
-);
-
-impl SchemeHandler {
-    fn new(response: ResponseHandler, mtm: MainThreadMarker) -> Retained<Self> {
-        let object = mtm
-            .alloc::<Self>()
-            .set_ivars(SchemeHandlerIvars { response });
-        unsafe { msg_send![super(object), init] }
-    }
-}
-
 struct MessageHandlerIvars {
     controller: Retained<WKUserContentController>,
     callback: IpcHandler,
     loaded: Arc<AtomicBool>,
     pending: PendingScripts,
+    renderer: RendererOrigin,
 }
 
 define_class!(
@@ -139,7 +88,7 @@ define_class!(
             else {
                 return;
             };
-            if shell_ready(&request) {
+            if shell_ready_for(&self.ivars().renderer, &request) {
                 let Some(webview) = (unsafe { message.webView() }) else {
                     return;
                 };
@@ -161,6 +110,7 @@ impl MessageHandler {
         callback: IpcHandler,
         loaded: Arc<AtomicBool>,
         pending: PendingScripts,
+        renderer: RendererOrigin,
         mtm: MainThreadMarker,
     ) -> Retained<Self> {
         let object = mtm.alloc::<Self>().set_ivars(MessageHandlerIvars {
@@ -168,6 +118,7 @@ impl MessageHandler {
             callback,
             loaded,
             pending,
+            renderer,
         });
         let object: Retained<Self> = unsafe { msg_send![super(object), init] };
         let protocol = ProtocolObject::from_ref(&*object);
@@ -181,7 +132,9 @@ impl MessageHandler {
     }
 }
 
-struct NavigationDelegateIvars;
+struct NavigationDelegateIvars {
+    renderer: RendererOrigin,
+}
 
 define_class!(
     #[unsafe(super(NSObject))]
@@ -203,7 +156,9 @@ define_class!(
             let allowed = request
                 .URL()
                 .and_then(|url| url.absoluteString())
-                .is_some_and(|url| app_navigation_allowed(url.to_string()));
+                .is_some_and(|url| {
+                    self.ivars().renderer.navigation_allowed(&url.to_string())
+                });
             decision.call((if allowed {
                 WKNavigationActionPolicy::Allow
             } else {
@@ -214,8 +169,10 @@ define_class!(
 );
 
 impl NavigationDelegate {
-    fn new(mtm: MainThreadMarker) -> Retained<Self> {
-        let object = mtm.alloc::<Self>().set_ivars(NavigationDelegateIvars);
+    fn new(renderer: RendererOrigin, mtm: MainThreadMarker) -> Retained<Self> {
+        let object = mtm
+            .alloc::<Self>()
+            .set_ivars(NavigationDelegateIvars { renderer });
         unsafe { msg_send![super(object), init] }
     }
 }
@@ -223,8 +180,6 @@ impl NavigationDelegate {
 pub(super) struct NativeWebView {
     webview: Retained<WKWebView>,
     manager: Retained<WKUserContentController>,
-    _app_scheme: Retained<SchemeHandler>,
-    _book_scheme: Retained<SchemeHandler>,
     _message_handler: Retained<MessageHandler>,
     _navigation_delegate: Retained<NavigationDelegate>,
     loaded: Arc<AtomicBool>,
@@ -235,7 +190,7 @@ impl NativeWebView {
     pub(super) fn create(
         host: &NSView,
         _view: u64,
-        resources: ResourceService,
+        renderer: RendererOrigin,
         on_ipc: impl Fn(HttpRequest<String>) + Send + Sync + 'static,
         _on_event: impl Fn(SurfaceEvent) + Send + Sync + 'static,
     ) -> Result<Self, ServiceError> {
@@ -245,22 +200,17 @@ impl NativeWebView {
                 "WKWebView must be created on the main thread",
             )
         })?;
+        let renderer_url =
+            NSURL::URLWithString(&NSString::from_str(renderer.url()))
+                .ok_or_else(|| {
+                    ServiceError::new(
+                        "invalid-renderer-url",
+                        "WKWebView rejected the EPUB renderer URL",
+                    )
+                })?;
         let created = catch_unwind(AssertUnwindSafe(|| unsafe {
             let configuration = WKWebViewConfiguration::new(mtm);
             let manager = configuration.userContentController();
-            let app_scheme = SchemeHandler::new(Arc::new(app_response), mtm);
-            let book_scheme = SchemeHandler::new(
-                Arc::new(move |request| resources.response(request)),
-                mtm,
-            );
-            configuration.setURLSchemeHandler_forURLScheme(
-                Some(ProtocolObject::from_ref(&*app_scheme)),
-                &NSString::from_str(APP_PROTOCOL),
-            );
-            configuration.setURLSchemeHandler_forURLScheme(
-                Some(ProtocolObject::from_ref(&*book_scheme)),
-                &NSString::from_str(BOOK_PROTOCOL),
-            );
 
             let user_script =
                 WKUserScript::initWithSource_injectionTime_forMainFrameOnly(
@@ -277,9 +227,11 @@ impl NativeWebView {
                 Arc::new(on_ipc),
                 Arc::clone(&loaded),
                 Rc::clone(&pending),
+                renderer.clone(),
                 mtm,
             );
-            let navigation_delegate = NavigationDelegate::new(mtm);
+            let navigation_delegate =
+                NavigationDelegate::new(renderer.clone(), mtm);
             let webview = WKWebView::initWithFrame_configuration(
                 WKWebView::alloc(mtm),
                 host.bounds(),
@@ -294,15 +246,11 @@ impl NativeWebView {
             )));
             host.addSubview(&webview);
 
-            let url = NSURL::URLWithString(&NSString::from_str(APP_URL))
-                .expect("the static renderer URL is valid");
-            let request = NSURLRequest::requestWithURL(&url);
+            let request = NSURLRequest::requestWithURL(&renderer_url);
             let _ = webview.loadRequest(&request);
             Self {
                 webview,
                 manager,
-                _app_scheme: app_scheme,
-                _book_scheme: book_scheme,
                 _message_handler: message_handler,
                 _navigation_delegate: navigation_delegate,
                 loaded,
@@ -369,64 +317,6 @@ impl Drop for NativeWebView {
             self.webview.setNavigationDelegate(None);
         }
         self.webview.removeFromSuperview();
-    }
-}
-
-fn respond_to_scheme_task(
-    handler: &SchemeHandler,
-    task: &ProtocolObject<dyn WKURLSchemeTask>,
-) {
-    let result = catch_unwind(AssertUnwindSafe(|| unsafe {
-        let request = task.request();
-        let url = request.URL().ok_or("request has no URL")?;
-        let uri = url
-            .absoluteString()
-            .ok_or("URL has no absolute string")?
-            .to_string();
-        let method = request
-            .HTTPMethod()
-            .map(|value| value.to_string())
-            .unwrap_or_else(|| "GET".to_owned());
-        let body = request
-            .HTTPBody()
-            .map(|body| body.to_vec())
-            .unwrap_or_default();
-        let request = HttpRequest::builder()
-            .uri(uri)
-            .method(method.as_str())
-            .body(body)
-            .map_err(|_| "invalid HTTP request")?;
-        let response = (handler.ivars().response)(request);
-        let headers = NSMutableDictionary::<NSString, NSString>::new();
-        for (name, value) in response.headers() {
-            if let Ok(value) = value.to_str() {
-                let key = NSString::from_str(name.as_str());
-                let value = NSString::from_str(value);
-                headers.insert(&*key, &*value);
-            }
-        }
-        let url_response =
-            NSHTTPURLResponse::initWithURL_statusCode_HTTPVersion_headerFields(
-                NSHTTPURLResponse::alloc(),
-                &url,
-                response.status().as_u16() as isize,
-                Some(&NSString::from_str("HTTP/1.1")),
-                Some(&headers),
-            )
-            .ok_or("could not create HTTP response")?;
-        task.didReceiveResponse(&url_response);
-        let data = match response.into_body() {
-            Cow::Borrowed(bytes) => NSData::with_bytes(bytes),
-            Cow::Owned(bytes) => NSData::from_vec(bytes),
-        };
-        task.didReceiveData(&data);
-        task.didFinish();
-        Ok::<(), &'static str>(())
-    }));
-    if result.is_err() || result.is_ok_and(|result| result.is_err()) {
-        unsafe {
-            task.didFinish();
-        }
     }
 }
 

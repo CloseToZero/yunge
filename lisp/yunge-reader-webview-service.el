@@ -159,15 +159,29 @@
         (message "Starting Yunge Reader WebView service..."))
       process)))
 
-(defun yunge-reader-webview--request (operation parameters complete)
-  "Send WebView OPERATION with PARAMETERS and call COMPLETE."
+(cl-defun yunge-reader-webview--request
+    (operation parameters complete &key owner timeout revision)
+  "Send WebView OPERATION with PARAMETERS and call COMPLETE.
+Return an owned transport task supporting cancellation and deadlines."
   (unless (stringp operation)
     (error "WebView operation must be a string: %S" operation))
   (unless (functionp complete)
     (error "WebView completion must be a function: %S" complete))
-  (let ((process (yunge-reader-webview-start)))
+  (let* ((process (yunge-reader-webview-start))
+         (owner
+          (or owner
+              (when-let* ((id (alist-get 'view parameters)))
+                (gethash id yunge-reader-webview--views)))))
     (yunge-reader-transport--request
-     yunge-reader-webview--transport process operation parameters complete)))
+     yunge-reader-webview--transport process operation parameters complete
+     :owner owner :timeout timeout :revision revision)))
+
+(defun yunge-reader-webview--cancel-view-requests
+    (view &optional reason)
+  "Cancel pending WebView transport requests owned by VIEW."
+  (when yunge-reader-webview--transport
+    (yunge-reader-transport-cancel-owner
+     yunge-reader-webview--transport view reason)))
 
 ;;;###autoload
 (defun yunge-reader-webview-stop (&optional force)

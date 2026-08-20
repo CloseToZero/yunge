@@ -21,7 +21,7 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{
 use windows::Win32::UI::WindowsAndMessaging::IsWindow;
 
 use super::protocol::{ACCELERATORS, ServiceError, control_accelerator};
-use super::resources::ResourceService;
+use super::renderer::RendererOrigin;
 
 #[path = "surface_windows/webview.rs"]
 mod webview;
@@ -50,6 +50,10 @@ pub(super) struct NativeSurface {
     visible: bool,
 }
 
+pub(super) struct SurfaceRuntime {
+    environment: Option<webview::NativeEnvironment>,
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum SurfaceEvent {
     Accelerator {
@@ -66,6 +70,24 @@ pub(super) enum SurfaceEvent {
 }
 
 type EventHandler = Arc<dyn Fn(SurfaceEvent) + Send + Sync>;
+type IpcHandler = Arc<dyn Fn(HttpRequest<String>) + Send + Sync>;
+
+pub(super) struct SurfaceCallbacks {
+    ipc: IpcHandler,
+    event: EventHandler,
+}
+
+impl SurfaceCallbacks {
+    pub(super) fn new(
+        on_ipc: impl Fn(HttpRequest<String>) + Send + Sync + 'static,
+        on_event: impl Fn(SurfaceEvent) + Send + Sync + 'static,
+    ) -> Self {
+        Self {
+            ipc: Arc::new(on_ipc),
+            event: Arc::new(on_event),
+        }
+    }
+}
 
 impl Bounds {
     fn validate(self) -> Result<Self, ServiceError> {
@@ -126,24 +148,26 @@ impl ParentWindow {
 }
 
 impl NativeSurface {
-    pub(super) fn create(
+    fn create(
+        environment: &webview::NativeEnvironment,
         parent: &ParentWindow,
         view: u64,
         bounds: Bounds,
         visible: bool,
-        resources: ResourceService,
-        on_ipc: impl Fn(HttpRequest<String>) + Send + Sync + 'static,
-        on_event: impl Fn(SurfaceEvent) + Send + Sync + 'static,
+        renderer: RendererOrigin,
+        callbacks: SurfaceCallbacks,
     ) -> Result<Self, ServiceError> {
         let bounds = bounds.validate()?;
+        let ipc = callbacks.ipc;
         let webview = NativeWebView::create(
+            environment,
             HWND(parent.0.get() as _),
             bounds,
             visible,
-            resources,
-            on_ipc,
+            renderer,
+            move |request| ipc(request),
         )?;
-        let on_event: EventHandler = Arc::new(on_event);
+        let on_event = callbacks.event;
         let accelerator_token =
             install_accelerator_handler(&webview, view, Arc::clone(&on_event))?;
         let (got_focus_token, lost_focus_token) =
@@ -182,18 +206,6 @@ impl NativeSurface {
         Ok(bounds)
     }
 
-    pub(super) fn set_parent(
-        &mut self,
-        parent: ParentWindow,
-        bounds: Bounds,
-    ) -> Result<Bounds, ServiceError> {
-        let bounds = bounds.validate()?;
-        self.webview.set_parent(HWND(parent.0.get() as _)).map_err(
-            |error| ServiceError::new("view-update-failed", error.to_string()),
-        )?;
-        self.set_bounds(bounds)
-    }
-
     pub(super) fn set_visible(
         &mut self,
         visible: bool,
@@ -227,6 +239,41 @@ impl NativeSurface {
 
     pub(super) fn visible(&self) -> bool {
         self.visible
+    }
+}
+
+impl SurfaceRuntime {
+    pub(super) fn new() -> Self {
+        Self { environment: None }
+    }
+
+    pub(super) fn create(
+        &mut self,
+        parent: &ParentWindow,
+        view: u64,
+        bounds: Bounds,
+        visible: bool,
+        renderer: RendererOrigin,
+        callbacks: SurfaceCallbacks,
+    ) -> Result<NativeSurface, ServiceError> {
+        if self.environment.is_none() {
+            self.environment = Some(webview::NativeEnvironment::create()?);
+        }
+        let environment = self.environment.as_ref().ok_or_else(|| {
+            ServiceError::new(
+                "webview-unavailable",
+                "WebView2 environment did not initialize",
+            )
+        })?;
+        NativeSurface::create(
+            environment,
+            parent,
+            view,
+            bounds,
+            visible,
+            renderer,
+            callbacks,
+        )
     }
 }
 

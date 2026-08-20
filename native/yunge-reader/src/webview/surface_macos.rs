@@ -8,9 +8,10 @@ use objc2::{MainThreadMarker, MainThreadOnly};
 use objc2_app_kit::{NSApplication, NSResponder, NSScreen, NSView, NSWindow};
 use objc2_foundation::{NSPoint, NSRect, NSSize};
 use serde::{Deserialize, Serialize};
+use std::sync::Arc;
 
 use super::protocol::ServiceError;
-use super::resources::ResourceService;
+use super::renderer::RendererOrigin;
 
 #[path = "surface_macos/webview.rs"]
 mod webview;
@@ -46,6 +47,8 @@ pub(super) struct NativeSurface {
     visible: bool,
 }
 
+pub(super) struct SurfaceRuntime;
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[allow(dead_code)]
 pub(super) enum SurfaceEvent {
@@ -60,6 +63,26 @@ pub(super) enum SurfaceEvent {
     FocusLost {
         view: u64,
     },
+}
+
+type EventHandler = Arc<dyn Fn(SurfaceEvent) + Send + Sync>;
+type IpcHandler = Arc<dyn Fn(HttpRequest<String>) + Send + Sync>;
+
+pub(super) struct SurfaceCallbacks {
+    ipc: IpcHandler,
+    event: EventHandler,
+}
+
+impl SurfaceCallbacks {
+    pub(super) fn new(
+        on_ipc: impl Fn(HttpRequest<String>) + Send + Sync + 'static,
+        on_event: impl Fn(SurfaceEvent) + Send + Sync + 'static,
+    ) -> Self {
+        Self {
+            ipc: Arc::new(on_ipc),
+            event: Arc::new(on_event),
+        }
+    }
 }
 
 impl Bounds {
@@ -194,14 +217,13 @@ fn close_to(left: f64, right: f64, tolerance: f64) -> bool {
 }
 
 impl NativeSurface {
-    pub(super) fn create(
+    fn create(
         parent: &ParentWindow,
         view: u64,
         bounds: Bounds,
         visible: bool,
-        resources: ResourceService,
-        on_ipc: impl Fn(HttpRequest<String>) + Send + Sync + 'static,
-        on_event: impl Fn(SurfaceEvent) + Send + Sync + 'static,
+        renderer: RendererOrigin,
+        callbacks: SurfaceCallbacks,
     ) -> Result<Self, ServiceError> {
         let bounds = bounds.validate()?;
         let mtm = MainThreadMarker::new().ok_or_else(|| {
@@ -216,8 +238,15 @@ impl NativeSurface {
         ));
         host.0.setHidden(!visible);
         parent.content.addSubview(&host.0);
-        let webview =
-            NativeWebView::create(&host.0, view, resources, on_ipc, on_event)?;
+        let ipc = callbacks.ipc;
+        let event = callbacks.event;
+        let webview = NativeWebView::create(
+            &host.0,
+            view,
+            renderer,
+            move |request| ipc(request),
+            move |surface_event| event(surface_event),
+        )?;
         webview.set_frame(bounds.webview_rect());
         Ok(Self {
             webview,
@@ -249,27 +278,6 @@ impl NativeSurface {
             .0
             .setFrame(bounds.embedded_rect(&self.parent.content));
         self.webview.set_frame(bounds.webview_rect());
-        self.bounds = bounds;
-        Ok(bounds)
-    }
-
-    pub(super) fn set_parent(
-        &mut self,
-        parent: ParentWindow,
-        bounds: Bounds,
-    ) -> Result<Bounds, ServiceError> {
-        let bounds = bounds.validate()?;
-        MainThreadMarker::new().ok_or_else(|| {
-            ServiceError::new(
-                "view-update-failed",
-                "WKWebView parent must be changed on the main thread",
-            )
-        })?;
-        self.host.0.removeFromSuperview();
-        self.host.0.setFrame(bounds.embedded_rect(&parent.content));
-        parent.content.addSubview(&self.host.0);
-        self.webview.set_frame(bounds.webview_rect());
-        self.parent = parent;
         self.bounds = bounds;
         Ok(bounds)
     }
@@ -319,6 +327,26 @@ impl NativeSurface {
 
     pub(super) fn visible(&self) -> bool {
         self.visible
+    }
+}
+
+impl SurfaceRuntime {
+    pub(super) fn new() -> Self {
+        Self
+    }
+
+    pub(super) fn create(
+        &mut self,
+        parent: &ParentWindow,
+        view: u64,
+        bounds: Bounds,
+        visible: bool,
+        renderer: RendererOrigin,
+        callbacks: SurfaceCallbacks,
+    ) -> Result<NativeSurface, ServiceError> {
+        NativeSurface::create(
+            parent, view, bounds, visible, renderer, callbacks,
+        )
     }
 }
 

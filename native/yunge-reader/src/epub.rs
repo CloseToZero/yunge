@@ -3,7 +3,7 @@
 
 use percent_encoding::percent_decode_str;
 use roxmltree::{Document, Node, ParsingOptions};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::fs::File;
@@ -41,7 +41,7 @@ pub struct PublicationMetadata {
     pub version: Option<String>,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum PublicationLayout {
     Reflowable,

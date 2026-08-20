@@ -5,6 +5,14 @@
 (require 'yunge-test-helper)
 (require 'yunge-reader-webview)
 
+(defconst yunge-reader-webview-test--renderer-url
+  "http://127.0.0.1:32123/0123456789abcdef0123456789abcdef/app/index.html"
+  "Valid broker renderer URL used by WebView tests.")
+
+(defconst yunge-reader-webview-test--resource-root
+  "http://127.0.0.1:32123/0123456789abcdef0123456789abcdef/book/abcdef0123456789abcdef0123456789/"
+  "Valid broker publication root used by WebView tests.")
+
 (defmacro yunge-reader-webview-test--with-fake-process (&rest body)
   "Run BODY with an isolated fake WebView process implementation."
   (declare (indent 0) (debug t))
@@ -65,7 +73,7 @@
   (let ((message
          (copy-tree
           '((kind . "webview-ready")
-     (protocol . 1)
+     (protocol . 2)
      (build-id . "test-build")
      (available . t)
      (version . "test-version")
@@ -74,13 +82,11 @@
          "C-d" "C-g" "C-u" "G" "J" "K" "M-m" "SPC"
          "g" "j" "k" "m" "y"))
      (capabilities
-      . ("publication-close" "publication-info" "publication-open"
-          "publication-resources" "view-appearance" "view-bounds"
+      . ("view-appearance" "view-bounds"
          "view-clear-selection" "view-create"
          "view-destroy" "view-events" "view-focus"
          "view-focus-parent" "view-info"
          "view-navigate" "view-open-publication"
-         "view-parent"
          "view-search"
          "view-search-result"
          "view-current-selection"
@@ -185,6 +191,26 @@
          (ok . t)
          (result . ((available . t)))))
       (should (alist-get 'available result)))))
+
+(ert-deftest yunge-reader-webview-owns-view-requests ()
+  (yunge-reader-webview-test--with-fake-process
+    (let ((view (yunge-reader-webview--make-view))
+          error-data)
+      (yunge-reader-webview-start)
+      (puthash 41 view yunge-reader-webview--views)
+      (let ((task
+             (yunge-reader-webview--request
+              "view-info" '((view . 41))
+              (lambda (_result error) (setq error-data error))
+              :revision 5)))
+        (should (eq (yunge-reader-task-owner task) view))
+        (should (= (yunge-reader-task-revision task) 5))
+        (should
+         (= (yunge-reader-webview--cancel-view-requests
+             view "view destroyed")
+            1))
+        (should (eq (yunge-reader-task-state task) 'cancelled))
+        (should (eq (car error-data) 'yunge-reader-task-cancelled))))))
 
 (ert-deftest yunge-reader-webview-forgets-views-after-service-exit ()
   (yunge-reader-webview-test--with-fake-process
@@ -781,7 +807,9 @@
         (((symbol-function
            'yunge-reader-webview--set-native-view-style)
           (lambda (_view reading-style _complete)
-            (setq requested reading-style))))
+            (setq requested reading-style)))
+         ((symbol-function 'yunge-reader-webview--sync-view)
+          #'ignore))
       (yunge-reader-webview--handle-event
        'fake-webview-process
        `((kind . "event")
@@ -853,7 +881,10 @@
     (let ((view
            (yunge-reader-webview--make-view
             :surface
-            (yunge-reader-webview-test--surface 4 'ready)))
+            (yunge-reader-webview-test--surface 4 'ready)
+            :layout 'reflow
+            :resource-root
+            yunge-reader-webview-test--resource-root))
           (location
            (yunge-reader-webview-test--location 0.25 12.5 30.0))
           (style (yunge-reader-webview-test--style))
@@ -914,6 +945,12 @@
          (equal (alist-get 'appearance (alist-get 'params open))
                 '((mode . "original"))))
         (should
+         (equal (alist-get 'layout (alist-get 'params open))
+                "reflowable"))
+        (should
+         (equal (alist-get 'resource-root (alist-get 'params open))
+                yunge-reader-webview-test--resource-root))
+        (should
          (eq (alist-get 'scroll-bars (alist-get 'params open))
              :false))
         (should
@@ -956,7 +993,9 @@
     (yunge-reader-webview--open-view-publication
      (yunge-reader-webview--make-view
       :surface
-      (yunge-reader-webview-test--surface 4 'ready))
+      (yunge-reader-webview-test--surface 4 'ready)
+      :layout 'fixed
+      :resource-root yunge-reader-webview-test--resource-root)
      7 #'ignore nil
      (yunge-reader-webview-test--original-appearance)
      nil 'fit-page 'hidden)
@@ -964,6 +1003,10 @@
             (json-parse-string (car sent) :object-type 'alist))
            (parameters (alist-get 'params request)))
       (should (equal (alist-get 'zoom parameters) "fit-page"))
+      (should (equal (alist-get 'layout parameters) "pre-paginated"))
+      (should
+       (equal (alist-get 'resource-root parameters)
+              yunge-reader-webview-test--resource-root))
       (should-not (assq 'style parameters)))))
 
 (ert-deftest yunge-reader-webview-serializes-boundary-navigation ()
@@ -989,39 +1032,51 @@
         ("view-navigate" ((view . 4) (command . "last"))))))))
 
 (ert-deftest yunge-reader-webview-wraps-publication-operations ()
-  (yunge-reader-webview-test--with-fake-process
-    (yunge-reader-webview-start)
-    (yunge-reader-webview--handle-message
-     'fake-webview-process
-     (yunge-reader-webview-test--ready-message))
-    (let ((path (expand-file-name "book.epub" temporary-file-directory)))
+  (let ((path (expand-file-name "book.epub" temporary-file-directory))
+        requests
+        released
+        opened
+        informed
+        closed)
+    (cl-letf
+        (((symbol-function 'yunge-reader-native-acquire)
+          (lambda () 3))
+         ((symbol-function 'yunge-reader-native-release)
+          (lambda () (setq released t)))
+         ((symbol-function 'yunge-reader-native-request-in-session)
+          (lambda (session operation parameters complete)
+            (push (list session operation parameters complete) requests))))
       (yunge-reader-webview--open-publication
-       path (lambda (_value _error-data)))
+       path (lambda (value error-data)
+              (setq opened (list value error-data))))
+      (let ((request (pop requests)))
+        (should (= (nth 0 request) 3))
+        (should (equal (nth 1 request) "epub-open"))
+        (should (equal (alist-get 'path (nth 2 request)) path))
+        (funcall
+         (nth 3 request)
+         `((publication . 7)
+           (renderer-url . ,yunge-reader-webview-test--renderer-url)
+           (resource-root . ,yunge-reader-webview-test--resource-root))
+         nil))
+      (should (= (alist-get 'session (car opened)) 3))
+      (should-not (cadr opened))
       (yunge-reader-webview--publication-info
-       7 (lambda (_value _error-data)))
-      (yunge-reader-webview--open-view-publication
-       (yunge-reader-webview--make-view
-        :surface
-        (yunge-reader-webview-test--surface 4 'ready))
-       7 (lambda (_value _error-data))
-       nil (yunge-reader-webview-test--original-appearance)
-       nil nil 'hidden)
+       3 7 (lambda (value error-data)
+             (setq informed (list value error-data))))
+      (let ((request (pop requests)))
+        (should (equal (butlast request) '(3 "epub-info" ((publication . 7)))))
+        (funcall (nth 3 request) '((publication . 7)) nil))
+      (should (equal informed '(((publication . 7)) nil)))
       (yunge-reader-webview--close-publication
-       7 (lambda (_value _error-data)))
-      (let ((requests
-             (mapcar
-              (lambda (line)
-                (json-parse-string line :object-type 'alist))
-              (nreverse sent))))
-        (should
-         (equal
-          (mapcar (lambda (request) (alist-get 'op request)) requests)
-          '("publication-open" "publication-info"
-            "view-open-publication" "publication-close")))
-        (should
-         (equal
-          (alist-get 'path (alist-get 'params (car requests)))
-          path))))))
+       3 7 (lambda (value error-data)
+             (setq closed (list value error-data))))
+      (let ((request (pop requests)))
+        (should (equal (butlast request) '(3 "epub-close" ((publication . 7)))))
+        (funcall (nth 3 request) '((closed . t)) nil))
+      (should released)
+      (should (equal closed '(((closed . t)) nil)))
+      (should-not requests))))
 
 (ert-deftest yunge-reader-webview-routes-dismiss-keys-to-owning-window ()
   (let* ((window (selected-window))
@@ -1396,22 +1451,24 @@
            (lambda (value error-data)
              (setq outline-result value
                    outline-error error-data)))
-          (yunge-reader-webview--handle-event
-           'fake-webview-process
-           '((kind . "event")
-             (event . "publication-ready")
-             (view . 6)
-             (location
-              . ((cfi . "epubcfi(/6/4!/4/2)")
-                 (href . "OPS/chapter.xhtml")
-                 (fraction . 0.25)))
-             (outline
-              . ((items
-                  . (((title . "Part One") (depth . 0))
-                     ((title . "Chapter")
-                      (depth . 1)
-                      (href . "OPS/chapter.xhtml#start"))))
-                 (truncated)))))
+          (cl-letf (((symbol-function 'yunge-reader-webview--sync-view)
+                     #'ignore))
+            (yunge-reader-webview--handle-event
+             'fake-webview-process
+             '((kind . "event")
+               (event . "publication-ready")
+               (view . 6)
+               (location
+                . ((cfi . "epubcfi(/6/4!/4/2)")
+                   (href . "OPS/chapter.xhtml")
+                   (fraction . 0.25)))
+               (outline
+                . ((items
+                    . (((title . "Part One") (depth . 0))
+                       ((title . "Chapter")
+                        (depth . 1)
+                        (href . "OPS/chapter.xhtml#start"))))
+                   (truncated))))))
           (should
            (yunge-reader-webview--surface-ready-p
             (yunge-reader-webview--view-surface view)))
@@ -1740,8 +1797,13 @@
          request)
     (puthash 8 view yunge-reader-webview--views)
     (cl-letf
-        (((symbol-function 'yunge-reader-webview--visible-window)
+        (((symbol-function 'yunge-reader-webview--visible-windows)
+          (lambda (_view) '(window)))
+         ((symbol-function 'yunge-reader-webview--visible-window)
           (lambda (_view) 'window))
+         ((symbol-function 'yunge-reader-webview--resolved-appearance)
+          (lambda (&rest _arguments)
+            (yunge-reader-webview-test--original-appearance)))
          ((symbol-function 'yunge-reader-webview--update-scroll-bar-mode)
           #'ignore)
          ((symbol-function 'yunge-reader-webview--window-bounds)
@@ -1782,7 +1844,7 @@
       (when (buffer-live-p buffer)
         (kill-buffer buffer)))))
 
-(ert-deftest yunge-reader-webview-moves-a-surface-within-its-frame ()
+(ert-deftest yunge-reader-webview-keeps-one-surface-per-visible-window ()
   (let ((buffer (generate-new-buffer " *webview same frame*")))
     (unwind-protect
         (save-window-excursion
@@ -1790,148 +1852,172 @@
           (yunge-reader-mode)
           (let* ((first (selected-window))
                  (second (split-window-right))
-                 (bounds
-                  '((x . 500) (y . 0) (width . 500) (height . 600)))
+                 (first-surface
+                  (yunge-reader-webview-test--surface
+                   9 'ready :window first))
                  (view
                   (yunge-reader-webview--make-view
-                   :surface
-                   (yunge-reader-webview-test--surface
-                    9 'ready :window first)
-                   :buffer buffer))
-                 synchronized)
+                   :surface first-surface :buffer buffer))
+                 synchronized
+                 started)
             (set-window-buffer second buffer)
             (select-window second)
             (cl-letf
-                (((symbol-function
-                   'yunge-reader-webview--update-scroll-bar-mode)
-                  #'ignore)
-                 ((symbol-function 'yunge-reader-webview--window-bounds)
-                  (lambda (window)
-                    (should (eq window second))
-                    bounds))
-                 ((symbol-function
-                   'yunge-reader-webview--send-latest-bounds)
-                  (lambda (value) (setq synchronized value)))
+                (((symbol-function 'yunge-reader-webview--sync-surface)
+                  (lambda (_view surface window)
+                    (push (cons surface window) synchronized)))
                  ((symbol-function 'yunge-reader-webview--release-surface)
                   (lambda (&rest _arguments)
-                    (ert-fail "Same-frame move released the surface")))
+                    (ert-fail "Visible presentation was released")))
                  ((symbol-function 'yunge-reader-webview--start-surface)
-                  (lambda (&rest _arguments)
-                    (ert-fail "Same-frame move recreated the surface"))))
+                  (lambda (value window)
+                    (setq started window)
+                    (yunge-reader-webview--register-surface
+                     value
+                     (yunge-reader-webview-test--surface
+                      10 'creating :window window)))))
               (yunge-reader-webview--sync-view view))
-            (should (eq synchronized view))
-            (let ((surface
-                   (yunge-reader-webview--view-surface view)))
-              (should
-               (eq (yunge-reader-webview--surface-window surface)
-                   second))
-              (should (= (yunge-reader-webview--surface-id surface) 9))
-              (should
-               (yunge-reader-webview--surface-ready-p surface))
-              (should
-               (equal
-                (yunge-reader-webview--surface-requested-bounds
-                 surface)
-                bounds)))))
+            (should (eq started second))
+            (should (assq first-surface synchronized))
+            (should (eq (yunge-reader-webview--view-surface-for-window
+                         view first)
+                        first-surface))
+            (let ((second-surface
+                   (yunge-reader-webview--view-surface-for-window
+                    view second)))
+              (should second-surface)
+              (should-not (eq first-surface second-surface))
+              (should (= (yunge-reader-webview--surface-id second-surface)
+                         10))
+              (should (eq (yunge-reader-webview--view-surface view)
+                          second-surface)))))
       (when (buffer-live-p buffer)
         (kill-buffer buffer)))))
 
-(ert-deftest yunge-reader-webview-reparents-a-surface-across-frames ()
-  (let* ((system-type 'gnu/linux)
-         (view
-          (yunge-reader-webview--make-view
-           :surface
-           (yunge-reader-webview-test--surface
-            9 'native-ready :window 'first)
-           :buffer (current-buffer)))
-         moved)
+(ert-deftest yunge-reader-webview-releases-only-removed-presentations ()
+  (let* ((first
+          (yunge-reader-webview-test--surface
+           9 'ready :window 'first))
+         (second
+          (yunge-reader-webview-test--surface
+           10 'ready :window 'second))
+         (view (yunge-reader-webview--make-view :surface first))
+         released
+         synchronized)
+    (yunge-reader-webview--register-surface view first)
+    (yunge-reader-webview--register-surface view second)
     (cl-letf
-        (((symbol-function 'yunge-reader-webview--visible-window)
+        (((symbol-function 'yunge-reader-webview--visible-windows)
+          (lambda (_view) '(second)))
+         ((symbol-function 'yunge-reader-webview--visible-window)
           (lambda (_view) 'second))
-         ((symbol-function 'window-live-p) (lambda (_window) t))
-         ((symbol-function 'window-frame)
-          (lambda (window)
-            (if (eq window 'first) 'first-frame 'second-frame)))
-         ((symbol-function 'yunge-reader-webview--set-surface-parent)
-          (lambda (value window)
-            (should (eq value view))
-            (setq moved window)))
-         ((symbol-function
-           'yunge-reader-webview--update-scroll-bar-mode)
-          #'ignore)
+         ((symbol-function 'yunge-reader-webview--sync-surface)
+          (lambda (_view surface window)
+            (setq synchronized (cons surface window))))
          ((symbol-function 'yunge-reader-webview--release-surface)
-          (lambda (value window)
-            (ignore value window)
-            (ert-fail "Cross-frame move released the surface")))
+          (lambda (value &optional _complete surface)
+            (push surface released)
+            (yunge-reader-webview--unregister-surface value surface)))
          ((symbol-function 'yunge-reader-webview--start-surface)
           (lambda (&rest _arguments)
-            (ert-fail "Cross-frame move recreated the surface"))))
+            (ert-fail "Existing presentation was recreated"))))
       (yunge-reader-webview--sync-view view)
-      (should (eq moved 'second)))))
+      (should (equal released (list first)))
+      (should (equal synchronized (cons second 'second)))
+      (should (eq (yunge-reader-webview--view-surface view) second)))))
 
-(ert-deftest yunge-reader-webview-reuses-a-windows-surface-in-its-frame ()
-  ;; A non-macOS host value exercises the parent-frame-bound surface path
-  ;; without installing native-comp Windows trampolines on a macOS test host.
-  (let* ((system-type 'gnu/linux)
-         (surface
+(ert-deftest yunge-reader-webview-selects-the-active-window-surface ()
+  (let* ((first
           (yunge-reader-webview-test--surface
-           40 'ready :window 'old-window))
-         (view
-          (yunge-reader-webview--make-view
-           :surface surface :buffer (current-buffer) :persistent t))
-         (yunge-reader-webview--process 'fake-webview-process)
-         (yunge-reader-webview--views
-          (make-hash-table :test #'eql))
-         presented
-         requests
-         synchronized)
-    (puthash 40 view yunge-reader-webview--views)
-    (cl-letf (((symbol-function 'yunge-reader-webview--visible-window)
-               (lambda (_view) presented))
-              ((symbol-function 'window-live-p) (lambda (_window) t))
-              ((symbol-function 'window-frame)
-               (lambda (_window) 'same-frame))
-              ((symbol-function 'yunge-reader-webview--window-bounds)
-               (lambda (_window)
-                 '((x . 20) (y . 30) (width . 400) (height . 500))))
-              ((symbol-function
-                'yunge-reader-webview--update-scroll-bar-mode)
+           40 'ready :window 'first))
+         (second
+          (yunge-reader-webview-test--surface
+           41 'ready :window 'second))
+         (view (yunge-reader-webview--make-view :surface first)))
+    (yunge-reader-webview--register-surface view first)
+    (yunge-reader-webview--register-surface view second)
+    (cl-letf (((symbol-function 'yunge-reader-webview--visible-windows)
+               (lambda (_view) '(first second)))
+              ((symbol-function 'yunge-reader-webview--visible-window)
+               (lambda (_view) 'second))
+              ((symbol-function 'yunge-reader-webview--sync-surface)
                #'ignore)
-              ((symbol-function
-                'yunge-reader-webview--send-latest-bounds)
-               (lambda (value) (setq synchronized value)))
-              ((symbol-function 'process-live-p)
-               (lambda (_process) t))
-              ((symbol-function 'yunge-reader-webview--request)
-               (lambda (operation parameters _complete)
-                 (push (list operation parameters) requests)))
               ((symbol-function 'yunge-reader-webview--release-surface)
                (lambda (&rest _arguments)
-                 (ert-fail "Same-frame return released the surface")))
+                 (ert-fail "Visible presentation was released")))
               ((symbol-function 'yunge-reader-webview--start-surface)
                (lambda (&rest _arguments)
-                 (ert-fail "Same-frame return recreated the surface"))))
-      (yunge-reader-webview--sync-view view)
-      (should (eq (yunge-reader-webview--view-surface view) surface))
-      (should (eq (yunge-reader-webview--surface-window surface)
-                  'old-window))
-      (should
-       (equal (mapcar #'car (reverse requests))
-              '("view-clear-selection" "view-visible")))
-      (should
-       (eq (alist-get 'visible (cadr (car requests))) :false))
-      (setq presented 'new-window)
+                 (ert-fail "Visible presentation was recreated"))))
       (yunge-reader-webview--sync-view view))
-    (should (eq (yunge-reader-webview--view-surface view) surface))
-    (should (eq (yunge-reader-webview--surface-window surface)
-                'new-window))
-    (should (eq synchronized view))
-    (should (equal (caar requests) "view-visible"))
-    (should (alist-get 'visible (cadar requests)))
-    (should
-     (equal (mapcar #'car (reverse requests))
-            '("view-clear-selection" "view-visible"
-              "view-visible")))))
+    (should (eq (yunge-reader-webview--view-surface view) second))))
+
+(ert-deftest yunge-reader-webview-keeps-presentation-location-and-selection ()
+  (let* ((first-location (yunge-reader-webview-test--location 0.1))
+         (second-location (yunge-reader-webview-test--location 0.6))
+         (first-selection (yunge-reader-webview-test--selection))
+         (second-selection
+          '((href . "OPS/next.xhtml")
+            (start . "epubcfi(/6/6!/4/2:1)")
+            (end . "epubcfi(/6/6!/4/2:4)")))
+         (first
+          (yunge-reader-webview-test--surface
+           50 'ready :window 'first :location first-location
+           :selection first-selection))
+         (second
+          (yunge-reader-webview-test--surface
+           51 'ready :window 'second))
+         (view
+          (yunge-reader-webview--make-view
+           :surface first :location first-location
+           :selection first-selection))
+         (yunge-reader-webview--process 'fake-webview-process)
+         (yunge-reader-webview--views (make-hash-table :test #'eql))
+         (location-notifications 0)
+         (selection-notifications 0))
+    (yunge-reader-webview--register-surface view first)
+    (yunge-reader-webview--register-surface view second)
+    (puthash 50 view yunge-reader-webview--views)
+    (puthash 51 view yunge-reader-webview--views)
+    (setf (yunge-reader-webview--view-location-changed-function view)
+          (lambda (&rest _arguments)
+            (cl-incf location-notifications))
+          (yunge-reader-webview--view-selection-changed-function view)
+          (lambda (&rest _arguments)
+            (cl-incf selection-notifications)))
+    (cl-letf (((symbol-function 'yunge-reader-webview--visible-window)
+               (lambda (_view) 'first)))
+      (yunge-reader-webview--handle-event
+       'fake-webview-process
+       `((kind . "event") (event . "location") (view . 51)
+         (user . t) (location . ,second-location)))
+      (yunge-reader-webview--handle-event
+       'fake-webview-process
+       `((kind . "event") (event . "selection") (view . 51)
+         (selection . ,second-selection))))
+    (should (equal (yunge-reader-webview--surface-location second)
+                   second-location))
+    (should (equal (yunge-reader-webview--surface-selection second)
+                   second-selection))
+    (should (equal (yunge-reader-webview--view-location view)
+                   first-location))
+    (should (equal (yunge-reader-webview--view-selection view)
+                   first-selection))
+    (should (zerop location-notifications))
+    (should (zerop selection-notifications))
+    (cl-letf (((symbol-function 'yunge-reader-webview--visible-windows)
+               (lambda (_view) '(first second)))
+              ((symbol-function 'yunge-reader-webview--visible-window)
+               (lambda (_view) 'second))
+              ((symbol-function 'yunge-reader-webview--sync-surface)
+               #'ignore))
+      (yunge-reader-webview--sync-view view))
+    (should (eq (yunge-reader-webview--view-surface view) second))
+    (should (equal (yunge-reader-webview--view-location view)
+                   second-location))
+    (should (equal (yunge-reader-webview--view-selection view)
+                   second-selection))
+    (should (= location-notifications 1))
+    (should (= selection-notifications 1))))
 
 (ert-deftest yunge-reader-webview-moves-before-synchronizing-focus ()
   (let (calls)
@@ -2065,8 +2151,10 @@
          released)
     (cl-letf (((symbol-function 'yunge-reader-webview--visible-window)
                (lambda (_view) nil))
+              ((symbol-function 'yunge-reader-webview--visible-windows)
+               (lambda (_view) nil))
               ((symbol-function 'yunge-reader-webview--release-surface)
-               (lambda (value &optional _complete)
+               (lambda (value &optional _complete _surface)
                  (setq released value)))
               ((symbol-function 'yunge-reader-webview--set-view-visible)
                (lambda (&rest _arguments)
@@ -2091,8 +2179,10 @@
          requested)
     (unwind-protect
         (cl-letf
-            (((symbol-function 'get-buffer-window)
-              (lambda (&rest _arguments) window))
+            (((symbol-function 'yunge-reader-webview--visible-windows)
+              (lambda (_view) (list window)))
+             ((symbol-function 'yunge-reader-webview--visible-window)
+              (lambda (_view) window))
              ((symbol-function 'window-buffer)
               (lambda (_window) buffer))
              ((symbol-function 'window-live-p)
@@ -2101,7 +2191,7 @@
               (lambda (_window)
                 '((x . 0) (y . 0) (width . 800) (height . 600))))
              ((symbol-function 'yunge-reader-webview--request-create)
-              (lambda (value) (setq requested value))))
+              (lambda (value _surface) (setq requested value))))
           (yunge-reader-webview--sync-view view)
           (should (eq requested view))
           (let ((surface
@@ -2200,6 +2290,8 @@
       (let ((view
              (yunge-reader-webview--attach-shared-publication
                8 'reflow
+               yunge-reader-webview-test--resource-root
+               yunge-reader-webview-test--renderer-url 3
                :appearance-function
                #'yunge-reader-webview-test--original-appearance
                :style style
@@ -2232,6 +2324,8 @@
       (let ((view
              (yunge-reader-webview--attach-shared-publication
                8 'fixed
+               yunge-reader-webview-test--resource-root
+               yunge-reader-webview-test--renderer-url 3
               :appearance-function
               #'yunge-reader-webview-test--original-appearance
               :zoom 1.5
@@ -2245,6 +2339,8 @@
       (let ((view
              (yunge-reader-webview--attach-shared-publication
                8 'fixed
+               yunge-reader-webview-test--resource-root
+               yunge-reader-webview-test--renderer-url 3
               :appearance-function
               #'yunge-reader-webview-test--original-appearance)))
         (should
@@ -2257,6 +2353,8 @@
       (should-error
         (yunge-reader-webview--attach-shared-publication
          8 'fixed
+         yunge-reader-webview-test--resource-root
+         yunge-reader-webview-test--renderer-url 3
          :appearance-function
          #'yunge-reader-webview-test--original-appearance
          :style (yunge-reader-webview-test--style))))
@@ -2264,6 +2362,8 @@
       (should-error
         (yunge-reader-webview--attach-shared-publication
          8 'reflow
+         yunge-reader-webview-test--resource-root
+         yunge-reader-webview-test--renderer-url 3
          :appearance-function
          #'yunge-reader-webview-test--original-appearance
          :zoom 'fit-page)))
@@ -2271,6 +2371,8 @@
       (should-error
         (yunge-reader-webview--attach-shared-publication
          8 'reflow
+         yunge-reader-webview-test--resource-root
+         yunge-reader-webview-test--renderer-url 3
          :appearance-function
          #'yunge-reader-webview-test--original-appearance
          :zoom-changed-function #'ignore)))))
@@ -2287,6 +2389,7 @@
          (yunge-reader-webview--logical-views
           (make-hash-table :test #'eq))
          requests
+         cancelled
          finished)
     (puthash 31 view yunge-reader-webview--views)
     (puthash view t yunge-reader-webview--logical-views)
@@ -2295,13 +2398,17 @@
          ((symbol-function 'yunge-reader-webview--request)
           (lambda (_operation parameters complete)
             (push (cons (alist-get 'view parameters) complete)
-                  requests))))
+                  requests)))
+         ((symbol-function 'yunge-reader-webview--cancel-view-requests)
+          (lambda (candidate _reason)
+            (setq cancelled candidate))))
       (yunge-reader-webview--release-surface view)
       (setf (yunge-reader-webview--view-surface view)
             (yunge-reader-webview-test--surface 32 'native-ready))
       (puthash 32 view yunge-reader-webview--views)
       (yunge-reader-webview--destroy-view
        view (lambda () (setq finished t)))
+      (should (eq cancelled view))
       (should (= (length requests) 2))
       (funcall (cdr (assq 32 requests)) nil nil)
       (should-not finished)
@@ -2317,23 +2424,29 @@
            :surface
            (yunge-reader-webview-test--surface 10 'native-ready)
            :publication 3 :location location
-           :owns-publication t))
+           :broker-session 9 :owns-publication t))
          (yunge-reader-webview--process 'fake-webview-process)
          (yunge-reader-webview--views
           (make-hash-table :test #'eql))
-         requests)
+         requests
+         closed)
     (puthash 10 view yunge-reader-webview--views)
     (cl-letf (((symbol-function 'process-live-p) (lambda (_process) t))
               ((symbol-function 'yunge-reader-webview--request)
                (lambda (operation parameters complete)
-                 (push (list operation parameters complete) requests))))
+                 (push (list operation parameters complete) requests)))
+              ((symbol-function 'yunge-reader-webview--close-publication)
+               (lambda (session publication complete)
+                 (setq closed (list session publication))
+                 (funcall complete '((closed . t)) nil))))
       (yunge-reader-webview--destroy-view view)
       (should (equal (yunge-reader-webview--view-location view)
                      location))
       (should (equal (caar requests) "view-destroy"))
       (funcall (nth 2 (car requests)) nil nil)
+      (should (equal closed '(9 3)))
       (should
        (equal (mapcar #'car (nreverse requests))
-              '("view-destroy" "publication-close"))))))
+              '("view-destroy"))))))
 
 ;;; yunge-reader-webview-test.el ends here

@@ -64,7 +64,11 @@
            :window 'window
            :requested-bounds
            '((x . 10) (y . 20) (width . 300) (height . 400))))
-         (view (yunge-reader-webview--make-view :surface surface))
+         (view
+          (yunge-reader-webview--make-view
+           :surface surface
+           :renderer-url
+           "http://127.0.0.1:32123/0123456789abcdef0123456789abcdef/app/index.html"))
          request)
     (cl-letf (((symbol-function 'window-frame)
                (lambda (_window) 'frame))
@@ -83,38 +87,6 @@
             '((x . 30) (y . 40) (width . 900) (height . 700))))
     (should (eq (alist-get 'visible (cadr request)) t))))
 
-(ert-deftest yunge-reader-webview-reparents-a-created-surface ()
-  (let* ((surface
-          (yunge-reader-webview--make-surface
-           :id 7
-           :state 'ready
-           :window 'old-window
-           :bounds '((x . 0) (y . 0) (width . 100) (height . 100))))
-         (view (yunge-reader-webview--make-view :surface surface))
-         request)
-    (cl-letf (((symbol-function 'window-frame)
-               (lambda (_window) 'frame))
-              ((symbol-function 'yunge-reader-webview--window-bounds)
-               (lambda (_window)
-                 '((x . 10) (y . 20) (width . 300) (height . 400))))
-              ((symbol-function 'yunge-reader-webview--frame-handle)
-               (lambda (_frame) 1234))
-              ((symbol-function 'yunge-reader-webview--frame-bounds)
-               (lambda (_frame)
-                 '((x . 30) (y . 40) (width . 900) (height . 700))))
-              ((symbol-function 'yunge-reader-webview--request)
-               (lambda (operation parameters complete)
-                 (setq request (list operation parameters complete)))))
-      (yunge-reader-webview--set-surface-parent view 'new-window))
-    (should (equal (car request) "view-parent"))
-    (should (= (alist-get 'parent (cadr request)) 1234))
-    (should
-     (equal (alist-get 'bounds (cadr request))
-            '((x . 10) (y . 20) (width . 300) (height . 400))))
-    (should (eq (yunge-reader-webview--surface-window surface)
-                'new-window))
-    (should (= (yunge-reader-webview--surface-id surface) 7))))
-
 (ert-deftest yunge-reader-webview-bounds-renderer-open-times-out ()
   (let* ((surface
           (yunge-reader-webview--make-surface
@@ -127,7 +99,7 @@
                 'yunge-reader-webview--set-buffer-message)
                (lambda (_view message) (setq warning message)))
               ((symbol-function 'display-warning) #'ignore))
-      (yunge-reader-webview--open-watchdog view))
+      (yunge-reader-webview--open-watchdog view 7))
     (should (eq (yunge-reader-webview--surface-state surface) 'failed))
     (should (equal warning "Timed out while opening the EPUB renderer"))))
 

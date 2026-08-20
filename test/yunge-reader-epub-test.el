@@ -16,7 +16,15 @@
 (defun yunge-reader-epub-test--handle (&optional publication)
   "Return a live EPUB handle for PUBLICATION."
   (make-yunge-reader-epub-handle
+   :session 1
    :publication (or publication 7)
+   :renderer-url (concat
+                  "http://127.0.0.1:32123/"
+                  "0123456789abcdef0123456789abcdef/app/index.html")
+   :resource-root (concat
+                   "http://127.0.0.1:32123/"
+                   "0123456789abcdef0123456789abcdef/book/"
+                   "fedcba9876543210fedcba9876543210/")
    :metadata '(:title "Test Book")
    :pending-detaches 0))
 
@@ -183,6 +191,9 @@
              properties props
              error-data error))
      '((publication . 9)
+       (session . 1)
+       (renderer-url . "http://127.0.0.1:32123/0123456789abcdef0123456789abcdef/app/index.html")
+       (resource-root . "http://127.0.0.1:32123/0123456789abcdef0123456789abcdef/book/fedcba9876543210fedcba9876543210/")
        (metadata
         . ((title . "Protocol Book")
            (language . "en")
@@ -209,6 +220,9 @@
              properties props
              error-data error))
      '((publication . 10)
+       (session . 1)
+       (renderer-url . "http://127.0.0.1:32123/0123456789abcdef0123456789abcdef/app/index.html")
+       (resource-root . "http://127.0.0.1:32123/0123456789abcdef0123456789abcdef/book/fedcba9876543210fedcba9876543210/")
        (metadata
         . ((title . "Fixed Book")
            (layout . "pre-paginated")))
@@ -224,11 +238,14 @@
       (cl-letf
           (((symbol-function
              'yunge-reader-webview--close-owned-publication)
-            (lambda (publication) (setq closed publication))))
+            (lambda (_session publication) (setq closed publication))))
         (yunge-reader-epub--open-complete
          (lambda (_value _properties error)
            (setq error-data error))
          `((publication . 11)
+           (session . 1)
+           (renderer-url . "http://127.0.0.1:32123/0123456789abcdef0123456789abcdef/app/index.html")
+           (resource-root . "http://127.0.0.1:32123/0123456789abcdef0123456789abcdef/book/fedcba9876543210fedcba9876543210/")
            (metadata . ((layout . ,layout))))
          nil))
       (should error-data)
@@ -275,7 +292,8 @@
       (cl-letf
           (((symbol-function
              'yunge-reader-webview--attach-shared-publication)
-             (lambda (_publication layout &rest options)
+             (lambda (_publication layout _root _renderer _session
+                      &rest options)
                (should (eq layout 'reflow))
                (setq attached-appearance-function
                      (plist-get options :appearance-function)
@@ -369,7 +387,8 @@
       (cl-letf
           (((symbol-function
              'yunge-reader-webview--attach-shared-publication)
-            (lambda (_publication layout &rest options)
+            (lambda (_publication layout _root _renderer _session
+                     &rest options)
               (setq attached-layout layout
                     attached-style (plist-get options :style)
                     attached-zoom (plist-get options :zoom)))))
@@ -400,7 +419,8 @@
       (cl-letf
           (((symbol-function
              'yunge-reader-webview--attach-shared-publication)
-            (lambda (_publication _layout &rest options)
+            (lambda (_publication _layout _root _renderer _session
+                     &rest options)
               (setq attached-zoom (plist-get options :zoom)))))
         (yunge-reader-epub--attach document))
       (should (= attached-zoom 1.8))
@@ -421,7 +441,8 @@
       (cl-letf
           (((symbol-function
              'yunge-reader-webview--attach-shared-publication)
-            (lambda (_publication _layout &rest options)
+            (lambda (_publication _layout _root _renderer _session
+                     &rest options)
               (setq attached-zoom (plist-get options :zoom)))))
         (yunge-reader-epub--attach document))
       (should (eq attached-zoom 'fit-width))
@@ -637,7 +658,8 @@
       (cl-letf
           (((symbol-function
              'yunge-reader-webview--attach-shared-publication)
-            (lambda (publication layout &rest options)
+            (lambda (publication layout _root _renderer _session
+                     &rest options)
               (should (eq layout 'reflow))
               (setq yunge-reader-webview--buffer-view
                     (yunge-reader-webview--make-view
@@ -668,7 +690,7 @@
             (lambda (_process) t))
            ((symbol-function
              'yunge-reader-webview--close-publication)
-            (lambda (publication complete)
+            (lambda (_session publication complete)
               (setq closed-publication publication
                     close-complete complete))))
         (yunge-reader-epub--attach document)
@@ -916,9 +938,10 @@
                 (lambda () view))
                ((symbol-function
                  'yunge-reader-webview--request-current-selection)
-                (lambda (actual complete)
+                (lambda (actual complete &optional revision)
                   (setq requested actual
-                        completion complete)))
+                        completion complete)
+                  (should (= revision 1))))
                ((symbol-function 'yunge-reader-copy-selection)
                 (lambda ()
                   (setq copied (copy-tree yunge-reader-selection)))))
@@ -955,7 +978,9 @@
                 (lambda () view))
                ((symbol-function
                  'yunge-reader-webview--request-current-selection)
-                (lambda (_view complete) (setq completion complete)))
+                (lambda (_view complete &optional revision)
+                  (should (= revision 1))
+                  (setq completion complete)))
                ((symbol-function 'yunge-reader-copy-selection)
                 (lambda () (setq copied t))))
             (yunge-reader-epub-copy-selection)
@@ -1068,14 +1093,18 @@
            :selection (copy-tree selection)))
          request
          result
-         error-data)
+         error-data
+         (yunge-reader--request-task
+          (yunge-reader-task-create
+           'selection-text #'ignore :revision 12)))
     (with-temp-buffer
       (setq yunge-reader-webview--buffer-view view)
       (cl-letf
           (((symbol-function
              'yunge-reader-webview--request-selection-text)
             (lambda (requested-view requested-selection offset limit
-                                    complete)
+                                    complete &optional revision)
+              (should (= revision 12))
               (setq request
                     (list requested-view requested-selection offset limit))
               (funcall
@@ -1085,10 +1114,11 @@
                  (next-offset . 8)
                  (done))
                nil))))
-        (yunge-reader-epub--request
-         document 'selection-text
-         (list :start start :end end :cursor cursor
-               :unit-limit 1 :character-limit 16)
+        (yunge-reader-epub--request-selection-text
+         document
+         (make-yunge-reader-selection-text-request
+          :start start :end end :cursor cursor
+          :unit-limit 1 :character-limit 16)
          (lambda (value error)
            (setq result value
                  error-data error)))))
@@ -1121,7 +1151,9 @@
           (((symbol-function 'yunge-reader-webview--request-search)
             (lambda (requested-view query case-sensitive direction
                                     origin native-cursor match-limit
-                                    section-limit complete)
+                                    section-limit complete
+                                    &optional revision)
+              (should-not revision)
               (setq request
                     (list requested-view query case-sensitive direction
                           origin native-cursor match-limit section-limit))
@@ -1138,10 +1170,11 @@
                   . ((href . "OPS/chapter.xhtml") (offset . 3)))
                  (done))
                nil))))
-        (yunge-reader-epub--request
-         document 'search
-         (list :query "Chapter" :case-sensitive t :direction 'forward
-               :origin nil :cursor cursor :match-limit 32 :page-limit 8)
+        (yunge-reader-epub--request-search
+         document
+         (make-yunge-reader-search-request
+          :query "Chapter" :case-sensitive t :direction 'forward
+          :origin nil :cursor cursor :match-limit 32 :unit-limit 8)
          (lambda (value error)
            (setq result value
                  error-data error)))))
@@ -1183,10 +1216,11 @@
       (cl-letf
           (((symbol-function 'yunge-reader-webview--request-search)
             (lambda (&rest _arguments) (setq requested t))))
-        (yunge-reader-epub--request
-         document 'search
-         (list :query "Chapter" :case-sensitive nil :direction 'forward
-               :origin nil :cursor cursor :match-limit 32 :page-limit 8)
+        (yunge-reader-epub--request-search
+         document
+         (make-yunge-reader-search-request
+          :query "Chapter" :case-sensitive nil :direction 'forward
+          :origin nil :cursor cursor :match-limit 32 :unit-limit 8)
          (lambda (_value error) (setq error-data error)))))
     (should error-data)
     (should-not requested)))
@@ -1214,10 +1248,11 @@
           (((symbol-function
              'yunge-reader-webview--request-selection-text)
             (lambda (&rest _arguments) (setq requested t))))
-        (yunge-reader-epub--request
-         document 'selection-text
-         (list :start start :end end :cursor nil
-               :unit-limit 1 :character-limit 16)
+        (yunge-reader-epub--request-selection-text
+         document
+         (make-yunge-reader-selection-text-request
+          :start start :end end :cursor nil
+          :unit-limit 1 :character-limit 16)
          (lambda (_value error) (setq error-data error)))))
     (should error-data)
     (should-not requested)))
@@ -1281,8 +1316,8 @@
          request-error)
     (with-temp-buffer
       (setq yunge-reader-webview--buffer-view view)
-      (yunge-reader-epub--request
-       document 'outline nil
+      (yunge-reader-epub--request-outline
+       document nil
        (lambda (value error-data)
          (setq result value
                request-error error-data))))

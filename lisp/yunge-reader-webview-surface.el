@@ -67,16 +67,20 @@ in-process module binds the selected key window when it creates the surface."
         (height . ,(frame-pixel-height frame))))))
 
 (defun yunge-reader-webview--surface-current-p (view id)
-  "Return whether ID is VIEW's current native surface."
-  (let ((surface (yunge-reader-webview--view-surface view)))
-    (and surface
-         (integerp id)
-         (eql id (yunge-reader-webview--surface-id surface))
-         (eq (gethash id yunge-reader-webview--views) view))))
+  "Return whether ID names one registered native surface of VIEW."
+  (and (integerp id)
+       (eq (gethash id yunge-reader-webview--views) view)
+       (or (yunge-reader-webview--view-surface-for-id view id)
+           (let ((surface (yunge-reader-webview--view-surface view)))
+             (and surface
+                  (eql id
+                       (yunge-reader-webview--surface-id surface)))))))
 
-(defun yunge-reader-webview--send-latest-bounds (view)
-  "Send VIEW's latest requested bounds unless one is in flight."
-  (when-let* ((surface (yunge-reader-webview--view-surface view))
+(defun yunge-reader-webview--send-latest-bounds (view &optional surface)
+  "Send SURFACE's latest requested bounds unless one is in flight.
+SURFACE defaults to VIEW's active presentation."
+  (when-let* ((surface (or surface
+                           (yunge-reader-webview--view-surface view)))
               ((yunge-reader-webview--surface-created-p surface))
               ((not (yunge-reader-webview--view-destroyed view)))
               ((not
@@ -104,7 +108,8 @@ in-process module binds the selected key window when it creates the surface."
                   'yunge-reader
                   (error-message-string error-data)
                   :warning))
-               (yunge-reader-webview--send-latest-bounds view)))))))))
+               (yunge-reader-webview--send-latest-bounds
+                view surface)))))))))
 
 (defun yunge-reader-webview--cancel-open-timer (surface)
   "Cancel SURFACE's renderer readiness timer."
@@ -137,19 +142,27 @@ in-process module binds the selected key window when it creates the surface."
     (yunge-reader-webview--maybe-finish-view-destroy view)))
 
 (defun yunge-reader-webview--release-surface
-    (view &optional complete)
-  "Release VIEW's native surface while retaining its logical state."
-  (let* ((surface (yunge-reader-webview--view-surface view))
+    (view &optional complete surface)
+  "Release one native SURFACE while retaining VIEW's logical state.
+SURFACE defaults to VIEW's active presentation."
+  (let* ((surface (or surface
+                      (yunge-reader-webview--view-surface view)))
          (id (and surface
                   (yunge-reader-webview--surface-id surface)))
+         (was-active
+          (eq surface (yunge-reader-webview--view-surface view)))
          (created
           (yunge-reader-webview--surface-created-p surface)))
     (when surface
       (yunge-reader-webview--cancel-open-timer surface))
     (when id
       (remhash id yunge-reader-webview--views))
-    (setf (yunge-reader-webview--view-surface view) nil)
-    (yunge-reader-webview--set-view-selection view nil)
+    (when surface
+      (yunge-reader-webview--unregister-surface view surface))
+    (when surface
+      (setf (yunge-reader-webview--surface-selection surface) nil))
+    (when (or (null surface) was-active)
+      (yunge-reader-webview--set-view-selection view nil))
     (cond
      ((not id)
       (when complete
@@ -171,7 +184,7 @@ in-process module binds the selected key window when it creates the surface."
 (defun yunge-reader-webview--open-complete
     (view id _result error-data)
   "Finish VIEW surface ID's attempt to attach its publication."
-  (let ((surface (yunge-reader-webview--view-surface view)))
+  (let ((surface (yunge-reader-webview--view-surface-for-id view id)))
     (when (yunge-reader-webview--surface-current-p view id)
       (when error-data
         (setf (yunge-reader-webview--surface-style surface) nil
@@ -194,11 +207,12 @@ in-process module binds the selected key window when it creates the surface."
           (setf (yunge-reader-webview--surface-open-timer surface)
                 (run-at-time
                  yunge-reader-webview-open-timeout nil
-                 #'yunge-reader-webview--open-watchdog view))))))))
+                 #'yunge-reader-webview--open-watchdog view id))))))))
 
-(defun yunge-reader-webview--open-watchdog (view)
-  "Fail VIEW when its renderer does not finish opening."
-  (when-let* ((surface (yunge-reader-webview--view-surface view)))
+(defun yunge-reader-webview--open-watchdog (view id)
+  "Fail VIEW surface ID when its renderer does not finish opening."
+  (when-let* ((surface
+               (yunge-reader-webview--view-surface-for-id view id)))
     (setf (yunge-reader-webview--surface-open-timer surface) nil)
     (when (and (eq (yunge-reader-webview--surface-state surface) 'opening)
                (not (yunge-reader-webview--view-destroyed view)))
@@ -207,9 +221,11 @@ in-process module binds the selected key window when it creates the surface."
         (yunge-reader-webview--set-buffer-message view message)
         (display-warning 'yunge-reader message :warning)))))
 
-(defun yunge-reader-webview--try-open-publication (view)
-  "Attach VIEW's publication to its native renderer."
-  (when-let* ((surface (yunge-reader-webview--view-surface view)))
+(defun yunge-reader-webview--try-open-publication (view &optional surface)
+  "Attach VIEW's publication to SURFACE's native renderer.
+SURFACE defaults to VIEW's active presentation."
+  (when-let* ((surface (or surface
+                           (yunge-reader-webview--view-surface view))))
     (setf (yunge-reader-webview--surface-open-timer surface) nil)
     (when (and (memq (yunge-reader-webview--surface-state surface)
                      '(native-ready opening))
@@ -223,22 +239,36 @@ in-process module binds the selected key window when it creates the surface."
                     (yunge-reader-webview--view-style view)))
               (yunge-reader-webview--surface-appearance surface)
               (copy-tree
-               (yunge-reader-webview--view-appearance view))
+               (or (yunge-reader-webview--surface-desired-appearance
+                    surface)
+                   (yunge-reader-webview--view-appearance view)))
               (yunge-reader-webview--surface-zoom surface)
               (yunge-reader-webview--view-zoom view)
               (yunge-reader-webview--surface-scroll-bar-mode surface)
-              (yunge-reader-webview--view-scroll-bar-mode view))
-        (yunge-reader-webview--open-view-publication
-         view
-         (yunge-reader-webview--view-publication view)
-         (apply-partially
-          #'yunge-reader-webview--open-complete view id)
-         (yunge-reader-webview--view-location view)
-         (copy-tree
-          (yunge-reader-webview--view-appearance view))
-         (yunge-reader-webview--view-style view)
-         (yunge-reader-webview--view-zoom view)
-         (yunge-reader-webview--view-scroll-bar-mode view))))))
+              (or (yunge-reader-webview--surface-desired-scroll-bar-mode
+                   surface)
+                  (yunge-reader-webview--view-scroll-bar-mode view)))
+        (let ((active (yunge-reader-webview--view-surface view)))
+          (unwind-protect
+              (progn
+                (setf (yunge-reader-webview--view-surface view) surface)
+                (yunge-reader-webview--open-view-publication
+                 view
+                 (yunge-reader-webview--view-publication view)
+                 (apply-partially
+                  #'yunge-reader-webview--open-complete view id)
+                 (or (yunge-reader-webview--surface-location surface)
+                     (yunge-reader-webview--view-location view))
+                 (copy-tree
+                  (or (yunge-reader-webview--surface-desired-appearance
+                       surface)
+                      (yunge-reader-webview--view-appearance view)))
+                 (yunge-reader-webview--view-style view)
+                 (yunge-reader-webview--view-zoom view)
+                 (or (yunge-reader-webview--surface-desired-scroll-bar-mode
+                      surface)
+                     (yunge-reader-webview--view-scroll-bar-mode view))))
+            (setf (yunge-reader-webview--view-surface view) active)))))))
 
 (defun yunge-reader-webview--destroy-obsolete-surface
     (view id)
@@ -260,7 +290,9 @@ in-process module binds the selected key window when it creates the surface."
       (yunge-reader-webview--destroy-obsolete-surface view id)))
    (error-data
     (remhash id yunge-reader-webview--views)
-    (setf (yunge-reader-webview--view-surface view) nil)
+    (when-let* ((surface
+                 (yunge-reader-webview--view-surface-for-id view id)))
+      (yunge-reader-webview--unregister-surface view surface))
     (yunge-reader-webview--set-buffer-message
      view (error-message-string error-data))
     (display-warning
@@ -268,18 +300,21 @@ in-process module binds the selected key window when it creates the surface."
     (unless (yunge-reader-webview--view-persistent view)
       (yunge-reader-webview--destroy-view view)))
    (t
-    (let ((surface (yunge-reader-webview--view-surface view)))
+    (let ((surface
+           (yunge-reader-webview--view-surface-for-id view id)))
       (yunge-reader-webview--set-surface-state surface 'native-ready)
       (setf (yunge-reader-webview--surface-bounds surface)
             created-bounds))
     (yunge-reader-webview--sync-view view)
     (when (and (yunge-reader-webview--surface-current-p view id)
                (yunge-reader-webview--view-publication view))
-      (yunge-reader-webview--try-open-publication view)))))
+      (yunge-reader-webview--try-open-publication
+       view (yunge-reader-webview--view-surface-for-id view id))))))
 
-(defun yunge-reader-webview--request-create (view)
-  "Ask the helper to create native VIEW."
-  (let* ((surface (yunge-reader-webview--view-surface view))
+(defun yunge-reader-webview--request-create (view &optional surface)
+  "Ask the helper to create VIEW's native SURFACE."
+  (let* ((surface (or surface
+                      (yunge-reader-webview--view-surface view)))
          (id (yunge-reader-webview--surface-id surface))
          (window (yunge-reader-webview--surface-window surface))
          (frame (window-frame window))
@@ -289,6 +324,9 @@ in-process module binds the selected key window when it creates the surface."
     (yunge-reader-webview--request
      "view-create"
      `((view . ,id)
+       (renderer-url
+        . ,(or (yunge-reader-webview--view-renderer-url view)
+               (error "EPUB view has no broker renderer URL")))
        (parent . ,(yunge-reader-webview--frame-handle frame))
        (frame . ,(yunge-reader-webview--frame-bounds frame))
        (bounds . ,bounds)
@@ -296,52 +334,14 @@ in-process module binds the selected key window when it creates the surface."
      (apply-partially
       #'yunge-reader-webview--create-complete view id bounds))))
 
-(defun yunge-reader-webview--parent-complete
-    (view id window bounds _result error-data)
-  "Finish moving VIEW surface ID to WINDOW with BOUNDS."
-  (when (yunge-reader-webview--surface-current-p view id)
-    (let ((surface (yunge-reader-webview--view-surface view)))
-      (when (eq (yunge-reader-webview--surface-window surface) window)
-        (if error-data
-            (progn
-              (display-warning
-               'yunge-reader (error-message-string error-data) :warning)
-              (yunge-reader-webview--release-surface view)
-              (when (and (window-live-p window)
-                         (eq (window-buffer window)
-                             (yunge-reader-webview--view-buffer view)))
-                (yunge-reader-webview--start-surface view window)))
-          (setf (yunge-reader-webview--surface-bounds surface) bounds))))))
-
-(defun yunge-reader-webview--set-surface-parent (view window)
-  "Move VIEW's created native surface into live WINDOW."
-  (let* ((surface (yunge-reader-webview--view-surface view))
-         (id (yunge-reader-webview--surface-id surface))
-         (frame (window-frame window))
-         (bounds (yunge-reader-webview--window-bounds window)))
-    (setf (yunge-reader-webview--surface-window surface) window
-          (yunge-reader-webview--surface-requested-bounds surface) bounds
-          (yunge-reader-webview--surface-bounds surface) bounds
-          (yunge-reader-webview--surface-bounds-pending surface) nil)
-    (yunge-reader-webview--request
-     "view-parent"
-     `((view . ,id)
-       (parent . ,(yunge-reader-webview--frame-handle frame))
-       (frame . ,(yunge-reader-webview--frame-bounds frame))
-       (bounds . ,bounds))
-     (apply-partially
-      #'yunge-reader-webview--parent-complete
-      view id window bounds))))
-
 (defun yunge-reader-webview--start-surface (view window)
   "Create VIEW's native surface in live WINDOW."
   (unless (and (window-live-p window)
                (eq (window-buffer window)
                    (yunge-reader-webview--view-buffer view)))
     (error "Cannot attach EPUB surface to an unrelated window"))
-  (unless (or (null (yunge-reader-webview--view-surface view))
-              (yunge-reader-webview--view-destroyed view))
-    (error "EPUB view already owns a native surface"))
+  (when (yunge-reader-webview--view-surface-for-window view window)
+    (error "EPUB view already owns a native surface for this window"))
   (unless (yunge-reader-webview--view-destroyed view)
     (let ((id (cl-incf yunge-reader-webview--next-view-id))
           (appearance
@@ -349,18 +349,33 @@ in-process module binds the selected key window when it creates the surface."
           (bar-mode
            (yunge-reader-webview--resolved-scroll-bar-mode view window)))
       (yunge-reader-webview--set-view-selection view nil)
-      (setf (yunge-reader-webview--view-surface view)
-            (yunge-reader-webview--make-surface
+      (let ((surface
+             (yunge-reader-webview--make-surface
              :id id
-             :window window
-             :requested-bounds
-             (yunge-reader-webview--window-bounds window))
-            (yunge-reader-webview--view-appearance view) appearance
-            (yunge-reader-webview--view-scroll-bar-mode view)
-            bar-mode
-            (yunge-reader-webview--view-outline-error view) nil)
-      (puthash id view yunge-reader-webview--views)
-      (yunge-reader-webview--request-create view)))
+              :window window
+              :desired-appearance (copy-tree appearance)
+              :desired-scroll-bar-mode bar-mode
+              :location
+              (and (yunge-reader-webview--view-location view)
+                   (copy-tree
+                    (yunge-reader-webview--view-location view)))
+              :requested-bounds
+              (yunge-reader-webview--window-bounds window))))
+        (yunge-reader-webview--register-surface view surface)
+        (when (or (null (yunge-reader-webview--view-surface view))
+                  (eq window
+                      (with-current-buffer
+                          (yunge-reader-webview--view-buffer view)
+                        (yunge-reader--presentation-window))))
+          (setf (yunge-reader-webview--view-surface view) surface))
+        (when (eq (yunge-reader-webview--view-surface view) surface)
+          (setf (yunge-reader-webview--view-appearance view)
+                (copy-tree appearance)
+                (yunge-reader-webview--view-scroll-bar-mode view)
+                bar-mode))
+        (setf (yunge-reader-webview--view-outline-error view) nil)
+        (puthash id view yunge-reader-webview--views)
+        (yunge-reader-webview--request-create view surface))))
   view)
 
 (provide 'yunge-reader-webview-surface)

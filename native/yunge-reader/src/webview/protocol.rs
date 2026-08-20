@@ -6,7 +6,7 @@ use serde_json::Value;
 
 use super::ViewEvent;
 
-pub(super) const PROTOCOL_VERSION: u32 = 1;
+pub(super) const PROTOCOL_VERSION: u32 = 2;
 pub(super) const ACCELERATORS: [&str; 20] = [
     "'", "+", "-", "=", "<escape>", "<next>", "<prior>", "C-d", "C-g", "C-u",
     "G", "J", "K", "M-m", "SPC", "g", "j", "k", "m", "y",
@@ -23,11 +23,7 @@ pub(super) fn control_accelerator(key: u8) -> Option<&'static str> {
             && bytes[2].eq_ignore_ascii_case(&key)
     })
 }
-pub(super) const CAPABILITIES: [&str; 26] = [
-    "publication-close",
-    "publication-info",
-    "publication-open",
-    "publication-resources",
+pub(super) const CAPABILITIES: [&str; 21] = [
     "view-bounds",
     "view-appearance",
     "view-clear-selection",
@@ -39,7 +35,6 @@ pub(super) const CAPABILITIES: [&str; 26] = [
     "view-info",
     "view-navigate",
     "view-open-publication",
-    "view-parent",
     "view-search",
     "view-search-result",
     "view-current-selection",
@@ -58,15 +53,14 @@ pub(super) struct Request {
     pub(super) id: u64,
     pub(super) op: String,
     #[serde(default)]
+    pub(super) revision: Option<Value>,
+    #[serde(default)]
     pub(super) params: Value,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum Operation {
     Shutdown,
-    PublicationOpen,
-    PublicationInfo,
-    PublicationClose,
     ViewInfo,
     ViewCreate,
     ViewBounds,
@@ -79,7 +73,6 @@ pub(super) enum Operation {
     ViewSelectionText,
     ViewSetSelection,
     ViewOpenPublication,
-    ViewParent,
     ViewStyle,
     ViewScrollBars,
     ViewVisible,
@@ -98,9 +91,6 @@ impl Request {
     pub(super) fn operation(&self) -> Result<Operation, ServiceError> {
         let operation = match self.op.as_str() {
             "shutdown" => Operation::Shutdown,
-            "publication-open" => Operation::PublicationOpen,
-            "publication-info" => Operation::PublicationInfo,
-            "publication-close" => Operation::PublicationClose,
             "view-info" => Operation::ViewInfo,
             "view-create" => Operation::ViewCreate,
             "view-bounds" => Operation::ViewBounds,
@@ -113,7 +103,6 @@ impl Request {
             "view-selection-text" => Operation::ViewSelectionText,
             "view-set-selection" => Operation::ViewSetSelection,
             "view-open-publication" => Operation::ViewOpenPublication,
-            "view-parent" => Operation::ViewParent,
             "view-style" => Operation::ViewStyle,
             "view-scroll-bars" => Operation::ViewScrollBars,
             "view-visible" => Operation::ViewVisible,
@@ -142,6 +131,8 @@ pub(super) struct ProtocolError {
 #[derive(Debug, Serialize)]
 pub(super) struct Response {
     pub(super) id: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) revision: Option<Value>,
     pub(super) ok: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) result: Option<Value>,
@@ -153,6 +144,7 @@ impl Response {
     pub(super) fn success(id: u64, result: Value) -> Self {
         Self {
             id: Some(id),
+            revision: None,
             ok: true,
             result: Some(result),
             error: None,
@@ -166,6 +158,7 @@ impl Response {
     ) -> Self {
         Self {
             id,
+            revision: None,
             ok: false,
             result: None,
             error: Some(ProtocolError {
@@ -173,6 +166,11 @@ impl Response {
                 message: message.into(),
             }),
         }
+    }
+
+    pub(super) fn with_revision(mut self, revision: Option<Value>) -> Self {
+        self.revision = revision;
+        self
     }
 }
 
@@ -207,11 +205,13 @@ pub(super) enum Control {
 
 pub(super) fn response(
     id: u64,
+    revision: Option<Value>,
     result: Result<Value, ServiceError>,
 ) -> Response {
     match result {
-        Ok(value) => Response::success(id, value),
-        Err(error) => Response::failure(Some(id), error.code, error.message),
+        Ok(value) => Response::success(id, value).with_revision(revision),
+        Err(error) => Response::failure(Some(id), error.code, error.message)
+            .with_revision(revision),
     }
 }
 
@@ -271,12 +271,6 @@ mod tests {
         )
         .unwrap();
         assert_eq!(request.operation().unwrap(), Operation::ViewAppearance);
-
-        let request = Request::decode(
-            r#"{"id":12,"op":"view-parent","params":{"view":3}}"#,
-        )
-        .unwrap();
-        assert_eq!(request.operation().unwrap(), Operation::ViewParent);
     }
 
     #[test]

@@ -6,7 +6,6 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use super::protocol::{PROTOCOL_VERSION, RENDERER_ACCELERATORS, Response};
-use super::resources::{APP_BROWSER_URL, APP_URL};
 use super::{
     EpubAppearance, EpubLocator, EpubNavigationTarget, EpubOutline,
     EpubSearchCursor, EpubSearchMatch, EpubSelection, EpubStyle, EpubZoom,
@@ -16,6 +15,104 @@ use super::{
     SearchDirection, ViewEvent, ViewEventPayload, ViewSearchParams,
     ViewSelectionTextParams,
 };
+
+#[cfg(test)]
+const TEST_RENDERER_URL: &str = concat!(
+    "http://127.0.0.1:32123/",
+    "0123456789abcdef0123456789abcdef/app/index.html"
+);
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(super) struct RendererOrigin {
+    url: String,
+    blob_root: String,
+    resource_prefix: String,
+}
+
+impl RendererOrigin {
+    pub(super) fn parse(
+        url: &str,
+    ) -> Result<Self, super::protocol::ServiceError> {
+        let uri: http::Uri = url.parse().map_err(|_| {
+            super::protocol::ServiceError::new(
+                "invalid-renderer-url",
+                "EPUB renderer URL is invalid",
+            )
+        })?;
+        let authority = uri.authority().ok_or_else(|| {
+            super::protocol::ServiceError::new(
+                "invalid-renderer-url",
+                "EPUB renderer URL has no authority",
+            )
+        })?;
+        let path = uri.path();
+        let token = path
+            .strip_prefix('/')
+            .and_then(|path| path.strip_suffix("/app/index.html"));
+        if uri.scheme_str() != Some("http")
+            || authority.host() != "127.0.0.1"
+            || authority.port_u16().is_none()
+            || uri.query().is_some()
+            || !token.is_some_and(valid_broker_token)
+        {
+            return Err(super::protocol::ServiceError::new(
+                "invalid-renderer-url",
+                "EPUB renderer URL is not a local broker URL",
+            ));
+        }
+        let origin = format!("http://{authority}");
+        let resource_prefix =
+            format!("{origin}/{}/", token.unwrap_or_default());
+        Ok(Self {
+            url: url.to_owned(),
+            blob_root: format!("blob:{origin}/"),
+            resource_prefix,
+        })
+    }
+
+    pub(super) fn url(&self) -> &str {
+        &self.url
+    }
+
+    pub(super) fn source_allowed(&self, url: &str) -> bool {
+        url == self.url
+    }
+
+    pub(super) fn navigation_allowed(&self, url: &str) -> bool {
+        self.source_allowed(url) || self.blob_navigation_allowed(url)
+    }
+
+    pub(super) fn resource_root_allowed(&self, url: &str) -> bool {
+        let Some(path) = url.strip_prefix(&self.resource_prefix) else {
+            return false;
+        };
+        let Some(token) = path
+            .strip_prefix("book/")
+            .and_then(|path| path.strip_suffix('/'))
+        else {
+            return false;
+        };
+        valid_broker_token(token)
+    }
+
+    fn blob_navigation_allowed(&self, url: &str) -> bool {
+        let Some(identifier) = url.strip_prefix(&self.blob_root) else {
+            return false;
+        };
+        !identifier.is_empty()
+            && identifier.len() <= 128
+            && identifier
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
+    }
+}
+
+fn valid_broker_token(value: &str) -> bool {
+    value.len() == 32
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
+}
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -138,8 +235,26 @@ enum RendererMessage {
     },
 }
 
+#[cfg(test)]
 pub(super) fn shell_ready(request: &HttpRequest<String>) -> bool {
     if !app_renderer_source_allowed(&request.uri().to_string())
+        || request.body().len() > MAX_RENDERER_MESSAGE_BYTES
+    {
+        return false;
+    }
+    matches!(
+        serde_json::from_str(request.body()),
+        Ok(RendererMessage::ShellReady {
+            protocol: PROTOCOL_VERSION
+        })
+    )
+}
+
+pub(super) fn shell_ready_for(
+    origin: &RendererOrigin,
+    request: &HttpRequest<String>,
+) -> bool {
+    if !origin.source_allowed(&request.uri().to_string())
         || request.body().len() > MAX_RENDERER_MESSAGE_BYTES
     {
         return false;
@@ -448,19 +563,32 @@ pub(super) fn search_response(
     Response::failure(Some(id), code, error.message)
 }
 
+#[cfg(test)]
 pub(super) fn app_navigation_allowed(url: String) -> bool {
     app_renderer_source_allowed(&url) || app_blob_navigation_allowed(&url)
 }
 
-pub(super) fn app_renderer_source_allowed(url: &str) -> bool {
-    url == APP_URL || url == APP_BROWSER_URL
+pub(super) fn search_callback_for(
+    view: u64,
+    origin: &RendererOrigin,
+    request: &HttpRequest<String>,
+) -> Option<RendererSearchCallback> {
+    if !origin.source_allowed(&request.uri().to_string())
+        || request.body().len() > MAX_RENDERER_MESSAGE_BYTES
+    {
+        return None;
+    }
+    search_callback_body(view, request)
 }
 
+#[cfg(test)]
+pub(super) fn app_renderer_source_allowed(url: &str) -> bool {
+    url == TEST_RENDERER_URL
+}
+
+#[cfg(test)]
 fn app_blob_navigation_allowed(url: &str) -> bool {
-    #[cfg(target_os = "windows")]
-    const ROOTS: &[&str] = &["blob:https://yunge-reader-app.localhost/"];
-    #[cfg(target_os = "macos")]
-    const ROOTS: &[&str] = &["blob:yunge-reader-app://localhost/"];
+    const ROOTS: &[&str] = &["blob:http://127.0.0.1:32123/"];
     ROOTS.iter().any(|root| {
         let Some(identifier) = url.strip_prefix(root) else {
             return false;
@@ -473,6 +601,7 @@ fn app_blob_navigation_allowed(url: &str) -> bool {
     })
 }
 
+#[cfg(test)]
 pub(super) fn search_callback(
     view: u64,
     request: &HttpRequest<String>,
@@ -482,6 +611,13 @@ pub(super) fn search_callback(
     {
         return None;
     }
+    search_callback_body(view, request)
+}
+
+fn search_callback_body(
+    view: u64,
+    request: &HttpRequest<String>,
+) -> Option<RendererSearchCallback> {
     let message: RendererSearchMessage =
         serde_json::from_str(request.body()).ok()?;
     if message.protocol != PROTOCOL_VERSION
@@ -504,6 +640,7 @@ fn checked_renderer_error(protocol: u32, message: String) -> Option<String> {
         .then_some(message)
 }
 
+#[cfg(test)]
 pub(super) fn event(
     view: u64,
     request: &HttpRequest<String>,
@@ -513,6 +650,10 @@ pub(super) fn event(
     {
         return None;
     }
+    event_body(view, request)
+}
+
+fn event_body(view: u64, request: &HttpRequest<String>) -> Option<ViewEvent> {
     let message: RendererMessage = serde_json::from_str(request.body()).ok()?;
     let payload = match message {
         RendererMessage::Accelerator {
@@ -624,6 +765,19 @@ pub(super) fn event(
         }
     };
     Some(ViewEvent::new(view, payload))
+}
+
+pub(super) fn event_for(
+    view: u64,
+    origin: &RendererOrigin,
+    request: &HttpRequest<String>,
+) -> Option<ViewEvent> {
+    if !origin.source_allowed(&request.uri().to_string())
+        || request.body().len() > MAX_RENDERER_MESSAGE_BYTES
+    {
+        return None;
+    }
+    event_body(view, request)
 }
 
 pub(super) fn open_script(

@@ -36,15 +36,15 @@
                   "yunge-reader-webview" (view))
 (declare-function yunge-reader-webview--sync-view-zoom
                   "yunge-reader-webview" (view))
+(declare-function yunge-reader-webview--sync-view
+                  "yunge-reader-webview" (view))
 (declare-function yunge-reader--uri-valid-p "yunge-reader" (uri))
 
 (defvar yunge-reader-webview--process)
 
 (defconst yunge-reader-webview--passive-buffer-message
-  (concat "Native EPUB content is attached to one Emacs window at a time.\n\n"
-          "Select this window to move the EPUB view here.\n"
-          "Use SPC m v for an independent Additional view.")
-  "Message visible behind a passive EPUB surface.")
+  "Native EPUB content is rendered in every visible Reader window."
+  "Message visible behind native EPUB presentation surfaces.")
 
 (defun yunge-reader-webview--event-location (message)
   "Return the validated EPUB locator carried by event MESSAGE."
@@ -89,11 +89,17 @@
   "Validate and route one asynchronous WebView MESSAGE from PROCESS."
   (unless (eq process yunge-reader-webview--process)
     (error "WebView event belongs to an obsolete process"))
-  (let ((event (alist-get 'event message))
-        (id (alist-get 'view message)))
+  (let* ((event (alist-get 'event message))
+         (id (alist-get 'view message))
+         (view (and (integerp id)
+                    (gethash id yunge-reader-webview--views)))
+         (surface (and view
+                       (yunge-reader-webview--view-surface-for-id
+                        view id))))
     (unless (and (stringp event) (integerp id))
       (error "Malformed Yunge Reader WebView event: %S" message))
-    (pcase event
+    (let ((yunge-reader-webview--operation-surface surface))
+      (pcase event
       ("accelerator"
        (let ((key (alist-get 'key message))
              (repeat (alist-get 'repeat message)))
@@ -133,28 +139,29 @@
          (yunge-reader-webview--record-native-focus view nil)))
       ("publication-ready"
        (when-let* ((view (gethash id yunge-reader-webview--views)))
-         (yunge-reader-webview--cancel-open-timer
-          (yunge-reader-webview--view-surface view))
-         (yunge-reader-webview--store-view-location view message t)
-         (yunge-reader-webview--set-surface-state
-          (yunge-reader-webview--view-surface view) 'ready)
-         (yunge-reader-webview--set-view-selection view nil)
-         (yunge-reader-webview--sync-view-appearance view)
-         (yunge-reader-webview--sync-view-style view)
-         (yunge-reader-webview--sync-view-zoom view)
-         (yunge-reader-webview--sync-view-scroll-bars view)
+         (yunge-reader-webview--cancel-open-timer surface)
+         (yunge-reader-webview--store-view-location
+          view message t surface)
+         (yunge-reader-webview--set-surface-state surface 'ready)
+         (yunge-reader-webview--set-view-selection view nil surface)
+         (yunge-reader-webview--sync-view-appearance view surface)
+         (yunge-reader-webview--sync-view-style view surface)
+         (yunge-reader-webview--sync-view-zoom view surface)
+         (yunge-reader-webview--sync-view-scroll-bars view surface)
          (yunge-reader-webview--sync-view-search-result view)
          (yunge-reader-webview--store-view-outline view message)
          (yunge-reader-webview--dispatch-pending-target view)
          (yunge-reader-webview--set-buffer-message
-          view yunge-reader-webview--passive-buffer-message)))
+          view yunge-reader-webview--passive-buffer-message)
+         (yunge-reader-webview--sync-view view)))
       ("location"
        (when-let* ((view (gethash id yunge-reader-webview--views)))
-         (yunge-reader-webview--store-view-location view message)))
+         (yunge-reader-webview--store-view-location
+          view message nil surface)))
       ("selection"
        (when-let* ((view (gethash id yunge-reader-webview--views)))
          (yunge-reader-webview--set-view-selection
-          view (yunge-reader-webview--event-selection message))))
+          view (yunge-reader-webview--event-selection message) surface)))
       ("external-link"
        (let ((uri (yunge-reader-webview--event-external-uri message)))
          (when-let* ((view (gethash id yunge-reader-webview--views))
@@ -183,18 +190,14 @@
          (unless (stringp detail)
            (error "Malformed EPUB appearance error: %S" message))
          (when-let* ((view (gethash id yunge-reader-webview--views)))
-           (setf (yunge-reader-webview--surface-appearance
-                  (yunge-reader-webview--view-surface view))
-                 nil))
+           (setf (yunge-reader-webview--surface-appearance surface) nil))
          (display-warning 'yunge-reader detail :warning)))
       ("style-error"
        (let ((detail (alist-get 'message message)))
          (unless (stringp detail)
            (error "Malformed EPUB style error: %S" message))
          (when-let* ((view (gethash id yunge-reader-webview--views)))
-           (setf (yunge-reader-webview--surface-style
-                  (yunge-reader-webview--view-surface view))
-                 nil))
+           (setf (yunge-reader-webview--surface-style surface) nil))
          (display-warning 'yunge-reader detail :warning)))
       ("zoom-changed"
        (let ((scale (alist-get 'scale message)))
@@ -217,9 +220,7 @@
          (unless (stringp detail)
            (error "Malformed EPUB zoom error: %S" message))
          (when-let* ((view (gethash id yunge-reader-webview--views)))
-           (setf (yunge-reader-webview--surface-zoom
-                  (yunge-reader-webview--view-surface view))
-                 nil))
+           (setf (yunge-reader-webview--surface-zoom surface) nil))
          (display-warning 'yunge-reader detail :warning)))
       ("scroll-bars-error"
        (let ((detail (alist-get 'message message)))
@@ -228,7 +229,7 @@
          (when-let* ((view (gethash id yunge-reader-webview--views)))
            (setf
             (yunge-reader-webview--surface-scroll-bar-mode
-             (yunge-reader-webview--view-surface view))
+             surface)
             nil))
          (display-warning 'yunge-reader detail :warning)))
       ("publication-error"
@@ -236,15 +237,12 @@
          (unless (stringp detail)
            (error "Malformed EPUB renderer error: %S" message))
          (when-let* ((view (gethash id yunge-reader-webview--views)))
-           (let ((surface
-                  (yunge-reader-webview--view-surface view)))
-             (yunge-reader-webview--set-surface-state surface 'failed)
-             (setf (yunge-reader-webview--surface-appearance surface) nil
-                   (yunge-reader-webview--surface-style surface) nil
-                   (yunge-reader-webview--surface-zoom surface) nil
-                   (yunge-reader-webview--surface-scroll-bar-mode
-                    surface)
-                   nil))
+           (yunge-reader-webview--set-surface-state surface 'failed)
+           (setf (yunge-reader-webview--surface-appearance surface) nil
+                 (yunge-reader-webview--surface-style surface) nil
+                 (yunge-reader-webview--surface-zoom surface) nil
+                 (yunge-reader-webview--surface-scroll-bar-mode surface)
+                 nil)
            (setf
                  (yunge-reader-webview--view-pending-target view) nil
                  (yunge-reader-webview--view-outline-error view)
@@ -255,7 +253,7 @@
            (yunge-reader-webview--set-buffer-message view detail))
          (display-warning 'yunge-reader detail :warning)))
       (_
-       (error "Unsupported Yunge Reader WebView event: %s" event)))))
+       (error "Unsupported Yunge Reader WebView event: %s" event))))))
 
 (provide 'yunge-reader-webview-events)
 

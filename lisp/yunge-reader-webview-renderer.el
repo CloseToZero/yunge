@@ -4,6 +4,7 @@
 
 (require 'yunge-reader-webview-protocol)
 (require 'yunge-reader-webview-view)
+(require 'yunge-reader-native)
 
 (declare-function yunge-reader-webview--request
                   "yunge-reader-webview-service"
@@ -11,12 +12,23 @@
 
 (defun yunge-reader-webview--current-surface-id (view)
   "Return VIEW's current native surface identifier."
-  (let* ((surface (yunge-reader-webview--view-surface view))
+  (let* ((surface (yunge-reader-webview--current-surface view))
          (id (and surface
                   (yunge-reader-webview--surface-id surface))))
     (unless (and (integerp id) (> id 0))
       (error "EPUB view has no current native surface"))
     id))
+
+(defun yunge-reader-webview--open-publication-complete
+    (session callback result error-data)
+  "Finish opening one broker publication in SESSION for CALLBACK."
+  (if error-data
+      (progn
+        (yunge-reader-native-release)
+        (funcall callback nil error-data))
+    (funcall callback
+             (cons (cons 'session session) result)
+             nil)))
 
 (defun yunge-reader-webview--open-publication (path callback)
   "Open the local EPUB at PATH and invoke CALLBACK with its result."
@@ -24,22 +36,42 @@
                (file-name-absolute-p path)
                (not (file-remote-p path)))
     (error "EPUB publication path must be absolute and local"))
-  (yunge-reader-webview--request
-   "publication-open" `((path . ,(expand-file-name path))) callback))
+  (let ((session (yunge-reader-native-acquire)))
+    (condition-case error-data
+        (yunge-reader-native-request-in-session
+         session "epub-open" `((path . ,(expand-file-name path)))
+         (apply-partially
+          #'yunge-reader-webview--open-publication-complete
+          session callback))
+      (error
+       (yunge-reader-native-release)
+       (signal (car error-data) (cdr error-data))))))
 
-(defun yunge-reader-webview--publication-info (publication callback)
+(defun yunge-reader-webview--publication-info
+    (session publication callback)
   "Query PUBLICATION and invoke CALLBACK with its result."
   (unless (and (integerp publication) (> publication 0))
     (error "Invalid EPUB publication ID: %S" publication))
-  (yunge-reader-webview--request
-   "publication-info" `((publication . ,publication)) callback))
+  (yunge-reader-native-request-in-session
+   session "epub-info" `((publication . ,publication)) callback))
 
-(defun yunge-reader-webview--close-publication (publication callback)
+(defun yunge-reader-webview--close-publication-complete
+    (callback result error-data)
+  "Release the broker client and finish CALLBACK."
+  (yunge-reader-native-release)
+  (funcall callback result error-data))
+
+(defun yunge-reader-webview--close-publication
+    (session publication callback)
   "Close PUBLICATION and invoke CALLBACK with its result."
   (unless (and (integerp publication) (> publication 0))
     (error "Invalid EPUB publication ID: %S" publication))
-  (yunge-reader-webview--request
-   "publication-close" `((publication . ,publication)) callback))
+  (yunge-reader-native-cancel-publication-requests
+   session publication "The EPUB publication was closed")
+  (yunge-reader-native-request-in-session
+   session "epub-close" `((publication . ,publication))
+   (apply-partially
+    #'yunge-reader-webview--close-publication-complete callback)))
 
 (defun yunge-reader-webview--selection-text-complete
     (offset character-limit complete result error-data)
@@ -72,7 +104,8 @@ OFFSET and CHARACTER-LIMIT are the corresponding request bounds."
      (list 'error
            (format "Malformed current EPUB selection: %S" result))))))
 
-(defun yunge-reader-webview--request-current-selection (view complete)
+(defun yunge-reader-webview--request-current-selection
+    (view complete &optional revision)
   "Read VIEW's live DOM selection and invoke COMPLETE."
   (unless (functionp complete)
     (error "Invalid current EPUB selection completion: %S" complete))
@@ -80,10 +113,11 @@ OFFSET and CHARACTER-LIMIT are the corresponding request bounds."
    "view-current-selection"
    `((view . ,(yunge-reader-webview--current-surface-id view)))
    (apply-partially
-    #'yunge-reader-webview--current-selection-complete complete)))
+    #'yunge-reader-webview--current-selection-complete complete)
+   :revision revision))
 
 (defun yunge-reader-webview--request-selection-text
-    (view selection offset character-limit complete)
+    (view selection offset character-limit complete &optional revision)
   "Request one text batch for SELECTION in native VIEW.
 OFFSET is a transient Unicode character cursor.  CHARACTER-LIMIT bounds the
 returned batch, and COMPLETE receives the validated native result."
@@ -110,7 +144,8 @@ returned batch, and COMPLETE receives the validated native result."
      (character-limit . ,character-limit))
    (apply-partially
     #'yunge-reader-webview--selection-text-complete
-    offset character-limit complete)))
+    offset character-limit complete)
+   :revision revision))
 
 (defun yunge-reader-webview--search-complete
     (match-limit complete result error-data)
@@ -128,7 +163,7 @@ returned batch, and COMPLETE receives the validated native result."
 
 (defun yunge-reader-webview--request-search
     (view query case-sensitive direction origin cursor
-          match-limit section-limit complete)
+          match-limit section-limit complete &optional revision)
   "Request one bounded native EPUB search batch from VIEW."
   (unless
       (and
@@ -174,7 +209,8 @@ returned batch, and COMPLETE receives the validated native result."
      (match-limit . ,match-limit)
      (section-limit . ,section-limit))
    (apply-partially
-    #'yunge-reader-webview--search-complete match-limit complete)))
+    #'yunge-reader-webview--search-complete match-limit complete)
+   :revision revision))
 
 (defun yunge-reader-webview--fixed-zoom-value (zoom)
   "Return protocol data for validated fixed-layout ZOOM."
@@ -200,6 +236,14 @@ CALLBACK when complete."
    (append
     `((view . ,(yunge-reader-webview--current-surface-id view))
       (publication . ,publication)
+      (layout
+       . ,(pcase (yunge-reader-webview--view-layout view)
+            ('reflow "reflowable")
+            ('fixed "pre-paginated")
+            (_ (error "Invalid EPUB publication layout"))))
+      (resource-root
+       . ,(or (yunge-reader-webview--view-resource-root view)
+              (error "EPUB view has no broker resource root")))
       (appearance
        . ,(yunge-reader-webview--appearance-value appearance)))
     (when location

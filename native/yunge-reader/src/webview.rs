@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Chen Zhexuan
 // SPDX-License-Identifier: MIT
 
-use crate::epub::{Publication, PublicationLayout};
+use crate::epub::PublicationLayout;
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::{Value, json};
 use std::collections::HashMap;
@@ -13,7 +13,6 @@ use super::{BUILD_ID, Error};
 
 mod protocol;
 mod renderer;
-mod resources;
 #[cfg(target_os = "windows")]
 mod surface;
 #[cfg(target_os = "macos")]
@@ -21,21 +20,24 @@ mod surface;
 mod surface;
 
 #[cfg(test)]
+use crate::broker::app_asset;
+#[cfg(test)]
 use protocol::RENDERER_ACCELERATORS;
 use protocol::{
     ACCELERATORS, CAPABILITIES, Control, Operation, Outgoing, PROTOCOL_VERSION,
     Request, Response, ServiceError, response,
 };
 use renderer::{
-    RendererSearchCallback, appearance_script as publication_appearance_script,
+    RendererOrigin, RendererSearchCallback,
+    appearance_script as publication_appearance_script,
     clear_selection_script as publication_clear_selection_script,
     current_selection_response as renderer_current_selection_response,
     current_selection_script as publication_current_selection_script,
-    event as renderer_event,
+    event_for as renderer_event_for,
     navigation_script as publication_navigation_script,
     open_script as publication_open_script,
     scroll_bars_script as publication_scroll_bars_script,
-    search_callback as renderer_search_callback,
+    search_callback_for as renderer_search_callback_for,
     search_response as renderer_search_response,
     search_result_script as publication_search_result_script,
     search_script as publication_search_script,
@@ -48,15 +50,13 @@ use renderer::{
 #[cfg(test)]
 use renderer::{
     app_navigation_allowed, app_renderer_source_allowed,
+    event as renderer_event, search_callback as renderer_search_callback,
     shell_ready as renderer_shell_ready,
 };
-use resources::ResourceService;
-#[cfg(test)]
-use resources::{
-    APP_BROWSER_ORIGIN, APP_BROWSER_URL, APP_URL, BOOK_PROTOCOL,
-    RESOURCE_CATALOG_PATH, app_asset, app_response, resource_request_target,
+use surface::{
+    Bounds, NativeSurface, ParentWindow, SurfaceCallbacks, SurfaceEvent,
+    SurfaceRuntime,
 };
-use surface::{Bounds, NativeSurface, ParentWindow, SurfaceEvent};
 
 const MAX_EPUB_LOCATOR_TEXT_BYTES: usize = 3_072;
 const MAX_EPUB_OUTLINE_DEPTH: u32 = 256;
@@ -154,6 +154,8 @@ enum ViewEventPayload {
 #[serde(deny_unknown_fields)]
 struct CreateParams {
     view: u64,
+    #[serde(rename = "renderer-url")]
+    renderer_url: String,
     parent: u64,
     #[serde(default)]
     frame: Option<Bounds>,
@@ -164,30 +166,8 @@ struct CreateParams {
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
-struct ParentParams {
-    view: u64,
-    parent: u64,
-    #[serde(default)]
-    frame: Option<Bounds>,
-    bounds: Bounds,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
 struct ViewParams {
     view: u64,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct PublicationOpenParams {
-    path: String,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct PublicationParams {
-    publication: u64,
 }
 
 #[derive(Debug, Deserialize)]
@@ -195,6 +175,9 @@ struct PublicationParams {
 struct ViewPublicationParams {
     view: u64,
     publication: u64,
+    layout: PublicationLayout,
+    #[serde(rename = "resource-root")]
+    resource_root: String,
     appearance: EpubAppearance,
     #[serde(default)]
     location: Option<EpubLocator>,
@@ -520,17 +503,23 @@ enum Incoming {
 
 struct NativeView {
     surface: NativeSurface,
+    renderer: RendererOrigin,
     publication: Option<u64>,
+    layout: Option<PublicationLayout>,
+}
+
+struct PendingSearch {
+    params: ViewSearchParams,
+    revision: Option<Value>,
 }
 
 struct Service {
     views: HashMap<u64, NativeView>,
-    resources: ResourceService,
-    next_publication: u64,
+    surfaces: SurfaceRuntime,
     version: Result<String, String>,
     outgoing_sender: Sender<Outgoing>,
     incoming_sender: Sender<Incoming>,
-    pending_searches: HashMap<u64, ViewSearchParams>,
+    pending_searches: HashMap<u64, PendingSearch>,
 }
 
 impl EpubLocator {
@@ -925,8 +914,7 @@ impl Service {
     ) -> Self {
         Self {
             views: HashMap::new(),
-            resources: ResourceService::default(),
-            next_publication: 1,
+            surfaces: SurfaceRuntime::new(),
             version: surface::webview_version(),
             outgoing_sender,
             incoming_sender,
@@ -948,60 +936,6 @@ impl Service {
         Ok(info_result(&self.version))
     }
 
-    fn open_publication(
-        &mut self,
-        params: Value,
-    ) -> Result<Value, ServiceError> {
-        let params: PublicationOpenParams = Self::parse(params)?;
-        let path = std::path::Path::new(&params.path);
-        if !path.is_absolute() {
-            return Err(ServiceError::new(
-                "invalid-publication-path",
-                "publication path must be absolute",
-            ));
-        }
-        let publication =
-            Publication::open(path).map_err(ServiceError::from)?;
-        let id = self.next_publication;
-        self.next_publication = id.checked_add(1).ok_or_else(|| {
-            ServiceError::new(
-                "publication-id-exhausted",
-                "no publication IDs remain",
-            )
-        })?;
-        self.resources.insert(id, publication)
-    }
-
-    fn publication_info(&self, params: Value) -> Result<Value, ServiceError> {
-        let params: PublicationParams = Self::parse(params)?;
-        self.resources.info(params.publication)
-    }
-
-    fn close_publication(
-        &mut self,
-        params: Value,
-    ) -> Result<Value, ServiceError> {
-        let params: PublicationParams = Self::parse(params)?;
-        if self
-            .views
-            .values()
-            .any(|view| view.publication == Some(params.publication))
-        {
-            return Err(ServiceError::new(
-                "publication-in-use",
-                format!(
-                    "publication {} is attached to a live view",
-                    params.publication
-                ),
-            ));
-        }
-        self.resources.remove(params.publication)?;
-        Ok(json!({
-            "publication": params.publication,
-            "closed": true,
-        }))
-    }
-
     fn create_view(&mut self, params: Value) -> Result<Value, ServiceError> {
         let params: CreateParams = Self::parse(params)?;
         if self.views.contains_key(&params.view) {
@@ -1017,42 +951,51 @@ impl Service {
             ));
         }
         let parent = ParentWindow::current(params.parent, params.frame)?;
-        let resources = self.resources.clone();
+        let renderer = RendererOrigin::parse(&params.renderer_url)?;
         let renderer_events = self.outgoing_sender.clone();
         let renderer_callbacks = self.incoming_sender.clone();
+        let callback_origin = renderer.clone();
         let view_id = params.view;
         let surface_events = self.outgoing_sender.clone();
-        let surface = NativeSurface::create(
+        let surface = self.surfaces.create(
             &parent,
             params.view,
             params.bounds,
             params.visible,
-            resources,
-            move |request| {
-                if let Some(callback) =
-                    renderer_search_callback(view_id, &request)
-                {
-                    if renderer_callbacks
-                        .send(Incoming::RendererSearch(callback))
-                        .is_ok()
+            renderer.clone(),
+            SurfaceCallbacks::new(
+                move |request| {
+                    if let Some(callback) = renderer_search_callback_for(
+                        view_id,
+                        &callback_origin,
+                        &request,
+                    ) {
+                        if renderer_callbacks
+                            .send(Incoming::RendererSearch(callback))
+                            .is_ok()
+                        {
+                            let _ = renderer_events.send(Outgoing::Wake);
+                        }
+                    } else if let Some(event) =
+                        renderer_event_for(view_id, &callback_origin, &request)
                     {
-                        let _ = renderer_events.send(Outgoing::Wake);
+                        let _ = renderer_events.send(Outgoing::Event(event));
                     }
-                } else if let Some(event) = renderer_event(view_id, &request) {
-                    let _ = renderer_events.send(Outgoing::Event(event));
-                }
-            },
-            move |event| {
-                let _ = surface_events
-                    .send(Outgoing::Event(surface_view_event(event)));
-            },
+                },
+                move |event| {
+                    let _ = surface_events
+                        .send(Outgoing::Event(surface_view_event(event)));
+                },
+            ),
         )?;
         let bounds = surface.bounds();
         self.views.insert(
             params.view,
             NativeView {
                 surface,
+                renderer,
                 publication: None,
+                layout: None,
             },
         );
         Ok(json!({
@@ -1068,16 +1011,6 @@ impl Service {
             .view_mut(params.view)?
             .surface
             .set_bounds(params.bounds)?;
-        Ok(json!({ "view": params.view, "bounds": bounds }))
-    }
-
-    fn set_parent(&mut self, params: Value) -> Result<Value, ServiceError> {
-        let params: ParentParams = Self::parse(params)?;
-        let parent = ParentWindow::current(params.parent, params.frame)?;
-        let bounds = self
-            .view_mut(params.view)?
-            .surface
-            .set_parent(parent, params.bounds)?;
         Ok(json!({ "view": params.view, "bounds": bounds }))
     }
 
@@ -1136,6 +1069,7 @@ impl Service {
     fn selection_text(
         &self,
         id: u64,
+        revision: Option<Value>,
         params: Value,
     ) -> Result<(), ServiceError> {
         let params =
@@ -1158,7 +1092,8 @@ impl Service {
                     offset,
                     character_limit,
                     &value,
-                );
+                )
+                .with_revision(revision);
                 let _ = sender.send(Outgoing::Response(response));
             })
             .map_err(|error| {
@@ -1170,6 +1105,7 @@ impl Service {
     fn current_selection(
         &self,
         id: u64,
+        revision: Option<Value>,
         params: Value,
     ) -> Result<(), ServiceError> {
         let params = Self::parse::<ViewParams>(params)?;
@@ -1184,7 +1120,8 @@ impl Service {
         let sender = self.outgoing_sender.clone();
         view.surface
             .evaluate_script_with_callback(&script, move |value| {
-                let response = renderer_current_selection_response(id, &value);
+                let response = renderer_current_selection_response(id, &value)
+                    .with_revision(revision);
                 let _ = sender.send(Outgoing::Response(response));
             })
             .map_err(|error| {
@@ -1193,7 +1130,12 @@ impl Service {
         Ok(())
     }
 
-    fn search(&mut self, id: u64, params: Value) -> Result<(), ServiceError> {
+    fn search(
+        &mut self,
+        id: u64,
+        revision: Option<Value>,
+        params: Value,
+    ) -> Result<(), ServiceError> {
         let params = Self::parse::<ViewSearchParams>(params)?.validate()?;
         let view = self.view(params.view)?;
         if view.publication.is_none() {
@@ -1210,7 +1152,8 @@ impl Service {
         }
         let view_id = params.view;
         let script = publication_search_script(id, &params);
-        self.pending_searches.insert(id, params);
+        self.pending_searches
+            .insert(id, PendingSearch { params, revision });
         if let Err(error) = self.view(view_id)?.surface.evaluate_script(&script)
         {
             self.pending_searches.remove(&id);
@@ -1254,13 +1197,16 @@ impl Service {
         &mut self,
         callback: RendererSearchCallback,
     ) -> Option<Response> {
-        let params = self.pending_searches.get(&callback.request)?;
-        if params.view != callback.view {
+        let pending = self.pending_searches.get(&callback.request)?;
+        if pending.params.view != callback.view {
             return None;
         }
-        let params = self.pending_searches.remove(&callback.request)?;
+        let pending = self.pending_searches.remove(&callback.request)?;
         let value = serde_json::to_string(&callback.response).ok()?;
-        Some(renderer_search_response(callback.request, &params, &value))
+        Some(
+            renderer_search_response(callback.request, &pending.params, &value)
+                .with_revision(pending.revision),
+        )
     }
 
     fn open_view_publication(
@@ -1273,12 +1219,17 @@ impl Service {
         let style = params.style.map(EpubStyle::validate).transpose()?;
         let zoom = params.zoom.map(EpubZoom::validate).transpose()?;
         self.view(params.view)?;
-        let layout = self.resources.layout(params.publication)?;
-        let (style, zoom) = view_layout_options(layout, style, zoom)?;
-        let resource_root = self.resources.resource_root(params.publication)?;
+        let view = self.view(params.view)?;
+        if !view.renderer.resource_root_allowed(&params.resource_root) {
+            return Err(ServiceError::new(
+                "invalid-resource-root",
+                "EPUB resource root does not belong to the renderer broker",
+            ));
+        }
+        let (style, zoom) = view_layout_options(params.layout, style, zoom)?;
         let script = publication_open_script(
             params.view,
-            &resource_root,
+            &params.resource_root,
             location.as_ref(),
             &params.appearance,
             style.as_ref(),
@@ -1294,7 +1245,9 @@ impl Service {
                     error.to_string(),
                 )
             })?;
-        self.view_mut(params.view)?.publication = Some(params.publication);
+        let view = self.view_mut(params.view)?;
+        view.publication = Some(params.publication);
+        view.layout = Some(params.layout);
         Ok(json!({
             "view": params.view,
             "publication": params.publication,
@@ -1373,14 +1326,13 @@ impl Service {
         let params: ViewStyleParams = Self::parse(params)?;
         let style = params.style.validate()?;
         let view = self.view(params.view)?;
-        let publication = view.publication.ok_or_else(|| {
+        view.publication.ok_or_else(|| {
             ServiceError::new(
                 "view-has-no-publication",
                 format!("view {} has no attached publication", params.view),
             )
         })?;
-        if self.resources.layout(publication)? != PublicationLayout::Reflowable
-        {
+        if view.layout != Some(PublicationLayout::Reflowable) {
             return Err(ServiceError::new(
                 "invalid-epub-view-layout",
                 "fixed-layout EPUB views do not accept reflow style",
@@ -1400,15 +1352,13 @@ impl Service {
         let params: ViewZoomParams = Self::parse(params)?;
         let zoom = params.zoom.validate()?;
         let view = self.view(params.view)?;
-        let publication = view.publication.ok_or_else(|| {
+        view.publication.ok_or_else(|| {
             ServiceError::new(
                 "view-has-no-publication",
                 format!("view {} has no attached publication", params.view),
             )
         })?;
-        if self.resources.layout(publication)?
-            != PublicationLayout::PrePaginated
-        {
+        if view.layout != Some(PublicationLayout::PrePaginated) {
             return Err(ServiceError::new(
                 "invalid-epub-view-layout",
                 "reflowable EPUB views do not accept fixed zoom",
@@ -1456,18 +1406,20 @@ impl Service {
             .pending_searches
             .iter()
             .filter_map(|(id, search)| {
-                (search.view == params.view).then_some(*id)
+                (search.params.view == params.view).then_some(*id)
             })
             .collect::<Vec<_>>();
         for id in pending {
-            self.pending_searches.remove(&id);
-            let _ = self.outgoing_sender.send(Outgoing::Response(
-                Response::failure(
-                    Some(id),
-                    "search-unavailable",
-                    "EPUB view was destroyed during search",
-                ),
-            ));
+            if let Some(pending) = self.pending_searches.remove(&id) {
+                let _ = self.outgoing_sender.send(Outgoing::Response(
+                    Response::failure(
+                        Some(id),
+                        "search-unavailable",
+                        "EPUB view was destroyed during search",
+                    )
+                    .with_revision(pending.revision),
+                ));
+            }
         }
         Ok(json!({ "view": params.view, "destroyed": true }))
     }
@@ -1497,28 +1449,32 @@ impl Service {
             Ok(operation) => operation,
             Err(error) => {
                 return (
-                    Some(Response::failure(
-                        Some(request.id),
-                        error.code,
-                        error.message,
-                    )),
+                    Some(
+                        Response::failure(
+                            Some(request.id),
+                            error.code,
+                            error.message,
+                        )
+                        .with_revision(request.revision),
+                    ),
                     Control::Continue,
                 );
             }
         };
         if operation == Operation::Shutdown {
-            let result =
-                Self::parse::<EmptyParams>(request.params).and_then(|_| {
-                    self.views.clear();
-                    self.resources.clear()?;
-                    Ok(json!({ "stopped": true }))
-                });
+            let result = Self::parse::<EmptyParams>(request.params).map(|_| {
+                self.views.clear();
+                json!({ "stopped": true })
+            });
             let control = if result.is_ok() {
                 Control::Shutdown
             } else {
                 Control::Continue
             };
-            return (Some(response(request.id, result)), control);
+            return (
+                Some(response(request.id, request.revision, result)),
+                control,
+            );
         }
         if matches!(
             operation,
@@ -1526,29 +1482,30 @@ impl Service {
                 | Operation::ViewCurrentSelection
                 | Operation::ViewSelectionText
         ) {
+            let revision = request.revision;
             let result = match operation {
                 Operation::ViewSearch => {
-                    self.search(request.id, request.params)
+                    self.search(request.id, revision.clone(), request.params)
                 }
-                Operation::ViewCurrentSelection => {
-                    self.current_selection(request.id, request.params)
-                }
-                Operation::ViewSelectionText => {
-                    self.selection_text(request.id, request.params)
-                }
+                Operation::ViewCurrentSelection => self.current_selection(
+                    request.id,
+                    revision.clone(),
+                    request.params,
+                ),
+                Operation::ViewSelectionText => self.selection_text(
+                    request.id,
+                    revision.clone(),
+                    request.params,
+                ),
                 _ => unreachable!("matched asynchronous operation"),
             };
             let response = result.err().map(|error| {
                 Response::failure(Some(request.id), error.code, error.message)
+                    .with_revision(revision)
             });
             return (response, Control::Continue);
         }
         let result = match operation {
-            Operation::PublicationOpen => self.open_publication(request.params),
-            Operation::PublicationInfo => self.publication_info(request.params),
-            Operation::PublicationClose => {
-                self.close_publication(request.params)
-            }
             Operation::ViewInfo => self.info(request.params),
             Operation::ViewCreate => self.create_view(request.params),
             Operation::ViewBounds => self.set_bounds(request.params),
@@ -1566,7 +1523,6 @@ impl Service {
             Operation::ViewOpenPublication => {
                 self.open_view_publication(request.params)
             }
-            Operation::ViewParent => self.set_parent(request.params),
             Operation::ViewStyle => self.set_view_style(request.params),
             Operation::ViewZoom => self.set_view_zoom(request.params),
             Operation::ViewScrollBars => {
@@ -1584,7 +1540,10 @@ impl Service {
                 unreachable!("handled protocol operation")
             }
         };
-        (Some(response(request.id, result)), Control::Continue)
+        (
+            Some(response(request.id, request.revision, result)),
+            Control::Continue,
+        )
     }
 }
 
@@ -1747,22 +1706,19 @@ impl EmbeddedService {
 impl Drop for EmbeddedService {
     fn drop(&mut self) {
         self.service.views.clear();
-        let _ = self.service.resources.clear();
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use http::{Method, Request as HttpRequest};
-    use std::fs::{self, File};
-    use std::io::Write;
-    use std::path::PathBuf;
-    use std::sync::atomic::{AtomicU64, Ordering};
-    use zip::write::SimpleFileOptions;
-    use zip::{CompressionMethod, ZipWriter};
+    use http::Request as HttpRequest;
 
-    static TEMPORARY_ID: AtomicU64 = AtomicU64::new(1);
+    const APP_URL: &str = concat!(
+        "http://127.0.0.1:32123/",
+        "0123456789abcdef0123456789abcdef/app/index.html"
+    );
+    const APP_BROWSER_URL: &str = APP_URL;
 
     fn original_appearance() -> EpubAppearance {
         serde_json::from_value(json!({ "mode": "original" })).unwrap()
@@ -1787,78 +1743,6 @@ mod tests {
 
     fn follow_emacs_appearance_json() -> Value {
         serde_json::to_value(follow_emacs_appearance()).unwrap()
-    }
-
-    struct TemporaryEpub(PathBuf);
-
-    impl Drop for TemporaryEpub {
-        fn drop(&mut self) {
-            let _ = fs::remove_file(&self.0);
-        }
-    }
-
-    fn test_epub() -> TemporaryEpub {
-        let id = TEMPORARY_ID.fetch_add(1, Ordering::Relaxed);
-        let path = std::env::temp_dir().join(format!(
-            "yunge-reader-webview-{}-{id}.epub",
-            std::process::id()
-        ));
-        let container = concat!(
-            "<container xmlns=\"",
-            "urn:oasis:names:tc:opendocument:xmlns:container",
-            "\" version=\"1.0\"><rootfiles>",
-            "<rootfile full-path=\"OPS/package.opf\" media-type=\"",
-            "application/oebps-package+xml",
-            "\"/></rootfiles></container>"
-        );
-        let package = concat!(
-            "<package xmlns=\"http://www.idpf.org/2007/opf\" ",
-            "version=\"3.0\"><metadata xmlns:dc=\"",
-            "http://purl.org/dc/elements/1.1/",
-            "\"><dc:title>Protocol Book</dc:title>",
-            "</metadata><manifest>",
-            "<item id=\"chapter\" href=\"chapter.xhtml\" media-type=\"",
-            "application/xhtml+xml\"/>",
-            "</manifest></package>"
-        );
-        let file = File::create(&path).unwrap();
-        let mut archive = ZipWriter::new(file);
-        for (name, contents, method) in [
-            (
-                "mimetype",
-                "application/epub+zip",
-                CompressionMethod::Stored,
-            ),
-            (
-                "META-INF/container.xml",
-                container,
-                CompressionMethod::Deflated,
-            ),
-            ("OPS/package.opf", package, CompressionMethod::Deflated),
-            (
-                "OPS/chapter.xhtml",
-                "<html><body>Chapter</body></html>",
-                CompressionMethod::Deflated,
-            ),
-        ] {
-            let options =
-                SimpleFileOptions::default().compression_method(method);
-            archive.start_file(name, options).unwrap();
-            archive.write_all(contents.as_bytes()).unwrap();
-        }
-        archive.finish().unwrap();
-        TemporaryEpub(path)
-    }
-
-    fn handle_immediate(
-        service: &mut Service,
-        request: Request,
-    ) -> (Response, Control) {
-        let (response, control) = service.handle(request);
-        (
-            response.expect("operation returns an immediate response"),
-            control,
-        )
     }
 
     fn renderer_event_value(view: u64, request: &HttpRequest<String>) -> Value {
@@ -1887,28 +1771,6 @@ mod tests {
 
     #[test]
     fn renderer_assets_are_bounded_and_script_safe() {
-        let response = app_response(
-            HttpRequest::builder()
-                .uri(APP_URL)
-                .body(Vec::new())
-                .unwrap(),
-        );
-        assert_eq!(response.status(), 200);
-        assert_eq!(response.headers()["Cache-Control"], "no-store");
-        assert!(
-            response.headers()["Content-Security-Policy"]
-                .to_str()
-                .unwrap()
-                .contains("script-src 'self'")
-        );
-        let csp = response.headers()["Content-Security-Policy"]
-            .to_str()
-            .unwrap();
-        assert!(csp.contains("style-src 'self' blob: 'unsafe-inline'"));
-        assert!(csp.contains("img-src blob: data:"));
-        assert!(csp.contains("font-src blob: data:"));
-        assert!(csp.contains("media-src blob: data:"));
-        assert!(!csp.contains("script-src 'self' blob:"));
         assert!(app_asset("foliate-js/search.js").is_some());
         assert!(app_asset("foliate-js/view.js").is_some());
         assert!(app_asset("yunge-reader-core.mjs").is_some());
@@ -2098,200 +1960,10 @@ mod tests {
     }
 
     #[test]
-    fn publication_operations_own_query_and_release_one_epub() {
-        let epub = test_epub();
-        let (sender, _receiver) = mpsc::channel();
-        let (incoming, _incoming_receiver) = mpsc::channel();
-        let mut service = Service::new(sender, incoming);
-        let path = epub.0.to_string_lossy().into_owned();
-        let (opened, control) = handle_immediate(
-            &mut service,
-            Request {
-                id: 1,
-                op: "publication-open".into(),
-                params: json!({ "path": path }),
-            },
-        );
-
-        assert_eq!(control, Control::Continue);
-        assert!(opened.ok);
-        let result = opened.result.unwrap();
-        assert_eq!(result["publication"], 1);
-        assert_eq!(result["metadata"]["package-path"], "OPS/package.opf");
-        assert_eq!(result["metadata"]["layout"], "reflowable");
-        assert_eq!(result["metadata"]["title"], "Protocol Book");
-        assert_eq!(result["entry-count"], 4);
-        assert!(result["expanded-bytes"].as_u64().unwrap() > 0);
-        let resource_root =
-            result["resource-root"].as_str().unwrap().to_owned();
-        assert!(resource_root.starts_with("yunge-reader-book://"));
-
-        let catalog = service.resources.response(
-            HttpRequest::builder()
-                .uri(format!("{resource_root}{RESOURCE_CATALOG_PATH}"))
-                .body(Vec::new())
-                .unwrap(),
-        );
-        assert_eq!(catalog.status(), 200);
-        assert_eq!(
-            catalog.headers()["Content-Type"],
-            "application/json; charset=utf-8"
-        );
-        let catalog: Value = serde_json::from_slice(catalog.body()).unwrap();
-        assert_eq!(catalog["resources"][0]["path"], "OPS/chapter.xhtml");
-        assert_eq!(catalog["resources"][0]["size"], 33);
-
-        let resource = service.resources.response(
-            HttpRequest::builder()
-                .uri(format!("{resource_root}OPS/chapter.xhtml"))
-                .body(Vec::new())
-                .unwrap(),
-        );
-        assert_eq!(resource.status(), 200);
-        assert_eq!(resource.headers()["Content-Type"], "application/xhtml+xml");
-        assert_eq!(resource.headers()["Cache-Control"], "no-store");
-        assert_eq!(
-            resource.headers()["Access-Control-Allow-Origin"],
-            APP_BROWSER_ORIGIN
-        );
-        assert_eq!(resource.headers()["X-Content-Type-Options"], "nosniff");
-        assert!(
-            resource.headers()["Content-Security-Policy"]
-                .to_str()
-                .unwrap()
-                .contains("script-src 'none'")
-        );
-        assert_eq!(
-            resource.body().as_ref(),
-            b"<html><body>Chapter</body></html>"
-        );
-
-        let head = service.resources.response(
-            HttpRequest::builder()
-                .method(Method::HEAD)
-                .uri(format!("{resource_root}OPS/chapter.xhtml"))
-                .body(Vec::new())
-                .unwrap(),
-        );
-        assert_eq!(head.status(), 200);
-        assert_eq!(head.headers()["Content-Length"], "33");
-        assert!(head.body().is_empty());
-
-        let (info, _) = handle_immediate(
-            &mut service,
-            Request {
-                id: 2,
-                op: "publication-info".into(),
-                params: json!({ "publication": 1 }),
-            },
-        );
-        let info = info.result.unwrap();
-        assert_eq!(info["metadata"]["title"], "Protocol Book");
-        assert_eq!(info["resource-root"], resource_root);
-
-        let (closed, _) = handle_immediate(
-            &mut service,
-            Request {
-                id: 3,
-                op: "publication-close".into(),
-                params: json!({ "publication": 1 }),
-            },
-        );
-        assert_eq!(closed.result.unwrap()["closed"], true);
-
-        let released = service.resources.response(
-            HttpRequest::builder()
-                .uri(format!("{resource_root}OPS/chapter.xhtml"))
-                .body(Vec::new())
-                .unwrap(),
-        );
-        assert_eq!(released.status(), 404);
-
-        let (missing, _) = handle_immediate(
-            &mut service,
-            Request {
-                id: 4,
-                op: "publication-info".into(),
-                params: json!({ "publication": 1 }),
-            },
-        );
-        assert_eq!(missing.error.unwrap().code, "unknown-publication");
-    }
-
-    #[test]
-    fn publication_open_requires_an_absolute_strict_path() {
-        let (sender, _receiver) = mpsc::channel();
-        let (incoming, _incoming_receiver) = mpsc::channel();
-        let mut service = Service::new(sender, incoming);
-        let (relative, _) = handle_immediate(
-            &mut service,
-            Request {
-                id: 1,
-                op: "publication-open".into(),
-                params: json!({ "path": "book.epub" }),
-            },
-        );
-        assert_eq!(relative.error.unwrap().code, "invalid-publication-path");
-
-        let (unknown, _) = handle_immediate(
-            &mut service,
-            Request {
-                id: 2,
-                op: "publication-open".into(),
-                params: json!({ "path": "book.epub", "extra": true }),
-            },
-        );
-        assert_eq!(unknown.error.unwrap().code, "invalid-params");
-    }
-
-    #[test]
-    fn resource_protocol_rejects_unsafe_targets_and_methods() {
-        let token = "0123456789abcdef0123456789abcdef";
-        let valid =
-            format!("{BOOK_PROTOCOL}://localhost/{token}/OPS/chapter.xhtml");
-        assert_eq!(
-            resource_request_target(&valid.parse().unwrap()).unwrap(),
-            (token.into(), "OPS/chapter.xhtml".into())
-        );
-        for uri in [
-            format!("{BOOK_PROTOCOL}://wrong/{token}/OPS/chapter.xhtml"),
-            format!("{BOOK_PROTOCOL}://localhost/short/OPS/chapter.xhtml"),
-            format!("{BOOK_PROTOCOL}://localhost/{token}/"),
-            format!(
-                "{BOOK_PROTOCOL}://localhost/{token}/OPS/%2e%2e/chapter.xhtml"
-            ),
-            format!(
-                "{BOOK_PROTOCOL}://localhost/{token}/OPS/a%2fchapter.xhtml"
-            ),
-            format!(
-                "{BOOK_PROTOCOL}://localhost/{token}/OPS/chapter.xhtml?x=1"
-            ),
-        ] {
-            let parsed = uri.parse().unwrap();
-            assert!(
-                resource_request_target(&parsed).is_err(),
-                "accepted {uri}"
-            );
-        }
-
-        let (sender, _receiver) = mpsc::channel();
-        let (incoming, _incoming_receiver) = mpsc::channel();
-        let service = Service::new(sender, incoming);
-        let response = service.resources.response(
-            HttpRequest::builder()
-                .method(Method::POST)
-                .uri(valid)
-                .body(Vec::new())
-                .unwrap(),
-        );
-        assert_eq!(response.status(), 405);
-    }
-
-    #[test]
     fn renderer_ipc_accepts_only_owned_bounded_messages() {
         let shell = HttpRequest::builder()
             .uri(APP_BROWSER_URL)
-            .body(r#"{"protocol":1,"event":"shell-ready"}"#.into())
+            .body(r#"{"protocol":2,"event":"shell-ready"}"#.into())
             .unwrap();
         assert!(renderer_shell_ready(&shell));
         assert!(renderer_event(7, &shell).is_none());
@@ -2305,7 +1977,7 @@ mod tests {
             .uri(APP_BROWSER_URL)
             .body(
                 concat!(
-                    r#"{"protocol":1,"event":"publication-ready","#,
+                    r#"{"protocol":2,"event":"publication-ready","#,
                     r#""location":{"cfi":"epubcfi(/6/4)","#,
                     r#""href":"OPS/chapter.xhtml","fraction":0.25},"#,
                     r#""outline":{"items":[{"title":"Chapter","#,
@@ -2341,7 +2013,7 @@ mod tests {
             .uri(APP_URL)
             .body(
                 concat!(
-                    r#"{"protocol":1,"event":"location","user":true,"#,
+                    r#"{"protocol":2,"event":"location","user":true,"#,
                     r#""location":{"#,
                     r#""cfi":"epubcfi(/6/6)","#,
                     r#""href":"OPS/next.xhtml"}}"#,
@@ -2366,7 +2038,7 @@ mod tests {
         let external_link = HttpRequest::builder()
             .uri(APP_URL)
             .body(
-                r#"{"protocol":1,"event":"external-link",
+                r#"{"protocol":2,"event":"external-link",
                     "uri":"https://example.com/reference"}"#
                     .into(),
             )
@@ -2385,7 +2057,7 @@ mod tests {
             .uri(APP_URL)
             .body(
                 concat!(
-                    r#"{"protocol":1,"event":"selection","selection":{"#,
+                    r#"{"protocol":2,"event":"selection","selection":{"#,
                     r#""href":"OPS/chapter.xhtml","#,
                     r#""start":"epubcfi(/6/4!/4/2/1:0)","#,
                     r#""end":"epubcfi(/6/4!/4/2/1:7)"}}"#,
@@ -2410,7 +2082,7 @@ mod tests {
         let selection_clear = HttpRequest::builder()
             .uri(APP_URL)
             .body(
-                r#"{"protocol":1,"event":"selection","selection":null}"#.into(),
+                r#"{"protocol":2,"event":"selection","selection":null}"#.into(),
             )
             .unwrap();
         assert_eq!(
@@ -2426,7 +2098,7 @@ mod tests {
         let error = HttpRequest::builder()
             .uri(APP_URL)
             .body(
-                r#"{"protocol":1,"event":"publication-error",
+                r#"{"protocol":2,"event":"publication-error",
                     "message":"bad EPUB"}"#
                     .into(),
             )
@@ -2436,7 +2108,7 @@ mod tests {
         let navigation_error = HttpRequest::builder()
             .uri(APP_URL)
             .body(
-                r#"{"protocol":1,"event":"navigation-error",
+                r#"{"protocol":2,"event":"navigation-error",
                     "message":"bad target"}"#
                     .into(),
             )
@@ -2451,7 +2123,7 @@ mod tests {
         let appearance_error = HttpRequest::builder()
             .uri(APP_URL)
             .body(
-                r#"{"protocol":1,"event":"appearance-error",
+                r#"{"protocol":2,"event":"appearance-error",
                     "message":"bad appearance"}"#
                     .into(),
             )
@@ -2466,7 +2138,7 @@ mod tests {
         let style_error = HttpRequest::builder()
             .uri(APP_URL)
             .body(
-                r#"{"protocol":1,"event":"style-error",
+                r#"{"protocol":2,"event":"style-error",
                     "message":"bad style"}"#
                     .into(),
             )
@@ -2481,7 +2153,7 @@ mod tests {
         let zoom_changed = HttpRequest::builder()
             .uri(APP_URL)
             .body(
-                r#"{"protocol":1,"event":"zoom-changed","scale":1.25}"#.into(),
+                r#"{"protocol":2,"event":"zoom-changed","scale":1.25}"#.into(),
             )
             .unwrap();
         assert_eq!(
@@ -2497,7 +2169,7 @@ mod tests {
         let zoom_error = HttpRequest::builder()
             .uri(APP_URL)
             .body(
-                r#"{"protocol":1,"event":"zoom-error",
+                r#"{"protocol":2,"event":"zoom-error",
                     "message":"bad zoom"}"#
                     .into(),
             )
@@ -2507,7 +2179,7 @@ mod tests {
         let scroll_bars_error = HttpRequest::builder()
             .uri(APP_URL)
             .body(
-                r#"{"protocol":1,"event":"scroll-bars-error",
+                r#"{"protocol":2,"event":"scroll-bars-error",
                     "message":"bad scroll bars"}"#
                     .into(),
             )
@@ -2521,7 +2193,7 @@ mod tests {
 
         for key in RENDERER_ACCELERATORS {
             let payload = json!({
-                "protocol": 1,
+                "protocol": 2,
                 "event": "accelerator",
                 "key": key,
                 "repeat": false,
@@ -2544,7 +2216,7 @@ mod tests {
         let repeated = HttpRequest::builder()
             .uri(APP_URL)
             .body(
-                r#"{"protocol":1,"event":"accelerator",
+                r#"{"protocol":2,"event":"accelerator",
                     "key":"SPC","repeat":true}"#
                     .into(),
             )
@@ -2566,7 +2238,7 @@ mod tests {
         ] {
             let focus = HttpRequest::builder()
                 .uri(APP_URL)
-                .body(json!({ "protocol": 1, "event": event }).to_string())
+                .body(json!({ "protocol": 2, "event": event }).to_string())
                 .unwrap();
             assert_eq!(
                 renderer_event_value(8, &focus),
@@ -2585,22 +2257,22 @@ mod tests {
                 .unwrap(),
             HttpRequest::builder()
                 .uri(APP_URL)
-                .body(r#"{"protocol":1,"event":"other"}"#.into())
+                .body(r#"{"protocol":2,"event":"other"}"#.into())
                 .unwrap(),
             HttpRequest::builder()
                 .uri(APP_URL)
-                .body(r#"{"protocol":1,"event":"publication-ready"}"#.into())
+                .body(r#"{"protocol":2,"event":"publication-ready"}"#.into())
                 .unwrap(),
             HttpRequest::builder()
                 .uri(APP_URL)
                 .body(
-                    r#"{"protocol":1,"event":"accelerator","key":"j"}"#.into(),
+                    r#"{"protocol":2,"event":"accelerator","key":"j"}"#.into(),
                 )
                 .unwrap(),
             HttpRequest::builder()
                 .uri(APP_URL)
                 .body(
-                    r#"{"protocol":1,"event":"accelerator",
+                    r#"{"protocol":2,"event":"accelerator",
                         "key":"j","repeat":0}"#
                         .into(),
                 )
@@ -2609,7 +2281,7 @@ mod tests {
                 .uri(APP_URL)
                 .body(
                     concat!(
-                        r#"{"protocol":1,"event":"location","location":{"#,
+                        r#"{"protocol":2,"event":"location","location":{"#,
                         r#""cfi":"epubcfi(/6/6)","#,
                         r#""href":"OPS/next.xhtml"}}"#,
                     )
@@ -2620,7 +2292,7 @@ mod tests {
                 .uri(APP_URL)
                 .body(
                     concat!(
-                        r#"{"protocol":1,"event":"location","location":{"#,
+                        r#"{"protocol":2,"event":"location","location":{"#,
                         r#""cfi":"bad","href":"../chapter.xhtml"}}"#,
                     )
                     .into(),
@@ -2628,12 +2300,12 @@ mod tests {
                 .unwrap(),
             HttpRequest::builder()
                 .uri(APP_URL)
-                .body(r#"{"protocol":1,"event":"selection"}"#.into())
+                .body(r#"{"protocol":2,"event":"selection"}"#.into())
                 .unwrap(),
             HttpRequest::builder()
                 .uri(APP_URL)
                 .body(
-                    r#"{"protocol":1,"event":"external-link",
+                    r#"{"protocol":2,"event":"external-link",
                         "uri":"relative/path"}"#
                         .into(),
                 )
@@ -2641,7 +2313,7 @@ mod tests {
             HttpRequest::builder()
                 .uri(APP_URL)
                 .body(
-                    r#"{"protocol":1,"event":"external-link",
+                    r#"{"protocol":2,"event":"external-link",
                         "uri":"https://bad uri"}"#
                         .into(),
                 )
@@ -2650,7 +2322,7 @@ mod tests {
                 .uri(APP_URL)
                 .body(
                     concat!(
-                        r#"{"protocol":1,"event":"selection","#,
+                        r#"{"protocol":2,"event":"selection","#,
                         r#""selection":{"href":"OPS/chapter.xhtml","#,
                         r#""start":"epubcfi(/6/4)","#,
                         r#""end":"epubcfi(/6/4)"}}"#,
@@ -2662,7 +2334,7 @@ mod tests {
                 .uri(APP_URL)
                 .body(
                     concat!(
-                        r#"{"protocol":1,"event":"location","#,
+                        r#"{"protocol":2,"event":"location","#,
                         r#""selection":null,"location":{"#,
                         r#""cfi":"epubcfi(/6/6)","#,
                         r#""href":"OPS/next.xhtml"}}"#,
@@ -2672,19 +2344,19 @@ mod tests {
                 .unwrap(),
             HttpRequest::builder()
                 .uri(APP_URL)
-                .body(r#"{"protocol":1,"event":"zoom-changed"}"#.into())
+                .body(r#"{"protocol":2,"event":"zoom-changed"}"#.into())
                 .unwrap(),
             HttpRequest::builder()
                 .uri(APP_URL)
                 .body(
-                    r#"{"protocol":1,"event":"zoom-changed","scale":0}"#.into(),
+                    r#"{"protocol":2,"event":"zoom-changed","scale":0}"#.into(),
                 )
                 .unwrap(),
             HttpRequest::builder()
                 .uri(APP_URL)
                 .body(
                     concat!(
-                        r#"{"protocol":1,"event":"location","scale":1,"#,
+                        r#"{"protocol":2,"event":"location","scale":1,"#,
                         r#""location":{"cfi":"epubcfi(/6/6)","#,
                         r#""href":"OPS/next.xhtml"}}"#,
                     )
@@ -2699,7 +2371,7 @@ mod tests {
             .uri(APP_URL)
             .body(
                 json!({
-                    "protocol": 1,
+                    "protocol": 2,
                     "event": "external-link",
                     "uri": format!(
                         "https:{}",
@@ -2715,7 +2387,7 @@ mod tests {
             .uri(APP_URL)
             .body(
                 json!({
-                    "protocol": 1,
+                    "protocol": 2,
                     "event": "navigation-error",
                     "message": "x".repeat(MAX_RENDERER_ERROR_BYTES + 1),
                 })
@@ -2727,14 +2399,8 @@ mod tests {
 
     #[test]
     fn renderer_navigation_allows_owned_blob_without_trusting_blob_ipc() {
-        #[cfg(target_os = "windows")]
         let blob = concat!(
-            "blob:https://yunge-reader-app.localhost/",
-            "01234567-89ab-cdef-0123-456789abcdef"
-        );
-        #[cfg(target_os = "macos")]
-        let blob = concat!(
-            "blob:yunge-reader-app://localhost/",
+            "blob:http://127.0.0.1:32123/",
             "01234567-89ab-cdef-0123-456789abcdef"
         );
         assert!(app_navigation_allowed(APP_BROWSER_URL.to_owned()));
@@ -2751,7 +2417,7 @@ mod tests {
     #[test]
     fn renderer_search_callbacks_keep_request_identity() {
         let body = json!({
-            "protocol": 1,
+            "protocol": 2,
             "event": "search-result",
             "request": 27,
             "response": {
@@ -2775,15 +2441,18 @@ mod tests {
         let mut service = Service::new(outgoing, incoming);
         service.pending_searches.insert(
             27,
-            ViewSearchParams {
-                view: 4,
-                query: "Chapter".into(),
-                case_sensitive: false,
-                direction: SearchDirection::Forward,
-                origin: None,
-                cursor: None,
-                match_limit: 2,
-                section_limit: 1,
+            PendingSearch {
+                params: ViewSearchParams {
+                    view: 4,
+                    query: "Chapter".into(),
+                    case_sensitive: false,
+                    direction: SearchDirection::Forward,
+                    origin: None,
+                    cursor: None,
+                    match_limit: 2,
+                    section_limit: 1,
+                },
+                revision: Some(json!(9)),
             },
         );
         let response = json!({
@@ -2808,6 +2477,7 @@ mod tests {
             })
             .unwrap();
         assert!(completed.ok);
+        assert_eq!(completed.revision, Some(json!(9)));
         assert!(!service.pending_searches.contains_key(&27));
     }
 
@@ -3470,10 +3140,12 @@ mod tests {
     #[test]
     fn outgoing_messages_preserve_the_public_ndjson_shapes() {
         let response = serde_json::to_value(Outgoing::Response(
-            Response::success(3, json!({ "scheduled": true })),
+            Response::success(3, json!({ "scheduled": true }))
+                .with_revision(Some(json!(11))),
         ))
         .unwrap();
         assert_eq!(response["id"], 3);
+        assert_eq!(response["revision"], 11);
         assert_eq!(response["ok"], true);
         assert!(response.get("kind").is_none());
 
@@ -3518,6 +3190,12 @@ mod tests {
         let parsed = Service::parse::<ViewPublicationParams>(json!({
             "view": 4,
             "publication": 7,
+            "layout": "reflowable",
+            "resource-root": concat!(
+                "http://127.0.0.1:32123/",
+                "0123456789abcdef0123456789abcdef/book/",
+                "fedcba9876543210fedcba9876543210/"
+            ),
             "appearance": original_appearance_json(),
             "scroll-bars": false,
         }))
@@ -3531,6 +3209,8 @@ mod tests {
             Service::parse::<ViewPublicationParams>(json!({
                 "view": 4,
                 "publication": 7,
+                "layout": "reflowable",
+                "resource-root": "http://127.0.0.1/book/token/",
                 "appearance": original_appearance_json(),
             }))
             .is_err()
@@ -3539,6 +3219,8 @@ mod tests {
             Service::parse::<ViewPublicationParams>(json!({
                 "view": 4,
                 "publication": 7,
+                "layout": "reflowable",
+                "resource-root": "http://127.0.0.1/book/token/",
                 "scroll-bars": false,
             }))
             .is_err()

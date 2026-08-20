@@ -32,11 +32,13 @@ READ-APPLIED returns the recorded value.  SET-APPLIED replaces it."
      'yunge-reader (error-message-string error-data) :warning)))
 
 (defun yunge-reader-webview--sync-surface-value
-    (view desired read-applied set-applied send)
-  "Synchronize VIEW's DESIRED value with its ready surface.
+    (view desired read-applied set-applied send &optional surface)
+  "Synchronize VIEW's DESIRED value with a ready SURFACE.
 READ-APPLIED and SET-APPLIED access the optimistic surface value.
-SEND starts the native request and accepts VIEW, value, and completion."
-  (let ((surface (yunge-reader-webview--view-surface view)))
+SEND starts the native request and accepts VIEW, value, and completion.
+SURFACE defaults to VIEW's active presentation."
+  (let ((surface (or surface
+                     (yunge-reader-webview--view-surface view))))
     (when (and surface
                desired
                (yunge-reader-webview--surface-ready-p surface)
@@ -47,21 +49,31 @@ SEND starts the native request and accepts VIEW, value, and completion."
       (let ((id (yunge-reader-webview--surface-id surface))
             (requested (copy-tree desired)))
         (funcall set-applied surface (copy-tree requested))
-        (funcall
-         send view requested
-         (apply-partially
-          #'yunge-reader-webview--surface-value-complete
-          view id surface requested read-applied set-applied))))))
+        (let ((active (yunge-reader-webview--view-surface view)))
+          (unwind-protect
+              (progn
+                (setf (yunge-reader-webview--view-surface view) surface)
+                (funcall
+                 send view requested
+                 (apply-partially
+                  #'yunge-reader-webview--surface-value-complete
+                  view id surface requested read-applied set-applied)))
+            (setf (yunge-reader-webview--view-surface view) active)))))))
 
-(defun yunge-reader-webview--sync-view-appearance (view)
-  "Send VIEW's desired appearance to its ready native surface."
+(defun yunge-reader-webview--sync-view-appearance (view &optional surface)
+  "Send VIEW's desired appearance to a ready native SURFACE."
+  (setq surface (or surface
+                    (yunge-reader-webview--view-surface view)))
   (yunge-reader-webview--sync-surface-value
    view
-   (yunge-reader-webview--view-appearance view)
+   (and surface
+        (or (yunge-reader-webview--surface-desired-appearance surface)
+            (yunge-reader-webview--view-appearance view)))
    #'yunge-reader-webview--surface-appearance
    (lambda (surface value)
      (setf (yunge-reader-webview--surface-appearance surface) value))
-   #'yunge-reader-webview--set-native-view-appearance))
+   #'yunge-reader-webview--set-native-view-appearance
+   surface))
 
 (defun yunge-reader-webview--set-view-appearance (view appearance)
   "Set logical VIEW's APPEARANCE and synchronize its live surface."
@@ -72,7 +84,10 @@ SEND starts the native request and accepts VIEW, value, and completion."
          (copy-tree
           (yunge-reader-webview--check-appearance appearance))))
     (setf (yunge-reader-webview--view-appearance view) appearance)
-    (yunge-reader-webview--sync-view-appearance view)
+    (dolist (surface (yunge-reader-webview--view-surface-list view))
+      (setf (yunge-reader-webview--surface-desired-appearance surface)
+            (copy-tree appearance))
+      (yunge-reader-webview--sync-view-appearance view surface))
     appearance))
 
 (defun yunge-reader-webview--resolved-appearance (view window)
@@ -87,33 +102,34 @@ SEND starts the native request and accepts VIEW, value, and completion."
         (funcall function window))))))
 
 (defun yunge-reader-webview--refresh-view-appearance (view)
-  "Resolve and synchronize VIEW's appearance for its current surface."
+  "Resolve and synchronize VIEW's appearance for every presentation."
   (when (or (null view)
             (yunge-reader-webview--view-destroyed view))
     (error "Cannot refresh the appearance of a dead EPUB view"))
-  (if-let* ((surface (yunge-reader-webview--view-surface view))
-            (window (yunge-reader-webview--surface-window surface))
-            ((window-live-p window))
-            ((eq (window-buffer window)
-                 (yunge-reader-webview--view-buffer view))))
+  (dolist (surface (yunge-reader-webview--view-surface-list view))
+    (when-let* ((window (yunge-reader-webview--surface-window surface))
+                ((window-live-p window))
+                ((eq (window-buffer window)
+                     (yunge-reader-webview--view-buffer view))))
       (let ((appearance
              (yunge-reader-webview--resolved-appearance view window)))
-        (unless (equal appearance
-                       (yunge-reader-webview--view-appearance view))
+        (setf (yunge-reader-webview--surface-desired-appearance surface)
+              appearance)
+        (when (eq surface (yunge-reader-webview--view-surface view))
           (setf (yunge-reader-webview--view-appearance view)
-                appearance)
-          (yunge-reader-webview--sync-view-appearance view)))
-    (setf (yunge-reader-webview--view-appearance view) nil)))
+                (copy-tree appearance)))
+        (yunge-reader-webview--sync-view-appearance view surface)))))
 
-(defun yunge-reader-webview--sync-view-style (view)
-  "Send VIEW's desired style to its ready native surface."
+(defun yunge-reader-webview--sync-view-style (view &optional surface)
+  "Send VIEW's desired style to a ready native SURFACE."
   (yunge-reader-webview--sync-surface-value
    view
    (yunge-reader-webview--view-style view)
    #'yunge-reader-webview--surface-style
    (lambda (surface value)
      (setf (yunge-reader-webview--surface-style surface) value))
-   #'yunge-reader-webview--set-native-view-style))
+   #'yunge-reader-webview--set-native-view-style
+   surface))
 
 (defun yunge-reader-webview--set-view-style (view style)
   "Set logical VIEW's desired STYLE and synchronize its live surface."
@@ -125,18 +141,20 @@ SEND starts the native request and accepts VIEW, value, and completion."
   (let ((style (copy-tree
                 (yunge-reader-webview--check-style style))))
     (setf (yunge-reader-webview--view-style view) style)
-    (yunge-reader-webview--sync-view-style view)
+    (dolist (surface (yunge-reader-webview--view-surface-list view))
+      (yunge-reader-webview--sync-view-style view surface))
     style))
 
-(defun yunge-reader-webview--sync-view-zoom (view)
-  "Send VIEW's desired fixed zoom to its ready native surface."
+(defun yunge-reader-webview--sync-view-zoom (view &optional surface)
+  "Send VIEW's desired fixed zoom to a ready native SURFACE."
   (yunge-reader-webview--sync-surface-value
    view
    (yunge-reader-webview--view-zoom view)
    #'yunge-reader-webview--surface-zoom
    (lambda (surface value)
      (setf (yunge-reader-webview--surface-zoom surface) value))
-   #'yunge-reader-webview--set-native-view-zoom))
+   #'yunge-reader-webview--set-native-view-zoom
+   surface))
 
 (defun yunge-reader-webview--set-view-zoom (view zoom)
   "Set logical VIEW's desired fixed-layout ZOOM and synchronize it."
@@ -147,19 +165,26 @@ SEND starts the native request and accepts VIEW, value, and completion."
     (error "Cannot apply fixed zoom to a reflowable EPUB view"))
   (setq zoom (yunge-reader-webview--check-fixed-zoom zoom))
   (setf (yunge-reader-webview--view-zoom view) zoom)
-  (yunge-reader-webview--sync-view-zoom view)
+  (dolist (surface (yunge-reader-webview--view-surface-list view))
+    (yunge-reader-webview--sync-view-zoom view surface))
   zoom)
 
-(defun yunge-reader-webview--sync-view-scroll-bars (view)
-  "Send VIEW's resolved scroll bar mode to its ready native surface."
+(defun yunge-reader-webview--sync-view-scroll-bars (view &optional surface)
+  "Send VIEW's resolved scroll bar mode to a ready native SURFACE."
+  (setq surface (or surface
+                    (yunge-reader-webview--view-surface view)))
   (yunge-reader-webview--sync-surface-value
    view
-   (yunge-reader-webview--view-scroll-bar-mode view)
+   (and surface
+        (or (yunge-reader-webview--surface-desired-scroll-bar-mode
+             surface)
+            (yunge-reader-webview--view-scroll-bar-mode view)))
    #'yunge-reader-webview--surface-scroll-bar-mode
    (lambda (surface value)
      (setf
       (yunge-reader-webview--surface-scroll-bar-mode surface) value))
-   #'yunge-reader-webview--set-native-scroll-bar-mode))
+   #'yunge-reader-webview--set-native-scroll-bar-mode
+   surface))
 
 (defun yunge-reader-webview--resolved-scroll-bar-mode (view window)
   "Return VIEW's resolved scroll bar mode in WINDOW."
@@ -169,13 +194,20 @@ SEND starts the native request and accepts VIEW, value, and completion."
        (funcall function window)
      'visible)))
 
-(defun yunge-reader-webview--update-scroll-bar-mode (view window)
-  "Resolve VIEW's scroll bar mode for WINDOW and synchronize it."
+(defun yunge-reader-webview--update-scroll-bar-mode
+    (view window &optional surface)
+  "Resolve VIEW's scroll bar mode for WINDOW and SURFACE."
+  (setq surface (or surface
+                    (yunge-reader-webview--view-surface view)))
   (let ((mode
          (yunge-reader-webview--resolved-scroll-bar-mode view window)))
-    (unless (eq mode (yunge-reader-webview--view-scroll-bar-mode view))
-      (setf (yunge-reader-webview--view-scroll-bar-mode view) mode)
-      (yunge-reader-webview--sync-view-scroll-bars view))))
+    (when surface
+      (setf (yunge-reader-webview--surface-desired-scroll-bar-mode
+             surface)
+            mode)
+      (when (eq surface (yunge-reader-webview--view-surface view))
+        (setf (yunge-reader-webview--view-scroll-bar-mode view) mode))
+      (yunge-reader-webview--sync-view-scroll-bars view surface))))
 
 (defun yunge-reader-webview--queue-view-target (view target)
   "Queue one transient EPUB TARGET until VIEW's surface is ready."
@@ -211,51 +243,67 @@ SEND starts the native request and accepts VIEW, value, and completion."
           (set-buffer-modified-p nil))))))
 
 (defun yunge-reader-webview--store-view-location
-    (view message &optional initial)
-  "Store VIEW's locator from MESSAGE and notify its logical owner.
+    (view message &optional initial surface)
+  "Store VIEW's locator from MESSAGE for SURFACE and notify its owner.
 An INITIAL publication location has no direct-user origin."
   (let ((location (yunge-reader-webview--event-location message))
         (user
          (unless initial
            (yunge-reader-webview--event-location-user message))))
-    (setf (yunge-reader-webview--view-location view) location)
-    (when-let* ((function
-                 (yunge-reader-webview--view-location-changed-function
-                  view)))
-      (condition-case error-data
-          (funcall function view user)
-        (error
-         (display-warning
-          'yunge-reader
-          (format "Could not update EPUB location: %s"
-                  (error-message-string error-data))
-          :warning))))))
+    (setq surface (or surface
+                      (yunge-reader-webview--current-surface view)))
+    (when surface
+      (setf (yunge-reader-webview--surface-location surface)
+            (copy-tree location)))
+    (when (or (null surface)
+              (yunge-reader-webview--surface-active-p view surface))
+      (setf (yunge-reader-webview--view-location view)
+            (copy-tree location))
+      (when-let* ((function
+                   (yunge-reader-webview--view-location-changed-function
+                    view)))
+        (condition-case error-data
+            (funcall function view user)
+          (error
+           (display-warning
+            'yunge-reader
+            (format "Could not update EPUB location: %s"
+                    (error-message-string error-data))
+            :warning)))))))
 
-(defun yunge-reader-webview--set-view-selection (view selection)
-  "Set VIEW's validated SELECTION and notify its logical owner."
+(defun yunge-reader-webview--set-view-selection
+    (view selection &optional surface)
+  "Set VIEW's validated SELECTION for SURFACE and notify its owner."
   (unless (or (null selection)
               (yunge-reader-webview--valid-selection-p selection))
     (error "Invalid EPUB view selection: %S" selection))
-  (unless (equal selection
-                 (yunge-reader-webview--view-selection view))
-    (setf (yunge-reader-webview--view-selection view)
-          (and selection (copy-tree selection)))
-    (when-let* ((function
-                 (yunge-reader-webview--view-selection-changed-function
-                  view)))
-      (condition-case error-data
-          (funcall function view)
-        (error
-         (display-warning
-          'yunge-reader
-          (format "Could not record EPUB selection: %s"
-                  (error-message-string error-data))
-          :warning)))))
+  (setq surface (or surface
+                    (yunge-reader-webview--current-surface view)))
+  (when surface
+    (setf (yunge-reader-webview--surface-selection surface)
+          (and selection (copy-tree selection))))
+  (when (or (null surface)
+            (yunge-reader-webview--surface-active-p view surface))
+    (unless (equal selection
+                   (yunge-reader-webview--view-selection view))
+      (setf (yunge-reader-webview--view-selection view)
+            (and selection (copy-tree selection)))
+      (when-let* ((function
+                   (yunge-reader-webview--view-selection-changed-function
+                    view)))
+        (condition-case error-data
+            (funcall function view)
+          (error
+           (display-warning
+            'yunge-reader
+            (format "Could not record EPUB selection: %s"
+                    (error-message-string error-data))
+            :warning))))))
   (yunge-reader-webview--view-selection view))
 
 (defun yunge-reader-webview--clear-view-selection (view)
   "Ask live native VIEW to clear its publication selection."
-  (when-let* ((surface (yunge-reader-webview--view-surface view))
+  (when-let* ((surface (yunge-reader-webview--current-surface view))
               ((yunge-reader-webview--surface-ready-p surface))
               ((not (yunge-reader-webview--view-destroyed view)))
               ((process-live-p yunge-reader-webview--process)))
@@ -280,7 +328,7 @@ An INITIAL publication location has no direct-user origin."
   "Ask live native VIEW to select validated CFI range SELECTION."
   (unless (yunge-reader-webview--valid-selection-p selection)
     (error "Invalid EPUB view selection: %S" selection))
-  (when-let* ((surface (yunge-reader-webview--view-surface view))
+  (when-let* ((surface (yunge-reader-webview--current-surface view))
               ((yunge-reader-webview--surface-ready-p surface))
               ((not (yunge-reader-webview--view-destroyed view)))
               ((process-live-p yunge-reader-webview--process)))
@@ -307,7 +355,7 @@ An INITIAL publication location has no direct-user origin."
 (defun yunge-reader-webview--sync-view-search-result (view &optional reveal)
   "Apply logical VIEW's desired search result to its ready surface.
 When REVEAL is non-nil, navigate to the result before painting it."
-  (when-let* ((surface (yunge-reader-webview--view-surface view))
+  (when-let* ((surface (yunge-reader-webview--current-surface view))
               ((yunge-reader-webview--surface-ready-p surface))
               ((not (yunge-reader-webview--view-destroyed view)))
               ((process-live-p yunge-reader-webview--process)))
@@ -341,7 +389,7 @@ When REVEAL is non-nil, navigate to the result before painting it."
 (defun yunge-reader-webview--focus-owning-window (view)
   "Return native focus from VIEW to its owning live Emacs window."
   (yunge-reader-webview--request-parent-focus view)
-  (when-let* ((surface (yunge-reader-webview--view-surface view))
+  (when-let* ((surface (yunge-reader-webview--current-surface view))
               (window (yunge-reader-webview--surface-window surface))
               ((window-live-p window)))
     (select-window window)
@@ -349,7 +397,7 @@ When REVEAL is non-nil, navigate to the result before painting it."
 
 (defun yunge-reader-webview--request-parent-focus (view)
   "Ask live native VIEW to return keyboard focus to its parent frame."
-  (when-let* ((surface (yunge-reader-webview--view-surface view))
+  (when-let* ((surface (yunge-reader-webview--current-surface view))
               ((yunge-reader-webview--surface-created-p surface))
               ((not
                 (yunge-reader-webview--surface-focus-release-pending
@@ -379,7 +427,7 @@ When REVEAL is non-nil, navigate to the result before painting it."
 
 (defun yunge-reader-webview--record-native-focus (view focused)
   "Record whether VIEW has native focus and synchronize Emacs selection."
-  (when-let* ((surface (yunge-reader-webview--view-surface view)))
+  (when-let* ((surface (yunge-reader-webview--current-surface view)))
     (setf (yunge-reader-webview--surface-native-focused surface) focused
           (yunge-reader-webview--surface-focus-release-pending surface)
           nil)
@@ -461,12 +509,15 @@ When REVEAL is non-nil, navigate to the result before painting it."
   (remove-hook 'window-selection-change-functions
                #'yunge-reader-webview--window-selection-changed))
 
-(defun yunge-reader-webview--set-view-visible (view visible)
-  "Set the current native surface for VIEW to VISIBLE.
+(defun yunge-reader-webview--set-view-visible
+    (view visible &optional surface)
+  "Set VIEW's native SURFACE to VISIBLE.
+SURFACE defaults to the active presentation.
 Creating surfaces are supported so this request can follow their already
 queued creation request."
   (when (process-live-p yunge-reader-webview--process)
-    (when-let* ((surface (yunge-reader-webview--view-surface view))
+    (when-let* ((surface (or surface
+                             (yunge-reader-webview--view-surface view)))
                 (id (yunge-reader-webview--surface-id surface))
                 ((yunge-reader-webview--surface-current-p view id)))
       (yunge-reader-webview--request
@@ -496,76 +547,115 @@ queued creation request."
       (with-current-buffer buffer
         (yunge-reader--presentation-window)))))
 
+(defun yunge-reader-webview--visible-windows (view)
+  "Return every live presentation window for VIEW."
+  (let ((buffer (yunge-reader-webview--view-buffer view)))
+    (when (buffer-live-p buffer)
+      (with-current-buffer buffer
+        (yunge-reader--presentation-windows)))))
+
+(defun yunge-reader-webview--surface-active-p (view surface)
+  "Return whether SURFACE is VIEW's active Reader presentation."
+  (if-let* ((window (yunge-reader-webview--visible-window view)))
+      (eq surface
+          (yunge-reader-webview--view-surface-for-window view window))
+    (eq surface (yunge-reader-webview--current-surface view))))
+
+(defun yunge-reader-webview--adopt-surface-state (view surface)
+  "Expose SURFACE's presentation state as VIEW's active state."
+  (when surface
+    (let ((location (yunge-reader-webview--surface-location surface)))
+      (when (and location
+                 (not (equal location
+                             (yunge-reader-webview--view-location view))))
+        (setf (yunge-reader-webview--view-location view)
+              (copy-tree location))
+        (when-let* ((function
+                     (yunge-reader-webview--view-location-changed-function
+                      view)))
+          (funcall function view nil))))
+    (yunge-reader-webview--set-view-selection
+     view (yunge-reader-webview--surface-selection surface) surface)
+    (setf (yunge-reader-webview--view-appearance view)
+          (copy-tree
+           (yunge-reader-webview--surface-desired-appearance surface))
+          (yunge-reader-webview--view-scroll-bar-mode view)
+          (yunge-reader-webview--surface-desired-scroll-bar-mode surface))))
+
+(defun yunge-reader-webview--sync-surface (view surface window)
+  "Synchronize VIEW's SURFACE with its live presentation WINDOW."
+  (setf (yunge-reader-webview--view-surface view) surface)
+  (let ((appearance
+         (yunge-reader-webview--resolved-appearance view window)))
+    (setf (yunge-reader-webview--surface-desired-appearance surface)
+          appearance
+          (yunge-reader-webview--view-appearance view)
+          (copy-tree appearance))
+    (yunge-reader-webview--sync-view-appearance view surface))
+  (yunge-reader-webview--update-scroll-bar-mode view window surface)
+  (setf (yunge-reader-webview--surface-requested-bounds surface)
+        (yunge-reader-webview--window-bounds window))
+  (yunge-reader-webview--send-latest-bounds view surface)
+  (yunge-reader-webview--set-view-visible view t surface))
+
 (defun yunge-reader-webview--sync-view (view)
-  "Synchronize logical VIEW with its currently visible window."
+  "Synchronize logical VIEW with all of its presentation windows."
   (unless (yunge-reader-webview--view-destroyed view)
-    (let* ((window (yunge-reader-webview--visible-window view))
-           (surface (yunge-reader-webview--view-surface view))
-           (current
-            (and surface
-                 (yunge-reader-webview--surface-window surface))))
-      (cond
-       ((and window surface
-             (yunge-reader-webview--view-persistent view)
-             (not (eq (yunge-reader-webview--surface-state surface)
-                      'failed))
-             current
-             (window-live-p current)
-             (eq (window-frame window)
-                 (window-frame current)))
-        ;; An in-process child surface follows its frame automatically and
-        ;; can move between windows belonging to that same native parent.
-        (setf (yunge-reader-webview--surface-window surface) window)
-        (yunge-reader-webview--update-scroll-bar-mode view window)
-        (setf (yunge-reader-webview--surface-requested-bounds surface)
-              (yunge-reader-webview--window-bounds window))
-        (yunge-reader-webview--send-latest-bounds view)
-        (yunge-reader-webview--set-view-visible view t))
-       ((and (not window) surface
-             (yunge-reader-webview--view-persistent view)
-             (not (eq (yunge-reader-webview--surface-state surface)
-                      'failed)))
-        ;; Hiding a buffer retains its loaded child surface and original
-        ;; parent frame so redisplay can reuse it without reopening the EPUB.
-        (setf (yunge-reader-webview--surface-native-focused surface) nil
-              (yunge-reader-webview--surface-focus-release-pending surface)
-              nil)
-        (yunge-reader-webview--clear-view-selection view)
-        (yunge-reader-webview--set-view-selection view nil)
-        (yunge-reader-webview--set-view-visible view nil))
-       ((and window surface (eq window current))
-        (yunge-reader-webview--update-scroll-bar-mode view window)
-        (setf (yunge-reader-webview--surface-requested-bounds surface)
-              (yunge-reader-webview--window-bounds window))
-        (yunge-reader-webview--send-latest-bounds view))
-       ((and window surface current
-             (window-live-p current)
-             (eq (window-frame window) (window-frame current)))
-        (setf (yunge-reader-webview--surface-window surface) window)
-        (yunge-reader-webview--update-scroll-bar-mode view window)
-        (setf (yunge-reader-webview--surface-requested-bounds surface)
-              (yunge-reader-webview--window-bounds window))
-        (yunge-reader-webview--send-latest-bounds view))
-       ((and window surface current
-             (window-live-p current)
-             (yunge-reader-webview--surface-created-p surface)
-             (not (eq (yunge-reader-webview--surface-state surface)
-                      'failed)))
-        ;; Reparent the live native child instead of reopening the EPUB in
-        ;; a new WebView whenever its presentation moves between frames.
-        (yunge-reader-webview--set-surface-parent view window)
-        (yunge-reader-webview--update-scroll-bar-mode view window)
-        (yunge-reader-webview--set-view-visible view t))
-       (surface
-        (yunge-reader-webview--release-surface view)
-        (if window
-            (yunge-reader-webview--start-surface view window)
-          (unless (yunge-reader-webview--view-persistent view)
-            (yunge-reader-webview--destroy-view view))))
-       (window
-        (yunge-reader-webview--start-surface view window))
-       ((not (yunge-reader-webview--view-persistent view))
-        (yunge-reader-webview--destroy-view view))))))
+    (let* ((windows (yunge-reader-webview--visible-windows view))
+           (active-window (yunge-reader-webview--visible-window view))
+           (active-surface (yunge-reader-webview--view-surface view))
+           (surfaces (yunge-reader-webview--view-surface-list view)))
+      (if windows
+          (progn
+            (dolist (surface surfaces)
+              (let ((window
+                     (yunge-reader-webview--surface-window surface)))
+                (if (memq window windows)
+                    (if (eq (yunge-reader-webview--surface-state surface)
+                            'failed)
+                        (progn
+                          (yunge-reader-webview--release-surface
+                           view nil surface)
+                          (yunge-reader-webview--start-surface view window))
+                      (yunge-reader-webview--sync-surface
+                       view surface window))
+                  (yunge-reader-webview--release-surface
+                   view nil surface))))
+            (dolist (window windows)
+              (unless (yunge-reader-webview--view-surface-for-window
+                       view window)
+                (yunge-reader-webview--start-surface view window)))
+            (setf (yunge-reader-webview--view-surface view)
+                  (or (and active-window
+                           (yunge-reader-webview--view-surface-for-window
+                            view active-window))
+                      (car (yunge-reader-webview--view-surface-list view))))
+            (when-let* ((surface
+                         (yunge-reader-webview--view-surface view)))
+              (yunge-reader-webview--adopt-surface-state view surface)))
+        (if (yunge-reader-webview--view-persistent view)
+            (when-let* ((surface
+                         (or active-surface (car surfaces))))
+              (if (eq (yunge-reader-webview--surface-state surface)
+                      'failed)
+                  (yunge-reader-webview--release-surface
+                   view nil surface)
+                (dolist (other surfaces)
+                  (unless (eq other surface)
+                    (yunge-reader-webview--release-surface
+                     view nil other)))
+                (setf (yunge-reader-webview--view-surface view) surface
+                      (yunge-reader-webview--surface-native-focused surface)
+                      nil
+                      (yunge-reader-webview--surface-focus-release-pending
+                       surface)
+                      nil)
+                (yunge-reader-webview--clear-view-selection view)
+                (yunge-reader-webview--set-view-selection view nil)
+                (yunge-reader-webview--set-view-visible view nil surface)))
+          (dolist (surface surfaces)
+            (yunge-reader-webview--release-surface view nil surface))
+          (yunge-reader-webview--destroy-view view))))))
 
 (defun yunge-reader-webview--sync-views (&rest _ignored)
   "Synchronize every logical view after an Emacs window change."
@@ -586,21 +676,22 @@ queued creation request."
   "Release any focused native child whose Emacs window is not selected."
   (maphash
    (lambda (view _present)
-     (when-let* ((surface (yunge-reader-webview--view-surface view)))
+     (dolist (surface (yunge-reader-webview--view-surface-list view))
        (when (and
               (yunge-reader-webview--surface-native-focused surface)
               (not (eq
                     (selected-window)
                     (yunge-reader-webview--surface-window surface))))
-         (yunge-reader-webview--request-parent-focus view))))
+         (let ((yunge-reader-webview--operation-surface surface))
+           (yunge-reader-webview--request-parent-focus view)))))
    yunge-reader-webview--logical-views))
 
-(defun yunge-reader-webview--close-owned-publication (publication)
-  "Close PUBLICATION when the native WebView service is still live."
-  (when (and publication
-             (process-live-p yunge-reader-webview--process))
+(defun yunge-reader-webview--close-owned-publication
+    (session publication)
+  "Close broker PUBLICATION owned by native helper SESSION."
+  (when (and (integerp session) publication)
     (yunge-reader-webview--close-publication
-     publication (lambda (_result _error-data)))))
+     session publication (lambda (_result _error-data)))))
 
 (defun yunge-reader-webview--finish-view-destroy (view)
   "Finish permanent destruction of logical VIEW."
@@ -614,7 +705,9 @@ queued creation request."
            (prog1 (yunge-reader-webview--view-publication view)
              (setf (yunge-reader-webview--view-publication view) nil))))
       (when (yunge-reader-webview--view-owns-publication view)
-        (yunge-reader-webview--close-owned-publication publication)))
+        (yunge-reader-webview--close-owned-publication
+         (yunge-reader-webview--view-broker-session view)
+         publication)))
     (let ((waiters
            (prog1
                (yunge-reader-webview--view-destroy-waiters view)
@@ -627,6 +720,7 @@ queued creation request."
   "Finish destroyed VIEW after all obsolete surfaces are gone."
   (when (and (yunge-reader-webview--view-destroyed view)
              (null (yunge-reader-webview--view-surface view))
+             (null (yunge-reader-webview--view-surface-list view))
              (null
               (yunge-reader-webview--view-pending-destroys view)))
     (yunge-reader-webview--finish-view-destroy view)))
@@ -649,7 +743,10 @@ queued creation request."
             (list complete)))
     (setf (yunge-reader-webview--view-destroyed view) t)
     (yunge-reader-webview--unregister-view view)
-    (yunge-reader-webview--release-surface view)
+    (dolist (surface (yunge-reader-webview--view-surface-list view))
+      (yunge-reader-webview--release-surface view nil surface))
+    (yunge-reader-webview--cancel-view-requests
+     view "The EPUB view was destroyed")
     (yunge-reader-webview--maybe-finish-view-destroy view)))
   view)
 
@@ -661,11 +758,12 @@ queued creation request."
        (push view views))
      yunge-reader-webview--logical-views)
     (dolist (view views)
-      (when-let* ((surface (yunge-reader-webview--view-surface view)))
+      (dolist (surface (yunge-reader-webview--view-surface-list view))
         (yunge-reader-webview--cancel-open-timer surface))
       (setf (yunge-reader-webview--view-surface view) nil
             (yunge-reader-webview--view-destroyed view) t
             (yunge-reader-webview--view-pending-destroys view) nil)
+      (clrhash (yunge-reader-webview--view-surface-table view))
       (yunge-reader-webview--set-view-selection view nil)
       (yunge-reader-webview--finish-view-destroy view)))
   (clrhash yunge-reader-webview--views)
@@ -692,11 +790,12 @@ queued creation request."
     view))
 
 (cl-defun yunge-reader-webview--attach-shared-publication
-    (publication layout
+    (publication layout resource-root renderer-url broker-session
      &key location location-changed-function selection-changed-function
      accelerator-function appearance-function style zoom
      zoom-changed-function scroll-bar-function external-link-function)
   "Attach shared PUBLICATION with Reader LAYOUT to the current buffer.
+RESOURCE-ROOT and RENDERER-URL belong to BROKER-SESSION.
 Restore bounded LOCATION when supplied.  Invoke LOCATION-CHANGED-FUNCTION
 with the logical view whenever its renderer reports a stable location.
 Invoke SELECTION-CHANGED-FUNCTION whenever its logical selection changes.
@@ -710,6 +809,10 @@ Invoke EXTERNAL-LINK-FUNCTION with the view and a validated absolute URI."
     (error "Invalid EPUB publication ID: %S" publication))
   (unless (memq layout '(fixed reflow))
     (error "Invalid EPUB publication layout: %S" layout))
+  (unless (and (stringp resource-root)
+               (stringp renderer-url)
+               (integerp broker-session))
+    (error "Invalid EPUB broker session data"))
   (unless (functionp appearance-function)
     (error "Invalid EPUB appearance resolver: %S"
            appearance-function))
@@ -760,6 +863,9 @@ Invoke EXTERNAL-LINK-FUNCTION with the view and a validated absolute URI."
           :buffer (current-buffer)
           :persistent t
           :publication publication
+          :broker-session broker-session
+          :renderer-url renderer-url
+          :resource-root resource-root
           :layout layout
           :style (and style (copy-tree style))
           :zoom zoom
@@ -823,8 +929,20 @@ Invoke EXTERNAL-LINK-FUNCTION with the view and a validated absolute URI."
       (unless (and (integerp publication) (> publication 0))
         (error "Malformed EPUB publication result: %S" result))
       (if (yunge-reader-webview--view-destroyed view)
-          (yunge-reader-webview--close-owned-publication publication)
+          (yunge-reader-webview--close-owned-publication
+           (alist-get 'session result) publication)
         (setf (yunge-reader-webview--view-publication view) publication
+              (yunge-reader-webview--view-broker-session view)
+              (alist-get 'session result)
+              (yunge-reader-webview--view-renderer-url view)
+              (alist-get 'renderer-url result)
+              (yunge-reader-webview--view-resource-root view)
+              (alist-get 'resource-root result)
+              (yunge-reader-webview--view-layout view)
+              (pcase (alist-get 'layout (alist-get 'metadata result))
+                ("reflowable" 'reflow)
+                ("pre-paginated" 'fixed)
+                (_ (error "Malformed EPUB publication layout")))
               (yunge-reader-webview--view-owns-publication view) t)
         (yunge-reader-webview--register-view view)))))
 

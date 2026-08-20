@@ -120,11 +120,12 @@
       (yunge-reader-native--handle-message
        'fake-reader-process
        '((kind . "ready")
-         (protocol . 1)
+         (protocol . 2)
          (build-id . "test-build")
          (pdfium-api . "7881")
          (capabilities
-           . ("cache-maintenance" "lifecycle" "pdf-links"
+           . ("cache-maintenance" "epub-publications" "epub-renderer"
+              "epub-resources" "lifecycle" "pdf-links"
               "pdf-outline" "pdf-render" "pdf-search" "pdf-text"))))
       (should (= (length sent) 1))
       (let ((request
@@ -138,16 +139,66 @@
       (should (equal (alist-get 'backend result) "none"))
       (should (zerop (yunge-reader-native-test--pending-count))))))
 
+(ert-deftest yunge-reader-native-infers-and-cancels-document-owners ()
+  (yunge-reader-native-test--with-fake-process
+    (let* (error-data
+           (task
+            (yunge-reader-native-request
+             "render" '((document . 17) (page . 0))
+             (lambda (_result error) (setq error-data error))
+             :revision 3))
+           (session (yunge-reader-native-current-session)))
+      (should
+       (equal (yunge-reader-task-owner task)
+              (list 'pdf-document session 17)))
+      (should (= (yunge-reader-task-revision task) 3))
+      (should
+       (= (yunge-reader-native-cancel-document-requests
+           session 17 "document closed")
+          1))
+      (should (eq (yunge-reader-task-state task) 'cancelled))
+      (should (eq (car error-data) 'yunge-reader-task-cancelled))
+      (let ((close
+             (yunge-reader-native-request
+              "close" '((document . 17)) #'ignore)))
+        (should-not (yunge-reader-task-owner close))))))
+
+(ert-deftest yunge-reader-native-infers-publication-owners ()
+  (yunge-reader-native-test--with-fake-process
+    (let* ((task
+            (yunge-reader-native-request
+             "epub-info" '((publication . 23)) #'ignore))
+           (session (yunge-reader-native-current-session)))
+      (should
+       (equal (yunge-reader-task-owner task)
+              (list 'epub-publication session 23)))
+      (let ((close
+             (yunge-reader-native-request
+              "epub-close" '((publication . 23)) #'ignore)))
+        (should-not (yunge-reader-task-owner close))))))
+
 (ert-deftest yunge-reader-native-rejects-an-outdated-helper ()
   (yunge-reader-native-test--with-fake-process
     (should-error
      (yunge-reader-native--validate-ready
       '((kind . "ready")
-        (protocol . 1)
+        (protocol . 2)
         (build-id . "old-build")
         (pdfium-api . "7881")
         (capabilities
-          . ("cache-maintenance" "lifecycle" "pdf-links"
+          . ("cache-maintenance" "epub-publications" "epub-renderer"
+             "epub-resources" "lifecycle" "pdf-links"
+             "pdf-outline" "pdf-render" "pdf-search" "pdf-text"))))
+     :type 'error)
+    (should-error
+     (yunge-reader-native--validate-ready
+      '((kind . "ready")
+        (protocol . 1)
+        (build-id . "test-build")
+        (pdfium-api . "7881")
+        (capabilities
+          . ("cache-maintenance" "epub-publications" "epub-renderer"
+             "epub-resources" "lifecycle" "pdf-links"
              "pdf-outline" "pdf-render" "pdf-search" "pdf-text"))))
      :type 'error)
     (should-error
@@ -157,17 +208,8 @@
         (build-id . "test-build")
         (pdfium-api . "7881")
         (capabilities
-          . ("cache-maintenance" "lifecycle" "pdf-links"
-             "pdf-outline" "pdf-render" "pdf-search" "pdf-text"))))
-     :type 'error)
-    (should-error
-     (yunge-reader-native--validate-ready
-      '((kind . "ready")
-        (protocol . 1)
-        (build-id . "test-build")
-        (pdfium-api . "7881")
-        (capabilities
-          . ("cache-maintenance" "lifecycle" "pdf-outline"
+          . ("cache-maintenance" "epub-publications" "epub-renderer"
+             "epub-resources" "lifecycle" "pdf-outline"
              "pdf-render" "pdf-search" "pdf-text"))))
      :type 'error)))
 
@@ -328,11 +370,12 @@
     (yunge-reader-native--handle-message
      'fake-reader-process
      '((kind . "ready")
-       (protocol . 1)
+       (protocol . 2)
        (build-id . "test-build")
        (pdfium-api . "7881")
        (capabilities
-         . ("cache-maintenance" "lifecycle" "pdf-links"
+         . ("cache-maintenance" "epub-publications" "epub-renderer"
+            "epub-resources" "lifecycle" "pdf-links"
             "pdf-outline" "pdf-render" "pdf-search" "pdf-text"))))
     (should (= (length sent) 1))
     (cl-letf (((symbol-function 'run-at-time)

@@ -10,7 +10,10 @@
 
 (cl-defstruct yunge-reader-epub-handle
   "One shared native EPUB publication."
+  session
   publication
+  renderer-url
+  resource-root
   metadata
   pending-detaches
   closing
@@ -235,12 +238,22 @@ scrolling behavior."
         (let ((publication (alist-get 'publication result)))
           (unless (and (integerp publication) (> publication 0))
             (error "Malformed EPUB publication result: %S" result))
-          (let ((layout (yunge-reader-epub--layout result))
+          (let ((session (alist-get 'session result))
+                (renderer-url (alist-get 'renderer-url result))
+                (resource-root (alist-get 'resource-root result))
+                (layout (yunge-reader-epub--layout result))
                 (metadata (yunge-reader-epub--metadata result)))
+            (unless (and (integerp session)
+                         (stringp renderer-url)
+                         (stringp resource-root))
+              (error "Malformed EPUB broker result: %S" result))
             (funcall
              complete
              (make-yunge-reader-epub-handle
+              :session session
               :publication publication
+              :renderer-url renderer-url
+              :resource-root resource-root
               :metadata metadata
               :pending-detaches 0)
              (list :layout layout :metadata metadata)
@@ -249,7 +262,8 @@ scrolling behavior."
        (when-let* ((publication (alist-get 'publication result))
                    ((integerp publication))
                    ((> publication 0)))
-         (yunge-reader-webview--close-owned-publication publication))
+         (yunge-reader-webview--close-owned-publication
+          (alist-get 'session result) publication))
        (funcall complete nil nil validation-error)))))
 
 (defun yunge-reader-epub--open (file complete)
@@ -289,12 +303,11 @@ scrolling behavior."
              (zerop
               (yunge-reader-epub-handle-pending-detaches handle))
              (not (yunge-reader-epub-handle-closed handle)))
-    (if (process-live-p yunge-reader-webview--process)
-        (yunge-reader-webview--close-publication
-         (yunge-reader-epub-handle-publication handle)
-         (apply-partially
-          #'yunge-reader-epub--close-complete handle))
-      (setf (yunge-reader-epub-handle-closed handle) t))))
+    (yunge-reader-webview--close-publication
+     (yunge-reader-epub-handle-session handle)
+     (yunge-reader-epub-handle-publication handle)
+     (apply-partially
+      #'yunge-reader-epub--close-complete handle))))
 
 (defun yunge-reader-epub--close (document)
   "Close the shared EPUB resource owned by DOCUMENT."
@@ -418,7 +431,8 @@ USER is non-nil when direct reader movement produced the location."
   (when (buffer-live-p buffer)
     (with-current-buffer buffer
       (when (= generation yunge-reader--copy-generation)
-        (setq yunge-reader--copy-pending nil)
+        (setq yunge-reader--copy-pending nil
+              yunge-reader--copy-task nil)
         (cond
          ((not (eq view yunge-reader-webview--buffer-view))
           (message "The EPUB view changed before its selection was read"))
@@ -445,13 +459,17 @@ USER is non-nil when direct reader movement produced the location."
       (setq yunge-reader--copy-pending t)
       (message "Reading document selection...")
       (condition-case error-data
-          (yunge-reader-webview--request-current-selection
-           view
-           (apply-partially
-            #'yunge-reader-epub--copy-current-selection-complete
-            buffer view generation))
+          (setq
+           yunge-reader--copy-task
+           (yunge-reader-webview--request-current-selection
+            view
+            (apply-partially
+             #'yunge-reader-epub--copy-current-selection-complete
+             buffer view generation)
+            generation))
         (error
-         (setq yunge-reader--copy-pending nil)
+         (setq yunge-reader--copy-pending nil
+               yunge-reader--copy-task nil)
          (signal (car error-data) (cdr error-data)))))))
 
 (defun yunge-reader-epub--search-result-changed ()
@@ -801,6 +819,9 @@ VALUES is an alist containing complete, already bounded property values."
           (yunge-reader-webview--attach-shared-publication
            (yunge-reader-epub-handle-publication handle)
            layout
+           (yunge-reader-epub-handle-resource-root handle)
+           (yunge-reader-epub-handle-renderer-url handle)
+           (yunge-reader-epub-handle-session handle)
            :location-changed-function
            #'yunge-reader-epub--location-changed
            :selection-changed-function
@@ -904,12 +925,16 @@ VALUES is an alist containing complete, already bounded property values."
              (alist-get 'items value))
      :truncated (eq (alist-get 'truncated value) t))))
 
-(defun yunge-reader-epub--location (_document _window)
-  "Return the current stable EPUB position."
+(defun yunge-reader-epub--location (_document window)
+  "Return the current stable EPUB position for WINDOW."
   (when-let* ((view yunge-reader-webview--buffer-view)
               ((not (yunge-reader-webview--view-destroyed view))))
     (yunge-reader-epub--locator-position
-     (yunge-reader-webview--view-location view))))
+     (or (when-let* ((surface
+                      (yunge-reader-webview--view-surface-for-window
+                       view window)))
+           (yunge-reader-webview--surface-location surface))
+         (yunge-reader-webview--view-location view)))))
 
 (defun yunge-reader-epub--restore-complete (_result error-data)
   "Report an asynchronous EPUB restore ERROR-DATA."
@@ -918,35 +943,45 @@ VALUES is an alist containing complete, already bounded property values."
      'yunge-reader (error-message-string error-data) :warning)))
 
 (defun yunge-reader-epub--restore-location
-    (_document position _window)
-  "Restore EPUB POSITION in the current buffer's logical view."
+    (_document position window)
+  "Restore EPUB POSITION in the presentation for WINDOW."
   (when-let* ((view yunge-reader-webview--buffer-view)
               (target
                (yunge-reader-epub--position-target position)))
-    (let ((stable
-          (yunge-reader-webview--valid-location-p target))
+    (let* ((surface
+            (or (yunge-reader-webview--view-surface-for-window
+                 view window)
+                (yunge-reader-webview--view-surface view)))
+           (stable
+            (yunge-reader-webview--valid-location-p target))
           (ready
            (yunge-reader-webview--surface-ready-p
-            (yunge-reader-webview--view-surface view))))
-      (cond
-       (stable
-        (setf (yunge-reader-webview--view-location view)
-              (copy-tree target)
-              (yunge-reader-webview--view-pending-target view) nil)
-        (when ready
-          (yunge-reader-webview--navigate-view
-           view "go-to" #'yunge-reader-epub--restore-complete target))
-        t)
-       (t
-        (if ready
-            (progn
-              (setf (yunge-reader-webview--view-pending-target view)
-                    nil)
-              (yunge-reader-webview--navigate-view
-               view "go-to" #'yunge-reader-epub--restore-complete
-               target))
-          (yunge-reader-webview--queue-view-target view target))
-        :deferred)))))
+            surface)))
+      (let ((yunge-reader-webview--operation-surface surface))
+        (cond
+         (stable
+          (when surface
+            (setf (yunge-reader-webview--surface-location surface)
+                  (copy-tree target)))
+          (when (or (null surface)
+                    (yunge-reader-webview--surface-active-p view surface))
+            (setf (yunge-reader-webview--view-location view)
+                  (copy-tree target)))
+          (setf (yunge-reader-webview--view-pending-target view) nil)
+          (when ready
+            (yunge-reader-webview--navigate-view
+             view "go-to" #'yunge-reader-epub--restore-complete target))
+          t)
+         (t
+          (if ready
+              (progn
+                (setf (yunge-reader-webview--view-pending-target view)
+                      nil)
+                (yunge-reader-webview--navigate-view
+                 view "go-to" #'yunge-reader-epub--restore-complete
+                 target))
+            (yunge-reader-webview--queue-view-target view target))
+          :deferred))))))
 
 (defun yunge-reader-epub--refresh ()
   "Synchronize the current EPUB surface with its Reader window."
@@ -1094,15 +1129,20 @@ VALUES is an alist containing complete, already bounded property values."
 (defun yunge-reader-epub--request-search
     (document arguments complete)
   "Request one generic search batch for EPUB DOCUMENT."
-  (let* ((query (plist-get arguments :query))
-         (case-sensitive (plist-get arguments :case-sensitive))
-         (direction (plist-get arguments :direction))
-         (origin-value (plist-get arguments :origin))
+  (unless (yunge-reader-search-request-p arguments)
+    (error "Invalid EPUB search request: %S" arguments))
+  (let* ((query (yunge-reader-search-request-query arguments))
+         (case-sensitive
+          (yunge-reader-search-request-case-sensitive arguments))
+         (direction (yunge-reader-search-request-direction arguments))
+         (origin-value (yunge-reader-search-request-origin arguments))
          (origin (yunge-reader-epub--search-origin origin-value))
-         (cursor-value (plist-get arguments :cursor))
+         (cursor-value (yunge-reader-search-request-cursor arguments))
          (cursor (yunge-reader-epub--search-cursor cursor-value))
-         (match-limit (plist-get arguments :match-limit))
-         (section-limit (plist-get arguments :page-limit))
+         (match-limit
+          (yunge-reader-search-request-match-limit arguments))
+         (section-limit
+          (yunge-reader-search-request-unit-limit arguments))
          (view (yunge-reader-epub--document-view document)))
     (cond
      ((and cursor-value (null cursor))
@@ -1125,7 +1165,9 @@ VALUES is an alist containing complete, already bounded property values."
        view query case-sensitive direction origin cursor
        match-limit section-limit
        (apply-partially
-        #'yunge-reader-epub--search-complete complete))))))
+        #'yunge-reader-epub--search-complete complete)
+       (and (yunge-reader-task-p yunge-reader--request-task)
+            (yunge-reader-task-revision yunge-reader--request-task)))))))
 
 (defun yunge-reader-epub--selection-text-complete
     (href complete result error-data)
@@ -1148,11 +1190,15 @@ VALUES is an alist containing complete, already bounded property values."
 (defun yunge-reader-epub--request-selection-text
     (document arguments complete)
   "Request one generic selection text batch for DOCUMENT."
-  (let* ((start (plist-get arguments :start))
-         (end (plist-get arguments :end))
-         (cursor (plist-get arguments :cursor))
-         (unit-limit (plist-get arguments :unit-limit))
-         (character-limit (plist-get arguments :character-limit))
+  (unless (yunge-reader-selection-text-request-p arguments)
+    (error "Invalid EPUB selection text request: %S" arguments))
+  (let* ((start (yunge-reader-selection-text-request-start arguments))
+         (end (yunge-reader-selection-text-request-end arguments))
+         (cursor (yunge-reader-selection-text-request-cursor arguments))
+         (unit-limit
+          (yunge-reader-selection-text-request-unit-limit arguments))
+         (character-limit
+          (yunge-reader-selection-text-request-character-limit arguments))
          (selection (yunge-reader-epub--selection-range start end))
          (href (and selection (alist-get 'href selection)))
          (offset
@@ -1200,34 +1246,23 @@ VALUES is an alist containing complete, already bounded property values."
        view selection offset character-limit
        (apply-partially
         #'yunge-reader-epub--selection-text-complete
-        href complete))))))
+        href complete)
+       (and (yunge-reader-task-p yunge-reader--request-task)
+            (yunge-reader-task-revision yunge-reader--request-task)))))))
 
-(defun yunge-reader-epub--request
-    (document operation arguments complete)
-  "Dispatch one EPUB DOCUMENT OPERATION through COMPLETE."
-  (pcase operation
-    ('outline
-     (let ((view (yunge-reader-epub--document-view document)))
-       (if view
-           (yunge-reader-webview--request-view-outline
-            view
-            (apply-partially
-             #'yunge-reader-epub--outline-complete complete))
-         (funcall
-          complete nil
-          (yunge-reader-epub--native-error
-           "The current EPUB view cannot provide its outline")))))
-    ('selection-text
-     (yunge-reader-epub--request-selection-text
-      document arguments complete))
-    ('search
-     (yunge-reader-epub--request-search
-      document arguments complete))
-    (_
-     (funcall
-      complete nil
-      (yunge-reader-epub--native-error
-       (format "Unsupported EPUB operation: %S" operation))))))
+(defun yunge-reader-epub--request-outline
+    (document _arguments complete)
+  "Request DOCUMENT's outline through COMPLETE."
+  (let ((view (yunge-reader-epub--document-view document)))
+    (if view
+        (yunge-reader-webview--request-view-outline
+         view
+         (apply-partially
+          #'yunge-reader-epub--outline-complete complete))
+      (funcall
+       complete nil
+       (yunge-reader-epub--native-error
+        "The current EPUB view cannot provide its outline")))))
 
 (defun yunge-reader-epub--navigate (command)
   "Run semantic EPUB navigation COMMAND in the current view."
@@ -1321,7 +1356,9 @@ VALUES is an alist containing complete, already bounded property values."
    :close #'yunge-reader-epub--close
    :attach #'yunge-reader-epub--attach
    :detach #'yunge-reader-epub--detach
-   :request #'yunge-reader-epub--request
+   :outline #'yunge-reader-epub--request-outline
+   :search #'yunge-reader-epub--request-search
+   :selection-text #'yunge-reader-epub--request-selection-text
    :location #'yunge-reader-epub--location
    :restore #'yunge-reader-epub--restore-location))
 

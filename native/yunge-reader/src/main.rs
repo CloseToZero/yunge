@@ -13,14 +13,18 @@ use std::fs::{self, File};
 use std::io::{self, BufRead, Write};
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
+use yunge_reader::broker::{BrokerError, EpubBroker};
 
 type Error = Box<dyn std::error::Error>;
 
-const PROTOCOL_VERSION: u32 = 1;
+const PROTOCOL_VERSION: u32 = 2;
 const PDFIUM_API: &str = "7881";
 const BUILD_ID: &str = env!("YUNGE_READER_BUILD_ID");
-const CAPABILITIES: [&str; 7] = [
+const CAPABILITIES: [&str; 10] = [
     "cache-maintenance",
+    "epub-publications",
+    "epub-renderer",
+    "epub-resources",
     "lifecycle",
     "pdf-links",
     "pdf-outline",
@@ -46,6 +50,8 @@ struct Request {
     id: u64,
     op: String,
     #[serde(default)]
+    revision: Option<Value>,
+    #[serde(default)]
     params: Value,
 }
 
@@ -57,7 +63,7 @@ struct Ready<'a> {
     build_id: &'a str,
     #[serde(rename = "pdfium-api")]
     pdfium_api: &'static str,
-    capabilities: [&'static str; 7],
+    capabilities: [&'static str; 10],
 }
 
 #[derive(Debug, Serialize)]
@@ -69,6 +75,8 @@ struct ProtocolError {
 #[derive(Debug, Serialize)]
 struct Response {
     id: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    revision: Option<Value>,
     ok: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     result: Option<Value>,
@@ -94,6 +102,7 @@ struct Service {
     cache_directory: Option<PathBuf>,
     documents: HashMap<u64, OpenDocument>,
     next_document: u64,
+    epub_broker: Option<EpubBroker>,
 }
 
 struct OpenDocument {
@@ -117,6 +126,18 @@ struct OpenParams {
 #[serde(deny_unknown_fields)]
 struct DocumentParams {
     document: u64,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct EpubOpenParams {
+    path: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct EpubPublicationParams {
+    publication: u64,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1119,6 +1140,7 @@ impl Response {
     fn success(id: u64, result: Value) -> Self {
         Self {
             id: Some(id),
+            revision: None,
             ok: true,
             result: Some(result),
             error: None,
@@ -1132,6 +1154,7 @@ impl Response {
     ) -> Self {
         Self {
             id,
+            revision: None,
             ok: false,
             result: None,
             error: Some(ProtocolError {
@@ -1139,6 +1162,11 @@ impl Response {
                 message: message.into(),
             }),
         }
+    }
+
+    fn with_revision(mut self, revision: Option<Value>) -> Self {
+        self.revision = revision;
+        self
     }
 }
 
@@ -1148,6 +1176,12 @@ impl ServiceError {
             code,
             message: message.into(),
         }
+    }
+}
+
+impl From<BrokerError> for ServiceError {
+    fn from(error: BrokerError) -> Self {
+        Self::new(error.code(), error.message())
     }
 }
 
@@ -1161,7 +1195,48 @@ impl Service {
                 .map(PathBuf::from),
             documents: HashMap::new(),
             next_document: 1,
+            epub_broker: None,
         }
+    }
+
+    fn epub_broker(&mut self) -> Result<&mut EpubBroker, ServiceError> {
+        if self.epub_broker.is_none() {
+            self.epub_broker = Some(EpubBroker::start()?);
+        }
+        self.epub_broker.as_mut().ok_or_else(|| {
+            ServiceError::new(
+                "epub-broker-unavailable",
+                "EPUB broker did not start",
+            )
+        })
+    }
+
+    fn epub_open(&mut self, params: Value) -> Result<Value, ServiceError> {
+        let params: EpubOpenParams = Self::parse(params)?;
+        let descriptor = self.epub_broker()?.open(params.path)?;
+        serde_json::to_value(descriptor).map_err(|error| {
+            ServiceError::new(
+                "epub-response-failed",
+                format!("could not encode EPUB descriptor: {error}"),
+            )
+        })
+    }
+
+    fn epub_info(&mut self, params: Value) -> Result<Value, ServiceError> {
+        let params: EpubPublicationParams = Self::parse(params)?;
+        let descriptor = self.epub_broker()?.info(params.publication)?;
+        serde_json::to_value(descriptor).map_err(|error| {
+            ServiceError::new(
+                "epub-response-failed",
+                format!("could not encode EPUB descriptor: {error}"),
+            )
+        })
+    }
+
+    fn epub_close(&mut self, params: Value) -> Result<Value, ServiceError> {
+        let params: EpubPublicationParams = Self::parse(params)?;
+        self.epub_broker()?.close(params.publication)?;
+        Ok(json!({ "closed": true }))
     }
 
     fn pdfium(&mut self) -> Result<&'static Pdfium, ServiceError> {
@@ -2087,11 +2162,17 @@ impl Service {
                     "capabilities": CAPABILITIES,
                 })
             });
-            return response(request.id, result, Control::Continue);
+            return response(
+                request.id,
+                request.revision,
+                result,
+                Control::Continue,
+            );
         }
         if request.op == "shutdown" {
             let result = Self::parse::<EmptyParams>(request.params).map(|_| {
                 self.documents.clear();
+                self.epub_broker = None;
                 json!({ "stopped": true })
             });
             let control = if result.is_ok() {
@@ -2099,10 +2180,13 @@ impl Service {
             } else {
                 Control::Continue
             };
-            return response(request.id, result, control);
+            return response(request.id, request.revision, result, control);
         }
         let result = match request.op.as_str() {
             "pdfium-info" => self.pdfium_info(request.params),
+            "epub-open" => self.epub_open(request.params),
+            "epub-info" => self.epub_info(request.params),
+            "epub-close" => self.epub_close(request.params),
             "open" => self.open(request.params),
             "close" => self.close(request.params),
             "outline" => self.outline(request.params),
@@ -2118,7 +2202,7 @@ impl Service {
                 format!("unsupported operation: {}", request.op),
             )),
         };
-        response(request.id, result, Control::Continue)
+        response(request.id, request.revision, result, Control::Continue)
     }
 }
 
@@ -2178,13 +2262,18 @@ fn page_selection_range(
 
 fn response(
     id: u64,
+    revision: Option<Value>,
     result: Result<Value, ServiceError>,
     control: Control,
 ) -> (Response, Control) {
     match result {
-        Ok(value) => (Response::success(id, value), control),
+        Ok(value) => (
+            Response::success(id, value).with_revision(revision),
+            control,
+        ),
         Err(error) => (
-            Response::failure(Some(id), error.code, error.message),
+            Response::failure(Some(id), error.code, error.message)
+                .with_revision(revision),
             Control::Continue,
         ),
     }
@@ -2368,11 +2457,25 @@ mod tests {
 
     #[test]
     fn ping_does_not_load_pdfium() {
-        let output = messages(r#"{"id":7,"op":"ping","params":{}}"#);
+        let output =
+            messages(r#"{"id":7,"op":"ping","revision":19,"params":{}}"#);
         assert_eq!(output.len(), 2);
         assert_eq!(output[1]["id"], 7);
+        assert_eq!(output[1]["revision"], 19);
         assert_eq!(output[1]["ok"], true);
         assert_eq!(output[1]["result"]["backend"], "pdfium");
+    }
+
+    #[test]
+    fn epub_operations_are_strict_and_report_broker_capabilities() {
+        let output = messages(concat!(
+            r#"{"id":1,"op":"epub-open","params":{"path":"book.epub"}}"#,
+            "\n",
+            r#"{"id":2,"op":"epub-info","params":{"publication":1,"extra":true}}"#,
+        ));
+        assert_eq!(output[0]["capabilities"], json!(CAPABILITIES));
+        assert_eq!(output[1]["error"]["code"], "invalid-publication-path");
+        assert_eq!(output[2]["error"]["code"], "invalid-params");
     }
 
     #[test]
@@ -2666,6 +2769,7 @@ mod tests {
             cache_directory: Some(directory.0.clone()),
             documents: HashMap::new(),
             next_document: 1,
+            epub_broker: None,
         };
         let result = service
             .cache_prune(json!({

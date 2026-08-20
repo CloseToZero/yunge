@@ -45,7 +45,7 @@ This must not exceed `yunge-reader-cache-max-bytes'."
   :type 'integer
   :group 'yunge-reader)
 
-(defconst yunge-reader-native-protocol-version 1
+(defconst yunge-reader-native-protocol-version 2
   "Native helper protocol version understood by this client.")
 
 (defconst yunge-reader-native-pdfium-api "7881"
@@ -189,6 +189,12 @@ This must not exceed `yunge-reader-cache-max-bytes'."
                  (equal (alist-get 'pdfium-api message)
                         yunge-reader-native-pdfium-api)
                  (member "cache-maintenance"
+                         (alist-get 'capabilities message))
+                 (member "epub-publications"
+                         (alist-get 'capabilities message))
+                 (member "epub-renderer"
+                         (alist-get 'capabilities message))
+                 (member "epub-resources"
                          (alist-get 'capabilities message))
                  (member "lifecycle"
                          (alist-get 'capabilities message))
@@ -356,19 +362,37 @@ When STOPPED is non-nil, report an intentional service stop."
   (and (integerp session)
        (eql session (yunge-reader-native-current-session))))
 
-(defun yunge-reader-native-request (operation parameters complete)
+(defun yunge-reader-native--request-owner
+    (session operation parameters)
+  "Return the inferred task owner for one native request."
+  (cond
+   ((and (not (member operation '("close" "shutdown")))
+         (integerp (alist-get 'document parameters)))
+    (list 'pdf-document session (alist-get 'document parameters)))
+   ((and (not (equal operation "epub-close"))
+         (integerp (alist-get 'publication parameters)))
+    (list 'epub-publication session (alist-get 'publication parameters)))))
+
+(cl-defun yunge-reader-native-request
+    (operation parameters complete &key owner timeout revision)
   "Send native OPERATION with PARAMETERS and call COMPLETE on response.
-COMPLETE receives a result and nil, or nil and an Emacs error value."
+COMPLETE receives a result and nil, or nil and an Emacs error value.
+OWNER, TIMEOUT, and REVISION describe the returned transport task."
   (unless (stringp operation)
     (error "Native reader operation must be a string: %S" operation))
   (unless (functionp complete)
     (error "Native reader completion must be a function: %S" complete))
-  (let ((process (yunge-reader-native-start)))
+  (let* ((process (yunge-reader-native-start))
+         (session (yunge-reader-native-current-session))
+         (owner (or owner
+                    (yunge-reader-native--request-owner
+                     session operation parameters))))
     (yunge-reader-transport--request
-     yunge-reader-native--transport process operation parameters complete)))
+     yunge-reader-native--transport process operation parameters complete
+     :owner owner :timeout timeout :revision revision)))
 
-(defun yunge-reader-native-request-in-session
-    (session operation parameters complete)
+(cl-defun yunge-reader-native-request-in-session
+    (session operation parameters complete &key owner timeout revision)
   "Send a native request only while SESSION remains current.
 OPERATION, PARAMETERS, and COMPLETE follow `yunge-reader-native-request'.
 A stale session completes with `yunge-reader-native-session-lost' without
@@ -380,12 +404,32 @@ starting or writing to another helper process."
   (unless (functionp complete)
     (error "Native reader completion must be a function: %S" complete))
   (if (yunge-reader-native-session-live-p session)
-      (yunge-reader-native-request operation parameters complete)
+      (yunge-reader-native-request
+       operation parameters complete
+       :owner owner :timeout timeout :revision revision)
     (funcall
      complete nil
      '(yunge-reader-native-session-lost
        "The requested helper session is no longer active"))
     nil))
+
+(defun yunge-reader-native-cancel-document-requests
+    (session document &optional reason)
+  "Cancel native requests owned by PDF DOCUMENT in SESSION."
+  (when yunge-reader-native--transport
+    (yunge-reader-transport-cancel-owner
+     yunge-reader-native--transport
+     (list 'pdf-document session document)
+     reason)))
+
+(defun yunge-reader-native-cancel-publication-requests
+    (session publication &optional reason)
+  "Cancel native requests owned by EPUB PUBLICATION in SESSION."
+  (when yunge-reader-native--transport
+    (yunge-reader-transport-cancel-owner
+     yunge-reader-native--transport
+     (list 'epub-publication session publication)
+     reason)))
 
 (defun yunge-reader-native-live-p ()
   "Return whether the Yunge Reader native helper is running."

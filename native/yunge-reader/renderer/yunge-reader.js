@@ -87,7 +87,7 @@ let current = null
 const post = (event, {
     message, location, outline, selection, key, repeat, uri, user, scale,
 } = {}) => {
-    const payload = { protocol: 1, event }
+    const payload = { protocol: 2, event }
     if (message) payload.message = String(message).slice(0, 4096)
     if (location) payload.location = location
     if (outline) payload.outline = outline
@@ -102,7 +102,7 @@ const post = (event, {
 
 const postSearchResult = (request, response) => {
     window.ipc.postMessage(JSON.stringify({
-        protocol: 1,
+        protocol: 2,
         event: 'search-result',
         request,
         response,

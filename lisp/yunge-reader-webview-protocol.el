@@ -9,7 +9,7 @@
 (define-error 'yunge-reader-webview-native-error
   "The Yunge Reader native WebView service reported an error")
 
-(defconst yunge-reader-webview-protocol-version 1
+(defconst yunge-reader-webview-protocol-version 2
   "WebView protocol version understood by this client.")
 
 (defconst yunge-reader-webview--max-location-text-bytes 3072
@@ -109,13 +109,11 @@
          (cl-every
           (lambda (capability)
             (member capability (alist-get 'capabilities message)))
-          '("publication-close" "publication-info" "publication-open"
-            "publication-resources" "view-appearance" "view-bounds"
+          '("view-appearance" "view-bounds"
             "view-clear-selection" "view-create"
             "view-destroy" "view-events" "view-focus"
             "view-focus-parent" "view-info"
             "view-navigate" "view-open-publication"
-            "view-parent"
             "view-search"
             "view-search-result"
             "view-current-selection"

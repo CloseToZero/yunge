@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Chen Zhexuan
 // SPDX-License-Identifier: MIT
 
+pub mod broker;
 pub mod epub;
 
 #[cfg(any(target_os = "windows", target_os = "macos"))]
