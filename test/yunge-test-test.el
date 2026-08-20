@@ -43,25 +43,32 @@
       (delete-directory root t))))
 
 (ert-deftest yunge-test-external-checks-cover-native-and-renderer-suites ()
-  (let ((yunge-config-directory "/source/")
-        (renderer-test
-         (concat "/source/native/yunge-reader/renderer-test/"
-                 "yunge-reader-core.test.mjs")))
+  (let* ((yunge-config-directory
+          (file-name-as-directory
+           (expand-file-name "source" temporary-file-directory)))
+         (renderer-test
+          (concat yunge-config-directory
+                  "native/yunge-reader/renderer-test/"
+                  "yunge-reader-core.test.mjs")))
     (should
      (equal
       (yunge-test--external-checks)
-      `(("Fangcun Watch Rust tests"
-         "cargo" "test" "--manifest-path"
-         "/source/native/fangcun-watch/Cargo.toml")
+       `(("Fangcun Watch Rust tests"
+          "cargo" "test" "--manifest-path"
+          ,(concat yunge-config-directory
+                   "native/fangcun-watch/Cargo.toml"))
         ("Yunge MCP Rust tests"
          "cargo" "test" "--manifest-path"
-         "/source/native/yunge-mcp/Cargo.toml")
+         ,(concat yunge-config-directory
+                  "native/yunge-mcp/Cargo.toml"))
         ("Yunge Reader Rust tests"
          "cargo" "test" "--manifest-path"
-         "/source/native/yunge-reader/Cargo.toml")
+         ,(concat yunge-config-directory
+                  "native/yunge-reader/Cargo.toml"))
         ("Yunge Reader renderer syntax"
          "node" "--check"
-         "/source/native/yunge-reader/renderer/yunge-reader.js")
+         ,(concat yunge-config-directory
+                  "native/yunge-reader/renderer/yunge-reader.js"))
         ("Yunge Reader renderer tests"
          "node" "--test"
          ,renderer-test))))))

@@ -193,7 +193,13 @@ SHA-256:</div><div>$hash</div>
         Test-MiktexPackageInstalled 'Shuying-TestMiktex' 'xcolor'
     } 'Could not inspect MiKTeX package' 'package query failure'
 
-    Write-Output 'Windows setup behavior tests passed: 中文'
+    # Windows PowerShell 5.1 can decode a BOM-less script as an older code
+    # page.  Build the marker from code points while still testing UTF-8 output.
+    $unicodeMarker = [string]::Concat(
+        [char]0x4e2d,
+        [char]0x6587
+    )
+    Write-Output "Windows setup behavior tests passed: $unicodeMarker"
 }
 finally {
     Remove-Item Function:\Shuying-TestNative -ErrorAction SilentlyContinue
