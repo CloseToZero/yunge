@@ -9,6 +9,7 @@
 (require 'yunge-history)
 (require 'yunge-autorevert)
 (require 'yunge-edit)
+(require 'yunge-scroll)
 (require 'yunge-project)
 (require 'yunge-treesit)
 (require 'yunge-cc)
