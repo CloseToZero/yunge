@@ -878,6 +878,36 @@ mod tests {
     }
 
     #[test]
+    fn generated_resource_paths_preserve_normalization_invariants() {
+        const ALPHABET: &[char] = &[
+            'a', 'Z', '0', '/', '.', '\\', '%', '2', 'f', '5', 'c', '0', '?',
+            '#', '\0', '界',
+        ];
+        let mut state = 0x6a09_e667_f3bc_c909_u64;
+        for _case in 0..10_000 {
+            state = state
+                .wrapping_mul(6_364_136_223_846_793_005)
+                .wrapping_add(1_442_695_040_888_963_407);
+            let length = (state as usize) % 96;
+            let mut encoded = String::new();
+            for _ in 0..length {
+                state = state
+                    .wrapping_mul(6_364_136_223_846_793_005)
+                    .wrapping_add(1_442_695_040_888_963_407);
+                encoded.push(ALPHABET[state as usize % ALPHABET.len()]);
+            }
+            if let Ok(path) = decode_resource_path(&encoded) {
+                assert!(!path.is_empty());
+                assert!(!path.starts_with('/'));
+                assert!(!path.contains(['\\', '\0']));
+                assert!(path.split('/').all(|component| {
+                    !component.is_empty() && !matches!(component, "." | "..")
+                }));
+            }
+        }
+    }
+
+    #[test]
     fn publication_resources_are_brokered_and_revoked() {
         let epub = test_epub();
         let mut broker = EpubBroker::start().unwrap();

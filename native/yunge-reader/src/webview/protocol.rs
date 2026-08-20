@@ -286,4 +286,34 @@ mod tests {
         assert_eq!(error.code, "unsupported-operation");
         assert_eq!(error.message, "unsupported operation: unknown");
     }
+
+    #[test]
+    fn generated_protocol_mutations_decode_or_fail_without_panicking() {
+        const ALPHABET: &[u8] =
+            br#"{}[],:\"0129abcdefghijklmnopqrstuvwxyz-_ truefalsenull"#;
+        let template =
+            br#"{\"id\":7,\"op\":\"view-search\",\"params\":{\"view\":3}}"#;
+        let mut state = 0xbb67_ae85_84ca_a73b_u64;
+        for case in 0..10_000 {
+            let mut input = template.to_vec();
+            let changes = 1 + case % 8;
+            for _ in 0..changes {
+                state = state
+                    .wrapping_mul(2_862_933_555_777_941_757)
+                    .wrapping_add(3_037_000_493);
+                let index = state as usize % input.len();
+                input[index] =
+                    ALPHABET[(state >> 32) as usize % ALPHABET.len()];
+            }
+            if case % 5 == 0 {
+                input.truncate(state as usize % input.len());
+            }
+            let text = std::str::from_utf8(&input).unwrap();
+            if let Ok(request) = Request::decode(text)
+                && let Err(error) = request.operation()
+            {
+                assert_eq!(error.code, "unsupported-operation");
+            }
+        }
+    }
 }

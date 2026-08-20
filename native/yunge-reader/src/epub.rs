@@ -993,6 +993,16 @@ mod tests {
         TemporaryFile(path)
     }
 
+    fn write_bytes(name: &str, bytes: &[u8]) -> TemporaryFile {
+        let id = TEMPORARY_ID.fetch_add(1, Ordering::Relaxed);
+        let path = std::env::temp_dir().join(format!(
+            "yunge-reader-epub-{}-{id}-{name}.epub",
+            std::process::id()
+        ));
+        fs::write(&path, bytes).unwrap();
+        TemporaryFile(path)
+    }
+
     #[test]
     fn opens_valid_epub_and_reads_metadata_and_resources() {
         let file = write_archive("valid", &valid_entries());
@@ -1284,5 +1294,43 @@ mod tests {
         let error = parse_container(container.as_bytes()).unwrap_err();
 
         assert!(error.message().contains("first"));
+    }
+
+    #[test]
+    fn generated_epub_and_xml_inputs_fail_closed_without_panicking() {
+        let mut state = 0x3c6e_f372_fe94_f82b_u64;
+        for case in 0..256 {
+            state = state
+                .wrapping_mul(3_202_034_522_624_059_733)
+                .wrapping_add(1);
+            let length = state as usize % 4096;
+            let mut bytes = Vec::with_capacity(length);
+            for _ in 0..length {
+                state = state
+                    .wrapping_mul(3_202_034_522_624_059_733)
+                    .wrapping_add(1);
+                bytes.push((state >> 32) as u8);
+            }
+            let file = write_bytes(&format!("generated-{case}"), &bytes);
+            assert!(Publication::open(&file.0).is_err());
+        }
+
+        let template = PACKAGE.as_bytes();
+        let alphabet = b"<>/=\"' abcdefghijklmnopqrstuvwxyz0123456789";
+        for case in 0..10_000 {
+            let mut bytes = template.to_vec();
+            let changes = 1 + case % 8;
+            for _ in 0..changes {
+                state = state
+                    .wrapping_mul(3_202_034_522_624_059_733)
+                    .wrapping_add(1);
+                let index = state as usize % bytes.len();
+                bytes[index] =
+                    alphabet[(state >> 32) as usize % alphabet.len()];
+            }
+            let text = std::str::from_utf8(&bytes).unwrap();
+            let _ = parse_xml(text, "generated.opf");
+            let _ = parse_package("OPS/package.opf", &bytes);
+        }
     }
 }
