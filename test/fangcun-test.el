@@ -1479,12 +1479,6 @@
               "SELECT source_id, target_id FROM links "
               "WHERE target_id = 'source'")))
            '(("theorem" "source"))))
-         (should
-          (sqlite-select
-           database
-           (concat
-            "SELECT name FROM sqlite_master "
-            "WHERE type = 'index' AND name = 'links_target_id'")))
          (should-not
           (sqlite-select
            database

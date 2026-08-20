@@ -271,7 +271,7 @@ mod tests {
     }
 
     #[test]
-    fn messages_are_newline_delimited_json() {
+    fn messages_are_semantic_newline_delimited_json() {
         let cases = [
             (
                 Message::State {
@@ -280,31 +280,43 @@ mod tests {
                     mtime: 1.5,
                     size: 7,
                 },
-                concat!(
-                    r#"{"kind":"state","yiyu":"work","file":"note.org","#,
-                    r#""mtime":1.5,"size":7}"#,
-                    "\n",
-                ),
+                serde_json::json!({
+                    "kind": "state",
+                    "yiyu": "work",
+                    "file": "note.org",
+                    "mtime": 1.5,
+                    "size": 7,
+                }),
             ),
             (
                 Message::Event {
                     paths: vec!["note.org".to_owned()],
                 },
-                "{\"kind\":\"event\",\"paths\":[\"note.org\"]}\n",
+                serde_json::json!({
+                    "kind": "event",
+                    "paths": ["note.org"],
+                }),
             ),
-            (Message::Rescan, "{\"kind\":\"rescan\"}\n"),
+            (Message::Rescan, serde_json::json!({"kind": "rescan"})),
             (
                 Message::Error {
                     message: "failed".to_owned(),
                 },
-                "{\"kind\":\"error\",\"message\":\"failed\"}\n",
+                serde_json::json!({
+                    "kind": "error",
+                    "message": "failed",
+                }),
             ),
         ];
 
         for (message, expected) in cases {
             let mut output = Vec::new();
             write_message(&mut output, &message).unwrap();
-            assert_eq!(String::from_utf8(output).unwrap(), expected);
+            assert_eq!(output.last(), Some(&b'\n'));
+            assert_eq!(output.iter().filter(|byte| **byte == b'\n').count(), 1);
+            let value: serde_json::Value =
+                serde_json::from_slice(&output[..output.len() - 1]).unwrap();
+            assert_eq!(value, expected);
         }
     }
 
@@ -322,12 +334,16 @@ mod tests {
 
         let note = nested.join("created.org");
         fs::write(&note, "created").unwrap();
+        let canonical_note = fs::canonicalize(&note).unwrap();
         let deadline = Instant::now() + Duration::from_secs(5);
         let mut reported = false;
         while Instant::now() < deadline {
             let timeout = deadline.saturating_duration_since(Instant::now());
             let event = receiver.recv_timeout(timeout).unwrap().unwrap();
-            if event.paths.iter().any(|path| path == &note) {
+            if event.paths.iter().any(|path| {
+                fs::canonicalize(path)
+                    .is_ok_and(|candidate| candidate == canonical_note)
+            }) {
                 reported = true;
                 break;
             }

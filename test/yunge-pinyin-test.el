@@ -128,17 +128,28 @@
 
 (ert-deftest yunge-pinyin-bounds-the-complete-query-cache ()
   (require 'yunge-pinyin)
-  (let ((yunge-pinyin-regexp-cache-size 2))
+  (let ((yunge-pinyin-regexp-cache-size 2)
+        (calls 0)
+        (original (symbol-function 'yunge-pinyin--segment-run)))
     (unwind-protect
         (progn
           (yunge-pinyin-clear-cache)
-          (dolist (query '("baoliu" "xian" "shi"))
-            (yunge-pinyin-regexp query))
-          (should (= (hash-table-count yunge-pinyin--regexp-cache) 2))
-          (should-not
-           (gethash (yunge-pinyin--regexp-cache-key
-                     "baoliu" 'structured)
-                    yunge-pinyin--regexp-cache)))
+          (cl-letf (((symbol-function 'yunge-pinyin--segment-run)
+                     (lambda (run grammar)
+                       (cl-incf calls)
+                       (funcall original run grammar))))
+            (dolist (query '("baoliu" "xian" "shi"))
+              (yunge-pinyin-regexp query))
+            (should (= calls 3))
+            ;; A just-compiled query remains hot.
+            (yunge-pinyin-regexp "shi")
+            (should (= calls 3))
+            ;; A cache smaller than the working set must recompile at least
+            ;; one query, without prescribing its storage or eviction order.
+            (dolist (query '("baoliu" "xian" "shi"))
+              (yunge-pinyin-regexp query))
+            (should (> calls 3))
+            (should (<= calls 6))))
       (yunge-pinyin-clear-cache))))
 
 (ert-deftest yunge-pinyin-caches-grammar-results-separately ()
@@ -162,32 +173,24 @@
                     yunge-pinyin--regexp-cache)))
       (yunge-pinyin-clear-cache))))
 
-(ert-deftest yunge-pinyin-avoids-doomed-frequency-levels ()
+(ert-deftest yunge-pinyin-frequency-levels-preserve-bounded-results ()
   (require 'yunge-pinyin)
-  (let ((original
-         (symbol-function 'yunge-pinyin--compile-run-at-level)))
-    (cl-labels
-        ((levels-for
-          (query maximum-level)
-          (let ((yunge-pinyin-max-frequency-level maximum-level)
-                levels)
-            (yunge-pinyin-clear-cache)
-            (cl-letf (((symbol-function
-                        'yunge-pinyin--compile-run-at-level)
-                       (lambda (literal paths level limit)
-                         (push level levels)
-                         (funcall original literal paths level limit))))
-              (yunge-pinyin-regexp query))
-            (nreverse levels))))
-      (should (equal (levels-for "shi" 4) '(1 4)))
-      (should (equal (levels-for "shi" 5) '(1 5)))
-      (let ((fallback-levels
-             (levels-for
-              (concat "asdfkljadsflkasdjflksadlfk"
-                      "asdfkljadsflkasdjflksadlfk")
-              4)))
-        (should (= (length fallback-levels) 1))
-        (should (<= (car fallback-levels) 4))))))
+  (dolist (maximum-level '(4 5))
+    (let ((yunge-pinyin-max-frequency-level maximum-level))
+      (yunge-pinyin-clear-cache)
+      (let ((regexp (yunge-pinyin-regexp "shi")))
+        (should (> (length regexp) (length "shi")))
+        (should (<= (length regexp) yunge-pinyin-regexp-budget))
+        (should (yunge-pinyin--valid-regexp-p regexp))
+        (should (string-match-p regexp "实时"))
+        (should (string-match-p regexp "shi")))
+      (let* ((query (concat "asdfkljadsflkasdjflksadlfk"
+                            "asdfkljadsflkasdjflksadlfk"))
+             (regexp (yunge-pinyin-regexp query)))
+        (should (<= (length regexp) yunge-pinyin-regexp-budget))
+        (should (yunge-pinyin--valid-regexp-p regexp))
+        (should (string-match-p regexp query)))))
+  (yunge-pinyin-clear-cache))
 
 (ert-deftest yunge-pinyin-falls-back-when-final-regexp-is-invalid ()
   (require 'yunge-pinyin)
