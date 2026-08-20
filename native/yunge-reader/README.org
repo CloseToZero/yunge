@@ -231,7 +231,7 @@ reflowable view.
 The renderer coalesces updates requested within one animation frame and lets
 Foliate retain its current visible-range anchor while the document reflows.
 Changing style does not reopen the publication, recreate the child surface,
-or emit a durable location for layout-only movement.  A renderer-side failure
+or emit a persistent location for layout-only movement.  A renderer-side failure
 is reported as a bounded =style-error= event.
 
 =view-zoom= changes an attached pre-paginated view without reopening its
@@ -429,7 +429,7 @@ request ID; unrelated view events may be written first.
 #+end_src
 
 The numeric offset is a transient cursor into this one selection, not a
-durable EPUB position.  A completed batch omits =next-offset=.  One batch is
+persistent EPUB position.  A completed batch omits =next-offset=.  One batch is
 limited to 65,536 characters, the complete selection to 1,048,576
 characters, and the callback JSON to 512 KiB.  Rust independently checks the
 returned character count, cursor progression, completion flag, total, field
@@ -458,11 +458,11 @@ for each match.  The asynchronous response keeps the original request ID.
 
 One request returns at most 200 matches and searches at most 64 searchable
 spine items.  Queries contain 1--256 Unicode characters.  =direction= is
-=forward= or =backward=.  An optional durable =origin= uses href and CFI;
+=forward= or =backward=.  An optional persistent =origin= uses href and CFI;
 =origin= and =cursor= are mutually exclusive.  The cursor href is canonical,
 and its nullable offset is a transient directional match boundary within that
-spine, not a durable EPUB position.  Results are nearest-first in the requested
-direction.  A completed batch omits =cursor=.
+spine, not a persistent EPUB position.  Results are nearest-first in the
+requested direction.  A completed batch omits =cursor=.
 The renderer caps its response at 384 KiB, while the native IPC boundary
 accepts at most 512 KiB.  Rust independently validates every field, CFI range,
 result count, cursor advance, error code, and byte bound.

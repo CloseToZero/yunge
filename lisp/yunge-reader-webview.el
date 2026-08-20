@@ -977,7 +977,7 @@ This command is an architecture spike, not an EPUB reader yet."
     (file &optional window location)
   "Open local EPUB FILE at LOCATION in a native child WebView in WINDOW.
 This manual architecture spike does not register EPUB file associations or
-save a durable reading position."
+save a persistent reading position."
   (interactive "fEPUB file: ")
   (unless (display-graphic-p)
     (user-error "The EPUB WebView spike requires a graphical display"))

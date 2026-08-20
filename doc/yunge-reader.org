@@ -80,7 +80,7 @@ primary view is unchanged.  The Additional buffer replaces the active
 presentation window deterministically; display the source buffer in another
 window first when both views should remain visible.  Run
 =M-x yunge-reader-make-primary= to transfer
-durable place ownership after saving the current view's stable location.
+persistent place ownership after saving the current view's stable location.
 PDF and EPUB headers identify each buffer as =Primary= or =Additional=.
 In Evil Normal state, =SPC m v= creates a view and =SPC m p= makes the
 current view primary.  Both commands are one-shot localleader actions.
@@ -93,26 +93,23 @@ graphical Emacs on Windows or macOS.  The adapter is autoloaded through
 Windows reports a missing WebView2 Runtime but never installs it automatically;
 macOS uses the system WKWebView framework.
 
-EPUB runs through an Emacs dynamic module.  The module constructs WKWebView
-directly through =objc2-web-kit= on macOS and a WebView2 controller directly
-through =webview2-com= on Windows.  Each is a real in-process child of the
-owning frame.  The backing buffer explains passive duplicate presentations;
-selecting one reparents the same loaded child view there.
+EPUB uses a small Emacs dynamic module for native surfaces only.  The module
+constructs WKWebView directly through =objc2-web-kit= on macOS and a WebView2
+controller directly through =webview2-com= on Windows.  Each surface is a real
+in-process child of its owning frame and never changes native parent.
 
 Consult does not preview unopened PDF or EPUB candidates.  Selecting one clears
 any preceding ordinary file preview, and confirmation opens the Reader buffer
 once through the normal file action.  This avoids starting either native
 backend from transient minibuffer selection.
 
-One shared native publication owns validation, metadata, archive resources,
-and its private origin.  Each Reader buffer owns an independent logical view,
-locator, native surface, and primary or additional role.  Both platforms use
-frame-relative child bounds.  Hiding a buffer hides but retains its loaded
-surface.  Displaying it again shows the same DOM and current CFI without
-reopening the publication.  Moving a presentation across frames reparents the
-same native child and retains its renderer session on both WebView2 and
-WKWebView.  The last buffer destroys its retained and obsolete surfaces before
-invalidating the publication resource token.
+The broker process owns EPUB parsing, validation, metadata, archive reads, and
+tokenized loopback resource origins.  Logical views and presentations share
+that publication while each visible Emacs window owns an independent native
+surface.  Both platforms use frame-relative child bounds.  Hiding a buffer
+retains at most one healthy hidden surface; redisplay reuses it when possible
+and otherwise restores the logical locator into a new surface.  The last view
+releases every surface before revoking the publication resource token.
 
 The Lisp adapter represents a surface as exactly one of =detached=,
 =creating=, =native-ready=, =opening=, =ready=, or =failed=.  The shared
@@ -125,12 +122,12 @@ finite whole-book fraction.  A fixed-layout locator may additionally contain
 a paired, unscaled =x/y= viewport.  Printable Reader places retain the stable
 CFI and href plus fixed viewport coordinates; a reflow fraction remains live
 progress feedback rather than masquerading as an =x= coordinate.  Ordinary
-renderer relocations update only the primary view's durable place.  An
-additional view can move independently and becomes a durable-place owner only
+renderer relocations update only the primary view's persistent place.  An
+additional view can move independently and becomes a persistent-place owner only
 through =yunge-reader-make-primary=.
 
 The renderer collapses each visible-range CFI to its start before emitting a
-durable locator.  The endpoint depends on window width, font metrics, and
+persistent locator.  The endpoint depends on window width, font metrics, and
 reading style, so retaining the whole range would make an otherwise stable
 place change during reflow.  Previously saved range CFIs remain valid restore
 inputs.
@@ -205,7 +202,7 @@ newly opened page away from its entry position.
 
 The desired zoom belongs to the logical view, not its disposable child
 surface.  Hiding and recreating a surface therefore restores the same mode,
-while Primary and Additional buffers may diverge independently.  Durable
+while Primary and Additional buffers may diverge independently.  Persistent
 places retain the fit mode and the last manual scale; renderer feedback alone
 does not create a new place.
 
@@ -227,21 +224,21 @@ the desired style and supplies it when its next surface opens.  A change made
 while the publication is still opening is reconciled after readiness.  The
 renderer coalesces updates within one animation frame, and Foliate retains the
 visible-range anchor across reflow.  Layout-only anchor movement remains
-transient and cannot replace the primary durable place.
+transient and cannot replace the primary persistent place.
 
 Reader's manual scale is the logical view's EPUB font scale and is bounded to
 0.5 through 3.0.  The generic zoom-in, zoom-out, and reset commands update the
 complete style in place; reset uses =yunge-reader-epub-default-font-scale=.
 The header reports the effective font percentage.  A user-requested change
 records the new scale with the current stable CFI, while an additional view
-cannot replace the primary durable place.  A copied view starts with the source
+cannot replace the primary persistent place.  A copied view starts with the source
 view's manual scale before its surface opens.  Reflowable EPUB places using a
 fit mode are rejected rather than migrated, and fit-width and fit-page remain
 unavailable for reflowable documents.
 
 A =publication-ready= locator updates only the logical view.  Readiness means
 that an initial target or retained location finished restoring; it is not user
-navigation and therefore cannot replace the primary durable place.  Later
+navigation and therefore cannot replace the primary persistent place.  Later
 screen movement, scrolling, and explicit navigation relocations retain the
 normal place-recording rules.  Layout-anchor and text-selection relocations do
 not masquerade as reading movement.  Explicit view closure still records its
@@ -295,14 +292,19 @@ height in configurable =yunge-reader-epub-line-height-step= increments,
 defaults.  Renderer bounds clamp repeated commands.  Each update replaces the
 complete style of only the current logical view, so hidden surfaces and
 Additional views retain independent choices.  The normal primary-only rule
-continues to govern durable place recording after reflow.
+continues to govern persistent place recording after reflow.
 
 * Library boundary
 
-The implementation is divided into thirteen pieces:
+The implementation is divided along explicit ownership boundaries:
 
-- =yunge-reader.el= owns drivers, documents, stable positions, logical
-  selections, outlines, bounded search state, reader buffers, and zoom state.
+- =yunge-reader.el= owns drivers, document sessions, Reader views,
+  presentations, stable positions, logical selections, outlines, bounded
+  search state, reader buffers, and zoom state.
+- =yunge-reader-state.el= owns versioned persistent per-document records,
+  fingerprints, path aliases, and MRU bounds.
+- =yunge-reader-task.el= owns cancellable, revisioned asynchronous work and
+  its exactly-once lifecycle independently of any transport.
 - =yunge-reader-transport.el= owns NDJSON framing, handshake queues, request
   identifiers, response callbacks, and session failure.
 - =yunge-reader-native.el= owns the PDF helper process, build identity,
@@ -310,8 +312,10 @@ The implementation is divided into thirteen pieces:
   commands.
 - =yunge-reader-setup.el= owns the pinned engine manifest and verified,
   operation-private installation transaction.
-- =yunge-reader-pdf.el= maps the format-independent interface onto PDFium,
-  virtualizes a continuous page roll, and paints visible selections.
+- =yunge-reader-pdf.el= is the PDF driver facade.  Its protocol, backend,
+  geometry, viewport, rendering, and interaction modules separately own
+  native mapping, recovery, spatial calculations, the continuous page roll,
+  caches and painting, and pointer behavior.
 - =yunge-reader-webview-protocol.el= owns the WebView handshake and bounded
   validation of renderer locations, selections, outlines, search, appearance,
   and styles.
@@ -331,12 +335,15 @@ The implementation is divided into thirteen pieces:
 - =yunge-reader-epub.el= maps shared EPUB publications and reflowable
   locations onto the Reader driver interface.
 
+The broker in =src/broker.rs= owns the loopback HTTP server, renderer assets,
+opaque service and publication tokens, normalized EPUB paths, bounded resource
+responses, and revocation.  =src/epub.rs= owns archive and publication parsing.
+The same executable provides PDF and EPUB operations, while the dynamic module
+exposes only the native WebView surface service to Emacs.
+
 The native WebView service keeps request decoding, stable operation names,
-response envelopes, and protocol errors in =src/webview/protocol.rs=.  The
-=module/= crate exposes that service to Emacs; the executable remains solely
-the PDF helper.  Typed operations coordinate
-the publication, renderer, resource, and surface components; unsupported
-operations are rejected before they can reach native resources.
+response envelopes, and protocol errors in =src/webview/protocol.rs=.
+Unsupported operations are rejected before they can reach native resources.
 
 =src/webview/surface.rs= owns the validated parent-window adapter, child
 WebView construction, bounds, visibility, load state, focus, routed
@@ -352,23 +359,16 @@ request identities and decides when to execute those commands.  The renderer
 bridge has no child-window handles, publication store, filesystem access, or
 EPUB resource-serving authority.
 
-=src/webview/resources.rs= owns embedded renderer assets, both private
-origins and their content-security policy, opaque publication tokens, the
-token-to-publication store, normalized EPUB paths, and HTTP response
-construction.  The direct platform callbacks answer synchronously while ZIP
-access remains serialized.  The service retains publication IDs and live-view
-close ordering, but cannot inspect the resource store or its archive locks.
-
 PDF selection and search geometry uses one compound SVG path per page and
 highlight kind.  Overlapping glyph bounds therefore share one opacity pass
 instead of producing darker intersections.  Adjacent axis-aligned glyphs
 coalesce into continuous line runs without bridging columns or line breaks.
 
 The core never depends on PDFium, PDF page objects, or PNG.  A driver supplies
-a name and file matcher, resource open and close functions, buffer view attach
-and detach functions, and a request function.  Open and request completion may
-be immediate or asynchronous.  The core guards completions so one driver
-mistake cannot complete an operation twice.
+a name and file matcher, resource and view lifecycle functions, stable location
+functions, and explicit outline, search, and selection-text capabilities.
+Operations may complete immediately or asynchronously through owned tasks.
+The core guards completions so one driver mistake cannot complete work twice.
 
 The core publishes a canonical opening entry before calling the driver, so
 concurrent Reader buffers for one file share the same asynchronous open.  Each
@@ -376,32 +376,23 @@ successful buffer then attaches its own format-specific view to the ready
 resource.  Closing detaches one view; only the last detach releases the
 resource.  A partial attach or failed initial restore removes only that view.
 
-The first attached buffer is the primary view and alone owns ordinary durable
+The first attached buffer is the primary view and alone owns ordinary persistent
 place updates.  If it closes, its final location is recorded before the most
 recently active survivor is promoted.  Promotion itself does not immediately
 replace the saved location.  Zoom, viewport, selection, search, render caches,
 and pending UI work remain buffer-local and independent between views.
 
-A Reader view is owned by its buffer, not by a window.  Removing, replacing,
-or deleting a window only hides that view; displaying its buffer attaches the
-same view state to a live window again.  Killing the view buffer performs the
-actual detach and may release the shared document when no views remain.
+A Reader view is owned by its buffer, not by a window.  Every window displaying
+that buffer has an explicit presentation with its own observed location,
+selection, appearance, bounds, and native surface where needed.  Selecting a
+presentation adopts its observed state as the active view state.  Removing or
+deleting a window releases only that presentation; killing the buffer detaches
+the logical view and may release the shared document when no views remain.
 
-One window is the active presentation of that buffer-owned view.  Selecting a
-window which displays the buffer makes that window active; hiding it falls
-back to another live presentation without changing the view's primary or
-additional role.  An explicit window may still be inspected for rendering,
-but only the primary view's active presentation can replace the durable place.
-For PDF, passive duplicate windows may remain visible, while their scrolling
-and resizing cannot change the shared current page, fit geometry, search
-anchor, or saved location.
-
-An embedded EPUB surface follows the active presentation.  Moving it between
-windows on one frame updates the native child bounds without reopening the
-publication.  Moving it across frames uses =view-parent= to reparent the same
-WebView2 child HWND or WKWebView host =NSView=, retaining the loaded DOM and
-locator.  A passive duplicate window explains that selecting it moves the
-surface and points to the explicit Additional-view command.
+Only the primary view's active presentation can replace the persistent place.
+EPUB surfaces never reparent: a presentation creates its child under one frame
+and releases it there.  Publication resources and logical desired state remain
+shared, so a replacement surface restores without reopening the book.
 
 Opening a document declares one of two layouts:
 
@@ -421,22 +412,24 @@ driver anchor, and optional unscaled coordinates.  PDF coordinates remain in
 the page coordinate system; zoom only changes their screen projection.  A
 reflowable backend can instead store a spine item and CFI-like anchor.
 
-The core persists a bounded, most-recently-used place alist through
-=savehist=.  Each value is plain printable data containing a format version,
-driver name, stable position, zoom mode, and manual scale.  It does not
-serialize Lisp structures that may be undefined when =savehist= first loads.
-A driver that supports places supplies location and restore functions as a
-pair.  EPUB uses that contract without storing an Emacs buffer point, and
-later reflowable drivers can do the same.
+The core persists one bounded, most-recently-used document-state list through
+=savehist=.  A versioned record is keyed by driver and a cached bounded content
+fingerprint, and retains a bounded set of path aliases.  Copying or moving a
+book therefore preserves its state; replacing a path with different content
+does not inherit the old book's state.  The record owns its place, appearance
+override, and lowercase named marks together.  Old independent state lists are
+intentionally ignored rather than migrated while this interface is unstable.
 
-Reader marks are a separate persistent, document-local namespace.  =m= plus a
-lowercase letter stores that document's current stable position, and ='= plus
-the same letter restores it.  Multiple logical views of one document share
-the marks.  A mark contains only a format version, driver name, and printable
-position; it deliberately omits zoom and surface state, so visiting it keeps
-the current view's scale and layout.  Each document has at most the 26
-lowercase marks, and the most recently modified document sets are bounded by
-=yunge-reader-mark-document-limit=.  Uppercase marks are not accepted.
+A place contains a stable position, zoom mode, and manual scale.  A driver that
+supports places supplies location and restore functions as a pair.  EPUB uses
+that contract without storing an Emacs buffer point, and later reflowable
+drivers can do the same.
+
+=m= plus a lowercase letter stores the document's current stable position, and
+='= plus the same letter restores it.  Multiple logical views of one document
+share the marks.  A mark deliberately omits zoom and surface state, so visiting
+it keeps the current view's scale and layout.  Each document has at most the 26
+lowercase marks.  Uppercase marks are not accepted.
 
 Document appearance has a separate inheritance chain.  Each format reads its
 default from =yunge-reader-default-appearances=; both PDF and EPUB default to
@@ -449,16 +442,14 @@ all logical views of the same document.  Use
 The same commands are available under =SPC m a=: =d= sets the current book,
 =D= sets the format default, and =u= restores inheritance.
 
-Appearance overrides are durable user preferences rather than recency data.
-They persist through =savehist= separately from bounded saved places and are
-not evicted automatically.  The explicit
-=yunge-reader-cleanup-missing-document-state= command removes places,
-appearance overrides, and mark sets whose files no longer exist.  It never
-runs on a timer, because a temporarily disconnected volume must not silently
-lose book preferences or marks.
+Appearance overrides are stored in the same persistent document record.  The
+explicit =yunge-reader-cleanup-missing-document-state= command removes a record
+only when all of its known path aliases are missing.  It never runs on a timer,
+because a temporarily disconnected volume must not silently lose book
+preferences or marks.
 
 A restore result of =:deferred= means that the driver accepted a transient
-navigation target but cannot yet provide its durable destination.  The core
+navigation target but cannot yet provide its persistent destination.  The core
 records the source jump without replacing the current location or saved place;
 only a later stable-location event may commit the destination.  Other non-nil
 results mean that restoration completed synchronously.
@@ -491,7 +482,7 @@ restoration.  Only a successful restore permits the current view to replace
 the old record.  An unavailable or unbuilt helper, an open, attach, refresh, or
 restore failure, an invalid layout, or a rejected restore therefore leaves the
 prior place untouched.  In particular, a transient initial PDF page zero
-cannot become durable state.
+cannot become persistent state.
 
 An encrypted PDF first tries a password from Emacs's standard
 =password-cache=.  A rejected cached password is removed before prompting.
@@ -546,7 +537,7 @@ marks entries without internal hrefs as structural.  At most 4,096 entries,
 href cross the renderer boundary.  Rust independently rejects malformed,
 external, or oversized targets before Emacs caches the document-level result.
 
-An EPUB outline href is a one-shot driver anchor, not a durable Reader place.
+An EPUB outline href is a one-shot driver anchor, not a persistent Reader place.
 Following it records the source jump immediately but leaves the view's last
 stable locator and saved place unchanged.  Only the subsequent relocation
 event, containing a complete CFI, canonical spine href, and optional fraction,
@@ -628,7 +619,7 @@ native null-selection events from echoing a second clear request.
 A search result uses the same stable endpoints, but its transient highlight is
 independent of the copy selection.  Search preview can therefore move and
 repaint without changing the text copied from the logical selection.  The
-distinction also leaves room for later decoration layers whose durable
+distinction also leaves room for later decoration layers whose persistent
 records use the same position contract.
 
 For PDF, =unit= is a zero-based page and =offset= is PDFium's zero-based
@@ -643,10 +634,10 @@ quadrilateral is a protocol error.  Cross-page copy preserves each exact page
 fragment and inserts one newline at every page boundary, including when that
 boundary separates two protocol batches.
 
-The same boundary can carry later annotations.  Durable annotation data can
+The same boundary can carry later annotations.  Persistent annotation data can
 store document identity, stable endpoints, quoted text, color, and provenance
 outside the renderer.  A PDF backend may additionally write native PDF
-annotations, but a PDFium object handle must never be the only durable anchor.
+annotations, but a PDFium object handle must never be the only persistent anchor.
 No note-taking or annotation storage is part of the current milestone.
 
 * Continuous roll, zoom, and rendering
@@ -721,7 +712,7 @@ remains independent of ephemeral selection paint.
 
 Document search is cooperatively paged.  One native request scans at most a
 configured number of document units and returns a bounded match list plus the
-driver's opaque continuation cursor.  Durable reading positions and transient
+driver's opaque continuation cursor.  Persistent reading positions and transient
 scan cursors are distinct types.  Emacs stops after the first useful batch and
 requests another only for repeat navigation.  An obsolete run cannot publish
 results, and each native batch is short enough to let render requests run
@@ -846,7 +837,7 @@ continuous flow.  A body/text landmark wins, followed by the first table of
 contents target and a bounded linear-spine fallback.  A section whose only
 media failed to decode is not reported as ready.  The manual command remains
 useful as a protocol diagnostic.  Normal =.epub= visits now use the formal
-Reader driver, durable places, and shared multi-view ownership.
+Reader driver, persistent places, and shared multi-view ownership.
 
 The renderer embeds a minimal set of modules from Foliate JS revision
 =78914aef4466eb960965702401634c2cb348e9b1= under its MIT license.  A
@@ -886,33 +877,32 @@ rasterization after every width change and would recreate text hit testing and
 selection in Lisp.  Image rendering remains appropriate for fixed-layout
 documents, but it is not the primary EPUB representation.
 
-Each logical Reader view receives its own numeric native view and WebView
-instance.  Emacs sends the frame identifier, its resolved geometry, and the
-frame-relative body pixel rectangle.
+Each visible Reader presentation receives its own numeric native surface and
+WebView instance.  Emacs sends the frame identifier, its resolved geometry,
+and the frame-relative body pixel rectangle.
 Window size, state, and buffer changes resynchronize that rectangle.  Only one
-bounds request per view may be outstanding; intermediate resize rectangles are
-coalesced into the newest value.  Surface creation retains the rectangle
+bounds request per surface may be outstanding; intermediate resize rectangles
+are coalesced into the newest value.  Surface creation retains the rectangle
 actually sent to the module, so a body-size change before creation completes
 is reconciled instead of being mistaken for an applied native resize.  A
 formal Reader view survives window replacement: an invisible persistent view
-retains its loaded surface and shows it again without reopening.  Windows
-and macOS both reparent that same surface when the new presentation belongs to
-a different frame.  Killing the buffer destroys the logical view.  A manual
-spike remains temporary and is destroyed when its window stops displaying it.
+retains at most one healthy hidden surface and reuses it when compatible.
+Windows and macOS never reparent a surface across native parents.  A newly
+visible presentation creates its own child and restores the logical locator.
+Killing the buffer destroys the logical view and all of its presentations.
 
-The renderer application and EPUB resource service use separate private
-HTTPS-equivalent origins.  Rust exposes only canonical, manifested,
-browser-safe resources, and each publication receives a random 128-bit token.
-Closing the publication invalidates that token.  Renderer assets are embedded
-in the native component and covered by its exact source build ID.
+The renderer application and EPUB publications use separate tokenized loopback
+HTTP origins.  The broker exposes only canonical, manifested, browser-safe
+resources, and each publication receives a random 128-bit token.  Closing the
+publication invalidates that token.  Renderer assets are embedded in the
+broker and covered by its exact source build ID.
 
-Both direct backends answer resource callbacks synchronously.  In particular,
-forwarding a WKURLSchemeTask callback from a worker can leave WebKit waiting
-for its system timeout before the first chapter frame loads.  ZIP access
-remains serialized on both platforms.  The renderer accepts visible text
-before waiting for media and bounds both frame settling and image decoding.
-It explicitly announces when its module API is ready, so the native backends
-can release queued scripts without polling page-load state.  Lisp retains one
+WebKit and WebView2 fetch those resources directly from the broker, so neither
+the Emacs thread nor a platform UI callback performs ZIP I/O or relays bytes.
+ZIP access remains serialized inside the broker.  The renderer accepts visible
+text before waiting for media and bounds both frame settling and image
+decoding.  It explicitly announces when its module API is ready, so queued
+scripts are released without polling page-load state.  Lisp retains one
 publication-ready deadline so =opening= cannot last indefinitely.
 
 EPUB scripts are rejected by the publication loader, and both reflowable and
@@ -1027,8 +1017,9 @@ WebView ERT tests cover the separate handshake, strict capability validation,
 asynchronous renderer event routing, per-view EPUB locations, owning-window
 focus recovery, owning-buffer key dispatch, frame handle parsing, coalesced
 resize requests, destruction after buffer replacement, persistent surface
-retention and reuse, cross-frame reparenting, multi-surface destruction
-barriers, outline waiter completion, and ordered publication release.  They
+retention and reuse, cross-frame presentation creation, multi-surface
+destruction barriers, outline waiter completion, and ordered publication
+release.  They
 also cover deferred and
 live style updates,
 opening-time reconciliation, surface reset, and retryable failures.  EPUB
@@ -1040,8 +1031,8 @@ restore timing, and primary-only place recording.
 Isolated graphical Emacs smoke tests open real EPUBs, move one screen, hide
 and show the retained native view, and preserve the exact CFI.  The
 reflowable pass also crosses a chapter during search, copies a real DOM
-selection, follows an exact outline destination, reparents the same surface
-to a second Emacs frame, and navigates it without changing its ID.  The formal
+selection, follows an exact outline destination, creates a presentation in a
+second Emacs frame, and navigates its independent surface.  The formal
 driver smoke test
 opens through =auto-mode-alist=, hides and reuses a persistent surface,
 verifies primary place ownership, and closes the resource only after both

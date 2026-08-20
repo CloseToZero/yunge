@@ -138,7 +138,7 @@
         (yunge-reader-drivers nil)
         (yunge-reader--document-registry
          (make-hash-table :test #'equal))
-        (yunge-reader-saved-places nil)
+        (yunge-reader-saved-document-state nil)
         (opens 0)
         (closes 0)
         (attaches 0)
@@ -279,7 +279,7 @@
 (ert-deftest yunge-reader-epub-opens-with-a-pending-manual-scale ()
   (let ((yunge-reader-epub-default-font-scale 1.25)
         (yunge-reader-default-appearances '((epub . follow-emacs)))
-        (yunge-reader-saved-appearance-overrides nil)
+        (yunge-reader-saved-document-state nil)
         (document (yunge-reader-epub-test--document))
         attached-appearance-function
         attached-style)
@@ -648,7 +648,7 @@
 (ert-deftest yunge-reader-epub-balances-shared-publication-ownership ()
   (let* ((handle (yunge-reader-epub-test--handle 11))
          (document (yunge-reader-epub-test--document handle))
-         (yunge-reader-saved-appearance-overrides nil)
+         (yunge-reader-saved-document-state nil)
          detach-complete
          close-complete
          closed-publication)
@@ -727,7 +727,9 @@
             (content-width . 720)
             (side-padding . 7.0))))
         (yunge-reader--store-appearance-override
-         (yunge-reader-document-file document) 'follow-emacs)
+         (yunge-reader-document-file document)
+         (yunge-reader-document-driver document)
+         'follow-emacs)
         (run-hooks 'yunge-reader-appearance-change-hook)
         (should-not
          (yunge-reader-webview--view-appearance

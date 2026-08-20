@@ -32,6 +32,8 @@
   "Read fixed-layout and reflowable documents."
   :group 'applications)
 
+(require 'yunge-reader-state)
+
 (defcustom yunge-reader-default-scale 1.0
   "Manual scale restored by `yunge-reader-zoom-reset'."
   :type 'number
@@ -72,16 +74,6 @@
   :type '(integer :tag "Characters" 1 65536)
   :group 'yunge-reader)
 
-(defcustom yunge-reader-place-limit 1000
-  "Maximum number of durable document places to retain."
-  :type '(integer :tag "Places" 1)
-  :group 'yunge-reader)
-
-(defcustom yunge-reader-mark-document-limit 1000
-  "Maximum number of documents whose named Reader marks are retained."
-  :type '(integer :tag "Documents" 1)
-  :group 'yunge-reader)
-
 (defcustom yunge-reader-default-appearances
   '((pdf . original)
     (epub . original))
@@ -102,12 +94,6 @@ An omitted format also defaults to `original'."
 
 (defconst yunge-reader-uri-maximum-bytes 4096
   "Maximum encoded size accepted for one document URI action.")
-
-(defconst yunge-reader-place-version 1
-  "Current durable Reader place format version.")
-
-(defconst yunge-reader-mark-version 1
-  "Current durable Reader named-mark format version.")
 
 (defconst yunge-reader-appearances '(original follow-emacs)
   "Appearance values accepted by Reader documents.")
@@ -291,19 +277,6 @@ unscaled coordinate system of UNIT."
   (make-hash-table :test #'equal)
   "Map canonical document keys to live resource entries.")
 
-(defvar yunge-reader-saved-places nil
-  "Most recently used durable Reader places.
-Each entry maps a canonical file name to versioned, printable place data.")
-
-(defvar yunge-reader-saved-appearance-overrides nil
-  "Durable Reader appearance overrides.
-Each entry maps a canonical file name to `original' or `follow-emacs'.")
-
-(defvar yunge-reader-saved-marks nil
-  "Durable document-local Reader marks.
-Each entry maps a canonical file name to an alist of lowercase characters and
-versioned, printable stable positions.")
-
 (defvar-local yunge-reader-document nil
   "Document displayed by the current reader buffer.")
 
@@ -320,13 +293,13 @@ versioned, printable stable positions.")
   "Generation used to reject late document-open completions.")
 
 (defvar-local yunge-reader--pending-place nil
-  "Durable place waiting for the current document to finish opening.")
+  "Persistent place waiting for the current document to finish opening.")
 
 (defvar-local yunge-reader--place-recording-enabled nil
-  "Whether the current document may replace its durable place.")
+  "Whether the current document may replace its persistent place.")
 
 (defvar-local yunge-reader--restoring-place nil
-  "Whether the current view is restoring a durable place.")
+  "Whether the current view is restoring a persistent place.")
 
 (defvar-local yunge-reader--active-presentation nil
   "Active `yunge-reader-presentation' for this logical Reader view.")
@@ -642,7 +615,7 @@ new definition highest precedence."
      yunge-reader-drivers)))
 
 (defun yunge-reader--place-file-key (file)
-  "Return the canonical durable-place key for FILE."
+  "Return the canonical persistent-place key for FILE."
   (let ((absolute (expand-file-name file)))
     (or (ignore-errors (file-truename absolute)) absolute)))
 
@@ -667,12 +640,11 @@ new definition highest precedence."
         appearance
       'original)))
 
-(defun yunge-reader--saved-appearance-override (file)
-  "Return FILE's valid saved appearance override, or nil."
+(defun yunge-reader--saved-appearance-override (file driver)
+  "Return FILE's valid saved DRIVER appearance override, or nil."
   (let ((appearance
-         (cdr
-          (assoc (yunge-reader--place-file-key file)
-                 yunge-reader-saved-appearance-overrides))))
+         (yunge-reader-state-value
+          file (yunge-reader--driver-format driver) :appearance)))
     (and (yunge-reader--appearance-p appearance) appearance)))
 
 (defun yunge-reader-document-appearance-override (&optional document)
@@ -681,7 +653,8 @@ DOCUMENT defaults to the document in the current Reader buffer."
   (let ((document (or document yunge-reader-document)))
     (when document
       (yunge-reader--saved-appearance-override
-       (yunge-reader-document-file document)))))
+       (yunge-reader-document-file document)
+       (yunge-reader-document-driver document)))))
 
 (defun yunge-reader-effective-appearance (&optional document)
   "Return DOCUMENT's effective Reader appearance.
@@ -693,61 +666,27 @@ DOCUMENT defaults to the document in the current Reader buffer."
         (yunge-reader--default-appearance
          (yunge-reader-document-driver document)))))
 
-(defun yunge-reader--store-appearance-override (file appearance)
-  "Persist APPEARANCE as FILE's explicit override."
+(defun yunge-reader--store-appearance-override (file driver appearance)
+  "Persist APPEARANCE as FILE's explicit DRIVER override."
   (unless (yunge-reader--appearance-p appearance)
     (error "Invalid Reader appearance: %S" appearance))
-  (let ((key (yunge-reader--place-file-key file)))
-    (setq yunge-reader-saved-appearance-overrides
-          (cons
-           (cons key appearance)
-           (seq-remove
-            (lambda (entry) (equal (car-safe entry) key))
-            yunge-reader-saved-appearance-overrides)))))
+  (yunge-reader-state-put
+   file (yunge-reader--driver-format driver) :appearance appearance))
 
-(defun yunge-reader--unset-appearance-override (file)
-  "Remove FILE's explicit appearance override."
-  (let ((key (yunge-reader--place-file-key file)))
-    (setq yunge-reader-saved-appearance-overrides
-          (seq-remove
-           (lambda (entry) (equal (car-safe entry) key))
-           yunge-reader-saved-appearance-overrides))))
-
-(defun yunge-reader--existing-document-state-entries (entries)
-  "Return ENTRIES whose file keys still exist."
-  (seq-filter
-   (lambda (entry)
-     (let ((file (car-safe entry)))
-       (and (stringp file) (file-exists-p file))))
-   entries))
+(defun yunge-reader--unset-appearance-override (file driver)
+  "Remove FILE's explicit DRIVER appearance override."
+  (yunge-reader-state-put
+   file (yunge-reader--driver-format driver) :appearance nil))
 
 (defun yunge-reader-cleanup-missing-document-state ()
   "Forget saved state for document files that no longer exist.
-This removes durable places, explicit appearance overrides, and named marks.
+This removes entire records whose path aliases are all missing.
 A file on a disconnected volume is considered missing, so this command is
 never run automatically."
   (interactive)
-  (let ((place-count (length yunge-reader-saved-places))
-        (appearance-count
-         (length yunge-reader-saved-appearance-overrides))
-        (mark-count (length yunge-reader-saved-marks)))
-    (setq yunge-reader-saved-places
-          (yunge-reader--existing-document-state-entries
-           yunge-reader-saved-places)
-          yunge-reader-saved-appearance-overrides
-          (yunge-reader--existing-document-state-entries
-           yunge-reader-saved-appearance-overrides)
-          yunge-reader-saved-marks
-          (yunge-reader--existing-document-state-entries
-           yunge-reader-saved-marks))
-    (message
-     (concat
-      "Removed %d saved places, %d appearance overrides, "
-      "and %d mark sets")
-     (- place-count (length yunge-reader-saved-places))
-     (- appearance-count
-        (length yunge-reader-saved-appearance-overrides))
-     (- mark-count (length yunge-reader-saved-marks)))))
+  (let ((count (yunge-reader-state-cleanup-missing)))
+    (message "Removed %d saved Reader document record%s"
+             count (if (= count 1) "" "s"))))
 
 (defun yunge-reader--document-key (file driver)
   "Return the registry key for FILE opened through DRIVER."
@@ -837,7 +776,8 @@ never run automatically."
                 format)
             (not
              (yunge-reader--saved-appearance-override
-              (yunge-reader--document-entry-file entry))))
+              (yunge-reader--document-entry-file entry)
+              (yunge-reader--document-entry-driver entry))))
        (yunge-reader--notify-appearance-change entry)))
    yunge-reader--document-registry))
 
@@ -895,7 +835,7 @@ never run automatically."
   (and (yunge-reader--document-view document) t))
 
 (defun yunge-reader--primary-view-p ()
-  "Return whether the current buffer owns durable place updates."
+  "Return whether the current buffer owns persistent place updates."
   (or (null yunge-reader--document-entry)
       (eq (current-buffer)
           (yunge-reader--document-entry-primary-view
@@ -1045,7 +985,9 @@ An explicit override on the current book remains unchanged."
       (user-error "This Reader view has no ready document"))
     (let ((old (yunge-reader-effective-appearance document)))
       (yunge-reader--store-appearance-override
-       (yunge-reader-document-file document) appearance)
+       (yunge-reader-document-file document)
+       (yunge-reader-document-driver document)
+       appearance)
       (unless (eq old appearance)
         (yunge-reader--notify-appearance-change entry)))
     (message "This book now uses %s"
@@ -1060,8 +1002,9 @@ An explicit override on the current book remains unchanged."
       (user-error "This Reader view has no ready document"))
     (if-let* ((override
                (yunge-reader-document-appearance-override document)))
-        (let ((file (yunge-reader-document-file document)))
-          (yunge-reader--unset-appearance-override file)
+        (let ((file (yunge-reader-document-file document))
+              (driver (yunge-reader-document-driver document)))
+          (yunge-reader--unset-appearance-override file driver)
           (let ((inherited
                  (yunge-reader-effective-appearance document)))
             (unless (eq override inherited)
@@ -1125,7 +1068,7 @@ An explicit override on the current book remains unchanged."
     found))
 
 (defun yunge-reader--position-data (position)
-  "Return printable durable data for reader POSITION."
+  "Return printable persistent data for reader POSITION."
   (list
    :unit (copy-tree (yunge-reader-position-unit position) t)
    :offset (copy-tree (yunge-reader-position-offset position) t)
@@ -1133,7 +1076,7 @@ An explicit override on the current book remains unchanged."
    :y (yunge-reader-position-y position)))
 
 (defun yunge-reader--position-data-p (data)
-  "Return whether DATA represents a durable reader position."
+  "Return whether DATA represents a persistent reader position."
   (and (listp data)
        (plist-member data :unit)
        (let ((x (plist-get data :x))
@@ -1142,7 +1085,7 @@ An explicit override on the current book remains unchanged."
               (or (null y) (numberp y))))))
 
 (defun yunge-reader--position-from-data (data)
-  "Return the reader position represented by durable DATA."
+  "Return the reader position represented by persistent DATA."
   (when (yunge-reader--position-data-p data)
     (make-yunge-reader-position
      :unit (copy-tree (plist-get data :unit) t)
@@ -1150,22 +1093,16 @@ An explicit override on the current book remains unchanged."
      :x (plist-get data :x)
      :y (plist-get data :y))))
 
-(defun yunge-reader--make-place (driver position)
-  "Return a printable place for DRIVER at POSITION."
+(defun yunge-reader--make-place (_driver position)
+  "Return a printable place at POSITION."
   (list
-   :version yunge-reader-place-version
-   :driver (yunge-reader-driver-name driver)
    :position (yunge-reader--position-data position)
    :zoom-mode yunge-reader-zoom-mode
    :scale yunge-reader-scale))
 
-(defun yunge-reader--place-p (place driver)
-  "Return whether PLACE is valid for DRIVER."
+(defun yunge-reader--place-p (place _driver)
+  "Return whether PLACE has the current persistent shape."
   (and (listp place)
-       (equal (plist-get place :version)
-              yunge-reader-place-version)
-       (eq (plist-get place :driver)
-           (yunge-reader-driver-name driver))
        (yunge-reader--position-data-p
         (plist-get place :position))
        (memq (plist-get place :zoom-mode)
@@ -1174,76 +1111,57 @@ An explicit override on the current book remains unchanged."
          (and (numberp scale) (> scale 0)))))
 
 (defun yunge-reader--saved-place (file driver)
-  "Return the valid durable place for FILE and DRIVER, or nil."
-  (let* ((key (yunge-reader--place-file-key file))
-         (place (cdr (assoc key yunge-reader-saved-places))))
+  "Return the valid persistent place for FILE and DRIVER, or nil."
+  (let ((place
+         (yunge-reader-state-value
+          file (yunge-reader--driver-format driver) :place)))
     (when (yunge-reader--place-p place driver)
       (copy-tree place t))))
 
-(defun yunge-reader--store-place (file place)
-  "Store durable PLACE for FILE as the most recent Reader place."
-  (let ((key (yunge-reader--place-file-key file)))
-    (setq yunge-reader-saved-places
-          (cons
-           (cons key (copy-tree place t))
-           (seq-remove
-            (lambda (entry) (equal (car-safe entry) key))
-            yunge-reader-saved-places)))
-    (when (> (length yunge-reader-saved-places)
-             yunge-reader-place-limit)
-      (setcdr (nthcdr (1- yunge-reader-place-limit)
-                      yunge-reader-saved-places)
-              nil))))
+(defun yunge-reader--store-place (file driver place)
+  "Store persistent PLACE for FILE and DRIVER as the most recent record."
+  (unless (yunge-reader--place-p place driver)
+    (error "Invalid Reader place: %S" place))
+  (yunge-reader-state-put
+   file (yunge-reader--driver-format driver) :place place))
 
 (defun yunge-reader--mark-character-p (character)
   "Return whether CHARACTER names one document-local Reader mark."
   (and (integerp character) (<= ?a character ?z)))
 
-(defun yunge-reader--mark-data-p (mark driver)
-  "Return whether MARK is valid durable data for DRIVER."
+(defun yunge-reader--mark-data-p (mark _driver)
+  "Return whether MARK has the current persistent shape."
   (and (listp mark)
-       (equal (plist-get mark :version) yunge-reader-mark-version)
-       (eq (plist-get mark :driver) (yunge-reader-driver-name driver))
        (yunge-reader--position-data-p (plist-get mark :position))))
 
-(defun yunge-reader--make-mark-data (driver position)
-  "Return printable mark data for DRIVER at POSITION."
+(defun yunge-reader--make-mark-data (_driver position)
+  "Return printable mark data at POSITION."
   (list
-   :version yunge-reader-mark-version
-   :driver (yunge-reader-driver-name driver)
    :position (yunge-reader--position-data position)))
 
-(defun yunge-reader--store-mark (file character mark)
-  "Store document-local CHARACTER MARK for FILE as the most recent set."
+(defun yunge-reader--store-mark (file driver character mark)
+  "Store document-local CHARACTER MARK for FILE and DRIVER."
   (unless (yunge-reader--mark-character-p character)
     (error "Invalid Reader mark character: %S" character))
-  (let* ((key (yunge-reader--place-file-key file))
-         (marks (copy-tree (cdr (assoc key yunge-reader-saved-marks)) t)))
+  (unless (yunge-reader--mark-data-p mark driver)
+    (error "Invalid Reader mark: %S" mark))
+  (let* ((format (yunge-reader--driver-format driver))
+         (marks (yunge-reader-state-value file format :marks)))
     (setq marks
           (cons
            (cons character (copy-tree mark t))
            (seq-remove
             (lambda (entry) (eq (car-safe entry) character))
-            marks))
-          yunge-reader-saved-marks
-          (cons
-           (cons key marks)
-           (seq-remove
-            (lambda (entry) (equal (car-safe entry) key))
-            yunge-reader-saved-marks)))
-    (when (> (length yunge-reader-saved-marks)
-             yunge-reader-mark-document-limit)
-      (setcdr
-       (nthcdr (1- yunge-reader-mark-document-limit)
-               yunge-reader-saved-marks)
-       nil))
+            marks)))
+    (yunge-reader-state-put file format :marks marks)
     (copy-tree mark t)))
 
 (defun yunge-reader--saved-mark (file driver character)
   "Return FILE's valid DRIVER mark CHARACTER, or nil."
   (when (yunge-reader--mark-character-p character)
-    (let* ((key (yunge-reader--place-file-key file))
-           (marks (cdr (assoc key yunge-reader-saved-marks)))
+    (let* ((marks
+            (yunge-reader-state-value
+             file (yunge-reader--driver-format driver) :marks))
            (mark (cdr (assq character marks))))
       (when (yunge-reader--mark-data-p mark driver)
         (copy-tree mark t)))))
@@ -1349,9 +1267,9 @@ the active presentation."
       (yunge-reader--current-place window))))
 
 (defun yunge-reader-record-place (&optional window)
-  "Record the current durable Reader place as viewed in WINDOW.
+  "Record the current persistent Reader place as viewed in WINDOW.
 Do nothing until document opening and any prior place restoration commit.
-Only the primary view's active presentation may replace the durable place."
+Only the primary view's active presentation may replace the persistent place."
   (let ((window (yunge-reader--place-window window)))
     (when (and window
                (yunge-reader--active-presentation-p window)
@@ -1363,6 +1281,7 @@ Only the primary view's active presentation may replace the durable place."
           (when-let* ((place (yunge-reader--current-place window)))
             (yunge-reader--store-place
              (yunge-reader-document-file yunge-reader-document)
+             (yunge-reader-document-driver yunge-reader-document)
              place))
         (error
          (display-warning
@@ -1372,7 +1291,7 @@ Only the primary view's active presentation may replace the durable place."
           :warning))))))
 
 (defun yunge-reader--restore-view-state (place)
-  "Restore generic zoom state from durable PLACE."
+  "Restore generic zoom state from persistent PLACE."
   (setq yunge-reader-zoom-mode (plist-get place :zoom-mode)
         yunge-reader-scale
         (yunge-reader--clamp-scale (plist-get place :scale))
@@ -1445,6 +1364,7 @@ Only the primary view's active presentation may replace the durable place."
         (user-error "The Reader driver has no stable current position"))
       (yunge-reader--store-mark
        (yunge-reader-document-file yunge-reader-document)
+       driver
        character
        (yunge-reader--make-mark-data driver position))
       (message "Reader mark %c set" character)
@@ -2079,7 +1999,7 @@ new Additional view."
            (signal (car error-data) (cdr error-data))))))))
 
 (defun yunge-reader-make-primary ()
-  "Make the current Reader view own durable place updates.
+  "Make the current Reader view own persistent place updates.
 Capture and save this view's stable place before changing the primary view."
   (interactive)
   (let ((entry (yunge-reader--ready-view-entry)))
@@ -2093,7 +2013,9 @@ Capture and save this view's stable place before changing the primary view."
         (unless place
           (user-error "This Reader view has no stable location yet"))
         (yunge-reader--store-place
-         (yunge-reader--document-entry-file entry) place)
+         (yunge-reader--document-entry-file entry)
+         (yunge-reader--document-entry-driver entry)
+         place)
         (setf (yunge-reader--document-entry-primary-view entry)
               (current-buffer)
               (yunge-reader--document-entry-active-view entry)

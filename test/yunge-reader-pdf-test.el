@@ -275,7 +275,7 @@
   (let ((file (expand-file-name "visited.pdf"))
         (yunge-reader-drivers nil)
         (yunge-reader--document-registry (make-hash-table :test #'equal))
-        (yunge-reader-saved-places nil)
+        (yunge-reader-saved-document-state nil)
         (opens 0)
         (closes 0)
         (attaches 0)
@@ -371,7 +371,7 @@
 (ert-deftest yunge-reader-pdf-resolves-appearance-for-window-frame ()
   (let ((yunge-reader-default-appearances
          '((pdf . follow-emacs)))
-        (yunge-reader-saved-appearance-overrides nil)
+        (yunge-reader-saved-document-state nil)
         (document
          (make-yunge-reader-document
           :file "C:/books/theme.pdf" :driver 'pdf))
@@ -400,7 +400,7 @@
 
 (ert-deftest yunge-reader-pdf-keeps-original-appearance-unmodified ()
   (let ((yunge-reader-default-appearances '((pdf . original)))
-        (yunge-reader-saved-appearance-overrides nil)
+        (yunge-reader-saved-document-state nil)
         (document
          (make-yunge-reader-document
           :file "C:/books/original.pdf" :driver 'pdf)))
@@ -829,8 +829,10 @@
            (yunge-reader-pdf-page 4)
            (yunge-reader-zoom-mode 'manual)
            (yunge-reader-scale 1.5)
-           (saved-places '(("saved.pdf" :version 1)))
-           (yunge-reader-saved-places (copy-tree saved-places))
+           (saved-state
+            '(((pdf "saved-fingerprint")
+               :version 1 :aliases ("saved.pdf"))))
+           (yunge-reader-saved-document-state (copy-tree saved-state))
            open-complete
            (open-count 0)
            requests
@@ -874,7 +876,8 @@
       (should (= yunge-reader-pdf-page 4))
       (should (eq yunge-reader-zoom-mode 'manual))
       (should (= yunge-reader-scale 1.5))
-      (should (equal yunge-reader-saved-places saved-places)))))
+      (should
+       (equal yunge-reader-saved-document-state saved-state)))))
 
 (ert-deftest yunge-reader-pdf-recovers-for-the-requesting-shared-view ()
   (let* ((yunge-reader--document-registry
@@ -1095,8 +1098,10 @@
             (make-yunge-reader-document :file file :handle handle))
            (yunge-reader-document document)
            (yunge-reader-pdf-page 4)
-           (saved-places '(("saved.pdf" :version 1)))
-           (yunge-reader-saved-places (copy-tree saved-places))
+           (saved-state
+            '(((pdf "saved-fingerprint")
+               :version 1 :aliases ("saved.pdf"))))
+           (yunge-reader-saved-document-state (copy-tree saved-state))
            started
            completion-error)
       (cl-letf
@@ -1116,7 +1121,8 @@
       (should (= (yunge-reader-pdf-handle-session handle) 17))
       (should (= (yunge-reader-pdf-handle-id handle) 7))
       (should (= yunge-reader-pdf-page 4))
-      (should (equal yunge-reader-saved-places saved-places)))))
+      (should
+       (equal yunge-reader-saved-document-state saved-state)))))
 
 (ert-deftest yunge-reader-pdf-rejects-a-file-changed-during-recovery ()
   (with-temp-buffer

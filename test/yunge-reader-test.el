@@ -11,19 +11,42 @@
 (defun yunge-reader-test--place
     (driver unit &optional x y zoom-mode scale)
   "Return printable place data for DRIVER at UNIT."
+  (ignore driver)
   (list
-   :version yunge-reader-place-version
-   :driver driver
    :position (list :unit unit :offset nil :x x :y y)
    :zoom-mode (or zoom-mode 'fit-width)
    :scale (or scale 1.0)))
 
 (defun yunge-reader-test--mark (driver unit &optional offset)
   "Return printable Reader mark data for DRIVER at UNIT and OFFSET."
+  (ignore driver)
   (list
-   :version yunge-reader-mark-version
-   :driver driver
    :position (list :unit unit :offset offset :x nil :y nil)))
+
+(defun yunge-reader-test--document-state (file driver &rest properties)
+  "Return one saved document-state list for FILE and DRIVER."
+  (let ((format (yunge-reader--driver-format driver))
+        (path (yunge-reader-state-canonical-path file)))
+    (list
+     (cons
+      (yunge-reader-state-key file format)
+      (append
+       (list :version yunge-reader-document-state-version
+             :aliases (list path))
+       (copy-tree properties t))))))
+
+(defun yunge-reader-test--saved-state-value (file driver property)
+  "Return saved FILE DRIVER PROPERTY without exposing record layout."
+  (yunge-reader-state-value file (yunge-reader--driver-format driver)
+                            property))
+
+(defun yunge-reader-test--saved-place (file driver)
+  "Return FILE's saved place for DRIVER."
+  (yunge-reader-test--saved-state-value file driver :place))
+
+(defun yunge-reader-test--saved-marks (file driver)
+  "Return FILE's saved marks for DRIVER."
+  (yunge-reader-test--saved-state-value file driver :marks))
 
 (defun yunge-reader-test--buffer (name)
   "Return a new Reader buffer named NAME."
@@ -168,7 +191,7 @@
 (ert-deftest yunge-reader-records-only-the-active-presentation ()
   (let ((buffer (generate-new-buffer " *reader-active-place*"))
         (yunge-reader-drivers nil)
-        (yunge-reader-saved-places nil))
+        (yunge-reader-saved-document-state nil))
     (unwind-protect
         (save-window-excursion
           (switch-to-buffer buffer)
@@ -190,12 +213,14 @@
                    :file "active.pdf" :driver driver :layout 'fixed)
                   yunge-reader--place-recording-enabled t)
             (yunge-reader-record-place second)
-            (should-not yunge-reader-saved-places)
+            (should-not
+             (yunge-reader-test--saved-place "active.pdf" driver))
             (yunge-reader-record-place first)
             (should
              (= (plist-get
                  (plist-get
-                  (cdar yunge-reader-saved-places) :position)
+                  (yunge-reader-test--saved-place "active.pdf" driver)
+                  :position)
                  :unit)
                 1))
             (select-window second)
@@ -203,7 +228,8 @@
             (should
              (= (plist-get
                  (plist-get
-                  (cdar yunge-reader-saved-places) :position)
+                  (yunge-reader-test--saved-place "active.pdf" driver)
+                  :position)
                  :unit)
                 2))))
       (when (buffer-live-p buffer)
@@ -676,8 +702,7 @@
 
 (ert-deftest yunge-reader-outline-jumps-restore-and-record-places ()
   (let* ((file (expand-file-name "outline-jump.pdf"))
-         (key (yunge-reader--place-file-key file))
-         (yunge-reader-saved-places nil)
+         (yunge-reader-saved-document-state nil)
          (yunge-reader-drivers nil)
          (current (make-yunge-reader-position :unit 1))
          buffer)
@@ -725,7 +750,7 @@
           (should
            (= (plist-get
                (plist-get
-                (cdr (assoc key yunge-reader-saved-places))
+                (yunge-reader-test--saved-place file 'test)
                 :position)
                :unit)
               9))
@@ -747,10 +772,9 @@
 
 (ert-deftest yunge-reader-deferred-outline-jumps-preserve-stable-places ()
   (let* ((file (expand-file-name "outline-deferred.epub"))
-         (key (yunge-reader--place-file-key file))
          (old (yunge-reader-test--place 'test 1))
-         (yunge-reader-saved-places
-          (list (cons key (copy-tree old t))))
+         (yunge-reader-saved-document-state
+          (yunge-reader-test--document-state file 'test :place old))
          (yunge-reader-drivers nil)
          (current (make-yunge-reader-position :unit 1))
          requested
@@ -792,7 +816,7 @@
           (should (= (yunge-reader-position-unit requested) 9))
           (should (= (yunge-reader-position-unit current) 1))
           (should
-           (equal (cdr (assoc key yunge-reader-saved-places)) old))
+           (equal (yunge-reader-test--saved-place file 'test) old))
           (let* ((history
                   (window-parameter
                    (selected-window) 'yunge-jump-history))
@@ -811,10 +835,9 @@
 
 (ert-deftest yunge-reader-rejected-outline-jump-rolls-back ()
   (let* ((file (expand-file-name "outline-rejected.pdf"))
-         (key (yunge-reader--place-file-key file))
          (old (yunge-reader-test--place 'test 4))
-         (yunge-reader-saved-places
-          (list (cons key (copy-tree old t))))
+         (yunge-reader-saved-document-state
+          (yunge-reader-test--document-state file 'test :place old))
          (yunge-reader-drivers nil)
          (current (make-yunge-reader-position :unit 4))
          buffer)
@@ -854,7 +877,7 @@
           (should (eq yunge-reader-zoom-mode 'fit-width))
           (should (= yunge-reader-scale 1.0))
           (should
-           (equal (cdr (assoc key yunge-reader-saved-places))
+           (equal (yunge-reader-test--saved-place file 'test)
                   old)))
       (when (buffer-live-p buffer)
         (kill-buffer buffer)))))
@@ -917,10 +940,9 @@
 
 (ert-deftest yunge-reader-open-failure-preserves-the-saved-place ()
   (let* ((file (expand-file-name "unbuilt.pdf"))
-         (key (yunge-reader--place-file-key file))
          (old (yunge-reader-test--place 'test 23))
-         (yunge-reader-saved-places
-          (list (cons key (copy-tree old t))))
+         (yunge-reader-saved-document-state
+          (yunge-reader-test--document-state file 'test :place old))
          (yunge-reader-drivers nil)
          complete
          locations)
@@ -943,16 +965,15 @@
         (should-not yunge-reader--place-recording-enabled)
         (should-not yunge-reader--pending-place)
         (should-not locations)
-        (should (equal (cdr (assoc key yunge-reader-saved-places))
+        (should (equal (yunge-reader-test--saved-place file 'test)
                        old))))))
 
 (ert-deftest yunge-reader-restores-before-committing-a-place ()
   (let* ((file (expand-file-name "remembered.pdf"))
-         (key (yunge-reader--place-file-key file))
          (old (yunge-reader-test--place
                'test 23 11.0 17.0 'manual 2.0))
-         (yunge-reader-saved-places
-          (list (cons key (copy-tree old t))))
+         (yunge-reader-saved-document-state
+          (yunge-reader-test--document-state file 'test :place old))
          (yunge-reader-drivers nil)
          (current (make-yunge-reader-position :unit 0))
          restored
@@ -967,7 +988,7 @@
            (lambda ()
              (yunge-reader-record-place)
              (should
-              (equal (cdr (assoc key yunge-reader-saved-places))
+              (equal (yunge-reader-test--saved-place file 'test)
                      old)))
            nil t)
           (let ((driver
@@ -990,16 +1011,15 @@
           (should yunge-reader--place-recording-enabled)
           (should-not yunge-reader--pending-place)
           (should
-           (equal (cdr (assoc key yunge-reader-saved-places)) old)))
+           (equal (yunge-reader-test--saved-place file 'test) old)))
       (when (buffer-live-p buffer)
         (kill-buffer buffer)))))
 
 (ert-deftest yunge-reader-rejected-restore-preserves-the-saved-place ()
   (let* ((file (expand-file-name "rejected.pdf"))
-         (key (yunge-reader--place-file-key file))
          (old (yunge-reader-test--place 'test 42))
-         (yunge-reader-saved-places
-          (list (cons key (copy-tree old t))))
+         (yunge-reader-saved-document-state
+          (yunge-reader-test--document-state file 'test :place old))
          (yunge-reader-drivers nil)
          buffer)
     (unwind-protect
@@ -1024,7 +1044,7 @@
             (yunge-reader--begin-open buffer driver file))
           (should-not yunge-reader--place-recording-enabled)
           (should
-           (equal (cdr (assoc key yunge-reader-saved-places)) old)))
+           (equal (yunge-reader-test--saved-place file 'test) old)))
       (when (buffer-live-p buffer)
         (kill-buffer buffer)))))
 
@@ -1070,9 +1090,8 @@
   (let* ((file (expand-file-name "jump-rejected.pdf"))
          (old (yunge-reader-test--place 'test 4))
          (target (yunge-reader-test--place 'test 9))
-         (key (yunge-reader--place-file-key file))
-         (yunge-reader-saved-places
-          (list (cons key (copy-tree old t))))
+         (yunge-reader-saved-document-state
+          (yunge-reader-test--document-state file 'test :place old))
          (yunge-reader-drivers nil)
          (current (make-yunge-reader-position :unit 4))
          completion
@@ -1103,7 +1122,7 @@
           (should-not completion)
           (should (= (yunge-reader-position-unit current) 4))
           (should (eq (window-buffer) buffer))
-          (should (equal (cdr (assoc key yunge-reader-saved-places))
+          (should (equal (yunge-reader-test--saved-place file 'test)
                          old)))
       (when (buffer-live-p buffer)
         (kill-buffer buffer)))))
@@ -1112,9 +1131,8 @@
   (let* ((file (expand-file-name "jump-reopen.pdf"))
          (old (yunge-reader-test--place 'test 17))
          (target (yunge-reader-test--place 'test 6))
-         (key (yunge-reader--place-file-key file))
-         (yunge-reader-saved-places
-          (list (cons key (copy-tree old t))))
+         (yunge-reader-saved-document-state
+          (yunge-reader-test--document-state file 'test :place old))
          (yunge-reader-drivers nil)
          (current (make-yunge-reader-position :unit 0))
          complete-open
@@ -1152,7 +1170,7 @@
             (should (= restored 2))
             (should (= (yunge-reader-position-unit current) 6))
             (should
-             (equal (cdr (assoc key yunge-reader-saved-places))
+             (equal (yunge-reader-test--saved-place file 'test)
                     target))))
       (when (buffer-live-p reader-buffer)
         (kill-buffer reader-buffer)))))
@@ -1161,9 +1179,8 @@
   (let* ((file (expand-file-name "jump-abandoned.pdf"))
          (old (yunge-reader-test--place 'test 21))
          (target (yunge-reader-test--place 'test 8))
-         (key (yunge-reader--place-file-key file))
-         (yunge-reader-saved-places
-          (list (cons key (copy-tree old t))))
+         (yunge-reader-saved-document-state
+          (yunge-reader-test--document-state file 'test :place old))
          (yunge-reader-drivers nil)
          (current (make-yunge-reader-position :unit 0))
          complete-open
@@ -1194,60 +1211,180 @@
         (should (= (point) (point-max)))
         (should-not (yunge-reader--existing-buffer file))
         (should
-         (equal (cdr (assoc key yunge-reader-saved-places)) old))))))
+         (equal (yunge-reader-test--saved-place file 'test) old))))))
 
-(ert-deftest yunge-reader-saved-places-are-bounded-and-most-recent-first ()
-  (let ((yunge-reader-place-limit 2)
-        (yunge-reader-saved-places nil))
+(ert-deftest yunge-reader-document-state-is-bounded-and-most-recent-first ()
+  (let ((yunge-reader-document-state-limit 2)
+        (yunge-reader-saved-document-state nil))
     (dolist (name '("one.pdf" "two.pdf" "three.pdf"))
       (yunge-reader--store-place
-       name (yunge-reader-test--place 'test name)))
+       name 'test (yunge-reader-test--place 'test name)))
     (should
      (equal (mapcar (lambda (entry)
-                      (file-name-nondirectory (car entry)))
-                    yunge-reader-saved-places)
+                      (file-name-nondirectory
+                       (car (plist-get (cdr entry) :aliases))))
+                    yunge-reader-saved-document-state)
             '("three.pdf" "two.pdf")))))
 
+(ert-deftest yunge-reader-consolidates-persistent-document-fields ()
+  (let* ((file (expand-file-name "consolidated.epub"))
+         (driver
+          (yunge-reader--make-driver
+           :name 'epub :close-function #'ignore))
+         (place (yunge-reader-test--place 'epub "chapter"))
+         (mark (yunge-reader-test--mark 'epub "chapter" 12))
+         (yunge-reader-saved-document-state nil))
+    (yunge-reader--store-place file driver place)
+    (yunge-reader--store-appearance-override
+     file driver 'follow-emacs)
+    (yunge-reader--store-mark file driver ?a mark)
+    (should (= (length yunge-reader-saved-document-state) 1))
+    (should (equal (yunge-reader--saved-place file driver) place))
+    (should
+     (= (plist-get (cdar yunge-reader-saved-document-state) :version)
+        yunge-reader-document-state-version))
+    (should
+     (eq (yunge-reader--saved-appearance-override file driver)
+         'follow-emacs))
+    (should (equal (yunge-reader--saved-mark file driver ?a) mark))))
+
+(ert-deftest yunge-reader-shares-state-through-document-fingerprints ()
+  (let* ((directory (make-temp-file "yunge-reader-fingerprint-" t))
+         (original (expand-file-name "original.pdf" directory))
+         (copy (expand-file-name "copy.pdf" directory))
+         (driver
+          (yunge-reader--make-driver
+           :name 'pdf :close-function #'ignore))
+         (place (yunge-reader-test--place 'pdf 7))
+         (yunge-reader-saved-document-state nil)
+         (yunge-reader-state--fingerprint-cache
+          (make-hash-table :test #'equal)))
+    (unwind-protect
+        (progn
+          (write-region "same document" nil original nil 'silent)
+          (copy-file original copy)
+          (yunge-reader--store-place original driver place)
+          (should
+           (equal (yunge-reader--saved-place copy driver) place))
+          (should (= (length yunge-reader-saved-document-state) 1))
+          (should
+           (equal
+            (sort
+             (copy-sequence
+              (plist-get
+               (cdar yunge-reader-saved-document-state) :aliases))
+             #'string<)
+            (sort
+             (list (file-truename original) (file-truename copy))
+             #'string<))))
+      (delete-directory directory t))))
+
+(ert-deftest yunge-reader-truncates-aliases-without-losing-state ()
+  (let* ((directory (make-temp-file "yunge-reader-aliases-" t))
+         (original (expand-file-name "original.pdf" directory))
+         (copy-one (expand-file-name "copy-one.pdf" directory))
+         (copy-two (expand-file-name "copy-two.pdf" directory))
+         (place (yunge-reader-test--place 'pdf 7))
+         (yunge-reader-document-alias-limit 3)
+         (yunge-reader-saved-document-state nil)
+         (yunge-reader-state--fingerprint-cache
+          (make-hash-table :test #'equal)))
+    (unwind-protect
+        (progn
+          (write-region "same document" nil original nil 'silent)
+          (copy-file original copy-one)
+          (copy-file original copy-two)
+          (yunge-reader--store-place original 'pdf place)
+          (should (equal (yunge-reader--saved-place copy-one 'pdf) place))
+          (should (equal (yunge-reader--saved-place copy-two 'pdf) place))
+          (let ((yunge-reader-document-alias-limit 1))
+            (should (equal (yunge-reader--saved-place original 'pdf) place))
+            (should
+             (equal
+              (plist-get
+               (cdar yunge-reader-saved-document-state) :aliases)
+              (list (file-truename original))))))
+      (delete-directory directory t))))
+
+(ert-deftest yunge-reader-separates-changed-document-content ()
+  (let* ((file (make-temp-file "yunge-reader-content-"))
+         (place (yunge-reader-test--place 'pdf 3))
+         (yunge-reader-saved-document-state nil)
+         (yunge-reader-state--fingerprint-cache
+          (make-hash-table :test #'equal)))
+    (unwind-protect
+        (progn
+          (write-region "first" nil file nil 'silent)
+          (yunge-reader--store-place file 'pdf place)
+          (write-region "second and different" nil file nil 'silent)
+          (should-not (yunge-reader--saved-place file 'pdf))
+          (should-not yunge-reader-saved-document-state)
+          (yunge-reader-state-put file 'pdf :appearance 'original)
+          (should (= (length yunge-reader-saved-document-state) 1))
+          (should-not
+           (yunge-reader-state-value file 'pdf :place)))
+      (delete-file file))))
+
+(ert-deftest yunge-reader-keeps-document-state-separate-by-driver ()
+  (let* ((file (make-temp-file "yunge-reader-drivers-"))
+         (pdf-place (yunge-reader-test--place 'pdf 3))
+         (epub-place (yunge-reader-test--place 'epub "chapter"))
+         (yunge-reader-saved-document-state nil)
+         (yunge-reader-state--fingerprint-cache
+          (make-hash-table :test #'equal)))
+    (unwind-protect
+        (progn
+          (write-region "one document" nil file nil 'silent)
+          (yunge-reader--store-place file 'pdf pdf-place)
+          (yunge-reader--store-place file 'epub epub-place)
+          (should (= (length yunge-reader-saved-document-state) 2))
+          (should (equal (yunge-reader--saved-place file 'pdf) pdf-place))
+          (should (equal (yunge-reader--saved-place file 'epub) epub-place)))
+      (delete-file file))))
+
 (ert-deftest yunge-reader-marks-are-document-local-copied-and-bounded ()
-  (let* ((yunge-reader-mark-document-limit 2)
-         (yunge-reader-saved-marks nil)
+  (let* ((yunge-reader-document-state-limit 2)
+         (yunge-reader-saved-document-state nil)
          (driver
           (yunge-reader--make-driver :name 'test :close-function #'ignore))
          (one (expand-file-name "one.pdf"))
          (two (expand-file-name "two.pdf"))
          (three (expand-file-name "three.pdf"))
          (mark (yunge-reader-test--mark 'test 1 "start")))
-    (yunge-reader--store-mark one ?a mark)
+    (yunge-reader--store-mark one driver ?a mark)
     (setf (plist-get (plist-get mark :position) :unit) 'mutated)
-    (yunge-reader--store-mark one ?b (yunge-reader-test--mark 'test 2))
+    (yunge-reader--store-mark
+     one driver ?b (yunge-reader-test--mark 'test 2))
     (should
      (equal
       (mapcar #'car
-              (cdr (assoc (yunge-reader--place-file-key one)
-                          yunge-reader-saved-marks)))
+              (yunge-reader-test--saved-marks one driver))
       '(98 97)))
     (should
      (= (plist-get
          (plist-get (yunge-reader--saved-mark one driver ?a) :position)
          :unit)
         1))
-    (yunge-reader--store-mark two ?a (yunge-reader-test--mark 'test 3))
-    (yunge-reader--store-mark three ?a (yunge-reader-test--mark 'test 4))
+    (yunge-reader--store-mark
+     two driver ?a (yunge-reader-test--mark 'test 3))
+    (yunge-reader--store-mark
+     three driver ?a (yunge-reader-test--mark 'test 4))
     (should
      (equal
-      (mapcar (lambda (entry) (file-name-nondirectory (car entry)))
-              yunge-reader-saved-marks)
+      (mapcar
+       (lambda (entry)
+         (file-name-nondirectory
+          (car (plist-get (cdr entry) :aliases))))
+       yunge-reader-saved-document-state)
       '("three.pdf" "two.pdf")))
     (should-not (yunge-reader--saved-mark one driver ?a))
     (should-error
-     (yunge-reader--store-mark two ?A mark)
+     (yunge-reader--store-mark two driver ?A mark)
      :type 'error)))
 
 (ert-deftest yunge-reader-mark-commands-use-stable-position-and-current-zoom ()
   (let* ((file (expand-file-name "marked.pdf"))
-         (key (yunge-reader--place-file-key file))
-         (yunge-reader-saved-marks nil)
-         (yunge-reader-saved-places nil)
+         (yunge-reader-saved-document-state nil)
          (yunge-reader-drivers nil)
          (current (make-yunge-reader-position :unit 1 :offset "source"))
          buffer)
@@ -1290,7 +1427,7 @@
           (should
            (= (plist-get
                (plist-get
-                (cdr (assoc key yunge-reader-saved-places)) :position)
+                (yunge-reader-test--saved-place file 'test) :position)
                :unit)
               1))
           (let* ((history
@@ -1310,8 +1447,7 @@
 
 (ert-deftest yunge-reader-mark-jumps-preserve-deferred-source-history ()
   (let* ((file (expand-file-name "marked.epub"))
-         (yunge-reader-saved-marks nil)
-         (yunge-reader-saved-places nil)
+         (yunge-reader-saved-document-state nil)
          (yunge-reader-drivers nil)
          (current (make-yunge-reader-position :unit "chapter-one"))
          requested
@@ -1337,13 +1473,14 @@
                    :file file :driver driver :layout 'reflow)
                   yunge-reader--place-recording-enabled t)
             (yunge-reader--store-mark
-             file ?a (yunge-reader-test--mark 'test "chapter-two"))
+             file driver ?a
+             (yunge-reader-test--mark 'test "chapter-two"))
             (should (eq (yunge-reader-goto-mark ?a) :deferred)))
           (should
            (equal (yunge-reader-position-unit requested) "chapter-two"))
           (should
            (equal (yunge-reader-position-unit current) "chapter-one"))
-          (should-not yunge-reader-saved-places)
+          (should-not (yunge-reader-test--saved-place file 'test))
           (let* ((history
                   (window-parameter
                    (selected-window) 'yunge-jump-history))
@@ -1359,7 +1496,7 @@
       (when (buffer-live-p buffer)
         (kill-buffer buffer)))))
 
-(ert-deftest yunge-reader-resolves-durable-appearance-overrides ()
+(ert-deftest yunge-reader-resolves-persistent-appearance-overrides ()
   (let* ((file (expand-file-name "appearance.epub"))
          (driver
           (yunge-reader--make-driver
@@ -1368,17 +1505,17 @@
           (make-yunge-reader-document :file file :driver driver))
          (yunge-reader-default-appearances
           '((epub . follow-emacs)))
-         (yunge-reader-saved-appearance-overrides nil))
+         (yunge-reader-saved-document-state nil))
     (should (eq (yunge-reader-effective-appearance document)
                 'follow-emacs))
     (should-not
      (yunge-reader-document-appearance-override document))
-    (yunge-reader--store-appearance-override file 'original)
+    (yunge-reader--store-appearance-override file driver 'original)
     (should (eq (yunge-reader-effective-appearance document) 'original))
     (should
      (eq (yunge-reader-document-appearance-override document)
          'original))
-    (yunge-reader--unset-appearance-override file)
+    (yunge-reader--unset-appearance-override file driver)
     (should (eq (yunge-reader-effective-appearance document)
                 'follow-emacs))))
 
@@ -1400,7 +1537,7 @@
            :state 'opening :document following))
          (yunge-reader-default-appearances
           '((epub . follow-emacs) (pdf . original)))
-         (yunge-reader-saved-appearance-overrides nil)
+         (yunge-reader-saved-document-state nil)
          (yunge-reader--document-registry
           (make-hash-table :test #'equal))
          notified)
@@ -1416,31 +1553,35 @@
       (yunge-reader--theme-changed 'test-theme))
     (should (equal notified (list following-entry)))))
 
-(ert-deftest yunge-reader-cleans-missing-durable-document-state ()
+(ert-deftest yunge-reader-cleans-missing-persistent-document-state ()
   (let* ((existing (make-temp-file "yunge-reader-state-"))
          (missing (concat existing ".missing"))
-         (yunge-reader-saved-places
-          (list (cons existing 'existing-place)
-                (cons missing 'missing-place)))
-         (yunge-reader-saved-appearance-overrides
-          (list (cons missing 'original)
-                (cons existing 'follow-emacs)))
-         (yunge-reader-saved-marks
-          (list (cons existing '((97 . existing-mark)))
-                (cons missing '((98 . missing-mark))))))
+         (yunge-reader-saved-document-state
+          (append
+           (yunge-reader-test--document-state
+            existing 'test
+            :place 'existing-place
+            :appearance 'follow-emacs
+            :marks '((97 . existing-mark)))
+           (yunge-reader-test--document-state
+            missing 'test
+            :place 'missing-place
+            :appearance 'original
+            :marks '((98 . missing-mark))))))
     (unwind-protect
         (let ((inhibit-message t))
           (yunge-reader-cleanup-missing-document-state)
+          (should (= (length yunge-reader-saved-document-state) 1))
           (should
-           (equal yunge-reader-saved-places
-                  (list (cons existing 'existing-place))))
+           (equal (yunge-reader-test--saved-place existing 'test)
+                  'existing-place))
           (should
-           (equal yunge-reader-saved-appearance-overrides
-                  (list (cons existing 'follow-emacs))))
+           (eq (yunge-reader-test--saved-state-value
+                existing 'test :appearance)
+               'follow-emacs))
           (should
-           (equal yunge-reader-saved-marks
-                  (list
-                   (cons existing '((97 . existing-mark)))))))
+           (equal (yunge-reader-test--saved-marks existing 'test)
+                  '((97 . existing-mark)))))
       (when (file-exists-p existing)
         (delete-file existing)))))
 
@@ -1460,7 +1601,7 @@
          (yunge-reader--document-registry
           (make-hash-table :test #'equal))
          (yunge-reader-default-appearances '((epub . original)))
-         (yunge-reader-saved-appearance-overrides nil)
+         (yunge-reader-saved-document-state nil)
          first
          second
          events
@@ -1516,7 +1657,8 @@
                              (buffer-name (car right)))))
             (list (cons first 'follow-emacs)
                   (cons second 'follow-emacs))))
-          (should-not yunge-reader-saved-appearance-overrides))
+          (should-not
+           (yunge-reader-document-appearance-override document)))
       (when (buffer-live-p second)
         (kill-buffer second))
       (when (buffer-live-p first)
@@ -1662,7 +1804,7 @@
 (ert-deftest yunge-reader-new-view-clones-the-live-place ()
   (let ((yunge-reader--document-registry
          (make-hash-table :test #'equal))
-        (yunge-reader-saved-places nil)
+        (yunge-reader-saved-document-state nil)
         (yunge-reader-drivers nil)
         (file (expand-file-name "new-view.pdf"))
         (positions (make-hash-table :test #'eq))
@@ -1713,8 +1855,7 @@
                   additional-window (split-window-right))
             (set-window-buffer additional-window first)
             (select-window additional-window)
-            (let ((document yunge-reader-document)
-                  (key (yunge-reader--place-file-key file)))
+            (let ((document yunge-reader-document))
               (setq yunge-reader-zoom-mode 'manual
                     yunge-reader-scale 1.75
                     yunge-reader-selection 'source-selection
@@ -1749,7 +1890,7 @@
               (should
                (= (plist-get
                    (plist-get
-                    (cdr (assoc key yunge-reader-saved-places))
+                    (yunge-reader-test--saved-place file 'test)
                     :position)
                    :unit)
                   3)))))
@@ -1761,7 +1902,7 @@
 (ert-deftest yunge-reader-new-view-requires-a-stable-place ()
   (let ((yunge-reader--document-registry
          (make-hash-table :test #'equal))
-        (yunge-reader-saved-places nil)
+        (yunge-reader-saved-document-state nil)
         (yunge-reader-drivers nil)
         (file (expand-file-name "new-view-unstable.pdf"))
         (unit 8)
@@ -1787,13 +1928,13 @@
             (switch-to-buffer first)
             (yunge-reader--begin-open first driver file)
             (let ((entry yunge-reader--document-entry)
-                  (saved (copy-tree yunge-reader-saved-places t)))
+                  (saved (copy-tree yunge-reader-saved-document-state t)))
               (setq unit nil)
               (should-error (yunge-reader-new-view) :type 'user-error)
               (should
                (equal (yunge-reader--document-entry-views entry)
                       (list first)))
-              (should (equal yunge-reader-saved-places saved)))))
+              (should (equal yunge-reader-saved-document-state saved)))))
       (when (buffer-live-p first)
         (kill-buffer first)))))
 
@@ -1832,7 +1973,7 @@
 (ert-deftest yunge-reader-make-primary-saves-the-current-view ()
   (let ((yunge-reader--document-registry
          (make-hash-table :test #'equal))
-        (yunge-reader-saved-places nil)
+        (yunge-reader-saved-document-state nil)
         (yunge-reader-drivers nil)
         (file (expand-file-name "make-primary.pdf"))
         (positions (make-hash-table :test #'eq))
@@ -1885,9 +2026,8 @@
                  nil t)))
             (should (eq (yunge-reader-make-primary) second))
             (let* ((entry yunge-reader--document-entry)
-                   (key (yunge-reader--place-file-key file))
                    (place
-                    (cdr (assoc key yunge-reader-saved-places))))
+                    (yunge-reader-test--saved-place file 'test)))
               (should
                (eq (yunge-reader--document-entry-primary-view entry)
                    second))
@@ -1913,7 +2053,7 @@
 (ert-deftest yunge-reader-make-primary-rejects-an-unstable-view ()
   (let ((yunge-reader--document-registry
          (make-hash-table :test #'equal))
-        (yunge-reader-saved-places nil)
+        (yunge-reader-saved-document-state nil)
         (yunge-reader-drivers nil)
         (file (expand-file-name "make-primary-unstable.pdf"))
         (positions (make-hash-table :test #'eq))
@@ -1949,23 +2089,23 @@
             (yunge-reader--begin-open first driver file)
             (setq second (yunge-reader-new-view))
             (let ((entry yunge-reader--document-entry)
-                  (saved (copy-tree yunge-reader-saved-places t)))
+                  (saved (copy-tree yunge-reader-saved-document-state t)))
               (remhash second positions)
               (should-error
                (yunge-reader-make-primary) :type 'user-error)
               (should
                (eq (yunge-reader--document-entry-primary-view entry)
                    first))
-              (should (equal yunge-reader-saved-places saved)))))
+              (should (equal yunge-reader-saved-document-state saved)))))
       (when (buffer-live-p second)
         (kill-buffer second))
       (when (buffer-live-p first)
         (kill-buffer first)))))
 
-(ert-deftest yunge-reader-primary-view-alone-records-durable-place ()
+(ert-deftest yunge-reader-primary-view-alone-records-persistent-place ()
   (let ((yunge-reader--document-registry
          (make-hash-table :test #'equal))
-        (yunge-reader-saved-places nil)
+        (yunge-reader-saved-document-state nil)
         (yunge-reader-drivers nil)
         (file (expand-file-name "primary.pdf"))
         (positions (make-hash-table :test #'eq))
@@ -2008,8 +2148,7 @@
                'yunge-reader-view-role-change-hook
                (lambda () (error "header update failed"))
                t t))
-            (let* ((key (yunge-reader--place-file-key file))
-                   (entry
+            (let* ((entry
                     (buffer-local-value
                      'yunge-reader--document-entry first)))
               (with-current-buffer second
@@ -2017,7 +2156,7 @@
               (should
                (= (plist-get
                    (plist-get
-                    (cdr (assoc key yunge-reader-saved-places))
+                    (yunge-reader-test--saved-place file 'test)
                     :position)
                    :unit)
                   10))
@@ -2038,7 +2177,7 @@
               (should
                (= (plist-get
                    (plist-get
-                    (cdr (assoc key yunge-reader-saved-places))
+                    (yunge-reader-test--saved-place file 'test)
                     :position)
                    :unit)
                   10))
@@ -2047,7 +2186,7 @@
               (should
                (= (plist-get
                    (plist-get
-                    (cdr (assoc key yunge-reader-saved-places))
+                    (yunge-reader-test--saved-place file 'test)
                     :position)
                    :unit)
                   20)))))
@@ -2150,10 +2289,9 @@
 
 (ert-deftest yunge-reader-cleans-up-a-failed-view-attach ()
   (let* ((file (expand-file-name "attach-failure.pdf"))
-         (key (yunge-reader--place-file-key file))
          (old (yunge-reader-test--place 'test 19))
-         (yunge-reader-saved-places
-          (list (cons key (copy-tree old t))))
+         (yunge-reader-saved-document-state
+          (yunge-reader-test--document-state file 'test :place old))
          (yunge-reader-drivers nil)
          (completion 'pending)
          events
@@ -2198,17 +2336,16 @@
           (should-not yunge-reader--place-recording-enabled)
           (should (equal (nreverse events)
                          '(attach detach close)))
-          (should (equal (cdr (assoc key yunge-reader-saved-places))
+          (should (equal (yunge-reader-test--saved-place file 'test)
                          old)))
       (when (buffer-live-p buffer)
         (kill-buffer buffer)))))
 
 (ert-deftest yunge-reader-cleans-up-a-failed-view-restore ()
   (let* ((file (expand-file-name "restore-failure.pdf"))
-         (key (yunge-reader--place-file-key file))
          (old (yunge-reader-test--place 'test 23))
-         (yunge-reader-saved-places
-          (list (cons key (copy-tree old t))))
+         (yunge-reader-saved-document-state
+          (yunge-reader-test--document-state file 'test :place old))
          (yunge-reader-drivers nil)
          (completion 'pending)
          events
@@ -2249,7 +2386,7 @@
           (should
            (equal (nreverse events)
                   '(attach restore detach close)))
-          (should (equal (cdr (assoc key yunge-reader-saved-places))
+          (should (equal (yunge-reader-test--saved-place file 'test)
                          old)))
       (when (buffer-live-p buffer)
         (kill-buffer buffer)))))
