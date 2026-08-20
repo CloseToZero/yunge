@@ -90,16 +90,30 @@ test('normalizes reader keyboard accelerators', () => {
 })
 
 test('validates publication roots, view identifiers, and external URIs', () => {
-    const root = `https://yunge-reader-book.localhost/${'a'.repeat(32)}/`
-    assert.equal(checkedRoot(root), root)
-    const wkRoot = `yunge-reader-book://localhost/${'b'.repeat(32)}/`
-    assert.equal(checkedRoot(wkRoot), wkRoot)
+    const session = 'a'.repeat(32)
+    const publication = 'b'.repeat(32)
+    const renderer = `http://127.0.0.1:32123/${session}/app/index.html`
+    const root = `http://127.0.0.1:32123/${session}/book/${publication}/`
+    assert.equal(checkedRoot(root, renderer), root)
     for (const invalid of [
         `${root}?query`,
         `${root}#fragment`,
-        `https://example.test/${'a'.repeat(32)}/`,
-        `https://yunge-reader-book.localhost/${'A'.repeat(32)}/`,
-    ]) assert.throws(() => checkedRoot(invalid))
+        root.replace('http:', 'https:'),
+        root.replace('127.0.0.1', 'localhost'),
+        root.replace(':32123', ''),
+        root.replace(session, 'c'.repeat(32)),
+        root.replace(publication, publication.toUpperCase()),
+        root.replace('/book/', '/app/'),
+        `http://user@127.0.0.1:32123/${session}/book/${publication}/`,
+    ]) assert.throws(() => checkedRoot(invalid, renderer))
+    for (const invalidRenderer of [
+        `${renderer}?query`,
+        `${renderer}#fragment`,
+        renderer.replace('index.html', 'other.html'),
+        renderer.replace(session, 'c'.repeat(32)),
+        renderer.replace(':32123', ':32124'),
+    ]) assert.throws(() => checkedRoot(root, invalidRenderer))
+    assert.throws(() => checkedRoot(root))
 
     assert.equal(checkedView(1), 1)
     assert.throws(() => checkedView(0))

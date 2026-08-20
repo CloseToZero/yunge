@@ -1096,7 +1096,7 @@ const open = async ({
         applyCanvasAppearance(appearance)
         scrollBars = checkedScrollBars(scrollBars)
         checkedRendererAccelerators(rendererAccelerators)
-        const root = checkedRoot(resourceRoot)
+        const root = checkedRoot(resourceRoot, window.location.href)
         const loader = await makeLoader(root)
         const book = await new EPUB(loader).init()
         protectBook(book)

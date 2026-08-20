@@ -1,10 +1,6 @@
 // SPDX-FileCopyrightText: 2026 Chen Zhexuan
 // SPDX-License-Identifier: MIT
 
-const BOOK_ROOTS = Object.freeze([
-    'https://yunge-reader-book.localhost/',
-    'yunge-reader-book://localhost/',
-])
 const MAX_EXTERNAL_URI_BYTES = 4096
 const MAX_INITIAL_TARGETS = 8
 const MAX_LOCATOR_TEXT_BYTES = 3072
@@ -88,12 +84,28 @@ export const checkedRendererAccelerators = value => {
 export const encodePath = path =>
     path.split('/').map(encodeURIComponent).join('/')
 
-export const checkedRoot = value => {
-    const url = new URL(value)
-    const root = `${url.protocol}//${url.host}/`
-    if (!BOOK_ROOTS.includes(root)
-        || !/^\/[0-9a-f]{32}\/$/u.test(url.pathname)
-        || url.search || url.hash || url.username || url.password) {
+export const checkedRoot = (value, rendererValue) => {
+    let url
+    let renderer
+    try {
+        url = new URL(value)
+        renderer = new URL(rendererValue)
+    } catch {
+        throw new Error('Invalid Yunge Reader publication resource root')
+    }
+    const resource = url.pathname.match(
+        /^\/([0-9a-f]{32})\/book\/[0-9a-f]{32}\/$/u)
+    const rendererPath = renderer.pathname.match(
+        /^\/([0-9a-f]{32})\/app\/index\.html$/u)
+    if (url.protocol !== 'http:'
+        || url.hostname !== '127.0.0.1'
+        || !url.port
+        || url.origin !== renderer.origin
+        || !resource || !rendererPath
+        || resource[1] !== rendererPath[1]
+        || url.search || url.hash || url.username || url.password
+        || renderer.search || renderer.hash
+        || renderer.username || renderer.password) {
         throw new Error('Invalid Yunge Reader publication resource root')
     }
     return url.href
