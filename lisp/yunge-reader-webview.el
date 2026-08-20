@@ -750,28 +750,35 @@ queued creation request."
     (yunge-reader-webview--maybe-finish-view-destroy view)))
   view)
 
-(defun yunge-reader-webview--forget-all-views ()
-  "Forget all native views without sending protocol messages."
-  (let (views)
+(defun yunge-reader-webview--forget-all-surfaces ()
+  "Forget native surfaces without destroying their logical views."
+  (let ((seen (make-hash-table :test #'eq))
+        views)
     (maphash
      (lambda (view _present)
-       (push view views))
+       (unless (gethash view seen)
+         (puthash view t seen)
+         (push view views)))
      yunge-reader-webview--logical-views)
+    (maphash
+     (lambda (_id view)
+       (unless (gethash view seen)
+         (puthash view t seen)
+         (push view views)))
+     yunge-reader-webview--views)
     (dolist (view views)
       (dolist (surface (yunge-reader-webview--view-surface-list view))
         (yunge-reader-webview--cancel-open-timer surface))
       (setf (yunge-reader-webview--view-surface view) nil
-            (yunge-reader-webview--view-destroyed view) t
             (yunge-reader-webview--view-pending-destroys view) nil)
       (clrhash (yunge-reader-webview--view-surface-table view))
-      (yunge-reader-webview--set-view-selection view nil)
-      (yunge-reader-webview--finish-view-destroy view)))
-  (clrhash yunge-reader-webview--views)
-  (clrhash yunge-reader-webview--logical-views)
-  (yunge-reader-webview--remove-hooks))
+      (if (yunge-reader-webview--view-destroyed view)
+          (yunge-reader-webview--finish-view-destroy view)
+        (yunge-reader-webview--set-view-selection view nil))))
+  (clrhash yunge-reader-webview--views))
 
 (add-hook 'yunge-reader-webview-service-stopped-hook
-          #'yunge-reader-webview--forget-all-views)
+          #'yunge-reader-webview--forget-all-surfaces)
 
 (defun yunge-reader-webview--kill-buffer ()
   "Destroy the native view owned by the current buffer."

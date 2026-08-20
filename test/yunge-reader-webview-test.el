@@ -212,14 +212,18 @@
         (should (eq (yunge-reader-task-state task) 'cancelled))
         (should (eq (car error-data) 'yunge-reader-task-cancelled))))))
 
-(ert-deftest yunge-reader-webview-forgets-views-after-service-exit ()
+(ert-deftest yunge-reader-webview-rebuilds-surfaces-after-service-exit ()
   (yunge-reader-webview-test--with-fake-process
     (let* ((buffer (generate-new-buffer " *stopped EPUB view*"))
+           (location '((cfi . "epubcfi(/6/4)")
+                       (href . "OPS/chapter.xhtml")))
            (view
             (yunge-reader-webview--make-view
              :buffer buffer
+             :location location
              :surface
-             (yunge-reader-webview-test--surface 7 'ready))))
+             (yunge-reader-webview-test--surface 7 'ready)))
+           recreated)
       (unwind-protect
           (progn
             (yunge-reader-webview-start)
@@ -230,18 +234,45 @@
               (yunge-reader-webview--sentinel
                'fake-webview-process "finished"))
             (should-not yunge-reader-webview--process)
-            (should (yunge-reader-webview--view-destroyed view))
-            (should
-             (yunge-reader-webview--view-destroy-finished view))
+            (should-not (yunge-reader-webview--view-destroyed view))
             (should-not (yunge-reader-webview--view-surface view))
+            (should (equal (yunge-reader-webview--view-location view)
+                           location))
             (should
              (zerop
               (hash-table-count yunge-reader-webview--views)))
             (should
-             (zerop
-              (hash-table-count
-               yunge-reader-webview--logical-views))))
+             (gethash view yunge-reader-webview--logical-views))
+            (cl-letf
+                (((symbol-function 'yunge-reader-webview--visible-windows)
+                  (lambda (_view) '(visible-window)))
+                 ((symbol-function 'yunge-reader-webview--visible-window)
+                  (lambda (_view) 'visible-window))
+                 ((symbol-function 'yunge-reader-webview--start-surface)
+                  (lambda (candidate window)
+                    (setq recreated (list candidate window)))))
+              (yunge-reader-webview--sync-view view))
+            (should (equal recreated (list view 'visible-window))))
         (kill-buffer buffer)))))
+
+(ert-deftest yunge-reader-webview-finishes-destroy-after-service-exit ()
+  (let* ((yunge-reader-webview--views (make-hash-table :test #'eql))
+         (yunge-reader-webview--logical-views
+          (make-hash-table :test #'eq))
+         (surface (yunge-reader-webview-test--surface 8 'ready))
+         (completed nil)
+         (view
+          (yunge-reader-webview--make-view
+           :surface surface
+           :destroyed t
+           :pending-destroys 1
+           :destroy-waiters (list (lambda () (setq completed t))))))
+    (puthash 8 view yunge-reader-webview--views)
+    (yunge-reader-webview--forget-all-surfaces)
+    (should completed)
+    (should (yunge-reader-webview--view-destroy-finished view))
+    (should-not (yunge-reader-webview--view-surface view))
+    (should (zerop (hash-table-count yunge-reader-webview--views)))))
 
 (ert-deftest yunge-reader-webview-rejects-incomplete-handshakes ()
   (yunge-reader-webview-test--with-fake-process
