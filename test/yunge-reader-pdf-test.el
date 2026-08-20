@@ -1005,7 +1005,8 @@
           (lambda (_document _view complete)
             (funcall complete nil)))
          ((symbol-function 'yunge-reader-pdf--dispatch)
-          (lambda (_document _operation _arguments complete)
+          (lambda (_document _operation _arguments complete
+                   &optional _operation-task)
             (cl-incf dispatches)
             (funcall
              complete nil
@@ -1036,7 +1037,8 @@
             (cl-incf ensures)
             (funcall complete nil)))
          ((symbol-function 'yunge-reader-pdf--dispatch)
-          (lambda (_document _operation _arguments complete)
+          (lambda (_document _operation _arguments complete
+                   &optional _operation-task)
             (cl-incf dispatches)
             (if (= dispatches 1)
                 (funcall
@@ -1067,7 +1069,8 @@
           (lambda (_document _view complete)
             (funcall complete nil)))
          ((symbol-function 'yunge-reader-pdf--dispatch)
-          (lambda (_document _operation _arguments complete)
+          (lambda (_document _operation _arguments complete
+                   &optional _operation-task)
             (cl-incf dispatches)
             (funcall
              complete nil
@@ -1204,6 +1207,59 @@
       (should (= (yunge-reader-pdf-handle-session handle) 17))
       (should (= (yunge-reader-pdf-handle-id handle) 7)))))
 
+(ert-deftest yunge-reader-pdf-adopts-recovered-request-tasks ()
+  (let* ((document
+          (make-yunge-reader-document
+           :handle (yunge-reader-pdf-test--handle 11)))
+         cancelled
+         (child
+          (yunge-reader-task--make
+           :operation "search"
+           :state 'sent
+           :cancel-function
+           (lambda (task reason)
+             (setq cancelled reason)
+             (setf (yunge-reader-task-state task) 'cancelled)
+             t)))
+         (parent
+          (yunge-reader-task--make
+           :operation 'search
+           :state 'running
+           :complete #'ignore
+           :cancel-function #'yunge-reader-task--cancel-composite))
+         (yunge-reader--request-task parent))
+    (cl-letf (((symbol-function 'yunge-reader-pdf--ensure-handle)
+               (lambda (_document _view complete)
+                 (funcall complete nil)))
+              ((symbol-function 'yunge-reader-pdf--dispatch)
+               (lambda (&rest _arguments) child)))
+      (yunge-reader-pdf--request document 'search nil #'ignore))
+    (should (eq (yunge-reader-task-child parent) child))
+    (should (yunge-reader-task-cancel parent "search replaced"))
+    (should (equal cancelled "search replaced"))))
+
+(ert-deftest yunge-reader-pdf-forwards-operation-task-revisions ()
+  (let* ((document
+          (make-yunge-reader-document
+           :handle (yunge-reader-pdf-test--handle 11)))
+         (operation-task
+          (yunge-reader-task-create
+           'page-info #'ignore :revision 23))
+         (yunge-reader--request-task operation-task)
+         options)
+    (cl-letf
+        (((symbol-function 'yunge-reader-native-session-live-p)
+          (lambda (session) (= session 17)))
+         ((symbol-function 'yunge-reader-native-request-in-session)
+          (lambda (session operation parameters _complete &rest arguments)
+            (should (= session 17))
+            (should (equal operation "page-info"))
+            (should (= (alist-get 'document parameters) 11))
+            (setq options arguments))))
+      (yunge-reader-pdf--request
+       document 'page-info '(:page 4) #'ignore))
+    (should (equal options '(:revision 23)))))
+
 (ert-deftest yunge-reader-pdf-maps-reader-requests-to-native-operations ()
   (let ((document
          (make-yunge-reader-document
@@ -1317,6 +1373,46 @@
       (yunge-reader-pdf--search-origin-value
        (make-yunge-reader-position :unit 2 :x 35.0 :y 95.0))
       '((page . 2) (offset . 4))))))
+
+(ert-deftest yunge-reader-pdf-search-capability-forwards-resolved-origin ()
+  (with-temp-buffer
+    (let ((document (make-yunge-reader-document))
+          request)
+      (setq yunge-reader-pdf--text-cache
+            (make-hash-table :test #'eql))
+      (puthash
+       2
+       '((characters
+          . (((index . 4)
+              (text . "A")
+              (bounds . ((left . 30.0) (bottom . 90.0)
+                         (right . 40.0) (top . 100.0)))))))
+       yunge-reader-pdf--text-cache)
+      (cl-letf
+          (((symbol-function 'yunge-reader-pdf--request)
+            (lambda (actual-document operation arguments complete)
+              (setq request
+                    (list actual-document operation arguments complete)))))
+        (yunge-reader-pdf--request-search-capability
+         document
+         (make-yunge-reader-search-request
+          :query "Needle"
+          :case-sensitive t
+          :direction 'forward
+          :origin
+          (make-yunge-reader-position :unit 2 :x 35.0 :y 95.0)
+          :cursor nil
+          :match-limit 25
+          :unit-limit 6)
+         #'ignore))
+      (should (eq (nth 0 request) document))
+      (should (eq (nth 1 request) 'search))
+      (should
+       (equal (plist-get (nth 2 request) :origin)
+              '((page . 2) (offset . 4))))
+      (should (= (plist-get (nth 2 request) :match-limit) 25))
+      (should (= (plist-get (nth 2 request) :page-limit) 6))
+      (should (eq (nth 3 request) #'ignore)))))
 
 (ert-deftest yunge-reader-pdf-rejects-invalid-search-cursors ()
   (let ((cursor
