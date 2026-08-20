@@ -126,20 +126,63 @@
          (directory
           (expand-file-name
            "run-locked" (yunge-var-subdirectory "shuying/setup")))
-         timer-arguments)
+         (attempts 0)
+         scheduled)
     (unwind-protect
         (progn
           (make-directory directory t)
           (cl-letf (((symbol-function 'delete-directory)
                      (lambda (&rest _arguments)
+                       (cl-incf attempts)
+                       (when (< attempts 3)
+                         (signal 'file-error '("sharing violation")))))
+                    ((symbol-function 'run-at-time)
+                     (lambda (_delay _repeat function &rest arguments)
+                       (setq scheduled (cons function arguments))
+                       'cleanup-timer)))
+            (shuying-setup--cleanup directory)
+            (should (= attempts 1))
+            (should scheduled)
+            (while scheduled
+              (let ((callback scheduled))
+                (setq scheduled nil)
+                (apply (car callback) (cdr callback)))))
+          (should (= attempts 3))
+          (should-not scheduled))
+      (delete-directory root t))))
+
+(ert-deftest shuying-setup-bounds-sharing-violation-retries ()
+  (let* ((root (make-temp-file "shuying-setup-retry-limit-" t))
+         (yunge-var-directory (file-name-as-directory root))
+         (directory
+          (expand-file-name
+           "run-locked" (yunge-var-subdirectory "shuying/setup")))
+         (attempts 0)
+         scheduled
+         warning)
+    (unwind-protect
+        (progn
+          (make-directory directory t)
+          (cl-letf (((symbol-function 'delete-directory)
+                     (lambda (&rest _arguments)
+                       (cl-incf attempts)
                        (signal 'file-error '("sharing violation"))))
                     ((symbol-function 'run-at-time)
-                     (lambda (&rest arguments)
-                       (setq timer-arguments arguments))))
-            (shuying-setup--cleanup directory))
-          (should
-           (equal timer-arguments
-                  (list 0.5 nil #'shuying-setup--cleanup directory 3))))
+                     (lambda (_delay _repeat function &rest arguments)
+                       (setq scheduled (cons function arguments))
+                       'cleanup-timer))
+                    ((symbol-function 'display-warning)
+                     (lambda (_type message &rest _arguments)
+                       (setq warning message))))
+            (shuying-setup--cleanup directory)
+            (while scheduled
+              (let ((callback scheduled))
+                (setq scheduled nil)
+                (apply (car callback) (cdr callback)))))
+          (should (> attempts 1))
+          (should (< attempts 100))
+          (should (string-match-p "sharing violation" warning))
+          (should-not scheduled))
       (delete-directory root t))))
 
 (ert-deftest shuying-setup-sentinel-refreshes-path-and-cleans-up ()

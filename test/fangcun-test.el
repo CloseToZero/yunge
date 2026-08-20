@@ -1265,31 +1265,38 @@
         (fangcun--native-pending-files
          (make-hash-table :test #'equal))
         (fangcun--native-pending-full-sync-p nil)
+        (fangcun--session-active-p nil)
+        timers
         scheduled
         cancelled)
     (cl-letf (((symbol-function 'run-with-idle-timer)
-               (lambda (seconds repeat function &rest arguments)
-                 (let ((timer (list 'timer (length scheduled))))
-                   (push (list seconds repeat function arguments timer)
-                         scheduled)
+               (lambda (_seconds _repeat function &rest arguments)
+                 (let ((timer (make-symbol "native-event-timer")))
+                   (push timer timers)
+                   (push (list timer function arguments) scheduled)
                    timer)))
-              ((symbol-function 'timerp) #'consp)
+              ((symbol-function 'timerp)
+               (lambda (timer) (memq timer timers)))
               ((symbol-function 'cancel-timer)
                (lambda (timer)
                  (push timer cancelled))))
       (fangcun--queue-native-files '("C:/notes/one.org"))
       (let ((first fangcun--native-event-timer))
         (fangcun--queue-native-files '("C:/notes/two.org"))
-        (should (equal cancelled (list first))))
-      (should (= (length scheduled) 2))
-      (should
-       (equal
-        (cddr (car scheduled))
-        (list #'fangcun--process-native-events nil
-              fangcun--native-event-timer)))
+        (should (memq first cancelled))
+        (should-not (eq first fangcun--native-event-timer)))
       (should (= (hash-table-count
                   fangcun--native-pending-files)
-                 2)))))
+                 2))
+      (pcase-let ((`(,_timer ,function ,arguments)
+                   (seq-find
+                    (lambda (entry)
+                      (eq (car entry) fangcun--native-event-timer))
+                    scheduled)))
+        (apply function arguments))
+      (should-not fangcun--native-event-timer)
+      (should (zerop (hash-table-count
+                      fangcun--native-pending-files))))))
 
 (ert-deftest fangcun-native-monitor-output-belongs-to-its-process ()
   (let ((fangcun--native-watch-process 'current-monitor)

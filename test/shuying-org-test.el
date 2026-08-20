@@ -725,21 +725,30 @@
                   (setq window-state 'first
                         ranges (list (cons (point-min) first-end)))
                   (shuying-org--schedule-visible-preview)
-                  (should (= (length scheduled) 1))
-                  (should
-                   (= (cadr (car scheduled))
-                      shuying-org-visible-preview-delay))
-                  (shuying-org--schedule-visible-preview)
-                  (should (= (length scheduled) 1))
-                  (setq window-state 'second
-                        ranges
-                        (list (cons second-start (point-max))))
-                  (shuying-org--schedule-visible-preview)
-                  (should (= (length scheduled) 2))
-                  (should
-                   (memq (car (cadr scheduled)) cancelled))
-                  (let ((latest (car scheduled)))
-                    (apply (nth 2 latest) (nth 3 latest)))
+                  (let* ((first shuying-org--visible-preview-timer)
+                         (first-entry
+                          (seq-find
+                           (lambda (entry) (eq (car entry) first))
+                           scheduled)))
+                    (should (= (cadr first-entry)
+                               shuying-org-visible-preview-delay))
+                    (shuying-org--schedule-visible-preview)
+                    (should
+                     (eq first shuying-org--visible-preview-timer))
+                    (should-not (memq first cancelled))
+                    (setq window-state 'second
+                          ranges
+                          (list (cons second-start (point-max))))
+                    (shuying-org--schedule-visible-preview)
+                    (let* ((latest shuying-org--visible-preview-timer)
+                           (latest-entry
+                            (seq-find
+                             (lambda (entry) (eq (car entry) latest))
+                             scheduled)))
+                      (should-not (eq latest first))
+                      (should (memq first cancelled))
+                      (apply (nth 2 latest-entry)
+                             (nth 3 latest-entry))))
                   (should (= shuying-org-test--render-count 1))
                   (should
                    (= (overlay-start (shuying-org-test--overlay))

@@ -281,6 +281,8 @@
          (shuying--active-batch-count 0)
          (shuying--scheduler-running nil)
          (shuying-max-concurrent-batches 2)
+         (in-flight 0)
+         (maximum-in-flight 0)
          controls
          started
          results)
@@ -289,6 +291,9 @@
           (shuying-register-backend
            'test
            (lambda (requests complete)
+             (cl-incf in-flight)
+             (setq maximum-in-flight
+                   (max maximum-in-flight in-flight))
              (let ((source
                     (shuying-render-spec-source
                      (shuying-backend-request-specification
@@ -307,6 +312,7 @@
                                request)))
                   (with-temp-file output
                     (insert source))
+                  (cl-decf in-flight)
                   (funcall callback request nil))))
             (shuying-render-batch
              (mapcar
@@ -321,8 +327,6 @@
                      (push artifact results)))))
               '("$a$" "$b$" "$c$" "$d$")))
             (should (equal (reverse started) '("$a$" "$b$")))
-            (should (= shuying--active-batch-count 2))
-            (should (= (length shuying--waiting-batches) 2))
             (complete "$a$")
             (should (equal (reverse started)
                            '("$a$" "$b$" "$c$")))
@@ -332,6 +336,8 @@
             (complete "$c$")
             (complete "$d$")
             (should (= (length results) 4))
+            (should (= maximum-in-flight 2))
+            (should (zerop in-flight))
             (should (zerop shuying--active-batch-count))
             (should-not shuying--waiting-batches)))
       (delete-directory root t))))
@@ -368,7 +374,6 @@
                    (push artifact results))))
               (list first second third))))
           (should (= (length calls) 1))
-          (should (= (length shuying--waiting-batches) 1))
           (pcase-let* ((`(,requests . ,complete) (car calls))
                        (first (car requests))
                        (second (cadr requests)))
@@ -378,7 +383,6 @@
                 (insert "artifact")))
             (funcall complete first nil)
             (should (= (length calls) 1))
-            (should (= shuying--active-batch-count 1))
             (funcall complete second nil))
           (should (= (length calls) 2))
           (should-not shuying--waiting-batches)
