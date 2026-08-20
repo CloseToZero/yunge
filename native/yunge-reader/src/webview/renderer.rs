@@ -780,6 +780,98 @@ pub(super) fn event_for(
     event_body(view, request)
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum RendererMethod {
+    ClearSelection,
+    CurrentSelection,
+    Navigate,
+    Open,
+    Search,
+    SelectionText,
+    SetAppearance,
+    SetScrollBars,
+    SetSearchResult,
+    SetSelection,
+    SetStyle,
+    SetZoom,
+}
+
+impl RendererMethod {
+    fn name(self) -> &'static str {
+        match self {
+            Self::ClearSelection => "clearSelection",
+            Self::CurrentSelection => "currentSelection",
+            Self::Navigate => "navigate",
+            Self::Open => "open",
+            Self::Search => "search",
+            Self::SelectionText => "selectionText",
+            Self::SetAppearance => "setAppearance",
+            Self::SetScrollBars => "setScrollBars",
+            Self::SetSearchResult => "setSearchResult",
+            Self::SetSelection => "setSelection",
+            Self::SetStyle => "setStyle",
+            Self::SetZoom => "setZoom",
+        }
+    }
+
+    fn discards_result(self) -> bool {
+        !matches!(
+            self,
+            Self::CurrentSelection | Self::Search | Self::SelectionText
+        )
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+struct RendererCall {
+    method: RendererMethod,
+    payload: Value,
+}
+
+impl RendererCall {
+    fn new(method: RendererMethod, payload: Value) -> Self {
+        Self { method, payload }
+    }
+
+    fn script(&self) -> String {
+        let payload = serde_json::to_string(&self.payload)
+            .expect("renderer call payload is serializable");
+        let discard = if self.method.discards_result() {
+            "void "
+        } else {
+            ""
+        };
+        format!(
+            "{discard}globalThis.yungeReader.{}({payload});",
+            self.method.name()
+        )
+    }
+}
+
+fn open_call(
+    view: u64,
+    resource_root: &str,
+    location: Option<&EpubLocator>,
+    appearance: &EpubAppearance,
+    style: Option<&EpubStyle>,
+    zoom: Option<&EpubZoom>,
+    scroll_bars: bool,
+) -> RendererCall {
+    RendererCall::new(
+        RendererMethod::Open,
+        json!({
+            "view": view,
+            "resourceRoot": resource_root,
+            "location": location,
+            "appearance": appearance,
+            "style": style,
+            "zoom": zoom,
+            "scrollBars": scroll_bars,
+            "rendererAccelerators": RENDERER_ACCELERATORS,
+        }),
+    )
+}
+
 pub(super) fn open_script(
     view: u64,
     resource_root: &str,
@@ -789,30 +881,48 @@ pub(super) fn open_script(
     zoom: Option<&EpubZoom>,
     scroll_bars: bool,
 ) -> String {
-    let payload = serde_json::to_string(&json!({
-        "view": view,
-        "resourceRoot": resource_root,
-        "location": location,
-        "appearance": appearance,
-        "style": style,
-        "zoom": zoom,
-        "scrollBars": scroll_bars,
-        "rendererAccelerators": RENDERER_ACCELERATORS,
-    }))
-    .expect("publication open payload is serializable");
-    format!("void globalThis.yungeReader.open({payload});")
+    open_call(
+        view,
+        resource_root,
+        location,
+        appearance,
+        style,
+        zoom,
+        scroll_bars,
+    )
+    .script()
+}
+
+fn appearance_call(view: u64, appearance: &EpubAppearance) -> RendererCall {
+    RendererCall::new(
+        RendererMethod::SetAppearance,
+        json!({
+            "view": view,
+            "appearance": appearance,
+        }),
+    )
 }
 
 pub(super) fn appearance_script(
     view: u64,
     appearance: &EpubAppearance,
 ) -> String {
-    let payload = serde_json::to_string(&json!({
-        "view": view,
-        "appearance": appearance,
-    }))
-    .expect("publication appearance payload is serializable");
-    format!("void globalThis.yungeReader.setAppearance({payload});")
+    appearance_call(view, appearance).script()
+}
+
+fn navigation_call(
+    view: u64,
+    command: NavigationCommand,
+    location: Option<&EpubNavigationTarget>,
+) -> RendererCall {
+    RendererCall::new(
+        RendererMethod::Navigate,
+        json!({
+            "view": view,
+            "command": command,
+            "location": location,
+        }),
+    )
 }
 
 pub(super) fn navigation_script(
@@ -820,84 +930,125 @@ pub(super) fn navigation_script(
     command: NavigationCommand,
     location: Option<&EpubNavigationTarget>,
 ) -> String {
-    let payload = serde_json::to_string(&json!({
-        "view": view,
-        "command": command,
-        "location": location,
-    }))
-    .expect("publication navigation payload is serializable");
-    format!("void globalThis.yungeReader.navigate({payload});")
+    navigation_call(view, command, location).script()
+}
+
+fn style_call(view: u64, style: &EpubStyle) -> RendererCall {
+    RendererCall::new(
+        RendererMethod::SetStyle,
+        json!({
+            "view": view,
+            "style": style,
+        }),
+    )
 }
 
 pub(super) fn style_script(view: u64, style: &EpubStyle) -> String {
-    let payload = serde_json::to_string(&json!({
-        "view": view,
-        "style": style,
-    }))
-    .expect("publication style payload is serializable");
-    format!("void globalThis.yungeReader.setStyle({payload});")
+    style_call(view, style).script()
+}
+
+fn zoom_call(view: u64, zoom: &EpubZoom) -> RendererCall {
+    RendererCall::new(
+        RendererMethod::SetZoom,
+        json!({
+            "view": view,
+            "zoom": zoom,
+        }),
+    )
 }
 
 pub(super) fn zoom_script(view: u64, zoom: &EpubZoom) -> String {
-    let payload = serde_json::to_string(&json!({
-        "view": view,
-        "zoom": zoom,
-    }))
-    .expect("fixed-layout zoom payload is serializable");
-    format!("void globalThis.yungeReader.setZoom({payload});")
+    zoom_call(view, zoom).script()
+}
+
+fn scroll_bars_call(view: u64, visible: bool) -> RendererCall {
+    RendererCall::new(
+        RendererMethod::SetScrollBars,
+        json!({
+            "view": view,
+            "visible": visible,
+        }),
+    )
 }
 
 pub(super) fn scroll_bars_script(view: u64, visible: bool) -> String {
-    let payload = serde_json::to_string(&json!({
-        "view": view,
-        "visible": visible,
-    }))
-    .expect("scroll bar payload is serializable");
-    format!("void globalThis.yungeReader.setScrollBars({payload});")
+    scroll_bars_call(view, visible).script()
+}
+
+fn clear_selection_call(view: u64) -> RendererCall {
+    RendererCall::new(RendererMethod::ClearSelection, json!({ "view": view }))
 }
 
 pub(super) fn clear_selection_script(view: u64) -> String {
-    let payload = serde_json::to_string(&json!({ "view": view }))
-        .expect("selection payload is serializable");
-    format!("void globalThis.yungeReader.clearSelection({payload});")
+    clear_selection_call(view).script()
+}
+
+fn set_selection_call(view: u64, selection: &EpubSelection) -> RendererCall {
+    RendererCall::new(
+        RendererMethod::SetSelection,
+        json!({
+            "view": view,
+            "selection": selection,
+        }),
+    )
 }
 
 pub(super) fn set_selection_script(
     view: u64,
     selection: &EpubSelection,
 ) -> String {
-    let payload = serde_json::to_string(&json!({
-        "view": view,
-        "selection": selection,
-    }))
-    .expect("selection payload is serializable");
-    format!("void globalThis.yungeReader.setSelection({payload});")
+    set_selection_call(view, selection).script()
+}
+
+fn current_selection_call(view: u64) -> RendererCall {
+    RendererCall::new(RendererMethod::CurrentSelection, json!({ "view": view }))
 }
 
 pub(super) fn current_selection_script(view: u64) -> String {
-    let payload = serde_json::to_string(&json!({ "view": view }))
-        .expect("current selection payload is serializable");
-    format!("globalThis.yungeReader.currentSelection({payload});")
+    current_selection_call(view).script()
+}
+
+fn selection_text_call(params: &ViewSelectionTextParams) -> RendererCall {
+    RendererCall::new(
+        RendererMethod::SelectionText,
+        serde_json::to_value(params)
+            .expect("selection text payload is serializable"),
+    )
 }
 
 pub(super) fn selection_text_script(
     params: &ViewSelectionTextParams,
 ) -> String {
-    let payload = serde_json::to_string(params)
-        .expect("selection text payload is serializable");
-    format!("globalThis.yungeReader.selectionText({payload});")
+    selection_text_call(params).script()
 }
 
-pub(super) fn search_script(id: u64, params: &ViewSearchParams) -> String {
+fn search_call(id: u64, params: &ViewSearchParams) -> RendererCall {
     let mut payload =
         serde_json::to_value(params).expect("search payload is serializable");
     payload
         .as_object_mut()
         .expect("search payload is an object")
         .insert("request".into(), json!(id));
-    let payload = serde_json::to_string(&payload)
-        .expect("search payload remains serializable");
-    format!("globalThis.yungeReader.search({payload});")
+    RendererCall::new(RendererMethod::Search, payload)
+}
+
+pub(super) fn search_script(id: u64, params: &ViewSearchParams) -> String {
+    search_call(id, params).script()
+}
+
+fn search_result_call(
+    view: u64,
+    selection: Option<&EpubSelection>,
+    reveal: bool,
+) -> RendererCall {
+    RendererCall::new(
+        RendererMethod::SetSearchResult,
+        json!({
+            "view": view,
+            "selection": selection,
+            "reveal": reveal,
+        }),
+    )
 }
 
 pub(super) fn search_result_script(
@@ -905,11 +1056,211 @@ pub(super) fn search_result_script(
     selection: Option<&EpubSelection>,
     reveal: bool,
 ) -> String {
-    let payload = serde_json::to_string(&json!({
-        "view": view,
-        "selection": selection,
-        "reveal": reveal,
-    }))
-    .expect("search result payload is serializable");
-    format!("void globalThis.yungeReader.setSearchResult({payload});")
+    search_result_call(view, selection, reveal).script()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::webview::EpubZoomMode;
+
+    fn recorded_script(script: &str) -> (bool, &str, Value) {
+        let (discards_result, script) =
+            if let Some(script) = script.strip_prefix("void ") {
+                (true, script)
+            } else {
+                (false, script)
+            };
+        let invocation = script
+            .strip_prefix("globalThis.yungeReader.")
+            .and_then(|script| script.strip_suffix(");"))
+            .expect("renderer script is a direct static invocation");
+        let (method, payload) = invocation
+            .split_once('(')
+            .expect("renderer invocation has one payload");
+        let payload = serde_json::from_str(payload)
+            .expect("renderer invocation payload is JSON");
+        (discards_result, method, payload)
+    }
+
+    fn appearance() -> EpubAppearance {
+        serde_json::from_value(json!({
+            "mode": "follow-emacs",
+            "foreground": "#112233",
+            "background": "#f4f5f6",
+            "link": "#2244aa",
+            "selection-foreground": "#ffffff",
+            "selection-background": "#335577",
+            "search-background": "#aa5500",
+        }))
+        .unwrap()
+    }
+
+    fn location() -> EpubLocator {
+        EpubLocator {
+            cfi: "epubcfi(/6/4!/4/2)".into(),
+            href: "OPS/chapter.xhtml".into(),
+            fraction: Some(0.25),
+            x: Some(12.5),
+            y: Some(30.0),
+        }
+    }
+
+    fn selection() -> EpubSelection {
+        EpubSelection {
+            href: "OPS/chapter.xhtml".into(),
+            start: "epubcfi(/6/4!/4/2/1:0)".into(),
+            end: "epubcfi(/6/4!/4/2/1:7)".into(),
+        }
+    }
+
+    #[test]
+    fn open_call_preserves_typed_renderer_inputs() {
+        let location = location();
+        let style = EpubStyle::default();
+        assert_eq!(
+            open_call(
+                4,
+                "https://yunge-reader-book.localhost/token/",
+                Some(&location),
+                &appearance(),
+                Some(&style),
+                None,
+                false,
+            ),
+            RendererCall::new(
+                RendererMethod::Open,
+                json!({
+                    "view": 4,
+                    "resourceRoot":
+                        "https://yunge-reader-book.localhost/token/",
+                    "location": location,
+                    "appearance": appearance(),
+                    "style": style,
+                    "zoom": null,
+                    "scrollBars": false,
+                    "rendererAccelerators": RENDERER_ACCELERATORS,
+                }),
+            )
+        );
+
+        assert_eq!(
+            open_call(
+                4,
+                "https://yunge-reader-book.localhost/token/",
+                None,
+                &EpubAppearance::Original,
+                None,
+                Some(&EpubZoom::Mode(EpubZoomMode::FitPage)),
+                true,
+            )
+            .payload["zoom"],
+            "fit-page"
+        );
+    }
+
+    #[test]
+    fn action_calls_preserve_methods_and_payloads() {
+        let location = location();
+        let target = EpubNavigationTarget {
+            cfi: Some(location.cfi),
+            href: location.href,
+            fraction: location.fraction,
+            x: location.x,
+            y: location.y,
+        };
+        let selection = selection();
+        let cases = [
+            appearance_call(4, &appearance()),
+            navigation_call(4, NavigationCommand::GoTo, Some(&target)),
+            style_call(4, &EpubStyle::default()),
+            zoom_call(4, &EpubZoom::Mode(EpubZoomMode::FitWidth)),
+            scroll_bars_call(4, true),
+            clear_selection_call(4),
+            set_selection_call(4, &selection),
+            search_result_call(4, Some(&selection), true),
+        ];
+        assert_eq!(
+            cases.each_ref().map(|call| call.method),
+            [
+                RendererMethod::SetAppearance,
+                RendererMethod::Navigate,
+                RendererMethod::SetStyle,
+                RendererMethod::SetZoom,
+                RendererMethod::SetScrollBars,
+                RendererMethod::ClearSelection,
+                RendererMethod::SetSelection,
+                RendererMethod::SetSearchResult,
+            ]
+        );
+        assert_eq!(cases[1].payload["command"], "go-to");
+        assert_eq!(cases[1].payload["location"]["x"], 12.5);
+        assert_eq!(cases[3].payload["zoom"], "fit-width");
+        assert_eq!(cases[4].payload, json!({"view": 4, "visible": true}));
+        assert_eq!(cases[6].payload["selection"], json!(selection));
+        assert_eq!(cases[7].payload["reveal"], true);
+        assert!(cases.iter().all(|call| call.method.discards_result()));
+    }
+
+    #[test]
+    fn query_calls_preserve_methods_and_payloads() {
+        let selection = selection();
+        let current = current_selection_call(4);
+        let text = selection_text_call(&ViewSelectionTextParams {
+            view: 4,
+            selection: selection.clone(),
+            offset: 2,
+            character_limit: 16_384,
+        });
+        let search = search_call(
+            27,
+            &ViewSearchParams {
+                view: 4,
+                query: "Chapter".into(),
+                case_sensitive: true,
+                direction: SearchDirection::Forward,
+                origin: None,
+                cursor: Some(EpubSearchCursor {
+                    href: selection.href,
+                    offset: Some(2),
+                }),
+                match_limit: 32,
+                section_limit: 8,
+            },
+        );
+
+        assert_eq!(current.method, RendererMethod::CurrentSelection);
+        assert_eq!(current.payload, json!({"view": 4}));
+        assert_eq!(text.method, RendererMethod::SelectionText);
+        assert_eq!(text.payload["character-limit"], 16_384);
+        assert_eq!(text.payload["offset"], 2);
+        assert_eq!(search.method, RendererMethod::Search);
+        assert_eq!(search.payload["request"], 27);
+        assert_eq!(search.payload["query"], "Chapter");
+        assert_eq!(search.payload["case-sensitive"], true);
+        assert_eq!(search.payload["match-limit"], 32);
+        assert_eq!(search.payload["section-limit"], 8);
+        assert_eq!(search.payload["cursor"]["offset"], 2);
+        assert!(
+            [&current, &text, &search]
+                .into_iter()
+                .all(|call| !call.method.discards_result())
+        );
+    }
+
+    #[test]
+    fn renderer_call_serialization_uses_static_methods_and_json_data() {
+        let call = RendererCall::new(
+            RendererMethod::Search,
+            json!({"query": "\"); globalThis.injected = true; //"}),
+        );
+        let script = call.script();
+        let (discards_result, method, payload) = recorded_script(&script);
+        assert!(!discards_result);
+        assert_eq!(method, "search");
+        assert_eq!(
+            payload,
+            json!({"query": "\"); globalThis.injected = true; //"})
+        );
+    }
 }
