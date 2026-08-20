@@ -10,7 +10,9 @@ param(
     [string] $WorkRoot,
 
     [Parameter(Mandatory = $true)]
-    [uri] $DownloadPage
+    [uri] $DownloadPage,
+
+    [switch] $ImportFunctions
 )
 
 Set-StrictMode -Version Latest
@@ -155,6 +157,90 @@ function Get-InstallerMetadata {
     }
 }
 
+function Assert-SetupWorkDirectory {
+    param(
+        [string] $Directory,
+        [string] $Root
+    )
+
+    $normalizedRoot = [IO.Path]::GetFullPath($Root).TrimEnd(
+        [IO.Path]::DirectorySeparatorChar,
+        [IO.Path]::AltDirectorySeparatorChar
+    )
+    $normalizedWork = [IO.Path]::GetFullPath($Directory).TrimEnd(
+        [IO.Path]::DirectorySeparatorChar,
+        [IO.Path]::AltDirectorySeparatorChar
+    )
+    $requiredPrefix = $normalizedRoot + [IO.Path]::DirectorySeparatorChar
+    $leaf = [IO.Path]::GetFileName($normalizedWork)
+    if (-not $normalizedWork.StartsWith(
+            $requiredPrefix,
+            [StringComparison]::OrdinalIgnoreCase
+        ) -or -not $leaf.StartsWith('run-', [StringComparison]::Ordinal)) {
+        throw "Unsafe setup work directory: $Directory"
+    }
+}
+
+function Assert-InstallerUri {
+    param(
+        [uri] $InstallerUri,
+        [uri] $SourcePage
+    )
+
+    if ($InstallerUri.Scheme -ne 'https' -or
+        $InstallerUri.Host -ne $SourcePage.Host) {
+        throw "Unexpected MiKTeX installer URL: $InstallerUri"
+    }
+}
+
+function Assert-InstallerHash {
+    param(
+        [string] $Expected,
+        [string] $Actual
+    )
+
+    if (-not $Actual.Equals(
+            $Expected,
+            [StringComparison]::OrdinalIgnoreCase
+        )) {
+        throw (
+            "Installer SHA-256 mismatch: expected $Expected, " +
+            "got $Actual"
+        )
+    }
+}
+
+function Confirm-InstallerSignature {
+    param([object] $Signature)
+
+    $validSignature = (
+        [System.Management.Automation.SignatureStatus]::Valid
+    )
+    if ($Signature.Status -eq $validSignature) {
+        $subject = $Signature.SignerCertificate.Subject
+        Write-Output "Installer Authenticode signature is valid: $subject"
+    }
+    elseif (
+        $Signature.Status -eq
+        [System.Management.Automation.SignatureStatus]::NotSigned
+    ) {
+        # MiKTeX publishes the Windows installer and its SHA-256 together,
+        # but the current official installer is not Authenticode-signed.
+        # The matched digest still protects a download served by a CTAN
+        # mirror from differing from the file named by the HTTPS page.
+        Write-Output (
+            'Installer is not Authenticode-signed; the official ' +
+            'SHA-256 matched.'
+        )
+    }
+    else {
+        throw (
+            'Installer Authenticode verification failed: ' +
+            $Signature.Status
+        )
+    }
+}
+
 function Add-DirectoryToProcessPath {
     param([string] $Directory)
 
@@ -184,23 +270,12 @@ function Remove-SetupWorkDirectory {
     }
 }
 
+if ($ImportFunctions) {
+    return
+}
+
 try {
-    $normalizedRoot = [IO.Path]::GetFullPath($WorkRoot).TrimEnd(
-        [IO.Path]::DirectorySeparatorChar,
-        [IO.Path]::AltDirectorySeparatorChar
-    )
-    $normalizedWork = [IO.Path]::GetFullPath($WorkDirectory).TrimEnd(
-        [IO.Path]::DirectorySeparatorChar,
-        [IO.Path]::AltDirectorySeparatorChar
-    )
-    $requiredPrefix = $normalizedRoot + [IO.Path]::DirectorySeparatorChar
-    $leaf = [IO.Path]::GetFileName($normalizedWork)
-    if (-not $normalizedWork.StartsWith(
-            $requiredPrefix,
-            [StringComparison]::OrdinalIgnoreCase
-        ) -or -not $leaf.StartsWith('run-', [StringComparison]::Ordinal)) {
-        throw "Unsafe setup work directory: $WorkDirectory"
-    }
+    Assert-SetupWorkDirectory $WorkDirectory $WorkRoot
     $safeToClean = $true
     New-Item -ItemType Directory -Force -Path $WorkDirectory | Out-Null
     Update-ProcessPath
@@ -221,10 +296,7 @@ try {
         )
         $pageContent = $downloadResponse.Content
         $metadata = Get-InstallerMetadata $pageContent $DownloadPage
-        if ($metadata.Uri.Scheme -ne 'https' -or
-            $metadata.Uri.Host -ne $DownloadPage.Host) {
-            throw "Unexpected MiKTeX installer URL: $($metadata.Uri)"
-        }
+        Assert-InstallerUri $metadata.Uri $DownloadPage
         $installer = Join-Path $WorkDirectory $metadata.Name
 
         Write-Stage "Downloading $($metadata.Name)"
@@ -236,39 +308,9 @@ try {
         Write-Stage 'Verifying the installer'
         $fileHash = Get-FileHash -Algorithm SHA256 -LiteralPath $installer
         $actualHash = $fileHash.Hash.ToLowerInvariant()
-        if ($actualHash -ne $metadata.Hash) {
-            throw (
-                "Installer SHA-256 mismatch: expected $($metadata.Hash), " +
-                "got $actualHash"
-            )
-        }
+        Assert-InstallerHash $metadata.Hash $actualHash
         $signature = Get-AuthenticodeSignature -LiteralPath $installer
-        $validSignature = (
-            [System.Management.Automation.SignatureStatus]::Valid
-        )
-        if ($signature.Status -eq $validSignature) {
-            $subject = $signature.SignerCertificate.Subject
-            Write-Output "Installer Authenticode signature is valid: $subject"
-        }
-        elseif (
-            $signature.Status -eq
-            [System.Management.Automation.SignatureStatus]::NotSigned
-        ) {
-            # MiKTeX publishes the Windows installer and its SHA-256 together,
-            # but the current official installer is not Authenticode-signed.
-            # The matched digest still protects a download served by a CTAN
-            # mirror from differing from the file named by the HTTPS page.
-            Write-Output (
-                'Installer is not Authenticode-signed; the official ' +
-                'SHA-256 matched.'
-            )
-        }
-        else {
-            throw (
-                'Installer Authenticode verification failed: ' +
-                $signature.Status
-            )
-        }
+        Confirm-InstallerSignature $signature
 
         Write-Stage 'Installing per-user MiKTeX'
         Invoke-Checked $installer @('--private', '--unattended') @(0, 3010)

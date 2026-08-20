@@ -17,19 +17,31 @@
   (let ((system-type 'gnu/linux))
     (should-error (shuying-setup) :type 'user-error)))
 
-(ert-deftest shuying-setup-windows-script-keeps-safety-contracts ()
-  (let ((script (shuying-setup--script)))
+(ert-deftest shuying-setup-windows-script-passes-behavior-contracts ()
+  (skip-unless (eq system-type 'windows-nt))
+  (let ((powershell (shuying-setup--powershell))
+        (script (shuying-setup--script))
+        (contract
+         (expand-file-name
+          "test/shuying-setup-windows-integration.ps1"
+          yunge-config-directory))
+        (coding-system-for-read 'utf-8-unix))
+    (should powershell)
     (with-temp-buffer
-      (insert-file-contents script)
-      (dolist (text '("[Console]::OutputEncoding = $utf8"
-                      "$Program @Arguments 2>&1"
-                      "Test-MiktexPackageInstalled"
-                      "Already installed: $package"
-                      "SignatureStatus]::NotSigned"
-                      "SHA-256 matched."
-                      "Authenticode verification failed"))
-        (goto-char (point-min))
-        (should (search-forward text nil t))))))
+      (let ((status
+             (call-process
+              powershell nil (current-buffer) nil
+              "-NoLogo" "-NoProfile" "-NonInteractive"
+              "-ExecutionPolicy" "Bypass"
+              "-File" contract "-SetupScript" script)))
+        (unless (and (integerp status) (zerop status))
+          (ert-fail
+           (format "Windows setup behavior test failed (%S):\n%s"
+                   status (buffer-string))))
+        (should
+         (string-match-p
+          "Windows setup behavior tests passed: 中文"
+          (buffer-string)))))))
 
 (ert-deftest shuying-setup-windows-starts-an-explicit-process ()
   (let ((shuying-setup--process nil)
