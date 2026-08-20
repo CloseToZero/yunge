@@ -912,8 +912,8 @@ Use the nearest cached render ENTRY while an exact render is unavailable."
          render-key (cons document generation)
          yunge-reader-pdf--render-pending)
         (condition-case error-data
-            (yunge-reader-request
-             'render-page
+            (yunge-reader-pdf--request
+             document 'render-page
              (list :page page
                    :width width
                    :appearance appearance
@@ -985,8 +985,8 @@ Use the nearest cached render ENTRY while an exact render is unavailable."
           (document yunge-reader-document))
       (puthash page (list document) yunge-reader-pdf--text-pending)
       (condition-case error-data
-          (yunge-reader-request
-           'page-text (list :page page)
+          (yunge-reader-pdf--request
+           document 'page-text (list :page page)
            (lambda (result request-error)
              (yunge-reader-pdf--text-complete
               buffer document page result request-error)))
@@ -1062,8 +1062,8 @@ Use the nearest cached render ENTRY while an exact render is unavailable."
           (puthash page (list complete)
                    yunge-reader-pdf--link-pending)
           (condition-case error-data
-              (yunge-reader-request
-               'page-links (list :page page)
+              (yunge-reader-pdf--request
+               document 'page-links (list :page page)
                (lambda (result request-error)
                  (yunge-reader-pdf--link-complete
                   buffer document page result request-error)))
