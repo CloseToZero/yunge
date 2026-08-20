@@ -6,6 +6,8 @@
 (require 'yunge-reader-native)
 (require 'yunge-reader-setup)
 
+(defvar yunge-test-external-checks-running-separately)
+
 (defmacro yunge-reader-native-test--with-fake-process (&rest body)
   "Run BODY with an isolated fake native process implementation."
   (declare (indent 0) (debug t))
@@ -64,6 +66,7 @@
     yunge-reader-native--transport)))
 
 (ert-deftest yunge-reader-native-renderer-tests-pass ()
+  (skip-when yunge-test-external-checks-running-separately)
   (let ((node (executable-find "node")))
     (skip-unless node)
     (with-temp-buffer

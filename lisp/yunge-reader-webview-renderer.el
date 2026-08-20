@@ -8,7 +8,7 @@
 
 (declare-function yunge-reader-webview--request
                   "yunge-reader-webview-service"
-                  (operation parameters complete))
+                  (operation parameters complete &rest keys))
 
 (defun yunge-reader-webview--current-surface-id (view)
   "Return VIEW's current native surface identifier."

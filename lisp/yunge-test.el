@@ -2,8 +2,64 @@
 ;; SPDX-FileCopyrightText: 2026 Chen Zhexuan
 ;; SPDX-License-Identifier: MIT
 
+(require 'cl-lib)
 (require 'compile)
+(require 'subr-x)
 (require 'yunge-state)
+
+(defvar yunge-test-external-checks-running-separately nil
+  "Non-nil when the batch runner executes external checks itself.")
+
+(defun yunge-test--external-checks ()
+  "Return required native and renderer test commands."
+  (let ((root yunge-config-directory))
+    `(("Fangcun Watch Rust tests"
+       "cargo" "test" "--manifest-path"
+       ,(expand-file-name "native/fangcun-watch/Cargo.toml" root))
+      ("Yunge MCP Rust tests"
+       "cargo" "test" "--manifest-path"
+       ,(expand-file-name "native/yunge-mcp/Cargo.toml" root))
+      ("Yunge Reader Rust tests"
+       "cargo" "test" "--manifest-path"
+       ,(expand-file-name "native/yunge-reader/Cargo.toml" root))
+      ("Yunge Reader renderer syntax"
+       "node" "--check"
+       ,(expand-file-name
+         "native/yunge-reader/renderer/yunge-reader.js" root))
+      ("Yunge Reader renderer tests"
+       "node" "--test"
+       ,(expand-file-name
+         (concat "native/yunge-reader/renderer-test/"
+                 "yunge-reader-core.test.mjs")
+         root)))))
+
+(defun yunge-test--run-command (name program arguments)
+  "Run required check NAME using PROGRAM with ARGUMENTS.
+Return non-nil on success and print its output to `standard-output'."
+  (princ (format "\n==> %s\n" name))
+  (if-let* ((executable (executable-find program)))
+      (with-temp-buffer
+        (let ((status
+               (apply #'call-process executable nil (current-buffer) nil
+                      arguments)))
+          (princ (buffer-string))
+          (if (and (integerp status) (zerop status))
+              (progn
+                (princ (format "%s passed\n" name))
+                t)
+            (princ (format "%s failed (exit %S)\n" name status))
+            nil)))
+    (princ (format "Required program is unavailable: %s\n" program))
+    nil))
+
+(defun yunge-test--run-external-checks ()
+  "Run every required external check and return the failure count."
+  (let ((failures 0))
+    (dolist (check (yunge-test--external-checks))
+      (unless (yunge-test--run-command
+               (car check) (cadr check) (cddr check))
+        (cl-incf failures)))
+    failures))
 
 (defun yunge-test--sentinel (process _event)
   "Report the result when test PROCESS exits."

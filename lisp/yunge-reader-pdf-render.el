@@ -12,6 +12,12 @@
 (require 'yunge-reader-pdf-protocol)
 (require 'yunge-reader-pdf-viewport)
 
+(declare-function yunge-reader-pdf--make-hit-index
+                  "yunge-reader-pdf-interaction" (page text-layer))
+
+(defvar yunge-reader-pdf--image-map)
+(defvar yunge-reader-pdf-view-mode)
+
 (defcustom yunge-reader-pdf-prefetch-pages 1
   "Number of pages to prefetch on each side of the visible PDF roll."
   :type 'natnum

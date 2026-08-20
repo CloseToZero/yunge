@@ -42,6 +42,62 @@
         (kill-buffer buffer))
       (delete-directory root t))))
 
+(ert-deftest yunge-test-external-checks-cover-native-and-renderer-suites ()
+  (let ((yunge-config-directory "/source/")
+        (renderer-test
+         (concat "/source/native/yunge-reader/renderer-test/"
+                 "yunge-reader-core.test.mjs")))
+    (should
+     (equal
+      (yunge-test--external-checks)
+      `(("Fangcun Watch Rust tests"
+         "cargo" "test" "--manifest-path"
+         "/source/native/fangcun-watch/Cargo.toml")
+        ("Yunge MCP Rust tests"
+         "cargo" "test" "--manifest-path"
+         "/source/native/yunge-mcp/Cargo.toml")
+        ("Yunge Reader Rust tests"
+         "cargo" "test" "--manifest-path"
+         "/source/native/yunge-reader/Cargo.toml")
+        ("Yunge Reader renderer syntax"
+         "node" "--check"
+         "/source/native/yunge-reader/renderer/yunge-reader.js")
+        ("Yunge Reader renderer tests"
+         "node" "--test"
+         ,renderer-test))))))
+
+(ert-deftest yunge-test-required-command-reports-its-result ()
+  (dolist (case '((0 . t) (7 . nil)))
+    (with-temp-buffer
+      (let ((standard-output (current-buffer)))
+        (cl-letf (((symbol-function 'executable-find)
+                   (lambda (_program) "/bin/check"))
+                  ((symbol-function 'call-process)
+                   (lambda (_program _input destination _display
+                            &rest arguments)
+                     (should (equal arguments '("--verify")))
+                     (with-current-buffer destination
+                       (insert "check output\n"))
+                     (car case))))
+          (should (eq (yunge-test--run-command
+                       "Native check" "check" '("--verify"))
+                      (cdr case))))
+        (should (string-match-p "check output" (buffer-string)))
+        (should (string-match-p
+                 (if (cdr case) "passed" "failed")
+                 (buffer-string)))))))
+
+(ert-deftest yunge-test-required-command-does-not-skip-a-missing-tool ()
+  (with-temp-buffer
+    (let ((standard-output (current-buffer)))
+      (cl-letf (((symbol-function 'executable-find) #'ignore))
+        (should-not
+         (yunge-test--run-command "Native check" "missing" nil)))
+      (should
+       (string-match-p
+        "Required program is unavailable: missing"
+        (buffer-string))))))
+
 (provide 'yunge-test-test)
 
 ;;; yunge-test-test.el ends here

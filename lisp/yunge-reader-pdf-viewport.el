@@ -8,6 +8,8 @@
 (require 'seq)
 (require 'yunge-reader)
 
+(defvar yunge-reader-pdf-view-mode)
+
 (defcustom yunge-reader-pdf-page-margin 24
   "Pixel margin reserved around a rendered PDF page."
   :type 'natnum

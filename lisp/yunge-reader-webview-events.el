@@ -19,23 +19,24 @@
 (declare-function yunge-reader-webview--set-buffer-message
                   "yunge-reader-webview" (view message))
 (declare-function yunge-reader-webview--set-view-selection
-                  "yunge-reader-webview" (view selection))
+                  "yunge-reader-webview" (view selection &optional surface))
 (declare-function yunge-reader-webview--cancel-open-timer
                   "yunge-reader-webview-surface" (surface))
 (declare-function yunge-reader-webview--store-view-location
-                  "yunge-reader-webview" (view message &optional quiet))
+                  "yunge-reader-webview"
+                  (view message &optional initial surface))
 (declare-function yunge-reader-webview--store-view-outline
                   "yunge-reader-webview" (view message))
 (declare-function yunge-reader-webview--sync-view-scroll-bars
-                  "yunge-reader-webview" (view))
+                  "yunge-reader-webview" (view &optional surface))
 (declare-function yunge-reader-webview--sync-view-search-result
                   "yunge-reader-webview" (view &optional reveal))
 (declare-function yunge-reader-webview--sync-view-appearance
-                  "yunge-reader-webview" (view))
+                  "yunge-reader-webview" (view &optional surface))
 (declare-function yunge-reader-webview--sync-view-style
-                  "yunge-reader-webview" (view))
+                  "yunge-reader-webview" (view &optional surface))
 (declare-function yunge-reader-webview--sync-view-zoom
-                  "yunge-reader-webview" (view))
+                  "yunge-reader-webview" (view &optional surface))
 (declare-function yunge-reader-webview--sync-view
                   "yunge-reader-webview" (view))
 (declare-function yunge-reader--uri-valid-p "yunge-reader" (uri))
