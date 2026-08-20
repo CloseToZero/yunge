@@ -79,14 +79,26 @@ LOG-ENVIRONMENT-VARIABLE optionally names a diagnostic log file."
   "Call FUNCTION with ARGUMENTS after the UI settling interval."
   (apply #'run-at-time 0.1 nil function arguments))
 
+(defun yunge-reader-graphical-smoke-exit (status)
+  "Exit the isolated smoke immediately with STATUS.
+Smoke processes are noninteractive test children, so no package or buffer
+may turn their terminal state into a query or another event-loop phase."
+  (setq confirm-kill-emacs nil
+        kill-emacs-query-functions nil)
+  (kill-emacs status))
+
 (defun yunge-reader-graphical-smoke-run-process
-    (context program arguments)
-  "Run PROGRAM with ARGUMENTS for smoke CONTEXT or signal with its output."
+    (context program arguments &optional timeout)
+  "Run PROGRAM with ARGUMENTS for smoke CONTEXT.
+Signal with captured output when it fails or does not exit within TIMEOUT
+seconds.  TIMEOUT defaults to ten minutes."
   (let* ((label
           (yunge-reader-graphical-smoke-context-label context))
          (buffer
           (generate-new-buffer (format " *%s process*" label)))
-         process)
+         (deadline (+ (float-time) (or timeout 600)))
+         process
+         timed-out)
     (unwind-protect
         (progn
           (setq process
@@ -98,7 +110,12 @@ LOG-ENVIRONMENT-VARIABLE optionally names a diagnostic log file."
                  :connection-type 'pipe
                  :sentinel #'ignore
                  :noquery t))
-          (while (process-live-p process)
+          (while (and (process-live-p process)
+                      (< (float-time) deadline))
+            (accept-process-output process 0.1))
+          (when (process-live-p process)
+            (setq timed-out t)
+            (delete-process process)
             (accept-process-output process 0.1))
           (let ((status (process-exit-status process))
                 (output
@@ -107,8 +124,14 @@ LOG-ENVIRONMENT-VARIABLE optionally names a diagnostic log file."
             (unless (string-empty-p output)
               (yunge-reader-graphical-smoke-log
                context "%s\n" output))
-            (unless (zerop status)
-              (error "%s failed with status %d" program status))))
+            (cond
+             (timed-out
+              (error "%s timed out after %g seconds"
+                     program (or timeout 600)))
+             ((not (zerop status))
+              (error "%s failed with status %d" program status)))))
+      (when (process-live-p process)
+        (delete-process process))
       (when (buffer-live-p buffer)
         (kill-buffer buffer)))))
 

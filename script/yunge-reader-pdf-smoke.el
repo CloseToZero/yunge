@@ -328,8 +328,8 @@
     (yunge-reader-pdf-smoke--log
      "PDF graphical smoke passed: %S\n"
      (nreverse yunge-reader-pdf-smoke--observations)))
-  (yunge-reader-graphical-smoke-schedule
-   #'kill-emacs yunge-reader-pdf-smoke--exit-status))
+  (yunge-reader-graphical-smoke-exit
+   yunge-reader-pdf-smoke--exit-status))
 
 (defun yunge-reader-pdf-smoke--finish (&optional error-data)
   "Finish the graphical PDF smoke, reporting optional ERROR-DATA."

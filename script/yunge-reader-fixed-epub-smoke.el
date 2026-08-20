@@ -203,8 +203,8 @@
   (when (zerop yunge-reader-fixed-smoke--exit-status)
     (yunge-reader-fixed-smoke--log
      "Fixed EPUB smoke passed all variants\n"))
-  (yunge-reader-graphical-smoke-schedule
-   #'kill-emacs yunge-reader-fixed-smoke--exit-status))
+  (yunge-reader-graphical-smoke-exit
+   yunge-reader-fixed-smoke--exit-status))
 
 (defun yunge-reader-fixed-smoke--await-stop ()
   "Wait for the isolated helper to stop, then run the next action."

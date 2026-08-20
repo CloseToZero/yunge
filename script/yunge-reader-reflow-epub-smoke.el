@@ -339,8 +339,8 @@
     (yunge-reader-reflow-smoke--log
      "Reflow EPUB smoke passed: %S\n"
      (nreverse yunge-reader-reflow-smoke--observations)))
-  (yunge-reader-graphical-smoke-schedule
-   #'kill-emacs yunge-reader-reflow-smoke--exit-status))
+  (yunge-reader-graphical-smoke-exit
+   yunge-reader-reflow-smoke--exit-status))
 
 (defun yunge-reader-reflow-smoke--await-stop ()
   "Wait for the isolated helper to stop, then complete the smoke."

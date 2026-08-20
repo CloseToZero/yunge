@@ -131,6 +131,62 @@
              (string-match-p "Process .* finished" (buffer-string)))))
       (yunge-reader-graphical-smoke-cleanup context))))
 
+(ert-deftest yunge-reader-graphical-smoke-bounds-child-processes ()
+  (let* ((context (yunge-reader-graphical-smoke-test--context))
+         (processes-before (process-list))
+         error-data)
+    (unwind-protect
+        (progn
+          (with-temp-buffer
+            (let ((standard-output (current-buffer)))
+              (setq error-data
+                    (should-error
+                     (yunge-reader-graphical-smoke-run-process
+                      context
+                      (yunge-reader-graphical-smoke-test--emacs)
+                      '("--batch" "-Q" "--eval"
+                        "(progn (princ \"waiting-marker\\n\")
+                                (while t
+                                  (accept-process-output nil 0.01)))")
+                      0.5)
+                     :type 'error))))
+          (should (string-match-p
+                   "timed out after 0.5 seconds"
+                   (error-message-string error-data)))
+          (should (equal processes-before (process-list))))
+      (yunge-reader-graphical-smoke-cleanup context))))
+
+(ert-deftest yunge-reader-graphical-smoke-exits-without-queries ()
+  (let ((confirm-kill-emacs t)
+        (kill-emacs-query-functions '(ignore))
+        exit-status)
+    (cl-letf (((symbol-function 'kill-emacs)
+               (lambda (status)
+                 (setq exit-status status))))
+      (yunge-reader-graphical-smoke-exit 7))
+    (should (equal exit-status 7))
+    (should-not confirm-kill-emacs)
+    (should-not kill-emacs-query-functions)))
+
+(ert-deftest yunge-reader-graphical-smoke-completes-scheduled-child-exit ()
+  (let ((context (yunge-reader-graphical-smoke-test--context)))
+    (unwind-protect
+        (yunge-reader-graphical-smoke-run-process
+         context
+         (yunge-reader-graphical-smoke-test--emacs)
+         (list
+          "--batch" "-Q"
+          "-L" (expand-file-name "script" yunge-test-root)
+          "--eval"
+          (concat
+           "(progn "
+           "(require 'yunge-reader-graphical-smoke) "
+           "(yunge-reader-graphical-smoke-schedule "
+           " #'yunge-reader-graphical-smoke-exit 0) "
+           "(while t (accept-process-output nil 0.01)))"))
+         2)
+      (yunge-reader-graphical-smoke-cleanup context))))
+
 (ert-deftest yunge-reader-graphical-smoke-refuses-foreign-cleanup ()
   (let* ((context (yunge-reader-graphical-smoke-test--context))
          (temporary
