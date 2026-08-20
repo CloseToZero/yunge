@@ -877,6 +877,42 @@
                 (shuying-org-test--overlay) 'display)))))
       (delete-directory root t))))
 
+(ert-deftest shuying-org-reuses-preview-after-list-meta-return ()
+  (let* ((root (make-temp-file "shuying-org-" t))
+         (shuying-cache-directory root)
+         (shuying-backends nil)
+         (shuying--pending-jobs (make-hash-table :test #'equal))
+         (shuying-org-test--render-count 0))
+    (unwind-protect
+        (progn
+          (shuying-register-backend
+           'shuying-latex
+           #'shuying-org-test--render-now)
+          (cl-letf (((symbol-function 'create-image)
+                     (lambda (file &rest _properties)
+                       (list 'image file))))
+            (with-temp-buffer
+              (org-mode)
+              (insert "1. First.\n2. Second.\n3. \\(x\\) [law]")
+              (goto-char (point-max))
+              (shuying-org-mode 1)
+              (shuying-org-preview-buffer)
+              (let* ((fragment (car (last (shuying-org--fragments))))
+                     (overlay (shuying-org--fragment-overlay fragment)))
+                (should (= shuying-org-test--render-count 1))
+                (should (overlay-get overlay 'display))
+                (call-interactively #'org-meta-return)
+                (shuying-org--post-command)
+                (setq fragment (car (last (shuying-org--fragments))))
+                (should
+                 (eq overlay
+                     (shuying-org--fragment-overlay fragment)))
+                (should (= shuying-org-test--render-count 1))
+                (should (overlay-get overlay 'display))
+                (should-not
+                 (overlay-get overlay 'shuying-org-dirty))))))
+      (delete-directory root t))))
+
 (ert-deftest shuying-org-keeps-an-incomplete-inline-formula-visible ()
   (let* ((root (make-temp-file "shuying-org-" t))
          (shuying-cache-directory root)

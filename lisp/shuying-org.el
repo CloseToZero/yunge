@@ -260,6 +260,10 @@ Return nil when POSITION has no preview or its source is currently visible."
 (defun shuying-org--modified
     (overlay after _beginning _end &optional _length)
   "Mark OVERLAY dirty after its source is modified."
+  (unless after
+    (unless (overlay-get overlay 'shuying-org-source-beginning)
+      (overlay-put overlay 'shuying-org-source-beginning
+                   (overlay-start overlay))))
   (overlay-put overlay 'display nil)
   (overlay-put overlay 'shuying-org-dirty t)
   (when after
@@ -291,6 +295,7 @@ Return nil when POSITION has no preview or its source is currently visible."
       (overlay-put overlay 'modification-hooks
                    '(shuying-org--modified)))
     (move-overlay overlay beginning end)
+    (overlay-put overlay 'shuying-org-source-beginning beginning)
     overlay))
 
 (defun shuying-org--face-color (option attribute)
@@ -458,13 +463,16 @@ When AUTOMATIC is non-nil, silently retain unavailable dependency errors."
                 (shuying-render-spec-hash specification))
                (overlay (shuying-org--fragment-overlay fragment)))
           (if (and stale-only overlay
-                   (not (overlay-get overlay 'shuying-org-dirty))
+                   (overlay-get overlay 'shuying-org-image)
                    (equal
                     (overlay-get
                      overlay 'shuying-org-specification-hash)
                     specification-hash))
-              (unless (shuying-org--point-inside-overlay-p overlay)
-                (shuying-org--show-overlay overlay))
+              (progn
+                (overlay-put overlay 'shuying-org-dirty nil)
+                (overlay-put overlay 'shuying-org-error nil)
+                (unless (shuying-org--point-inside-overlay-p overlay)
+                  (shuying-org--show-overlay overlay)))
             (push
              (shuying-org--render-request
               fragment specification specification-hash
@@ -585,8 +593,9 @@ When AUTOMATIC is non-nil, silently retain unavailable dependency errors."
           (dolist (overlay
                    (shuying-org--fragment-overlays
                     active-position (1+ active-position)))
-            (delete-overlay overlay)
-            (setq refresh-visible t))))
+            (unless (memq overlay changed-overlays)
+              (delete-overlay overlay)
+              (setq refresh-visible t)))))
       (shuying-org--clear-active-fragment)
       (when current
         (shuying-org--enter-fragment current)
@@ -606,10 +615,19 @@ When AUTOMATIC is non-nil, silently retain unavailable dependency errors."
     (dolist (overlay changed-overlays)
       (when (overlay-buffer overlay)
         (if-let* ((fragment
-                   (shuying-org--fragment-at-position
-                    (overlay-start overlay))))
-            (let ((beginning
-                   (shuying-org-fragment-beginning fragment)))
+                   (or
+                    (when-let* ((beginning
+                                 (overlay-get
+                                  overlay
+                                  'shuying-org-source-beginning)))
+                    (shuying-org--fragment-at-position beginning))
+                    (shuying-org--fragment-at-position
+                     (overlay-start overlay)))))
+            (pcase-let ((`(,beginning . ,end)
+                         (shuying-org--fragment-bounds fragment)))
+              (move-overlay overlay beginning end)
+              (overlay-put overlay 'shuying-org-source-beginning
+                           beginning)
               (unless (or (memq beginning processed-starts)
                           (equal beginning current-start))
                 (push beginning processed-starts)
