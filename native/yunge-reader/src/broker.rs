@@ -840,6 +840,36 @@ mod tests {
     }
 
     #[test]
+    fn renderer_asset_manifest_excludes_unvetted_vendor_code() {
+        for path in [
+            "index.html",
+            "style.css",
+            "yunge-reader.js",
+            "yunge-reader-core.mjs",
+            "foliate-js/epub.js",
+            "foliate-js/epubcfi.js",
+            "foliate-js/fixed-layout.js",
+            "foliate-js/overlayer.js",
+            "foliate-js/paginator.js",
+            "foliate-js/progress.js",
+            "foliate-js/search.js",
+            "foliate-js/text-walker.js",
+            "foliate-js/view.js",
+        ] {
+            let (media_type, contents) = app_asset(path).unwrap();
+            assert!(!contents.is_empty());
+            assert!(media_type.starts_with("text/"));
+        }
+        for path in [
+            "foliate-js/vendor/zip.js",
+            "foliate-js/../../build.rs",
+            "unknown.js",
+        ] {
+            assert!(app_asset(path).is_none());
+        }
+    }
+
+    #[test]
     fn resource_paths_reject_encoded_separators_and_traversal() {
         assert!(decode_resource_path("OPS/chapter.xhtml").is_ok());
         assert!(decode_resource_path("OPS/%2fsecret").is_err());

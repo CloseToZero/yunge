@@ -63,11 +63,22 @@
    (yunge-reader-transport--session-callbacks
     yunge-reader-native--transport)))
 
-(ert-deftest yunge-reader-native-renderer-core-tests-pass ()
+(ert-deftest yunge-reader-native-renderer-tests-pass ()
   (let ((node (executable-find "node")))
     (skip-unless node)
     (with-temp-buffer
-      (let ((status
+      (let ((syntax-status
+             (call-process
+              node nil t nil "--check"
+              (expand-file-name
+               "native/yunge-reader/renderer/yunge-reader.js"
+               yunge-test-root))))
+        (unless (zerop syntax-status)
+          (ert-fail
+           (format "Renderer syntax check exited with %S:\n%s"
+                   syntax-status (buffer-string)))))
+      (erase-buffer)
+      (let ((test-status
              (call-process
               node nil t nil "--test"
               (expand-file-name
@@ -75,10 +86,10 @@
                 "native/yunge-reader/renderer-test/"
                 "yunge-reader-core.test.mjs")
                yunge-test-root))))
-        (unless (zerop status)
+        (unless (zerop test-status)
           (ert-fail
-           (format "Node exited with %S:\n%s"
-                   status (buffer-string))))))))
+           (format "Renderer tests exited with %S:\n%s"
+                   test-status (buffer-string))))))))
 
 (ert-deftest yunge-reader-native-resolves-platform-pdfium-layouts ()
   (cl-letf (((symbol-function 'yunge-reader-native-pdfium-directory)

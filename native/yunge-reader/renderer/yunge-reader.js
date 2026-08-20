@@ -10,20 +10,28 @@ import {
     appearanceStyleCSS,
     checkedAppearance,
     checkedExternalURI,
+    checkedLocator,
+    checkedLocatorText,
+    checkedNavigationTarget,
+    checkedOutlineHref,
     checkedRendererAccelerators,
     checkedRoot,
     checkedScrollBars,
+    checkedSelection,
     checkedStyle,
     checkedView,
     checkedZoom,
     colorScheme,
     encodePath,
+    initialTargets,
     initialNavigationState,
+    outlineFromBook,
     readerKey,
     readingStyleCSS,
     reduceNavigation,
     sameAppearance,
     sameReadingStyle,
+    sameSelection,
 } from './yunge-reader-core.mjs'
 
 const CATALOG_PATH = '.yunge/resources.json'
@@ -45,8 +53,6 @@ const reader = document.querySelector('#reader')
 const status = document.querySelector('#status')
 const decoder = new TextDecoder()
 const encoder = new TextEncoder()
-const MAX_INITIAL_TARGETS = 8
-const MAX_LOCATOR_TEXT_BYTES = 3072
 const MAX_SELECTION_CHARACTERS = 1024 * 1024
 const MAX_SELECTION_CHARACTER_LIMIT = 65536
 const MAX_SEARCH_QUERY_CHARACTERS = 256
@@ -58,12 +64,6 @@ const SEARCH_HIGHLIGHT_COLOR = '#ff7800'
 const MAX_MEDIA_CANDIDATES = 256
 const MAX_TEXT_NODES = 4096
 const MAX_TEXT_SAMPLE = 4096
-const MAX_TOC_ITEMS = 4096
-const MAX_TOC_DEPTH = 256
-const MAX_TOC_HREF_BYTES = 3072
-const MAX_TOC_TITLE_BYTES = 1024
-const MAX_TOC_TOTAL_TEXT_BYTES = 384 * 1024
-const MAX_VIEWPORT_COORDINATE = 1000000
 const LAYOUT_SETTLE_TIMEOUT_MS = 100
 const IMAGE_DECODE_TIMEOUT_MS = 1000
 const LOCATION_DELAY_MS = 75
@@ -266,85 +266,6 @@ const setScrollBars = ({ view: viewID, visible }) => {
     }
 }
 
-const checkedLocatorText = (value, name) => {
-    if (typeof value !== 'string' || !value
-        || encoder.encode(value).length > MAX_LOCATOR_TEXT_BYTES
-        || /[\u0000-\u001f\u007f]/u.test(value)) {
-        throw new Error(`Invalid EPUB locator ${name}`)
-    }
-    return value
-}
-
-const checkedLocator = value => {
-    if (!value || typeof value !== 'object' || Array.isArray(value)) {
-        throw new Error('Invalid EPUB locator')
-    }
-    const keys = Object.keys(value)
-    if (keys.some(key => ![
-        'cfi', 'href', 'fraction', 'x', 'y',
-    ].includes(key))) {
-        throw new Error('Invalid EPUB locator field')
-    }
-    const cfi = checkedLocatorText(value.cfi, 'CFI')
-    const href = checkedLocatorText(value.href, 'href')
-    if (!/^epubcfi\(.+\)$/u.test(cfi)) {
-        throw new Error('Invalid EPUB locator CFI')
-    }
-    if (href.startsWith('/') || /[\\:?#]/u.test(href)
-        || href.split('/').some(part => !part || ['.', '..'].includes(part))) {
-        throw new Error('Invalid EPUB locator href')
-    }
-    const result = { cfi, href }
-    if (value.fraction !== undefined && value.fraction !== null) {
-        if (!Number.isFinite(value.fraction)
-            || value.fraction < 0 || value.fraction > 1) {
-            throw new Error('Invalid EPUB locator fraction')
-        }
-        result.fraction = value.fraction
-    }
-    const hasX = value.x !== undefined && value.x !== null
-    const hasY = value.y !== undefined && value.y !== null
-    if (hasX !== hasY) {
-        throw new Error('Incomplete EPUB viewport coordinate')
-    }
-    if (hasX) {
-        for (const coordinate of [value.x, value.y]) {
-            if (!Number.isFinite(coordinate) || coordinate < 0
-                || coordinate > MAX_VIEWPORT_COORDINATE) {
-                throw new Error('Invalid EPUB viewport coordinate')
-            }
-        }
-        result.x = value.x
-        result.y = value.y
-    }
-    return Object.freeze(result)
-}
-
-const checkedSelection = value => {
-    if (!value || typeof value !== 'object' || Array.isArray(value)) {
-        throw new Error('Invalid EPUB selection')
-    }
-    const keys = Object.keys(value).sort()
-    if (keys.join() !== 'end,href,start') {
-        throw new Error('Invalid EPUB selection field')
-    }
-    const href = checkedLocatorText(value.href, 'href')
-    const start = checkedLocatorText(value.start, 'selection start')
-    const end = checkedLocatorText(value.end, 'selection end')
-    for (const cfi of [start, end]) {
-        if (!/^epubcfi\(.+\)$/u.test(cfi)) {
-            throw new Error('Invalid EPUB selection CFI')
-        }
-    }
-    if (href.startsWith('/') || /[\\:?#]/u.test(href)
-        || href.split('/').some(part => !part
-            || ['.', '..'].includes(part))
-        || start === end) {
-        throw new Error('Invalid EPUB selection range')
-    }
-    return Object.freeze({ href, start, end })
-}
-
 const selectionTextError = (code, message) => {
     const error = new Error(message)
     error.code = code
@@ -469,19 +390,6 @@ const checkedSetSelectionRequest = value => {
     }
 }
 
-const checkedNavigationTarget = value => {
-    if (!value || typeof value !== 'object' || Array.isArray(value)) {
-        throw new Error('Invalid EPUB navigation target')
-    }
-    if (value.cfi !== undefined) return checkedLocator(value)
-    const keys = Object.keys(value)
-    const href = checkedOutlineHref(value.href)
-    if (keys.length !== 1 || keys[0] !== 'href' || !href) {
-        throw new Error('Invalid EPUB navigation target')
-    }
-    return Object.freeze({ href })
-}
-
 const fetchResource = async (root, path) => {
     const response = await fetch(root + encodePath(path), {
         cache: 'no-store',
@@ -573,121 +481,6 @@ const closeCurrent = () => {
         current = null
     }
     applyCanvasAppearance(null)
-}
-
-const boundedOutlineTitle = value => {
-    if (typeof value !== 'string') return { value: null, truncated: false }
-    value = value.replace(/[\u0000-\u001f\u007f]/gu, ' ')
-        .replace(/\s+/gu, ' ').trim()
-    if (!value) return { value: null, truncated: false }
-    if (encoder.encode(value).length <= MAX_TOC_TITLE_BYTES) {
-        return { value, truncated: false }
-    }
-    let result = ''
-    let bytes = 0
-    for (const character of value) {
-        const size = encoder.encode(character).length
-        if (bytes + size > MAX_TOC_TITLE_BYTES) break
-        result += character
-        bytes += size
-    }
-    return { value: result.trim(), truncated: true }
-}
-
-const checkedOutlineHref = value => {
-    if (typeof value !== 'string' || !value
-        || encoder.encode(value).length > MAX_TOC_HREF_BYTES
-        || /[\u0000-\u001f\u007f\\?]/u.test(value)) return null
-    const hash = value.indexOf('#')
-    const path = hash < 0 ? value : value.slice(0, hash)
-    if (!path || path.startsWith('/') || path.includes(':')
-        || (hash >= 0 && value.indexOf('#', hash + 1) >= 0)
-        || path.split('/').some(part =>
-            !part || ['.', '..'].includes(part))) return null
-    return value
-}
-
-const outlineFromBook = toc => {
-    const items = []
-    const roots = Array.isArray(toc) ? toc : []
-    const stack = []
-    let truncated = roots.length > MAX_TOC_ITEMS
-    let textBytes = 0
-    let seen = 0
-    const pushChildren = (children, depth) => {
-        if (!Array.isArray(children) || !children.length) return
-        const available = Math.max(0, MAX_TOC_ITEMS - stack.length)
-        const count = Math.min(children.length, available)
-        if (count < children.length) truncated = true
-        for (let index = count - 1; index >= 0; index--) {
-            stack.push({ item: children[index], depth })
-        }
-    }
-    pushChildren(roots, 0)
-    while (stack.length) {
-        if (seen++ >= MAX_TOC_ITEMS || items.length >= MAX_TOC_ITEMS) {
-            truncated = true
-            break
-        }
-        const { item, depth } = stack.pop()
-        const title = boundedOutlineTitle(item?.label)
-        if (title.truncated) truncated = true
-        const href = checkedOutlineHref(item?.href)
-        if (item?.href && !href) truncated = true
-        let childDepth = depth
-        if (title.value) {
-            const size = encoder.encode(title.value).length
-                + (href ? encoder.encode(href).length : 0)
-            if (textBytes + size > MAX_TOC_TOTAL_TEXT_BYTES) {
-                truncated = true
-                break
-            }
-            const entry = { title: title.value, depth }
-            if (href) entry.href = href
-            items.push(entry)
-            textBytes += size
-            childDepth++
-        }
-        if (childDepth > MAX_TOC_DEPTH) {
-            if (item?.subitems?.length) truncated = true
-        } else pushChildren(item?.subitems, childDepth)
-    }
-    return Object.freeze({ items, truncated })
-}
-
-const firstTocHref = items => {
-    const stack = (items ?? []).slice(0, MAX_TOC_ITEMS).reverse()
-    for (let seen = 0; stack.length && seen < MAX_TOC_ITEMS; seen++) {
-        const item = stack.pop()
-        if (item?.href) return item.href
-        const nested = item?.subitems ?? []
-        for (let index = nested.length - 1; index >= 0; index--) {
-            if (stack.length >= MAX_TOC_ITEMS) break
-            stack.push(nested[index])
-        }
-    }
-    return null
-}
-
-const initialTargets = book => {
-    const targets = []
-    const keys = new Set()
-    const add = target => {
-        if (target === null || target === undefined) return
-        const key = `${typeof target}:${target}`
-        if (keys.has(key) || targets.length >= MAX_INITIAL_TARGETS) return
-        keys.add(key)
-        targets.push(target)
-    }
-    const landmark = book.landmarks?.slice(0, MAX_TOC_ITEMS).find(item =>
-        item.type?.includes('bodymatter') || item.type?.includes('text'))
-    add(landmark?.href)
-    add(firstTocHref(book.toc))
-    for (let index = 0; index < book.sections.length
-        && targets.length < MAX_INITIAL_TARGETS; index++) {
-        if (book.sections[index].linear !== 'no') add(index)
-    }
-    return targets
 }
 
 const settleWithin = (promise, timeout) => new Promise(resolve => {
@@ -869,12 +662,6 @@ const queueLocation = (session, relocation) => {
             () => flushLocation(session), LOCATION_DELAY_MS)
     }
 }
-
-const sameSelection = (left, right) => left === right
-    || left && right
-        && left.href === right.href
-        && left.start === right.start
-        && left.end === right.end
 
 const emitSelection = (session, selection) => {
     if (current !== session || sameSelection(session.selection, selection)) {

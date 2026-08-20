@@ -8,21 +8,29 @@ import {
     appearanceStyleCSS,
     checkedAppearance,
     checkedExternalURI,
+    checkedLocator,
+    checkedLocatorText,
+    checkedNavigationTarget,
+    checkedOutlineHref,
     checkedRendererAccelerators,
     checkedRoot,
     checkedScrollBars,
+    checkedSelection,
     checkedStyle,
     checkedView,
     checkedZoom,
     colorScheme,
     encodePath,
+    initialTargets,
     initialNavigationState,
+    outlineFromBook,
     readerKey,
     READER_CHARACTER_KEYS,
     readingStyleCSS,
     reduceNavigation,
     sameAppearance,
     sameReadingStyle,
+    sameSelection,
 } from '../renderer/yunge-reader-core.mjs'
 
 const followAppearance = () => ({
@@ -105,6 +113,101 @@ test('validates publication roots, view identifiers, and external URIs', () => {
         `https:${'a'.repeat(4096)}`,
         'https:\u0000example.test',
     ]) assert.throws(() => checkedExternalURI(invalid))
+})
+
+test('validates persistent EPUB locations and transient selections', () => {
+    const locator = {
+        cfi: 'epubcfi(/6/4!/4/2/1:7)',
+        href: 'OPS/chapter.xhtml',
+        fraction: 0.5,
+        x: 12,
+        y: 34,
+    }
+    assert.deepEqual(checkedLocator(locator), locator)
+    assert.ok(Object.isFrozen(checkedLocator(locator)))
+    assert.deepEqual(
+        checkedNavigationTarget({ href: 'OPS/chapter.xhtml#part' }),
+        { href: 'OPS/chapter.xhtml#part' })
+    assert.equal(
+        checkedOutlineHref('OPS/chapter.xhtml#part'),
+        'OPS/chapter.xhtml#part')
+
+    const selection = {
+        href: 'OPS/chapter.xhtml',
+        start: 'epubcfi(/6/4!/4/2/1:7)',
+        end: 'epubcfi(/6/4!/4/2/1:11)',
+    }
+    assert.deepEqual(checkedSelection(selection), selection)
+    assert.ok(sameSelection(selection, { ...selection }))
+    assert.ok(!sameSelection(selection, { ...selection, end: 'epubcfi(/8)' }))
+
+    for (const invalid of [
+        { ...locator, href: '../chapter.xhtml' },
+        { ...locator, x: 12, y: undefined },
+        { ...locator, fraction: 1.01 },
+        { ...locator, extra: true },
+    ]) assert.throws(() => checkedLocator(invalid))
+    assert.throws(() => checkedSelection({ ...selection,
+        end: selection.start }))
+    assert.throws(() => checkedSelection({ ...selection,
+        href: 'OPS/chapter.xhtml#part' }))
+    assert.equal(checkedOutlineHref('https://example.test/chapter'), null)
+    assert.throws(() => checkedLocatorText('x'.repeat(3073), 'href'))
+})
+
+test('flattens and bounds publication outlines', () => {
+    const outline = outlineFromBook([
+        {
+            label: '  Part\n One  ',
+            href: 'OPS/part.xhtml',
+            subitems: [{
+                label: 'Chapter',
+                href: 'OPS/chapter.xhtml#start',
+            }],
+        },
+        { label: 'Unsafe', href: '../outside.xhtml' },
+    ])
+    assert.deepEqual(outline.items, [
+        { title: 'Part One', depth: 0, href: 'OPS/part.xhtml' },
+        {
+            title: 'Chapter',
+            depth: 1,
+            href: 'OPS/chapter.xhtml#start',
+        },
+        { title: 'Unsafe', depth: 0 },
+    ])
+    assert.equal(outline.truncated, true)
+
+    const longTitle = outlineFromBook([{
+        label: '界'.repeat(400),
+        href: 'OPS/chapter.xhtml',
+    }])
+    assert.equal(longTitle.truncated, true)
+    assert.ok(Buffer.byteLength(longTitle.items[0].title) <= 1024)
+
+    const oversized = outlineFromBook(Array.from(
+        { length: 4097 }, (_, index) => ({
+            label: `Chapter ${index}`,
+            href: `OPS/${index}.xhtml`,
+        })))
+    assert.equal(oversized.items.length, 4096)
+    assert.equal(oversized.truncated, true)
+})
+
+test('chooses a bounded deduplicated set of initial reading targets', () => {
+    const targets = initialTargets({
+        landmarks: [
+            { type: ['cover'], href: 'OPS/cover.xhtml' },
+            { type: ['bodymatter'], href: 'OPS/start.xhtml' },
+        ],
+        toc: [{ label: 'Start', href: 'OPS/start.xhtml' }],
+        sections: Array.from({ length: 20 }, (_, index) => ({
+            linear: index === 0 ? 'no' : 'yes',
+        })),
+    })
+    assert.deepEqual(targets, [
+        'OPS/start.xhtml', 1, 2, 3, 4, 5, 6, 7,
+    ])
 })
 
 test('normalizes bounded EPUB appearance and style values', () => {
@@ -212,7 +315,7 @@ test('coalesces navigation while preserving the active request', () => {
     assert.deepEqual(transition.state, initialNavigationState())
 })
 
-test('cancels only matching pending navigation and drops work on failure', () => {
+test('cancels matching pending navigation and drops work on failure', () => {
     let transition = reduceNavigation(initialNavigationState(), {
         type: 'enqueue',
         navigation: { command: 'next-page' },
