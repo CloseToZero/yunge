@@ -844,6 +844,39 @@
                 (shuying-org-test--overlay) 'display)))))
       (delete-directory root t))))
 
+(ert-deftest shuying-org-previews-after-meta-return-from-list-formula ()
+  (let* ((root (make-temp-file "shuying-org-" t))
+         (shuying-cache-directory root)
+         (shuying-backends nil)
+         (shuying--pending-jobs (make-hash-table :test #'equal))
+         (shuying-org-test--render-count 0))
+    (unwind-protect
+        (progn
+          (shuying-register-backend
+           'shuying-latex
+           #'shuying-org-test--render-now)
+          (cl-letf (((symbol-function 'create-image)
+                     (lambda (file &rest _properties)
+                       (list 'image file))))
+            (with-temp-buffer
+              (org-mode)
+              (insert "1. First.\n2. Second.\n3. \\(x")
+              (shuying-org-mode 1)
+              (insert "\\)")
+              (shuying-org--post-command)
+              (should (markerp shuying-org--active-start))
+              (call-interactively #'org-meta-return)
+              (shuying-org--post-command)
+              (should
+               (equal
+                (buffer-string)
+                "1. First.\n2. Second.\n3. \\(x\\)\n4. "))
+              (should (= shuying-org-test--render-count 1))
+              (should
+               (overlay-get
+                (shuying-org-test--overlay) 'display)))))
+      (delete-directory root t))))
+
 (ert-deftest shuying-org-keeps-an-incomplete-inline-formula-visible ()
   (let* ((root (make-temp-file "shuying-org-" t))
          (shuying-cache-directory root)

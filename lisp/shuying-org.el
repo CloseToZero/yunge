@@ -168,20 +168,35 @@ EQUATION-NUMBER is the next automatic number at the fragment's start."
            (org-element-property :value element))
    :equation-number equation-number))
 
-(defun shuying-org--fragment-at-position (position)
-  "Return the Org LaTeX fragment containing POSITION, or nil."
+(defun shuying-org--fragment-context-at-position (position)
+  "Return the previewable Org LaTeX context at POSITION, or nil."
   (when (and position
              (<= (point-min) position)
-             (< position (point-max)))
+             (<= position (point-max)))
     (save-excursion
       (goto-char position)
       (let ((fragment (org-element-context)))
         (when (shuying-org--latex-fragment-p fragment)
-          (setq fragment (shuying-org--fragment-from-element fragment))
-          (pcase-let ((`(,beginning . ,end)
-                       (shuying-org--fragment-bounds fragment)))
-            (when (and (<= beginning position) (< position end))
-              fragment)))))))
+          (shuying-org--fragment-from-element fragment))))))
+
+(defun shuying-org--fragment-at-position (position)
+  "Return the Org LaTeX fragment containing POSITION, or nil."
+  (when (and position (< position (point-max)))
+    (when-let* ((fragment
+                 (shuying-org--fragment-context-at-position position))
+                (bounds (shuying-org--fragment-bounds fragment)))
+      (when (and (<= (car bounds) position)
+                 (< position (cdr bounds)))
+        fragment))))
+
+(defun shuying-org--fragment-at-or-ending-at-position (position)
+  "Return the Org LaTeX fragment containing or ending at POSITION."
+  (when-let* ((fragment
+               (shuying-org--fragment-context-at-position position))
+              (bounds (shuying-org--fragment-bounds fragment)))
+    (when (and (<= (car bounds) position)
+               (<= position (cdr bounds)))
+      fragment)))
 
 (defun shuying-org--fragment-at-point ()
   "Return the Org LaTeX fragment containing point, or nil."
@@ -578,7 +593,7 @@ When AUTOMATIC is non-nil, silently retain unavailable dependency errors."
         (shuying-org--set-active-fragment current)))
     (unless current
       (when-let* ((completed
-                  (shuying-org--fragment-at-position
+                  (shuying-org--fragment-at-or-ending-at-position
                    shuying-org--previous-point)))
         (unless (or (= (point) (shuying-org-fragment-end completed))
                     (memq (shuying-org-fragment-beginning completed)
