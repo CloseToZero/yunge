@@ -5,6 +5,7 @@
 (require 'cl-lib)
 (require 'json)
 (require 'subr-x)
+(require 'yunge-reader-task)
 
 (defconst yunge-reader-transport--session-property
   'yunge-reader-transport-session
@@ -32,8 +33,94 @@
   response-error-function
   invalid-output-function
   (callbacks (make-hash-table :test #'eql))
+  (retired (make-hash-table :test #'eql))
   outbound
   (next-id 0))
+
+(defun yunge-reader-transport--retire (session task)
+  "Remember cancelled TASK in SESSION until its response arrives."
+  (puthash (yunge-reader-task-id task)
+           (list (yunge-reader-task-revision task))
+           (yunge-reader-transport--session-retired session)))
+
+(defun yunge-reader-transport--forget-retired (session id)
+  "Forget retired request ID from SESSION."
+  (remhash id (yunge-reader-transport--session-retired session)))
+
+(defun yunge-reader-transport--invoke-complete
+    (session task value error-data)
+  "Safely complete TASK from SESSION with VALUE or ERROR-DATA."
+  (when-let* ((complete
+               (prog1 (yunge-reader-task-complete task)
+                 (setf (yunge-reader-task-complete task) nil))))
+    (condition-case callback-error
+        (funcall complete value error-data)
+      (error
+       (display-warning
+        'yunge-reader
+        (format "%s callback for %s failed: %s"
+                (yunge-reader-transport--session-label session)
+                (yunge-reader-task-operation task)
+                (error-message-string callback-error))
+        :warning)))))
+
+(defun yunge-reader-transport--finish-task
+    (session task state value error-data)
+  "Finish TASK in SESSION once with STATE, VALUE, and ERROR-DATA."
+  (when-let* ((timer (yunge-reader-task-timer task)))
+    (when (timerp timer)
+      (cancel-timer timer))
+    (setf (yunge-reader-task-timer task) nil))
+  (setf (yunge-reader-task-state task) state)
+  (yunge-reader-transport--invoke-complete
+   session task value error-data))
+
+(defun yunge-reader-transport--cancel-task
+    (task state error-data)
+  "Cancel live TASK with terminal STATE and ERROR-DATA."
+  (let* ((session (yunge-reader-task-session task))
+         (id (yunge-reader-task-id task))
+         (callbacks
+          (and session
+               (yunge-reader-transport--session-callbacks session))))
+    (when (and callbacks (eq (gethash id callbacks) task))
+      (remhash id callbacks)
+      (setf (yunge-reader-transport--session-outbound session)
+            (assq-delete-all
+             id (yunge-reader-transport--session-outbound session)))
+      (when (eq (yunge-reader-task-state task) 'sent)
+        (yunge-reader-transport--retire session task))
+      (yunge-reader-transport--finish-task
+       session task state nil error-data)
+      t)))
+
+(defun yunge-reader-transport--cancel-request (task reason)
+  "Cancel transport TASK for REASON."
+  (yunge-reader-transport--cancel-task
+   task 'cancelled
+   (list 'yunge-reader-task-cancelled
+         (or reason "The Yunge Reader task was cancelled"))))
+
+(defun yunge-reader-transport--timeout-task (task)
+  "Expire live Reader TASK at its deadline."
+  (yunge-reader-transport--cancel-task
+   task 'timed-out
+   (list 'yunge-reader-task-timed-out
+         (format "Yunge Reader %s request timed out"
+                 (yunge-reader-task-operation task)))))
+
+(defun yunge-reader-transport-cancel-owner
+    (session owner &optional reason)
+  "Cancel every pending task in SESSION owned by OWNER."
+  (let (tasks)
+    (maphash
+     (lambda (_id task)
+       (when (equal owner (yunge-reader-task-owner task))
+         (push task tasks)))
+     (yunge-reader-transport--session-callbacks session))
+    (dolist (task tasks)
+      (yunge-reader-task-cancel task reason))
+    (length tasks)))
 
 (defun yunge-reader-transport--bind
     (session process &optional send-function)
@@ -74,10 +161,15 @@ of writing that line to the process input pipe."
 
 (defun yunge-reader-transport--flush (session process)
   "Send SESSION's queued requests to ready PROCESS in FIFO order."
-  (dolist
-      (entry
-       (nreverse (yunge-reader-transport--session-outbound session)))
-    (yunge-reader-transport--send-line process (cdr entry)))
+  (dolist (entry
+           (nreverse
+            (yunge-reader-transport--session-outbound session)))
+    (when-let* ((task
+                 (gethash
+                  (car entry)
+                  (yunge-reader-transport--session-callbacks session))))
+      (setf (yunge-reader-task-state task) 'sent)
+      (yunge-reader-transport--send-line process (cdr entry))))
   (setf (yunge-reader-transport--session-outbound session) nil))
 
 (defun yunge-reader-transport--handle-ready
@@ -96,22 +188,38 @@ of writing that line to the process input pipe."
 (defun yunge-reader-transport--handle-response (session message)
   "Route one response MESSAGE through transport SESSION."
   (let* ((id (alist-get 'id message))
+         (revision (alist-get 'revision message))
          (callbacks
           (yunge-reader-transport--session-callbacks session))
-         (callback (and (integerp id) (gethash id callbacks))))
-    (unless callback
+         (task (and (integerp id) (gethash id callbacks)))
+         (retired
+          (and (integerp id)
+               (gethash id
+                        (yunge-reader-transport--session-retired session)))))
+    (cond
+     (task
+      (unless (equal revision (yunge-reader-task-revision task))
+        (error "Mismatched %s response revision for request %s: %S"
+               (yunge-reader-transport--session-label session) id message))
+      (remhash id callbacks)
+      (if (alist-get 'ok message)
+          (yunge-reader-transport--finish-task
+           session task 'completed (alist-get 'result message) nil)
+        (yunge-reader-transport--finish-task
+         session task 'failed nil
+         (funcall
+          (yunge-reader-transport--session-response-error-function
+           session)
+          message))))
+     (retired
+      (unless (equal revision (car retired))
+        (error "Mismatched retired %s response revision for request %s: %S"
+               (yunge-reader-transport--session-label session) id message))
+      (yunge-reader-transport--forget-retired session id))
+     (t
       (error "Unexpected %s response: %S"
              (yunge-reader-transport--session-label session)
-             message))
-    (remhash id callbacks)
-    (if (alist-get 'ok message)
-        (funcall callback (alist-get 'result message) nil)
-      (funcall
-       callback nil
-       (funcall
-        (yunge-reader-transport--session-response-error-function
-         session)
-        message)))))
+             message)))))
 
 (defun yunge-reader-transport--handle-message
     (session process message)
@@ -129,11 +237,14 @@ of writing that line to the process input pipe."
    (t
     (yunge-reader-transport--handle-response session message))))
 
-(defun yunge-reader-transport--request
-    (session process operation parameters complete)
+(cl-defun yunge-reader-transport--request
+    (session process operation parameters complete
+     &key owner timeout revision)
   "Send one request through SESSION to PROCESS.
 OPERATION is a string.  PARAMETERS is an alist or nil.  COMPLETE receives a
-result and nil, or nil and an Emacs error value."
+result and nil, or nil and an Emacs error value.  Return a `yunge-reader-task'.
+OWNER groups related requests for cancellation.  TIMEOUT is an optional number
+of seconds.  REVISION is opaque client state used to reject stale work."
   (unless (stringp operation)
     (error "Reader transport operation must be a string: %S" operation))
   (unless (functionp complete)
@@ -141,36 +252,61 @@ result and nil, or nil and an Emacs error value."
   (unless (yunge-reader-transport--bound-p session process)
     (error "Reader transport session is not bound to process: %S"
            process))
+  (when (and timeout
+             (not (and (numberp timeout) (> timeout 0))))
+    (error "Reader transport timeout must be positive: %S" timeout))
   (let* ((id
           (cl-incf (yunge-reader-transport--session-next-id session)))
+         (created-at (float-time))
+         (task
+          (yunge-reader-task--make
+           :id id
+           :operation operation
+           :owner owner
+           :revision revision
+           :state 'queued
+           :created-at created-at
+           :deadline (and timeout (+ created-at timeout))
+           :complete complete
+           :session session
+           :cancel-function #'yunge-reader-transport--cancel-request))
          (request
           (append
            (list (cons 'id id) (cons 'op operation))
+           (when revision
+             (list (cons 'revision revision)))
            (when parameters
              (list (cons 'params parameters)))))
          (line
           (json-serialize request :null-object nil :false-object :false)))
-    (puthash
-     id complete
-     (yunge-reader-transport--session-callbacks session))
+    (puthash id task
+             (yunge-reader-transport--session-callbacks session))
+    (when timeout
+      (setf (yunge-reader-task-timer task)
+            (run-at-time timeout nil
+                         #'yunge-reader-transport--timeout-task task)))
     (if (yunge-reader-transport--ready-p session process)
-        (yunge-reader-transport--send-line process line)
+        (progn
+          (setf (yunge-reader-task-state task) 'sent)
+          (yunge-reader-transport--send-line process line))
       (push
        (cons id line)
        (yunge-reader-transport--session-outbound session)))
-    id))
+    task))
 
 (defun yunge-reader-transport--fail (session error-data)
   "Complete SESSION's pending callbacks with ERROR-DATA."
-  (let (callbacks)
+  (let (tasks)
     (maphash
-     (lambda (_id callback)
-       (push callback callbacks))
+     (lambda (_id task)
+       (push task tasks))
      (yunge-reader-transport--session-callbacks session))
     (clrhash (yunge-reader-transport--session-callbacks session))
+    (clrhash (yunge-reader-transport--session-retired session))
     (setf (yunge-reader-transport--session-outbound session) nil)
-    (dolist (callback callbacks)
-      (funcall callback nil error-data))))
+    (dolist (task tasks)
+      (yunge-reader-transport--finish-task
+       session task 'failed nil error-data))))
 
 (defun yunge-reader-transport--filter (process output)
   "Collect and handle complete NDJSON messages in PROCESS OUTPUT."

@@ -97,7 +97,6 @@
                    :match (lambda (_file) t)
                    :open #'ignore
                    :close #'ignore
-                   :request #'ignore
                    :location
                    (lambda (_document _window)
                      (make-yunge-reader-position :unit unit))
@@ -160,8 +159,7 @@
           (let* ((driver
                   (yunge-reader-register-driver
                    'test
-                   :match #'ignore :open #'ignore :close #'ignore
-                   :request #'ignore))
+                   :match #'ignore :open #'ignore :close #'ignore))
                  (file (expand-file-name "outline-dead.pdf"))
                  (key (yunge-reader--document-key file driver))
                  (document
@@ -213,7 +211,6 @@
                    :match (lambda (_file) t)
                    :open #'ignore
                    :close #'ignore
-                   :request #'ignore
                    :location
                    (lambda (_document _window)
                      (make-yunge-reader-position :unit unit))

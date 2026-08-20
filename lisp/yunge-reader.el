@@ -7,6 +7,7 @@
 (require 'subr-x)
 (require 'yunge-jump-history)
 (require 'yunge-key)
+(require 'yunge-reader-task)
 
 (declare-function browse-url "browse-url" (url &rest arguments))
 (declare-function evil-refresh-cursor
@@ -134,9 +135,10 @@ MATCH-FUNCTION receives an absolute file name.  OPEN-FUNCTION receives that
 file and a completion function, which it calls with HANDLE, a properties
 plist, and an error value.  CLOSE-FUNCTION receives a `yunge-reader-document'.
 ATTACH-FUNCTION and DETACH-FUNCTION receive a document in the Reader buffer
-whose format-specific view they initialize or tear down.  REQUEST-FUNCTION
-receives a document, operation, argument plist, and a completion function,
-which it calls with a value and an error value.
+whose format-specific view they initialize or tear down.  OUTLINE-FUNCTION,
+SEARCH-FUNCTION, and SELECTION-TEXT-FUNCTION are explicit asynchronous
+capabilities.  Each receives a document, its argument value, and a completion
+function, which it calls with a value and an error value.
 LOCATION-FUNCTION receives a document and window and returns a stable
 `yunge-reader-position'.  RESTORE-FUNCTION receives a document, position,
 and window and returns non-nil after accepting the location."
@@ -146,7 +148,9 @@ and window and returns non-nil after accepting the location."
   close-function
   attach-function
   detach-function
-  request-function
+  outline-function
+  search-function
+  selection-text-function
   location-function
   restore-function)
 
@@ -167,13 +171,14 @@ and window and returns non-nil after accepting the location."
   driver
   state
   document
+  open-task
   requests
   views
   primary-view
   active-view
   outline
   outline-loaded
-  outline-pending
+  outline-task
   outline-waiters)
 
 (cl-defstruct (yunge-reader--view-request
@@ -190,6 +195,14 @@ and window and returns non-nil after accepting the location."
   buffer
   generation
   outline-buffer)
+
+(defvar yunge-reader--request-task nil
+  "Dynamically bound composite task for the current driver request.")
+
+(cl-defstruct (yunge-reader-presentation
+               (:constructor yunge-reader--make-presentation))
+  "One live Emacs window presenting a logical Reader view."
+  window)
 
 (cl-defstruct yunge-reader-position
   "A stable position in a document.
@@ -225,11 +238,29 @@ unscaled coordinate system of UNIT."
   "Opaque driver-owned continuation for one directional search run."
   value)
 
+(cl-defstruct yunge-reader-search-request
+  "One typed, bounded request for a document search batch."
+  query
+  case-sensitive
+  direction
+  origin
+  cursor
+  match-limit
+  unit-limit)
+
 (cl-defstruct yunge-reader-search-batch
   "One bounded batch of driver search results."
   results
   cursor
   done)
+
+(cl-defstruct yunge-reader-selection-text-request
+  "One typed, bounded request for selected document text."
+  start
+  end
+  cursor
+  unit-limit
+  character-limit)
 
 (cl-defstruct yunge-reader-action
   "One format-independent action exposed by a document."
@@ -298,7 +329,10 @@ versioned, printable stable positions.")
   "Whether the current view is restoring a durable place.")
 
 (defvar-local yunge-reader--active-presentation nil
-  "Live window currently presenting this logical Reader view.")
+  "Active `yunge-reader-presentation' for this logical Reader view.")
+
+(defvar-local yunge-reader--presentations nil
+  "Live Reader presentations indexed by their Emacs windows.")
 
 (defvar-local yunge-reader-zoom-mode 'fit-width
   "Current zoom mode: `manual', `fit-width', or `fit-page'.")
@@ -317,6 +351,9 @@ versioned, printable stable positions.")
 
 (defvar-local yunge-reader--copy-pending nil
   "Non-nil while the current selection is being copied in batches.")
+
+(defvar-local yunge-reader--copy-task nil
+  "Cancellable task serving the active selection copy.")
 
 (defvar-local yunge-reader-search-query nil
   "Literal query active in the current reader buffer, or nil.")
@@ -365,6 +402,9 @@ versioned, printable stable positions.")
 
 (defvar-local yunge-reader--search-pending nil
   "Non-nil while one search batch is outstanding.")
+
+(defvar-local yunge-reader--search-task nil
+  "Cancellable task serving the active search batch.")
 
 (defvar-local yunge-reader--search-in-flight 0
   "Number of physical search requests not yet completed.")
@@ -495,9 +535,13 @@ Functions run in the affected Reader buffer without arguments.")
   (setq-local yunge-reader--document-entry nil)
   (setq-local yunge-reader--view-attached nil)
   (setq-local yunge-reader--active-presentation nil)
+  (setq-local yunge-reader--presentations
+              (make-hash-table :test #'eq))
   (setq-local yunge-reader--outline-buffer nil)
   (setq-local yunge-reader--copy-generation 0)
   (setq-local yunge-reader--copy-pending nil)
+  (setq-local yunge-reader--copy-task nil)
+  (setq-local yunge-reader--search-task nil)
   (add-hook 'post-command-hook
             #'yunge-reader--note-view-activity nil t)
   (add-hook 'change-major-mode-hook
@@ -530,19 +574,26 @@ Functions run in the affected Reader buffer without arguments.")
    yunge-reader-command-map yunge-reader-command-bindings))
 
 (cl-defun yunge-reader-register-driver
-    (name &key match open close attach detach request location restore)
+    (name &key match open close attach detach
+          outline search selection-text location restore)
   "Register a reader driver NAME.
-MATCH, OPEN, CLOSE, and REQUEST follow the contracts documented by
-`yunge-reader-driver'.  ATTACH and DETACH are an optional pair whose omitted
-default performs no buffer-specific setup.  LOCATION and RESTORE are another
-optional pair.
+MATCH, OPEN, CLOSE, OUTLINE, SEARCH, and SELECTION-TEXT follow the contracts
+documented by `yunge-reader-driver'.  Capabilities are optional; attempting an
+unsupported operation completes with an error.  ATTACH and DETACH are an
+optional pair whose omitted default performs no buffer-specific setup.
+LOCATION and RESTORE are another optional pair.
 Registering NAME again atomically replaces its old definition and gives the
 new definition highest precedence."
   (unless (symbolp name)
     (error "Reader driver name must be a symbol: %S" name))
-  (dolist (function (list match open close request))
+  (dolist (function (list match open close))
     (unless (functionp function)
       (error "Reader driver %s has a non-function member: %S"
+             name function)))
+  (dolist (function
+           (delq nil (list outline search selection-text)))
+    (unless (functionp function)
+      (error "Reader driver %s has a non-function capability: %S"
              name function)))
   (unless (eq (null attach) (null detach))
     (error "Reader driver %s must define both view functions" name))
@@ -560,7 +611,9 @@ new definition highest precedence."
           :close-function close
           :attach-function (or attach #'ignore)
           :detach-function (or detach #'ignore)
-          :request-function request
+          :outline-function outline
+          :search-function search
+          :selection-text-function selection-text
           :location-function location
           :restore-function restore)))
     (setq yunge-reader-drivers
@@ -1200,22 +1253,61 @@ An explicit override on the current book remains unchanged."
   (and (window-live-p window)
        (eq (window-buffer window) (current-buffer))))
 
+(defun yunge-reader--sync-presentations ()
+  "Synchronize and return this Reader view's live presentations."
+  (unless (hash-table-p yunge-reader--presentations)
+    (setq yunge-reader--presentations (make-hash-table :test #'eq)))
+  (let ((windows (get-buffer-window-list (current-buffer) nil t))
+        stale)
+    (maphash
+     (lambda (window _presentation)
+       (unless (memq window windows)
+         (push window stale)))
+     yunge-reader--presentations)
+    (dolist (window stale)
+      (remhash window yunge-reader--presentations))
+    (dolist (window windows)
+      (unless (gethash window yunge-reader--presentations)
+        (puthash window
+                 (yunge-reader--make-presentation :window window)
+                 yunge-reader--presentations)))
+    (when (and yunge-reader--active-presentation
+               (not (gethash
+                     (yunge-reader-presentation-window
+                      yunge-reader--active-presentation)
+                     yunge-reader--presentations)))
+      (setq yunge-reader--active-presentation nil))
+    (mapcar (lambda (window)
+              (gethash window yunge-reader--presentations))
+            windows)))
+
+(defun yunge-reader--presentation-windows ()
+  "Return every live window presenting the current Reader view."
+  (mapcar #'yunge-reader-presentation-window
+          (yunge-reader--sync-presentations)))
+
 (defun yunge-reader--activate-presentation (&optional window)
   "Make WINDOW the current logical view's active presentation.
 WINDOW defaults to the selected window.  Return the accepted window, or
-nil when it does not display the current Reader buffer."
+  nil when it does not display the current Reader buffer."
   (let ((window (or window (selected-window))))
     (when (yunge-reader--presentation-window-p window)
-      (setq yunge-reader--active-presentation window))))
+      (yunge-reader--sync-presentations)
+      (setq yunge-reader--active-presentation
+            (gethash window yunge-reader--presentations))
+      window)))
 
 (defun yunge-reader--presentation-window ()
   "Return and retain the active window for this logical Reader view."
   (or (yunge-reader--activate-presentation)
-      (and (yunge-reader--presentation-window-p
-            yunge-reader--active-presentation)
-           yunge-reader--active-presentation)
-      (when-let* ((window (get-buffer-window (current-buffer) t)))
-        (setq yunge-reader--active-presentation window))))
+      (progn
+        (yunge-reader--sync-presentations)
+        (when-let* ((presentation yunge-reader--active-presentation))
+          (yunge-reader-presentation-window presentation)))
+      (when-let* ((presentation
+                   (car (yunge-reader--sync-presentations))))
+        (setq yunge-reader--active-presentation presentation)
+        (yunge-reader-presentation-window presentation))))
 
 (defun yunge-reader--active-presentation-p (window)
   "Return whether WINDOW is the current view's active presentation."
@@ -1669,6 +1761,10 @@ Only the primary view's active presentation may replace the durable place."
       (remhash (yunge-reader--document-entry-key entry)
                yunge-reader--document-registry))
     (setf (yunge-reader--document-entry-state entry) 'closed)
+    (when-let* ((task (yunge-reader--document-entry-outline-task entry))
+                ((yunge-reader-task-active-p task)))
+      (yunge-reader-task-cancel
+       task "No Reader view is using this document outline"))
     (yunge-reader--close-resource
      (yunge-reader--document-entry-document entry)
      "Could not close reader document: %s")))
@@ -1733,6 +1829,7 @@ Only the primary view's active presentation may replace the durable place."
 (defun yunge-reader--finish-resource-open
     (entry handle properties error-data)
   "Finish opening the shared resource for ENTRY."
+  (setf (yunge-reader--document-entry-open-task entry) nil)
   (let ((layout (plist-get properties :layout)))
     (when (and (not error-data)
                (not (memq layout '(fixed reflow))))
@@ -1784,29 +1881,49 @@ Only the primary view's active presentation may replace the durable place."
   "Start the one driver resource open owned by ENTRY."
   (let ((driver (yunge-reader--document-entry-driver entry))
         (file (yunge-reader--document-entry-file entry))
-        completed)
+        completed
+        task)
+    (setq
+     task
+     (yunge-reader-task-create
+      'open
+      (lambda (value error-data)
+        (yunge-reader--finish-resource-open
+         entry (car-safe value) (cadr value) error-data))
+      :owner entry))
+    (setf (yunge-reader--document-entry-open-task entry) task)
     (condition-case error-data
-        (funcall
-         (yunge-reader-driver-open-function driver)
-         file
-         (lambda (handle properties open-error)
-           (if completed
-               (progn
-                 (yunge-reader--close-handle
-                  driver file handle properties)
-                 (display-warning
-                  'yunge-reader
-                  (format "Reader driver %s completed open twice"
-                          (yunge-reader-driver-name driver))
-                  :warning))
-             (setq completed t)
-             (yunge-reader--finish-resource-open
-              entry handle properties open-error))))
+        (let ((yunge-reader--request-task task))
+          (yunge-reader-task-adopt-child
+           task
+           (funcall
+            (yunge-reader-driver-open-function driver)
+            file
+            (lambda (handle properties open-error)
+              (if completed
+                  (progn
+                    (yunge-reader--close-handle
+                     driver file handle properties)
+                    (display-warning
+                     'yunge-reader
+                     (format "Reader driver %s completed open twice"
+                             (yunge-reader-driver-name driver))
+                     :warning))
+                (setq completed t)
+                (if (yunge-reader-task-active-p task)
+                    (yunge-reader-task-finish
+                     task (if open-error 'failed 'completed)
+                     (list handle properties) open-error)
+                  ;; A driver predating cancellable tasks can still return a
+                  ;; handle after the last waiting view disappeared.
+                  (yunge-reader--close-handle
+                   driver file handle properties)))))))
       (error
        (unless completed
          (setq completed t)
-         (yunge-reader--finish-resource-open
-          entry nil nil error-data))))))
+         (yunge-reader-task-finish
+          task 'failed nil error-data))))
+    task))
 
 (defun yunge-reader--begin-open
     (buffer driver file &optional place complete)
@@ -1990,19 +2107,27 @@ Capture and save this view's stable place before changing the primary view."
   "Detach the current view and close its driver-owned document resource."
   (let ((entry yunge-reader--document-entry)
         (document yunge-reader-document)
+        (search-task yunge-reader--search-task)
+        (copy-task yunge-reader--copy-task)
         cancelled)
     (cl-incf yunge-reader--open-generation)
     (cl-incf yunge-reader--search-generation)
     (cl-incf yunge-reader--outline-generation)
     (cl-incf yunge-reader--copy-generation)
     (setq yunge-reader--copy-pending nil
+          yunge-reader--copy-task nil
           yunge-reader--search-pending nil
+          yunge-reader--search-task nil
           yunge-reader--search-navigation-intent nil
           yunge-reader--search-cursor nil
           yunge-reader--search-direction nil
           yunge-reader--search-origin nil
           yunge-reader--search-wrapped nil
           yunge-reader--search-detached nil)
+    (when (yunge-reader-task-active-p search-task)
+      (yunge-reader-task-cancel search-task "The Reader view was closed"))
+    (when (yunge-reader-task-active-p copy-task)
+      (yunge-reader-task-cancel copy-task "The Reader view was closed"))
     (when (buffer-live-p yunge-reader--outline-buffer)
       (let ((outline yunge-reader--outline-buffer))
         (setq yunge-reader--outline-buffer nil)
@@ -2040,31 +2165,82 @@ Capture and save this view's stable place before changing the primary view."
       (when (yunge-reader--entry-current-p entry)
         (remhash (yunge-reader--document-entry-key entry)
                  yunge-reader--document-registry))
-      (setf (yunge-reader--document-entry-state entry) 'abandoned)))
+      (setf (yunge-reader--document-entry-state entry) 'abandoned)
+      (when-let* ((task
+                   (yunge-reader--document-entry-open-task entry))
+                  ((yunge-reader-task-active-p task)))
+        (yunge-reader-task-cancel
+         task "No Reader view is waiting for this document"))))
     (dolist (request cancelled)
       (yunge-reader--complete-view-request request nil))))
 
-(defun yunge-reader-request (operation arguments complete)
+(defun yunge-reader--driver-capability (driver operation)
+  "Return DRIVER's explicit function for generic OPERATION."
+  (pcase operation
+    ('outline (yunge-reader-driver-outline-function driver))
+    ('search (yunge-reader-driver-search-function driver))
+    ('selection-text
+     (yunge-reader-driver-selection-text-function driver))
+    (_ nil)))
+
+(defun yunge-reader--typed-capability-arguments (operation arguments)
+  "Build explicit driver arguments for OPERATION from ARGUMENTS."
+  (pcase operation
+    ('outline nil)
+    ('search
+     (make-yunge-reader-search-request
+      :query (plist-get arguments :query)
+      :case-sensitive (plist-get arguments :case-sensitive)
+      :direction (plist-get arguments :direction)
+      :origin (plist-get arguments :origin)
+      :cursor (plist-get arguments :cursor)
+      :match-limit (plist-get arguments :match-limit)
+      :unit-limit (plist-get arguments :page-limit)))
+    ('selection-text
+     (make-yunge-reader-selection-text-request
+      :start (plist-get arguments :start)
+      :end (plist-get arguments :end)
+      :cursor (plist-get arguments :cursor)
+      :unit-limit (plist-get arguments :unit-limit)
+      :character-limit (plist-get arguments :character-limit)))
+    (_ arguments)))
+
+(cl-defun yunge-reader-request
+    (operation arguments complete &key owner timeout revision)
   "Request OPERATION with ARGUMENTS for the current document.
-COMPLETE is called exactly once by the driver with a value and error value."
+COMPLETE is called exactly once with a value and error value.  Return a
+cancellable composite task.  OWNER, TIMEOUT, and REVISION describe that task."
   (unless yunge-reader-document
     (user-error "This reader buffer has no open document"))
   (unless (functionp complete)
     (error "Reader completion must be a function: %S" complete))
-  (let ((driver (yunge-reader-document-driver yunge-reader-document))
-        completed)
+  (let* ((driver (yunge-reader-document-driver yunge-reader-document))
+         (capability (yunge-reader--driver-capability driver operation))
+         (task
+          (yunge-reader-task-create
+           operation complete
+           :owner (or owner (current-buffer))
+           :timeout timeout
+           :revision revision)))
     (condition-case error-data
-        (funcall
-         (yunge-reader-driver-request-function driver)
-         yunge-reader-document operation arguments
-         (lambda (value request-error)
-           (unless completed
-             (setq completed t)
-             (funcall complete value request-error))))
+        (if (not capability)
+            (error "Reader driver %s does not support %s"
+                   (yunge-reader-driver-name driver) operation)
+          (let ((yunge-reader--request-task task))
+            (yunge-reader-task-adopt-child
+             task
+             (funcall
+              capability yunge-reader-document
+              (yunge-reader--typed-capability-arguments
+               operation arguments)
+              (lambda (value request-error)
+                (yunge-reader-task-finish
+                 task (if request-error 'failed 'completed)
+                 value request-error))))))
       (error
-       (unless completed
-         (setq completed t)
-         (funcall complete nil error-data))))))
+       (yunge-reader-task-finish
+        task 'failed nil error-data)))
+    task))
 
 (defun yunge-reader--uri-scheme (uri)
   "Return URI's lowercase explicit scheme, or nil."
@@ -2251,14 +2427,14 @@ Render OUTLINE when non-nil; otherwise display STATUS."
 (defun yunge-reader--complete-outline
     (entry document value error-data)
   "Complete the shared outline request for ENTRY and DOCUMENT."
-  (when (and (yunge-reader--entry-current-p entry)
-             (eq (yunge-reader--document-entry-state entry) 'ready)
-             (eq document
-                 (yunge-reader--document-entry-document entry)))
-    (let ((waiters
-           (yunge-reader--document-entry-outline-waiters entry)))
-      (setf (yunge-reader--document-entry-outline-pending entry) nil
-            (yunge-reader--document-entry-outline-waiters entry) nil)
+  (let ((waiters
+         (yunge-reader--document-entry-outline-waiters entry)))
+    (setf (yunge-reader--document-entry-outline-task entry) nil
+          (yunge-reader--document-entry-outline-waiters entry) nil)
+    (when (and (yunge-reader--entry-current-p entry)
+               (eq (yunge-reader--document-entry-state entry) 'ready)
+               (eq document
+                   (yunge-reader--document-entry-document entry)))
       (cond
        (error-data
         (let ((status
@@ -2314,8 +2490,8 @@ Render OUTLINE when non-nil; otherwise display STATUS."
              (window (yunge-reader--place-window))
              (loaded
               (yunge-reader--document-entry-outline-loaded entry))
-             (pending
-              (yunge-reader--document-entry-outline-pending entry)))
+             (task
+              (yunge-reader--document-entry-outline-task entry)))
         (unless window
           (user-error
            "The Reader buffer is not displayed in a live window"))
@@ -2332,7 +2508,7 @@ Render OUTLINE when non-nil; otherwise display STATUS."
           (yunge-reader-outline-display-buffer outline-buffer)
           (cond
            (loaded nil)
-           (pending
+           ((yunge-reader-task-active-p task)
             (with-current-buffer reader
               (yunge-reader--add-outline-waiter
                entry outline-buffer)))
@@ -2340,14 +2516,23 @@ Render OUTLINE when non-nil; otherwise display STATUS."
             (with-current-buffer reader
               (yunge-reader--add-outline-waiter
                entry outline-buffer)
-              (setf
-               (yunge-reader--document-entry-outline-pending entry)
-               t)
-              (yunge-reader-request
-               'outline nil
-               (lambda (value error-data)
-                 (yunge-reader--complete-outline
-                  entry document value error-data)))))))))))
+              (let (completed)
+                (setq task
+                      (yunge-reader-request
+                       'outline nil
+                       (lambda (value error-data)
+                         (setq completed t)
+                         (yunge-reader--complete-outline
+                          entry document value error-data))
+                       :owner entry
+                       :revision yunge-reader--outline-generation))
+                ;; A driver may complete synchronously before
+                ;; `yunge-reader-request' returns.  Do not resurrect that
+                ;; terminal task as the entry's active outline request.
+                (unless completed
+                  (setf
+                   (yunge-reader--document-entry-outline-task entry)
+                   task)))))))))))
 
 (defun yunge-reader--search-smart-case-p (query)
   "Return non-nil when QUERY contains an uppercase character."
@@ -2459,21 +2644,25 @@ Render OUTLINE when non-nil; otherwise display STATUS."
 When WRAPPED is non-nil, ORIGIN is the corresponding document boundary."
   (unless (memq direction '(forward backward))
     (error "Invalid Reader search direction: %S" direction))
-  (cl-incf yunge-reader--search-generation)
-  (setq yunge-reader-search-results nil
-        yunge-reader-search-result nil
-        yunge-reader-search-highlight-visible t
-        yunge-reader--search-index nil
-        yunge-reader--search-cursor nil
-        yunge-reader--search-direction direction
-        yunge-reader--search-origin origin
-        yunge-reader--search-wrapped wrapped
-        yunge-reader--search-detached nil
-        yunge-reader--search-done nil
-        yunge-reader--search-pending nil
-        yunge-reader--search-navigation-intent direction)
-  (run-hooks 'yunge-reader-search-result-hook)
-  (yunge-reader--drive-search-navigation))
+  (let ((obsolete yunge-reader--search-task))
+    (cl-incf yunge-reader--search-generation)
+    (setq yunge-reader-search-results nil
+          yunge-reader-search-result nil
+          yunge-reader-search-highlight-visible t
+          yunge-reader--search-index nil
+          yunge-reader--search-cursor nil
+          yunge-reader--search-direction direction
+          yunge-reader--search-origin origin
+          yunge-reader--search-wrapped wrapped
+          yunge-reader--search-detached nil
+          yunge-reader--search-done nil
+          yunge-reader--search-pending nil
+          yunge-reader--search-task nil
+          yunge-reader--search-navigation-intent direction)
+    (when (yunge-reader-task-active-p obsolete)
+      (yunge-reader-task-cancel obsolete "The search run was replaced"))
+    (run-hooks 'yunge-reader-search-result-hook)
+    (yunge-reader--drive-search-navigation)))
 
 (defun yunge-reader--wrap-search-run ()
   "Continue the active search from its directional document boundary."
@@ -2518,7 +2707,8 @@ When WRAPPED is non-nil, ORIGIN is the corresponding document boundary."
           (when (and (zerop yunge-reader--search-in-flight)
                      yunge-reader--search-navigation-intent)
             (yunge-reader--drive-search-navigation))
-        (setq yunge-reader--search-pending nil)
+        (setq yunge-reader--search-pending nil
+              yunge-reader--search-task nil)
         (cond
          (error-data
           (setq yunge-reader--search-navigation-intent nil)
@@ -2567,19 +2757,27 @@ When WRAPPED is non-nil, ORIGIN is the corresponding document boundary."
             (old-cursor yunge-reader--search-cursor))
         (setq yunge-reader--search-pending t)
         (cl-incf yunge-reader--search-in-flight)
-        (yunge-reader-request
-         'search
-         (list :query yunge-reader-search-query
-               :case-sensitive yunge-reader--search-case-sensitive
-               :direction yunge-reader--search-direction
-               :origin (and (null yunge-reader--search-cursor)
-                            yunge-reader--search-origin)
-               :cursor yunge-reader--search-cursor
-               :match-limit yunge-reader-search-match-limit
-               :page-limit yunge-reader-search-page-limit)
-         (lambda (value error-data)
-           (yunge-reader--complete-search-batch
-            buffer document generation old-cursor value error-data)))))))
+        (let ((task
+               (yunge-reader-request
+                'search
+                (list :query yunge-reader-search-query
+                      :case-sensitive yunge-reader--search-case-sensitive
+                      :direction yunge-reader--search-direction
+                      :origin (and (null yunge-reader--search-cursor)
+                                   yunge-reader--search-origin)
+                      :cursor yunge-reader--search-cursor
+                      :match-limit yunge-reader-search-match-limit
+                      :page-limit yunge-reader-search-page-limit)
+                (lambda (value error-data)
+                  (yunge-reader--complete-search-batch
+                   buffer document generation old-cursor
+                   value error-data))
+                :revision generation)))
+          ;; A synchronous completion may already have started the next
+          ;; batch; never overwrite that task with this terminal one.
+          (when (and (yunge-reader-task-active-p task)
+                     (= generation yunge-reader--search-generation))
+            (setq yunge-reader--search-task task)))))))
 
 (defun yunge-reader--search-loading-message (intent)
   "Describe the outstanding search for navigation INTENT."
@@ -2658,20 +2856,24 @@ Case is ignored unless QUERY contains an uppercase character."
 (defun yunge-reader-clear-search ()
   "Clear the active document search and its view highlight."
   (interactive)
-  (cl-incf yunge-reader--search-generation)
-  (setq yunge-reader-search-query nil
-        yunge-reader-search-results nil
-        yunge-reader-search-result nil
-        yunge-reader-search-highlight-visible nil
-        yunge-reader--search-index nil
-        yunge-reader--search-cursor nil
-        yunge-reader--search-direction nil
-        yunge-reader--search-origin nil
-        yunge-reader--search-wrapped nil
-        yunge-reader--search-detached nil
-        yunge-reader--search-done nil
-        yunge-reader--search-pending nil
-        yunge-reader--search-navigation-intent nil)
+  (let ((obsolete yunge-reader--search-task))
+    (cl-incf yunge-reader--search-generation)
+    (setq yunge-reader-search-query nil
+          yunge-reader-search-results nil
+          yunge-reader-search-result nil
+          yunge-reader-search-highlight-visible nil
+          yunge-reader--search-index nil
+          yunge-reader--search-cursor nil
+          yunge-reader--search-direction nil
+          yunge-reader--search-origin nil
+          yunge-reader--search-wrapped nil
+          yunge-reader--search-detached nil
+          yunge-reader--search-done nil
+          yunge-reader--search-pending nil
+          yunge-reader--search-task nil
+          yunge-reader--search-navigation-intent nil)
+    (when (yunge-reader-task-active-p obsolete)
+      (yunge-reader-task-cancel obsolete "The search was cleared")))
   (run-hooks 'yunge-reader-search-result-hook)
   (message "Cleared document search"))
 
@@ -2750,9 +2952,13 @@ driver that already resolved the selected glyphs."
     (error "Reader selection endpoints must be reader positions"))
   (let ((selection
          (make-yunge-reader-selection
-          :start start :end end :text text)))
+          :start start :end end :text text))
+        (obsolete yunge-reader--copy-task))
     (cl-incf yunge-reader--copy-generation)
-    (setq yunge-reader--copy-pending nil)
+    (setq yunge-reader--copy-pending nil
+          yunge-reader--copy-task nil)
+    (when (yunge-reader-task-active-p obsolete)
+      (yunge-reader-task-cancel obsolete "The selection changed"))
     (unless (equal selection yunge-reader-selection)
       (setq yunge-reader-selection selection)
       (run-hooks 'yunge-reader-selection-change-hook))))
@@ -2761,10 +2967,14 @@ driver that already resolved the selected glyphs."
   "Clear the logical selection in the current reader buffer.
 When DEFER-REFRESH is non-nil, leave repainting to the caller."
   (interactive)
-  (let ((changed yunge-reader-selection))
+  (let ((changed yunge-reader-selection)
+        (obsolete yunge-reader--copy-task))
     (cl-incf yunge-reader--copy-generation)
     (setq yunge-reader-selection nil
-          yunge-reader--copy-pending nil)
+          yunge-reader--copy-pending nil
+          yunge-reader--copy-task nil)
+    (when (yunge-reader-task-active-p obsolete)
+      (yunge-reader-task-cancel obsolete "The selection was cleared"))
     (when changed
       (run-hooks 'yunge-reader-selection-change-hook)))
   (unless defer-refresh
@@ -2853,6 +3063,7 @@ Return non-nil when at least one transient highlight was active."
     (with-current-buffer buffer
       (when (yunge-reader--copy-current-p
              document selection generation)
+        (setq yunge-reader--copy-task nil)
         (cond
          (error-data
           (setq yunge-reader--copy-pending nil)
@@ -2903,17 +3114,22 @@ Return non-nil when at least one transient highlight was active."
 (defun yunge-reader--request-selection-batch
     (buffer document selection generation cursor fragments)
   "Request one bounded text batch for SELECTION in DOCUMENT."
-  (yunge-reader-request
-   'selection-text
-   (list :start (yunge-reader-selection-start selection)
-         :end (yunge-reader-selection-end selection)
-         :cursor cursor
-         :unit-limit yunge-reader-copy-unit-limit
-         :character-limit yunge-reader-copy-character-limit)
-   (lambda (value error-data)
-     (yunge-reader--complete-selection-batch
-      buffer document selection generation cursor fragments
-      value error-data))))
+  (let ((task
+         (yunge-reader-request
+          'selection-text
+          (list :start (yunge-reader-selection-start selection)
+                :end (yunge-reader-selection-end selection)
+                :cursor cursor
+                :unit-limit yunge-reader-copy-unit-limit
+                :character-limit yunge-reader-copy-character-limit)
+          (lambda (value error-data)
+            (yunge-reader--complete-selection-batch
+             buffer document selection generation cursor fragments
+             value error-data))
+          :revision generation)))
+    (when (and (yunge-reader-task-active-p task)
+               (= generation yunge-reader--copy-generation))
+      (setq yunge-reader--copy-task task))))
 
 (defun yunge-reader-copy-selection ()
   "Copy the current logical document selection.
@@ -2923,8 +3139,12 @@ Ask the active driver for text when the selection does not already carry it."
     (user-error "There is no document selection"))
   (cond
    ((yunge-reader-selection-text yunge-reader-selection)
-    (cl-incf yunge-reader--copy-generation)
-    (setq yunge-reader--copy-pending nil)
+    (let ((obsolete yunge-reader--copy-task))
+      (cl-incf yunge-reader--copy-generation)
+      (setq yunge-reader--copy-pending nil
+            yunge-reader--copy-task nil)
+      (when (yunge-reader-task-active-p obsolete)
+        (yunge-reader-task-cancel obsolete "Cached selection text was used")))
     (yunge-reader--copy-text
      (yunge-reader-selection-text yunge-reader-selection)))
    (yunge-reader--copy-pending

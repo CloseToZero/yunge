@@ -148,9 +148,18 @@
             (should (eq (yunge-reader--presentation-window) first))
             (select-window second)
             (yunge-reader--note-view-activity)
-            (should (eq yunge-reader--active-presentation second))
+            (should
+             (eq (yunge-reader-presentation-window
+                  yunge-reader--active-presentation)
+                 second))
+            (let ((windows (yunge-reader--presentation-windows)))
+              (should (= (length windows) 2))
+              (should (memq first windows))
+              (should (memq second windows)))
             (set-window-buffer second other)
-            (should (eq (yunge-reader--presentation-window) first))))
+            (should (eq (yunge-reader--presentation-window) first))
+            (should (equal (yunge-reader--presentation-windows)
+                           (list first)))))
       (when (buffer-live-p buffer)
         (kill-buffer buffer))
       (when (buffer-live-p other)
@@ -170,7 +179,6 @@
                   (yunge-reader-register-driver
                    'test
                    :match #'ignore :open #'ignore :close #'ignore
-                   :request #'ignore
                    :location
                    (lambda (_document window)
                      (make-yunge-reader-position
@@ -463,9 +471,8 @@
                   (lambda (_file complete)
                     (funcall complete 'handle '(:layout fixed) nil))
                   :close #'ignore
-                  :request
-                  (lambda (_document operation arguments complete)
-                    (should (eq operation 'outline))
+                  :outline
+                  (lambda (_document arguments complete)
                     (should-not arguments)
                     (cl-incf requests)
                     (setq completion complete))
@@ -482,7 +489,7 @@
                    (buffer-string)))
           (should
            (with-current-buffer reader
-             (yunge-reader--document-entry-outline-pending
+             (yunge-reader--document-entry-outline-task
               yunge-reader--document-entry)))
           (quit-window)
           (switch-to-buffer other)
@@ -503,7 +510,7 @@
              (yunge-reader--document-entry-outline-loaded
               yunge-reader--document-entry))
             (should-not
-             (yunge-reader--document-entry-outline-pending
+             (yunge-reader--document-entry-outline-task
               yunge-reader--document-entry)))
           (switch-to-buffer reader)
           (yunge-reader-outline)
@@ -539,9 +546,8 @@
                   :close #'ignore
                   :attach #'ignore
                   :detach #'ignore
-                  :request
-                  (lambda (_document operation _arguments complete)
-                    (should (eq operation 'outline))
+                  :outline
+                  (lambda (_document _arguments complete)
                     (cl-incf requests)
                     (setq completion complete))
                   :location
@@ -588,7 +594,7 @@
               (should (= requests 1))
               (should-not (eq first-outline second-outline))
               (should
-               (yunge-reader--document-entry-outline-pending entry))
+               (yunge-reader--document-entry-outline-task entry))
               (should
                (= (length
                    (yunge-reader--document-entry-outline-waiters entry))
@@ -616,6 +622,58 @@
       (when (buffer-live-p first)
         (kill-buffer first)))))
 
+(ert-deftest yunge-reader-cancels-outline-with-its-last-view ()
+  (let ((yunge-reader--document-registry
+         (make-hash-table :test #'equal))
+        (yunge-reader-drivers nil)
+        cancelled
+        reader)
+    (unwind-protect
+        (save-window-excursion
+          (let* ((child
+                  (yunge-reader-task--make
+                   :operation "outline"
+                   :state 'sent
+                   :cancel-function
+                   (lambda (task reason)
+                     (setq cancelled reason)
+                     (setf (yunge-reader-task-state task) 'cancelled)
+                     t)))
+                 (driver
+                  (yunge-reader-register-driver
+                   'test
+                   :match (lambda (_file) t)
+                   :open
+                   (lambda (_file complete)
+                     (funcall complete 'handle '(:layout fixed) nil))
+                   :close #'ignore
+                   :outline
+                   (lambda (_document _arguments _complete)
+                     child)
+                   :location
+                   (lambda (_document _window)
+                     (make-yunge-reader-position :unit 0))
+                   :restore (lambda (&rest _arguments) t))))
+            (setq reader
+                  (yunge-reader-test--buffer
+                   " *reader-outline-cancel*"))
+            (switch-to-buffer reader)
+            (yunge-reader--begin-open reader driver "outline-cancel.pdf")
+            (yunge-reader-outline)
+            (should
+             (yunge-reader-task-active-p
+              (with-current-buffer reader
+                (yunge-reader--document-entry-outline-task
+                 yunge-reader--document-entry))))
+            (kill-buffer reader)
+            (setq reader nil)
+            (should (stringp cancelled))
+            (should
+             (zerop
+              (hash-table-count yunge-reader--document-registry)))))
+      (when (buffer-live-p reader)
+        (kill-buffer reader)))))
+
 (ert-deftest yunge-reader-outline-jumps-restore-and-record-places ()
   (let* ((file (expand-file-name "outline-jump.pdf"))
          (key (yunge-reader--place-file-key file))
@@ -634,7 +692,6 @@
                  (yunge-reader-register-driver
                   'test
                   :match #'ignore :open #'ignore :close #'ignore
-                  :request #'ignore
                   :location (lambda (_document _window) current)
                   :restore
                   (lambda (_document position _window)
@@ -710,7 +767,6 @@
                  (yunge-reader-register-driver
                   'test
                   :match #'ignore :open #'ignore :close #'ignore
-                  :request #'ignore
                   :location (lambda (_document _window) current)
                   :restore
                   (lambda (_document position _window)
@@ -771,7 +827,6 @@
                  (yunge-reader-register-driver
                   'test
                   :match #'ignore :open #'ignore :close #'ignore
-                  :request #'ignore
                   :location (lambda (_document _window) current)
                   :restore
                   (lambda (_document position _window)
@@ -809,11 +864,11 @@
     (yunge-reader-register-driver
      'fallback
      :match (lambda (_file) t)
-     :open #'ignore :close #'ignore :request #'ignore)
+     :open #'ignore :close #'ignore)
     (yunge-reader-register-driver
      'pdf
      :match (lambda (file) (string-suffix-p ".pdf" file t))
-     :open #'ignore :close #'ignore :request #'ignore)
+     :open #'ignore :close #'ignore)
     (should
      (eq (yunge-reader-driver-name
           (yunge-reader-driver-for-file "book.pdf"))
@@ -822,7 +877,7 @@
            (yunge-reader-register-driver
             'pdf
             :match (lambda (file) (string-suffix-p ".xps" file t))
-            :open #'ignore :close #'ignore :request #'ignore)))
+            :open #'ignore :close #'ignore)))
       (should (= (length yunge-reader-drivers) 2))
       (should (eq (car yunge-reader-drivers) replacement))
       (should
@@ -839,12 +894,12 @@
     (should-error
      (yunge-reader-register-driver
       'location-only
-      :match #'ignore :open #'ignore :close #'ignore :request #'ignore
+      :match #'ignore :open #'ignore :close #'ignore
       :location #'ignore))
     (should-error
      (yunge-reader-register-driver
       'restore-only
-      :match #'ignore :open #'ignore :close #'ignore :request #'ignore
+      :match #'ignore :open #'ignore :close #'ignore
       :restore #'ignore))))
 
 (ert-deftest yunge-reader-requires-both-driver-view-functions ()
@@ -852,12 +907,12 @@
     (should-error
      (yunge-reader-register-driver
       'attach-only
-      :match #'ignore :open #'ignore :close #'ignore :request #'ignore
+      :match #'ignore :open #'ignore :close #'ignore
       :attach #'ignore))
     (should-error
      (yunge-reader-register-driver
       'detach-only
-      :match #'ignore :open #'ignore :close #'ignore :request #'ignore
+      :match #'ignore :open #'ignore :close #'ignore
       :detach #'ignore))))
 
 (ert-deftest yunge-reader-open-failure-preserves-the-saved-place ()
@@ -876,7 +931,7 @@
               'test
               :match (lambda (_file) t)
               :open (lambda (_file callback) (setq complete callback))
-              :close #'ignore :request #'ignore
+              :close #'ignore
               :location
               (lambda (_document _window)
                 (cl-incf locations)
@@ -922,7 +977,7 @@
                   :open
                   (lambda (_file complete)
                     (funcall complete 'handle '(:layout fixed) nil))
-                  :close #'ignore :request #'ignore
+                  :close #'ignore
                   :location (lambda (_document _window) current)
                   :restore
                   (lambda (_document location _window)
@@ -961,7 +1016,7 @@
                   :open
                   (lambda (_file complete)
                     (funcall complete 'handle '(:layout fixed) nil))
-                  :close #'ignore :request #'ignore
+                  :close #'ignore
                   :location
                   (lambda (_document _window)
                     (make-yunge-reader-position :unit 0))
@@ -987,7 +1042,7 @@
                  (yunge-reader-register-driver
                   'test
                   :match (lambda (_file) t)
-                  :open #'ignore :close #'ignore :request #'ignore
+                  :open #'ignore :close #'ignore
                   :location (lambda (_document _window) current)
                   :restore (lambda (&rest _arguments) t))))
             (setq yunge-reader-document
@@ -1031,7 +1086,7 @@
                  (yunge-reader-register-driver
                   'test
                   :match (lambda (_file) t)
-                  :open #'ignore :close #'ignore :request #'ignore
+                  :open #'ignore :close #'ignore
                   :location (lambda (_document _window) current)
                   :restore
                   (lambda (_document position _window)
@@ -1075,7 +1130,7 @@
              :match (lambda (_file) t)
              :open
              (lambda (_file complete) (setq complete-open complete))
-             :close #'ignore :request #'ignore
+             :close #'ignore
              :location (lambda (_document _window) current)
              :restore
              (lambda (_document position _window)
@@ -1122,7 +1177,7 @@
          'test
          :match (lambda (_file) t)
          :open (lambda (_file complete) (setq complete-open complete))
-         :close #'ignore :request #'ignore
+         :close #'ignore
          :location (lambda (_document _window) current)
          :restore
          (lambda (_document position _window)
@@ -1207,7 +1262,6 @@
                  (yunge-reader-register-driver
                   'test
                   :match #'ignore :open #'ignore :close #'ignore
-                  :request #'ignore
                   :location (lambda (_document _window) current)
                   :restore
                   (lambda (_document position _window)
@@ -1273,7 +1327,6 @@
                  (yunge-reader-register-driver
                   'test
                   :match #'ignore :open #'ignore :close #'ignore
-                  :request #'ignore
                   :location (lambda (_document _window) current)
                   :restore
                   (lambda (_document position _window)
@@ -1502,7 +1555,6 @@
                   (lambda (document)
                     (should (eq document attached-document))
                     (push 'detach events))
-                  :request #'ignore
                   :location
                   (lambda (_document _window)
                     (push 'location events)
@@ -1553,8 +1605,7 @@
                 :attach
                 (lambda (_document) (push (current-buffer) attached))
                 :detach
-                (lambda (_document) (push (current-buffer) detached))
-                :request #'ignore)))
+                (lambda (_document) (push (current-buffer) detached)))))
           (setq first
                 (yunge-reader-test--buffer " *reader-shared-one*")
                 second
@@ -1636,7 +1687,6 @@
                   (lambda (_document)
                     (push (current-buffer) attached))
                   :detach #'ignore
-                  :request #'ignore
                   :location
                   (lambda (_document window)
                     (should (eq (window-buffer window)
@@ -1726,7 +1776,6 @@
                   (lambda (_file complete)
                     (funcall complete 'handle '(:layout fixed) nil))
                   :close #'ignore
-                  :request #'ignore
                   :location
                   (lambda (_document _window)
                     (when unit
@@ -1802,7 +1851,6 @@
                     (cl-incf opens)
                     (funcall complete 'handle '(:layout fixed) nil))
                   :close #'ignore
-                  :request #'ignore
                   :location
                   (lambda (_document _window)
                     (when-let* ((unit
@@ -1881,7 +1929,6 @@
                   (lambda (_file complete)
                     (funcall complete 'handle '(:layout fixed) nil))
                   :close #'ignore
-                  :request #'ignore
                   :location
                   (lambda (_document _window)
                     (when-let* ((unit
@@ -1936,7 +1983,6 @@
                   (lambda (_file complete)
                     (funcall complete 'handle '(:layout fixed) nil))
                   :close #'ignore
-                  :request #'ignore
                   :location
                   (lambda (_document _window)
                     (make-yunge-reader-position
@@ -2032,8 +2078,7 @@
                 (lambda (_document)
                   (when (eq (current-buffer) failing-buffer)
                     (error "attach failed")))
-                :detach #'ignore
-                :request #'ignore)))
+                :detach #'ignore)))
           (setq first
                 (yunge-reader-test--buffer " *reader-attach-ok*")
                 second
@@ -2077,8 +2122,7 @@
                 :open
                 (lambda (_file complete)
                   (setq open-complete complete))
-                :close #'ignore
-                :request #'ignore)))
+                :close #'ignore)))
           (setq first
                 (yunge-reader-test--buffer " *reader-pending-one*")
                 second
@@ -2140,7 +2184,6 @@
                   (lambda (value)
                     (should (eq value document))
                     (push 'detach events))
-                  :request #'ignore
                   :location
                   (lambda (&rest _arguments)
                     (push 'location events)
@@ -2188,7 +2231,6 @@
                   (lambda (_document) (push 'attach events))
                   :detach
                   (lambda (_document) (push 'detach events))
-                  :request #'ignore
                   :location
                   (lambda (&rest _arguments)
                     (push 'location events)
@@ -2231,8 +2273,7 @@
                  '(error "open failed")))
               :close (lambda (document) (setq closed document))
               :attach (lambda (_document) (setq attached t))
-              :detach #'ignore
-              :request #'ignore)))
+              :detach #'ignore)))
         (yunge-reader--begin-open
          (current-buffer) driver "open-error.pdf" nil
          (lambda (success) (setq completion success))))
@@ -2261,8 +2302,7 @@
                :detach
                (lambda (_document)
                  (push 'detach events)
-                 (error "detach failed"))
-               :request #'ignore))
+                 (error "detach failed"))))
              (document
               (make-yunge-reader-document
                :file "detach-error.pdf"
@@ -2295,8 +2335,7 @@
              (setq opened file)
              (funcall complete 'handle
                       '(:layout fixed :metadata (:pages 3)) nil))
-           :close (lambda (document) (push document closed))
-           :request #'ignore)
+           :close (lambda (document) (push document closed)))
           (setq buffer (yunge-reader-open "book.pdf"))
           (with-current-buffer buffer
             (should (eq major-mode 'yunge-reader-mode))
@@ -2330,8 +2369,7 @@
                   :match (lambda (_file) t)
                   :open (lambda (_file callback)
                           (setq complete callback))
-                  :close (lambda (document) (push document closed))
-                  :request #'ignore)))
+                  :close (lambda (document) (push document closed)))))
             (setq buffer (generate-new-buffer " *reader-late-test*"))
             (with-current-buffer buffer
               (yunge-reader-mode))
@@ -2346,6 +2384,50 @@
       (when (buffer-live-p buffer)
         (kill-buffer buffer)))))
 
+(ert-deftest yunge-reader-cancels-an-unobserved-resource-open ()
+  (let ((yunge-reader--document-registry
+         (make-hash-table :test #'equal))
+        (yunge-reader-drivers nil)
+        callback
+        cancelled
+        closed
+        buffer)
+    (unwind-protect
+        (let* ((child
+                (yunge-reader-task--make
+                 :operation "open"
+                 :state 'sent
+                 :cancel-function
+                 (lambda (task reason)
+                   (setq cancelled reason)
+                   (setf (yunge-reader-task-state task) 'cancelled)
+                   t)))
+               (driver
+                (yunge-reader-register-driver
+                 'test
+                 :match (lambda (_file) t)
+                 :open
+                 (lambda (_file complete)
+                   (setq callback complete)
+                   child)
+                 :close (lambda (document) (push document closed)))))
+          (setq buffer (yunge-reader-test--buffer " *reader-cancel-open*"))
+          (yunge-reader--begin-open buffer driver "cancel-open.pdf")
+          (kill-buffer buffer)
+          (setq buffer nil)
+          (should (stringp cancelled))
+          (should
+           (zerop
+            (hash-table-count yunge-reader--document-registry)))
+          ;; A non-cooperative driver completion is still disposed safely.
+          (funcall callback 'late-handle '(:layout fixed) nil)
+          (should (= (length closed) 1))
+          (should
+           (eq (yunge-reader-document-handle (car closed))
+               'late-handle)))
+      (when (buffer-live-p buffer)
+        (kill-buffer buffer)))))
+
 (ert-deftest yunge-reader-rejects-invalid-driver-layouts ()
   (let ((yunge-reader-drivers nil)
         closed
@@ -2357,8 +2439,7 @@
            :match (lambda (_file) t)
            :open (lambda (_file complete)
                    (funcall complete 'handle '(:layout pages) nil))
-           :close (lambda (document) (push document closed))
-           :request #'ignore)
+           :close (lambda (document) (push document closed)))
           (setq buffer (yunge-reader-open "invalid.pdf"))
           (with-current-buffer buffer
             (should-not yunge-reader-document)
@@ -2418,16 +2499,24 @@
              :match #'ignore
              :open #'ignore
              :close #'ignore
-             :request
-             (lambda (_document operation arguments complete)
+             :selection-text
+             (lambda (_document arguments complete)
                (cl-incf requests)
                (push arguments arguments-seen)
-               (should (eq operation 'selection-text))
-               (should (eq (plist-get arguments :start) start))
-               (should (eq (plist-get arguments :end) end))
-               (should (= (plist-get arguments :unit-limit) 2))
-               (should (= (plist-get arguments :character-limit) 3))
-               (if (plist-get arguments :cursor)
+               (should
+                (eq (yunge-reader-selection-text-request-start arguments)
+                    start))
+               (should
+                (eq (yunge-reader-selection-text-request-end arguments)
+                    end))
+               (should
+                (= (yunge-reader-selection-text-request-unit-limit arguments)
+                   2))
+               (should
+                (= (yunge-reader-selection-text-request-character-limit
+                    arguments)
+                   3))
+               (if (yunge-reader-selection-text-request-cursor arguments)
                    (funcall
                     complete
                     (make-yunge-reader-selection-batch
@@ -2460,8 +2549,10 @@
              nil))))
       (should (= requests 2))
       (should-not yunge-reader--copy-pending)
-      (should (eq (plist-get (car arguments-seen) :cursor)
-                  cursor))
+      (should
+       (eq (yunge-reader-selection-text-request-cursor
+            (car arguments-seen))
+           cursor))
       (should (equal (car kill-ring) "resolved"))
       (should
        (equal (yunge-reader-selection-text yunge-reader-selection)
@@ -2487,8 +2578,8 @@
              :match #'ignore
              :open #'ignore
              :close #'ignore
-             :request
-             (lambda (_document _operation _arguments complete)
+             :selection-text
+             (lambda (_document _arguments complete)
                (setq completion complete)))))
       (setq yunge-reader-document
             (make-yunge-reader-document
@@ -2523,8 +2614,8 @@
              :match #'ignore
              :open #'ignore
              :close #'ignore
-             :request
-             (lambda (_document _operation _arguments complete)
+             :selection-text
+             (lambda (_document _arguments complete)
                (cl-incf requests)
                (funcall
                 complete
@@ -2568,10 +2659,10 @@
              :match #'ignore
              :open #'ignore
              :close #'ignore
-             :request
-             (lambda (_document _operation arguments complete)
+             :selection-text
+             (lambda (_document arguments complete)
                (cl-incf requests)
-               (if (plist-get arguments :cursor)
+               (if (yunge-reader-selection-text-request-cursor arguments)
                    (funcall complete nil '(error "copy stopped"))
                  (funcall
                   complete
@@ -2607,8 +2698,8 @@
             (yunge-reader-register-driver
              'request-test
              :match #'ignore :open #'ignore :close #'ignore
-             :request
-             (lambda (_document _operation _arguments complete)
+             :outline
+             (lambda (_document _arguments complete)
                (funcall complete 'first nil)
                (funcall complete 'second nil)))))
       (setq yunge-reader-document
@@ -2616,12 +2707,54 @@
              :file "request.pdf" :driver driver :handle 'handle
              :layout 'fixed))
       (yunge-reader-request
-       'test nil
+       'outline nil
        (lambda (value error-data)
          (should-not error-data)
          (should (eq value 'first))
          (cl-incf calls)))
       (should (= calls 1)))))
+
+(ert-deftest yunge-reader-request-cancels-its-driver-child ()
+  (with-temp-buffer
+    (yunge-reader-mode)
+    (let* ((yunge-reader-drivers nil)
+           cancelled
+           driver-complete
+           completion
+           (child
+            (yunge-reader-task--make
+             :operation "native-work"
+             :state 'sent
+             :cancel-function
+             (lambda (task reason)
+               (setq cancelled reason)
+               (setf (yunge-reader-task-state task) 'cancelled)
+               t)))
+           (driver
+            (yunge-reader-register-driver
+             'request-cancel-test
+             :match #'ignore :open #'ignore :close #'ignore
+             :outline
+             (lambda (_document _arguments complete)
+               (setq driver-complete complete)
+               child))))
+      (setq yunge-reader-document
+            (make-yunge-reader-document
+             :file "request.pdf" :driver driver :handle 'handle
+             :layout 'fixed))
+      (let ((task
+             (yunge-reader-request
+              'outline nil
+              (lambda (value error-data)
+                (setq completion (list value error-data))))))
+        (should (eq (yunge-reader-task-child task) child))
+        (should (yunge-reader-task-cancel task "replaced"))
+        (should (equal cancelled "replaced"))
+        (should (eq (yunge-reader-task-state task) 'cancelled))
+        (should
+         (eq (car (cadr completion)) 'yunge-reader-task-cancelled))
+        (funcall driver-complete 'late nil)
+        (should-not (eq (car completion) 'late))))))
 
 (ert-deftest yunge-reader-search-records-before-visiting-a-result ()
   (save-window-excursion
@@ -2668,9 +2801,8 @@
             (yunge-reader-register-driver
              'search-test
              :match #'ignore :open #'ignore :close #'ignore
-             :request
-             (lambda (_document operation arguments complete)
-               (should (eq operation 'search))
+             :search
+             (lambda (_document arguments complete)
                (setq requests (append requests (list arguments))
                      completions (append completions (list complete)))))))
       (setq yunge-reader-document
@@ -2684,9 +2816,11 @@
                    (apply function arguments))))
         (let ((inhibit-message t))
           (yunge-reader-search "needle"))
-        (should-not (plist-get (car requests) :case-sensitive))
-        (should (= (plist-get (car requests) :page-limit)
-                   yunge-reader-search-page-limit))
+        (should-not
+         (yunge-reader-search-request-case-sensitive (car requests)))
+        (should
+         (= (yunge-reader-search-request-unit-limit (car requests))
+            yunge-reader-search-page-limit))
         (funcall
          (pop completions)
          (make-yunge-reader-search-batch
@@ -2695,7 +2829,7 @@
          nil)
         (should (= (length requests) 2))
         (should
-         (equal (plist-get (cadr requests) :cursor)
+         (equal (yunge-reader-search-request-cursor (cadr requests))
                  (make-yunge-reader-search-cursor :value 'batch-2)))
         (let ((inhibit-message t))
           (funcall
@@ -2747,8 +2881,8 @@
             (yunge-reader-register-driver
              'stale-search-test
              :match #'ignore :open #'ignore :close #'ignore
-             :request
-             (lambda (_document _operation arguments complete)
+             :search
+             (lambda (_document arguments complete)
                (push arguments requests)
                (push complete completions)))))
       (setq yunge-reader-document
@@ -2758,9 +2892,11 @@
       (let ((inhibit-message t))
         (yunge-reader-search "old")
         (yunge-reader-search "New"))
-      (should (= (length requests) 1))
-      (should-not (plist-get (car requests) :case-sensitive))
-      (let ((old-completion (car completions))
+      (should (= (length requests) 2))
+      (should-not
+       (yunge-reader-search-request-case-sensitive (cadr requests)))
+      (should (yunge-reader-search-request-case-sensitive (car requests)))
+      (let ((old-completion (cadr completions))
             (inhibit-message t))
         (funcall
          old-completion
@@ -2769,7 +2905,6 @@
          nil)
         (should-not yunge-reader-search-result)
         (should (= (length requests) 2))
-        (should (plist-get (car requests) :case-sensitive))
         (funcall
          (car completions)
          (make-yunge-reader-search-batch
@@ -2795,8 +2930,8 @@
             (yunge-reader-register-driver
              'backward-search-test
              :match #'ignore :open #'ignore :close #'ignore
-             :request
-             (lambda (_document _operation actual complete)
+             :search
+             (lambda (_document actual complete)
                (setq arguments actual
                      completion complete)))))
       (setq yunge-reader-document
@@ -2812,9 +2947,11 @@
            :cursor (make-yunge-reader-search-cursor :value 'forward-2))
          nil)
         (yunge-reader-search-previous)
-        (should (eq (plist-get arguments :direction) 'backward))
-        (should (eq (plist-get arguments :origin)
-                    (yunge-reader-search-result-start first)))
+        (should
+         (eq (yunge-reader-search-request-direction arguments) 'backward))
+        (should
+         (eq (yunge-reader-search-request-origin arguments)
+             (yunge-reader-search-result-start first)))
         (funcall
          completion
          (make-yunge-reader-search-batch
@@ -2841,8 +2978,8 @@
             (yunge-reader-register-driver
              'coalesced-search-test
              :match #'ignore :open #'ignore :close #'ignore
-             :request
-             (lambda (_document _operation arguments complete)
+             :search
+             (lambda (_document arguments complete)
                (cl-incf requests)
                (setq request-arguments
                      (append request-arguments (list arguments))
@@ -2857,10 +2994,12 @@
         (yunge-reader-search-next)
         (yunge-reader-search-next)
         (yunge-reader-search-previous))
-      (should (= requests 1))
+      (should (= requests 2))
       (should (eq yunge-reader--search-navigation-intent 'backward))
-      (should (eq (plist-get (car request-arguments) :direction)
-                  'forward))
+      (should
+       (eq (yunge-reader-search-request-direction
+            (car request-arguments))
+           'forward))
       (let ((inhibit-message t))
         (funcall
          (car completions)
@@ -2869,8 +3008,10 @@
          nil)
         (should-not yunge-reader-search-result)
         (should (= requests 2))
-        (should (eq (plist-get (cadr request-arguments) :direction)
-                    'backward))
+        (should
+         (eq (yunge-reader-search-request-direction
+              (cadr request-arguments))
+             'backward))
         (funcall
          (cadr completions)
          (make-yunge-reader-search-batch
@@ -2894,8 +3035,8 @@
             (yunge-reader-register-driver
              'cancelled-search-test
              :match #'ignore :open #'ignore :close #'ignore
-             :request
-             (lambda (_document _operation _arguments complete)
+             :search
+             (lambda (_document _arguments complete)
                (cl-incf requests)
                (setq completion complete)))))
       (setq yunge-reader-document
@@ -2943,8 +3084,8 @@
             (yunge-reader-register-driver
              'reanchored-search-test
              :match #'ignore :open #'ignore :close #'ignore
-             :request
-             (lambda (_document _operation arguments complete)
+             :search
+             (lambda (_document arguments complete)
                (setq requests (append requests (list arguments))
                      completions (append completions (list complete)))))))
       (setq yunge-reader-document
@@ -2959,9 +3100,9 @@
           (setq current
                 (make-yunge-reader-position :unit 9 :offset 7))
           (yunge-reader-search-next)))
-      (should (= (length requests) 1))
+      (should (= (length requests) 2))
       (should
-       (equal (plist-get (car requests) :origin)
+       (equal (yunge-reader-search-request-origin (car requests))
               (make-yunge-reader-position :unit 2 :offset 4)))
       (let ((inhibit-message t))
         (funcall
@@ -2972,7 +3113,7 @@
         (should-not yunge-reader-search-result)
         (should (= (length requests) 2))
         (should
-         (equal (plist-get (cadr requests) :origin)
+         (equal (yunge-reader-search-request-origin (cadr requests))
                 (make-yunge-reader-position :unit 9 :offset 7)))
         (funcall
          (cadr completions)
