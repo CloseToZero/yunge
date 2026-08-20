@@ -18,8 +18,10 @@ import {
     checkedZoom,
     colorScheme,
     encodePath,
+    initialNavigationState,
     readerKey,
     readingStyleCSS,
+    reduceNavigation,
     sameAppearance,
     sameReadingStyle,
 } from './yunge-reader-core.mjs'
@@ -557,7 +559,8 @@ const protectBook = book => {
 const closeCurrent = () => {
     if (current) {
         if (current.locationTimer) clearTimeout(current.locationTimer)
-        current.pendingNavigation = null
+        current.navigation = reduceNavigation(
+            current.navigation, { type: 'reset' }).state
         if (current.styleFrame !== null) {
             cancelAnimationFrame(current.styleFrame)
         }
@@ -931,9 +934,10 @@ const queueSelection = (session, doc) => {
 
 const cancelPendingSelection = session => {
     session.selectionRevision++
-    if (session.pendingNavigation?.command === 'show-selection') {
-        session.pendingNavigation = null
-    }
+    session.navigation = reduceNavigation(session.navigation, {
+        type: 'cancel-pending',
+        command: 'show-selection',
+    }).state
 }
 
 const installSelectionTracking = (doc, session) => {
@@ -1376,8 +1380,7 @@ const open = async ({
             opening: true,
             commandNavigation: false,
             userMovementDeadline: 0,
-            pendingNavigation: null,
-            navigationRunning: false,
+            navigation: initialNavigationState(),
             searchResultCFI: null,
             searchResultRevision: 0,
             selectionRevision: 0,
@@ -1568,31 +1571,36 @@ const runNavigation = async (session, navigation) => {
     }
 }
 
-const drainNavigation = async session => {
-    if (session.navigationRunning) return
-    session.navigationRunning = true
+const executeNavigation = async (session, navigation) => {
     try {
-        while (current === session && session.pendingNavigation) {
-            const navigation = session.pendingNavigation
-            session.pendingNavigation = null
-            await runNavigation(session, navigation)
+        await runNavigation(session, navigation)
+        if (current === session) {
+            applyNavigationTransition(session, { type: 'complete' })
         }
     } catch (error) {
-        session.pendingNavigation = null
         if (current === session) {
+            applyNavigationTransition(session, { type: 'fail' })
             post('navigation-error', {
                 message: error?.message ?? error,
             })
         }
-    } finally {
-        session.navigationRunning = false
+    }
+}
+
+const applyNavigationTransition = (session, event) => {
+    const transition = reduceNavigation(session.navigation, event)
+    session.navigation = transition.state
+    if (transition.navigation) {
+        void executeNavigation(session, transition.navigation)
     }
 }
 
 const scheduleNavigation = (session, navigation) => {
     if (current !== session) return
-    session.pendingNavigation = navigation
-    void drainNavigation(session)
+    applyNavigationTransition(session, {
+        type: 'enqueue',
+        navigation,
+    })
 }
 
 const navigate = ({ view: viewID, command, location }) => {
@@ -1624,14 +1632,14 @@ const setSearchResult = request => {
         const revision = ++session.searchResultRevision
         session.searchResultCFI = null
         session.view.setSearchResult(null)
-        if (session.pendingNavigation?.command === 'show-search-result') {
-            session.pendingNavigation = null
-        }
+        session.navigation = reduceNavigation(session.navigation, {
+            type: 'cancel-pending',
+            command: 'show-search-result',
+        }).state
         if (selection && reveal) {
-            session.pendingNavigation = {
+            scheduleNavigation(session, {
                 command: 'show-search-result', selection, revision,
-            }
-            void drainNavigation(session)
+            })
         } else if (selection) {
             const cfi = selectionCFI(
                 session, selection, 'search result')
@@ -1659,10 +1667,9 @@ const setSelection = request => {
         const session = current
         const revision = ++session.selectionRevision
         session.view.deselect()
-        session.pendingNavigation = {
+        scheduleNavigation(session, {
             command: 'show-selection', selection, revision,
-        }
-        void drainNavigation(session)
+        })
     } catch (error) {
         post('navigation-error', { message: error?.message ?? error })
     }

@@ -1819,8 +1819,6 @@ mod tests {
         assert!(adapter.contains("collapseCFI(relocation.cfi)"));
         assert!(adapter.contains("session.commandNavigation"));
         assert!(adapter.contains("view.renderer.setAttribute('animated', '')"));
-        assert!(adapter.contains("pendingNavigation"));
-        assert!(adapter.contains("navigationRunning"));
         assert!(adapter.contains("case 'show-selection':"));
         assert!(adapter.contains("selected.addRange(range)"));
         assert!(adapter.contains("'boundary-scroll', event =>"));

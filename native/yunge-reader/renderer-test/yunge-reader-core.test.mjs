@@ -16,9 +16,11 @@ import {
     checkedZoom,
     colorScheme,
     encodePath,
+    initialNavigationState,
     readerKey,
     READER_CHARACTER_KEYS,
     readingStyleCSS,
+    reduceNavigation,
     sameAppearance,
     sameReadingStyle,
 } from '../renderer/yunge-reader-core.mjs'
@@ -174,4 +176,99 @@ test('derives stable reading styles and appearance CSS', () => {
         ...style,
         lineHeight: 2,
     }))
+})
+
+test('coalesces navigation while preserving the active request', () => {
+    const first = { command: 'next-page' }
+    const second = { command: 'next-line' }
+    const latest = { command: 'go-to', location: { href: 'chapter.xhtml' } }
+    let transition = reduceNavigation(initialNavigationState(), {
+        type: 'enqueue',
+        navigation: first,
+    })
+    assert.deepEqual(transition.navigation, first)
+    assert.deepEqual(transition.state, { running: true, pending: null })
+    assert.ok(Object.isFrozen(transition.state))
+
+    transition = reduceNavigation(transition.state, {
+        type: 'enqueue',
+        navigation: second,
+    })
+    assert.equal(transition.navigation, null)
+    assert.deepEqual(transition.state.pending, second)
+
+    transition = reduceNavigation(transition.state, {
+        type: 'enqueue',
+        navigation: latest,
+    })
+    assert.equal(transition.navigation, null)
+    assert.deepEqual(transition.state.pending, latest)
+
+    transition = reduceNavigation(transition.state, { type: 'complete' })
+    assert.deepEqual(transition.navigation, latest)
+    assert.deepEqual(transition.state, { running: true, pending: null })
+    transition = reduceNavigation(transition.state, { type: 'complete' })
+    assert.equal(transition.navigation, null)
+    assert.deepEqual(transition.state, initialNavigationState())
+})
+
+test('cancels only matching pending navigation and drops work on failure', () => {
+    let transition = reduceNavigation(initialNavigationState(), {
+        type: 'enqueue',
+        navigation: { command: 'next-page' },
+    })
+    transition = reduceNavigation(transition.state, {
+        type: 'enqueue',
+        navigation: { command: 'show-selection', revision: 4 },
+    })
+    const pending = transition.state.pending
+    transition = reduceNavigation(transition.state, {
+        type: 'cancel-pending',
+        command: 'show-search-result',
+    })
+    assert.equal(transition.state.pending, pending)
+    transition = reduceNavigation(transition.state, {
+        type: 'cancel-pending',
+        command: 'show-selection',
+    })
+    assert.equal(transition.state.pending, null)
+
+    transition = reduceNavigation(transition.state, {
+        type: 'enqueue',
+        navigation: { command: 'last' },
+    })
+    assert.equal(transition.state.pending.command, 'last')
+    transition = reduceNavigation(transition.state, { type: 'fail' })
+    assert.deepEqual(transition.state, initialNavigationState())
+    assert.equal(transition.navigation, null)
+})
+
+test('bounds an arbitrary navigation burst to active and latest work', () => {
+    let state = initialNavigationState()
+    const started = []
+    for (let index = 0; index < 1000; index++) {
+        const transition = reduceNavigation(state, {
+            type: 'enqueue',
+            navigation: { command: 'go-to', location: index },
+        })
+        state = transition.state
+        if (transition.navigation) started.push(transition.navigation)
+    }
+    assert.deepEqual(started, [{ command: 'go-to', location: 0 }])
+    let transition = reduceNavigation(state, { type: 'complete' })
+    assert.deepEqual(
+        transition.navigation,
+        { command: 'go-to', location: 999 })
+    transition = reduceNavigation(transition.state, { type: 'complete' })
+    assert.deepEqual(transition.state, initialNavigationState())
+})
+
+test('rejects invalid navigation state transitions', () => {
+    assert.throws(() => reduceNavigation(null, { type: 'reset' }))
+    assert.throws(() => reduceNavigation(
+        initialNavigationState(), { type: 'enqueue' }))
+    assert.throws(() => reduceNavigation(
+        initialNavigationState(), { type: 'complete' }))
+    assert.throws(() => reduceNavigation(
+        initialNavigationState(), { type: 'unknown' }))
 })

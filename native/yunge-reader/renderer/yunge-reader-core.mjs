@@ -243,3 +243,65 @@ export const sameAppearance = (left, right) => left && right
     && left.mode === right.mode
     && (left.mode === 'original'
         || APPEARANCE_COLOR_KEYS.every(key => left[key] === right[key]))
+
+export const initialNavigationState = () => Object.freeze({
+    running: false,
+    pending: null,
+})
+
+const navigationTransition = (state, navigation = null) => Object.freeze({
+    state: Object.freeze(state),
+    navigation,
+})
+
+export const reduceNavigation = (state, event) => {
+    if (!state || typeof state !== 'object'
+        || typeof state.running !== 'boolean'
+        || (state.pending !== null
+            && typeof state.pending !== 'object')) {
+        throw new Error('Invalid EPUB navigation state')
+    }
+    if (!event || typeof event !== 'object'
+        || typeof event.type !== 'string') {
+        throw new Error('Invalid EPUB navigation event')
+    }
+    switch (event.type) {
+    case 'enqueue':
+        if (!event.navigation || typeof event.navigation !== 'object') {
+            throw new Error('Invalid EPUB navigation request')
+        }
+        return state.running
+            ? navigationTransition({
+                running: true,
+                pending: event.navigation,
+            })
+            : navigationTransition({
+                running: true,
+                pending: null,
+            }, event.navigation)
+    case 'complete':
+        if (!state.running) {
+            throw new Error('Cannot complete idle EPUB navigation')
+        }
+        return state.pending
+            ? navigationTransition({
+                running: true,
+                pending: null,
+            }, state.pending)
+            : navigationTransition(initialNavigationState())
+    case 'fail':
+    case 'reset':
+        return navigationTransition(initialNavigationState())
+    case 'cancel-pending':
+        if (typeof event.command !== 'string') {
+            throw new Error('Invalid EPUB navigation cancellation')
+        }
+        return navigationTransition({
+            running: state.running,
+            pending: state.pending?.command === event.command
+                ? null : state.pending,
+        })
+    default:
+        throw new Error(`Unsupported EPUB navigation event: ${event.type}`)
+    }
+}
