@@ -810,11 +810,20 @@ and arm64 assets on Windows, Linux, and macOS.  Setup performs these steps:
    licenses into staging.
 6. Parse and verify the four-component upstream version.
 7. Atomically publish under =var/yunge-reader/pdfium/7881/=.
-8. Build the locked Rust helper and WebView module, then load PDFium in a
-   smoke test.
+8. Build the locked Rust helper and WebView module without modifying the
+   source tree.
+9. Ask the helper for its embedded build ID, require it to match the committed
+   source identity, and atomically publish =yunge-reader.build-id= beside the
+   release artifacts.
+10. Load PDFium in a smoke test.
 
 An invalid prior installation is renamed for inspection rather than deleted.
 Normal document opening never downloads or compiles dependencies implicitly.
+The helper, dynamic module, and build-ID sidecar form one native artifact set;
+missing, malformed, mixed-version, or stale sets are rejected before startup.
+The Cargo build script writes generated identity data only below Cargo's
+=OUT_DIR=.  Updating hashed native sources therefore requires an explicit
+update to =native/yunge-reader/source.sha256= in the same source commit.
 
 =pdfium-render= is a Rust API wrapper, not a PDF engine implemented in Rust;
 the dynamic PDFium library is still required.  Building PDFium from Chromium

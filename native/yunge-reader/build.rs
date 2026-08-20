@@ -46,6 +46,7 @@ fn main() {
     println!("cargo:rerun-if-changed=module");
     println!("cargo:rerun-if-changed=pdfium-manifest.eld");
     println!("cargo:rerun-if-changed=renderer");
+    println!("cargo:rerun-if-changed=source.sha256");
     println!("cargo:rerun-if-changed=src");
 
     let mut hasher = Sha256::new();
@@ -61,10 +62,14 @@ fn main() {
         hasher.update([0]);
     }
     let build_id = format!("{:x}", hasher.finalize());
-    let build_id_file = root.join("source.sha256");
-    let recorded = fs::read_to_string(&build_id_file).unwrap_or_default();
-    if recorded.trim() != build_id {
-        fs::write(build_id_file, format!("{build_id}\n")).unwrap();
-    }
+    let expected = fs::read_to_string(root.join("source.sha256"))
+        .expect("native/yunge-reader/source.sha256 is missing");
+    assert_eq!(
+        expected.trim(),
+        build_id,
+        "native/yunge-reader/source.sha256 is stale; expected {build_id}"
+    );
+    let output = PathBuf::from(env::var_os("OUT_DIR").unwrap());
+    fs::write(output.join("build-id"), format!("{build_id}\n")).unwrap();
     println!("cargo:rustc-env=YUNGE_READER_BUILD_ID={build_id}");
 }

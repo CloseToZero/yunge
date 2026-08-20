@@ -2327,6 +2327,18 @@ fn serve(input: impl BufRead, mut output: impl Write) -> Result<(), Error> {
 }
 
 fn main() {
+    let mut arguments = env::args_os().skip(1);
+    match (arguments.next(), arguments.next()) {
+        (Some(argument), None) if argument == "--build-id" => {
+            println!("{BUILD_ID}");
+            return;
+        }
+        (None, None) => {}
+        _ => {
+            eprintln!("usage: yunge-reader [--build-id]");
+            std::process::exit(2);
+        }
+    }
     if let Err(error) = serve(io::stdin().lock(), io::stdout().lock()) {
         eprintln!("yunge-reader: {error}");
         std::process::exit(1);
@@ -2447,7 +2459,10 @@ mod tests {
     #[test]
     fn ready_reports_protocol_and_exact_source_build() {
         let value = serde_json::to_value(ready_message()).unwrap();
-        assert_eq!(BUILD_ID, include_str!("../source.sha256").trim());
+        assert_eq!(
+            BUILD_ID,
+            include_str!(concat!(env!("OUT_DIR"), "/build-id")).trim()
+        );
         assert_eq!(value["kind"], "ready");
         assert_eq!(value["protocol"], PROTOCOL_VERSION);
         assert_eq!(value["build-id"], BUILD_ID);

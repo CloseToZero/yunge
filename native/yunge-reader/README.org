@@ -27,6 +27,17 @@ Emacs requires the protocol, build ID, PDFium API, and all capabilities to
 match.  The build ID hashes the Cargo manifest and lock, build script, PDFium
 manifest, Rust sources, and bundled renderer sources.
 
+The committed =source.sha256= is an explicit source input, not build output.
+The Cargo build script recomputes and verifies it, then writes generated data
+only to Cargo's =OUT_DIR=.  After a successful workspace build, setup runs
+=yunge-reader --build-id= and atomically publishes the result as
+=yunge-reader.build-id= beside the release executable and dynamic module.
+Emacs accepts the native artifacts only when that sidecar, the helper's
+handshake, the module's handshake, and the committed source identity agree.
+Changing any hashed source requires explicitly updating =source.sha256= to the
+value reported by the rejecting build; an ordinary Cargo invocation never
+edits tracked files.
+
 * Requests and responses
 
 Every request has a positive integer =id=, an =op=, and an optional =params=

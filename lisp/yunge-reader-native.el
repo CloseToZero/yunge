@@ -64,11 +64,11 @@ This must not exceed `yunge-reader-cache-max-bytes'."
    yunge-reader-native--source-directory)
   "Cargo manifest of the Yunge Reader native helper.")
 
-(defconst yunge-reader-native--source-hash-file
+(defconst yunge-reader-native--source-build-id-file
   (expand-file-name
    "source.sha256"
    (file-name-directory yunge-reader-native--manifest))
-  "Tracked source hash embedded in the native helper.")
+  "Committed build identity expected from current native Reader sources.")
 
 (defconst yunge-reader-native--build-buffer-name
   "*Yunge Reader native build*"
@@ -134,6 +134,12 @@ This must not exceed `yunge-reader-cache-max-bytes'."
      (_ "release/libyunge_reader_module.so"))
    (yunge-reader-native--cargo-target-directory)))
 
+(defun yunge-reader-native-build-id-file ()
+  "Return the build identity sidecar for installed native artifacts."
+  (expand-file-name
+   "release/yunge-reader.build-id"
+   (yunge-reader-native--cargo-target-directory)))
+
 (defun yunge-reader-native-pdfium-directory ()
   "Return the installed directory for the pinned PDFium API."
   (expand-file-name
@@ -154,21 +160,80 @@ This must not exceed `yunge-reader-cache-max-bytes'."
   "Return the directory containing rendered PDF page artifacts."
   (yunge-var-subdirectory "yunge-reader/cache"))
 
-(defun yunge-reader-native--build-id ()
-  "Return the expected native helper build ID, or nil."
-  (when (file-readable-p yunge-reader-native--source-hash-file)
+(defun yunge-reader-native--read-build-id (file)
+  "Return a validated build identity from FILE, or nil."
+  (when (file-readable-p file)
     (with-temp-buffer
-      (insert-file-contents yunge-reader-native--source-hash-file)
+      (insert-file-contents file)
       (let ((build-id (string-trim (buffer-string))))
-        (unless (string-empty-p build-id)
+        (when (string-match-p "\\`[0-9a-f]\\{64\\}\\'" build-id)
           build-id)))))
 
-(defun yunge-reader-native--available-p ()
-  "Return whether the required native Reader artifacts are available."
+(defun yunge-reader-native--source-build-id ()
+  "Return the build ID expected from the current native sources."
+  (yunge-reader-native--read-build-id
+   yunge-reader-native--source-build-id-file))
+
+(defun yunge-reader-native--artifact-build-id ()
+  "Return the installed native artifact build ID, or nil."
+  (yunge-reader-native--read-build-id
+   (yunge-reader-native-build-id-file)))
+
+(defun yunge-reader-native--build-id ()
+  "Return the current compatible native artifact build ID, or nil."
+  (let ((expected (yunge-reader-native--source-build-id))
+        (installed (yunge-reader-native--artifact-build-id)))
+    (and expected installed (equal expected installed) installed)))
+
+(defun yunge-reader-native--embedded-build-id ()
+  "Return and validate the build ID reported by the built helper."
+  (with-temp-buffer
+    (let ((status
+           (call-process
+            (yunge-reader-native-program) nil t nil "--build-id")))
+      (unless (and (integerp status) (zerop status))
+        (error "Yunge Reader helper could not report its build ID"))
+      (let ((build-id (string-trim (buffer-string))))
+        (unless (string-match-p "\\`[0-9a-f]\\{64\\}\\'" build-id)
+          (error "Yunge Reader helper reported an invalid build ID: %S"
+                 build-id))
+        build-id))))
+
+(defun yunge-reader-native--publish-build-id ()
+  "Publish the built helper identity beside the release artifacts."
+  (let* ((build-id (yunge-reader-native--embedded-build-id))
+         (expected (yunge-reader-native--source-build-id))
+         (file (yunge-reader-native-build-id-file))
+         (directory (file-name-directory file))
+         temporary)
+    (unless (equal build-id expected)
+      (error
+       "Built Yunge Reader identity %s does not match current sources %s"
+       build-id (or expected "<missing>")))
+    (make-directory directory t)
+    (unwind-protect
+        (progn
+          (setq temporary (make-temp-file
+                           (expand-file-name ".build-id-" directory)))
+          (let ((coding-system-for-write 'utf-8-unix))
+            (write-region (concat build-id "\n") nil temporary nil 'silent))
+          (rename-file temporary file t)
+          (setq temporary nil)
+          build-id)
+      (when (and temporary (file-exists-p temporary))
+        (delete-file temporary)))))
+
+(defun yunge-reader-native--artifacts-available-p ()
+  "Return whether the required native Reader artifacts exist."
   (and (file-executable-p (yunge-reader-native-program))
        (file-regular-p (yunge-reader-native-pdfium-library))
        (or (not (memq system-type '(darwin windows-nt)))
            (file-regular-p (yunge-reader-native-module-file)))))
+
+(defun yunge-reader-native--available-p ()
+  "Return whether compatible native Reader artifacts are available."
+  (and (yunge-reader-native--artifacts-available-p)
+       (yunge-reader-native--build-id)))
 
 (defun yunge-reader-native--cancel-timer (symbol)
   "Cancel the timer stored in SYMBOL and set SYMBOL to nil."
@@ -181,7 +246,7 @@ This must not exceed `yunge-reader-cache-max-bytes'."
   (let ((expected (yunge-reader-native--build-id))
         (actual (alist-get 'build-id message)))
     (unless expected
-      (error "Yunge Reader native source hash is unavailable"))
+      (error "Yunge Reader native artifact identity is unavailable"))
     (unless (and (equal (alist-get 'kind message) "ready")
                  (= (or (alist-get 'protocol message) -1)
                     yunge-reader-native-protocol-version)
@@ -668,9 +733,10 @@ When NOTIFY is non-nil, report successful cleanup in the echo area."
       (setq yunge-reader-native--build-process nil))
     (if (and (eq (process-status process) 'exit)
              (zerop (process-exit-status process))
-             (yunge-reader-native--available-p))
+             (yunge-reader-native--artifacts-available-p))
         (condition-case error-data
             (progn
+              (yunge-reader-native--publish-build-id)
               (yunge-reader-native-start)
               (yunge-reader-native-request
                "pdfium-info" nil
@@ -678,7 +744,7 @@ When NOTIFY is non-nil, report successful cleanup in the echo area."
           (error
            (display-warning
             'yunge-reader
-            (format "Could not start the built Yunge Reader helper: %s"
+            (format "Could not publish or start Yunge Reader artifacts: %s"
                     (error-message-string error-data))
             :error)))
       (display-buffer (process-buffer process))

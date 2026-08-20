@@ -114,6 +114,54 @@
          (equal (yunge-reader-native-module-file)
                 (expand-file-name (cdr case) "/reader-target")))))))
 
+(ert-deftest yunge-reader-native-publishes-artifact-build-identity ()
+  (let* ((directory (make-temp-file "yunge-reader-build-id-" t))
+         (build-id (make-string 64 ?a)))
+    (unwind-protect
+        (cl-letf (((symbol-function
+                    'yunge-reader-native--cargo-target-directory)
+                   (lambda () directory))
+                  ((symbol-function 'yunge-reader-native--source-build-id)
+                   (lambda () build-id))
+                  ((symbol-function 'yunge-reader-native--embedded-build-id)
+                   (lambda () build-id)))
+          (should-not (yunge-reader-native--build-id))
+          (should (equal (yunge-reader-native--publish-build-id) build-id))
+          (should (equal (yunge-reader-native--build-id) build-id))
+          (should
+           (equal
+            (directory-files
+             (expand-file-name "release" directory) nil
+             "\\`[^.]" t)
+            '("yunge-reader.build-id"))))
+      (delete-directory directory t))))
+
+(ert-deftest yunge-reader-native-rejects-invalid-artifact-build-identity ()
+  (let ((directory (make-temp-file "yunge-reader-build-id-" t)))
+    (unwind-protect
+        (cl-letf (((symbol-function
+                    'yunge-reader-native--cargo-target-directory)
+                   (lambda () directory)))
+          (let ((file (yunge-reader-native-build-id-file)))
+            (make-directory (file-name-directory file) t)
+            (write-region "not-a-build-id\n" nil file nil 'silent)
+            (should-not (yunge-reader-native--build-id))))
+      (delete-directory directory t))))
+
+(ert-deftest yunge-reader-native-rejects-stale-artifacts ()
+  (cl-letf (((symbol-function 'yunge-reader-native--source-build-id)
+             (lambda () (make-string 64 ?a)))
+            ((symbol-function 'yunge-reader-native--artifact-build-id)
+             (lambda () (make-string 64 ?b))))
+    (should-not (yunge-reader-native--build-id))))
+
+(ert-deftest yunge-reader-native-refuses-to-publish-a-stale-build ()
+  (cl-letf (((symbol-function 'yunge-reader-native--source-build-id)
+             (lambda () (make-string 64 ?a)))
+            ((symbol-function 'yunge-reader-native--embedded-build-id)
+             (lambda () (make-string 64 ?b))))
+    (should-error (yunge-reader-native--publish-build-id) :type 'error)))
+
 (ert-deftest yunge-reader-native-queues-until-validated-ready ()
   (yunge-reader-native-test--with-fake-process
     (let (result)
