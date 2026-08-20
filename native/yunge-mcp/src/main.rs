@@ -2,7 +2,12 @@
 // SPDX-License-Identifier: MIT
 
 use std::{
-    env, error::Error, ffi::OsString, fs, path::PathBuf, process::Stdio,
+    env,
+    error::Error,
+    ffi::OsString,
+    fs,
+    path::{Path, PathBuf},
+    process::Stdio,
     sync::Arc,
 };
 
@@ -90,14 +95,13 @@ impl EmacsBridge {
         Some(executable.parent()?.parent()?.join("runtime.json"))
     }
 
-    fn runtime_config() -> Result<Option<RuntimeConfig>, BridgeError> {
-        let Some(file) = Self::runtime_file() else {
-            return Ok(None);
-        };
+    fn runtime_config_at(
+        file: &Path,
+    ) -> Result<Option<RuntimeConfig>, BridgeError> {
         if !file.exists() {
             return Ok(None);
         }
-        let bytes = fs::read(&file).map_err(|error| {
+        let bytes = fs::read(file).map_err(|error| {
             BridgeError(format!(
                 "could not read runtime manifest {}: {error}",
                 file.display()
@@ -119,64 +123,69 @@ impl EmacsBridge {
         Ok(Some(config))
     }
 
-    fn from_environment() -> Result<Self, BridgeError> {
-        let config = Self::runtime_config()?;
-        let program = env::var_os("YUNGE_EMACSCLIENT")
+    fn runtime_config() -> Result<Option<RuntimeConfig>, BridgeError> {
+        let Some(file) = Self::runtime_file() else {
+            return Ok(None);
+        };
+        Self::runtime_config_at(&file)
+    }
+
+    fn from_sources(
+        config: Option<RuntimeConfig>,
+        program_override: Option<OsString>,
+        server_file_override: Option<OsString>,
+    ) -> Self {
+        let program = program_override
             .or_else(|| {
                 config
                     .as_ref()
                     .map(|runtime| runtime.emacsclient.clone().into_os_string())
             })
             .unwrap_or_else(|| OsString::from("emacsclient"));
-        let connection_arguments =
-            if let Some(file) = env::var_os("YUNGE_EMACS_SERVER_FILE") {
-                vec![OsString::from("--server-file"), file]
-            } else {
-                config
-                    .map(|runtime| {
-                        runtime
-                            .connection_arguments
-                            .into_iter()
-                            .map(OsString::from)
-                            .collect()
-                    })
-                    .unwrap_or_default()
-            };
-        Ok(Self {
+        let connection_arguments = if let Some(file) = server_file_override {
+            vec![OsString::from("--server-file"), file]
+        } else {
+            config
+                .map(|runtime| {
+                    runtime
+                        .connection_arguments
+                        .into_iter()
+                        .map(OsString::from)
+                        .collect()
+                })
+                .unwrap_or_default()
+        };
+        Self {
             program,
             connection_arguments,
-        })
+        }
     }
 
-    async fn request(
+    fn from_environment() -> Result<Self, BridgeError> {
+        Ok(Self::from_sources(
+            Self::runtime_config()?,
+            env::var_os("YUNGE_EMACSCLIENT"),
+            env::var_os("YUNGE_EMACS_SERVER_FILE"),
+        ))
+    }
+
+    fn command_arguments(
         &self,
         request: &BridgeRequest<'_>,
-    ) -> Result<Value, BridgeError> {
+    ) -> Result<Vec<OsString>, BridgeError> {
         let request_argument = Self::request_argument(request)?;
-        let mut command = Command::new(&self.program);
-        command.args(&self.connection_arguments);
-        let output = command
-            .arg("--eval")
-            .arg(DISPATCH_FORM)
-            .arg(BUILD_ID)
-            .arg(request_argument)
-            .stdin(Stdio::null())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .kill_on_drop(true)
-            .output()
-            .await
-            .map_err(|error| {
-                BridgeError(format!("could not run emacsclient: {error}"))
-            })?;
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            return Err(BridgeError(format!(
-                "emacsclient failed: {}",
-                stderr.trim()
-            )));
-        }
-        let printed = String::from_utf8(output.stdout)
+        let mut arguments = self.connection_arguments.clone();
+        arguments.extend([
+            OsString::from("--eval"),
+            OsString::from(DISPATCH_FORM),
+            OsString::from(BUILD_ID),
+            OsString::from(request_argument),
+        ]);
+        Ok(arguments)
+    }
+
+    fn decode_response(stdout: &[u8]) -> Result<Value, BridgeError> {
+        let printed = std::str::from_utf8(stdout)
             .map_err(|error| BridgeError(error.to_string()))?;
         let encoded: String =
             serde_json::from_str(printed.trim()).map_err(|error| {
@@ -202,6 +211,33 @@ impl EmacsBridge {
                 error.kind, error.message
             )))
         }
+    }
+
+    async fn request(
+        &self,
+        request: &BridgeRequest<'_>,
+    ) -> Result<Value, BridgeError> {
+        let arguments = self.command_arguments(request)?;
+        let mut command = Command::new(&self.program);
+        let output = command
+            .args(arguments)
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .kill_on_drop(true)
+            .output()
+            .await
+            .map_err(|error| {
+                BridgeError(format!("could not run emacsclient: {error}"))
+            })?;
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            return Err(BridgeError(format!(
+                "emacsclient failed: {}",
+                stderr.trim()
+            )));
+        }
+        Self::decode_response(&output.stdout)
     }
 
     async fn list_tools(&self) -> Result<Vec<Tool>, BridgeError> {
@@ -304,6 +340,23 @@ async fn main() -> Result<(), Box<dyn Error>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
+
+    fn sample_runtime() -> RuntimeConfig {
+        RuntimeConfig {
+            version: 1,
+            emacsclient: PathBuf::from("/runtime/emacsclient"),
+            connection_arguments: vec![
+                "--socket-name".into(),
+                "runtime".into(),
+            ],
+        }
+    }
+
+    fn encoded_stdout(response: Value) -> Vec<u8> {
+        let response_json = serde_json::to_vec(&response).unwrap();
+        serde_json::to_vec(&STANDARD.encode(response_json)).unwrap()
+    }
 
     #[test]
     fn request_arguments_are_ascii_and_preserve_unicode() {
@@ -327,5 +380,175 @@ mod tests {
     fn build_id_is_available_to_bridge_requests() {
         assert_eq!(BUILD_ID.len(), 64);
         assert!(BUILD_ID.bytes().all(|byte| byte.is_ascii_hexdigit()));
+    }
+
+    #[test]
+    fn runtime_manifest_is_optional_and_versioned() {
+        let file = env::temp_dir().join(format!(
+            "yunge-mcp-runtime-test-{}.json",
+            std::process::id()
+        ));
+        let _ = fs::remove_file(&file);
+
+        assert!(EmacsBridge::runtime_config_at(&file).unwrap().is_none());
+
+        fs::write(&file, b"not json").unwrap();
+        let error = EmacsBridge::runtime_config_at(&file)
+            .unwrap_err()
+            .to_string();
+        assert!(error.starts_with("invalid runtime manifest "));
+
+        fs::write(
+            &file,
+            br#"{"version":2,"emacsclient":"client","connectionArguments":[]}"#,
+        )
+        .unwrap();
+        let error = EmacsBridge::runtime_config_at(&file)
+            .unwrap_err()
+            .to_string();
+        assert_eq!(error, "unsupported runtime manifest version 2");
+
+        fs::write(
+            &file,
+            br#"{"version":1,"emacsclient":"client","connectionArguments":["--socket-name","work"]}"#,
+        )
+        .unwrap();
+        let config = EmacsBridge::runtime_config_at(&file).unwrap().unwrap();
+        assert_eq!(config.emacsclient, PathBuf::from("client"));
+        assert_eq!(config.connection_arguments, ["--socket-name", "work"]);
+
+        fs::remove_file(file).unwrap();
+    }
+
+    #[test]
+    fn explicit_bridge_sources_override_runtime_defaults() {
+        let bridge = EmacsBridge::from_sources(
+            Some(sample_runtime()),
+            Some(OsString::from("override-client")),
+            Some(OsString::from("override-server")),
+        );
+        assert_eq!(bridge.program, OsString::from("override-client"));
+        assert_eq!(
+            bridge.connection_arguments,
+            ["--server-file", "override-server"]
+                .map(OsString::from)
+                .to_vec()
+        );
+
+        let bridge =
+            EmacsBridge::from_sources(Some(sample_runtime()), None, None);
+        assert_eq!(
+            bridge.program,
+            PathBuf::from("/runtime/emacsclient").into_os_string()
+        );
+        assert_eq!(
+            bridge.connection_arguments,
+            ["--socket-name", "runtime"].map(OsString::from).to_vec()
+        );
+
+        let bridge = EmacsBridge::from_sources(None, None, None);
+        assert_eq!(bridge.program, OsString::from("emacsclient"));
+        assert!(bridge.connection_arguments.is_empty());
+    }
+
+    #[test]
+    fn command_arguments_keep_connection_and_protocol_boundaries() {
+        let bridge = EmacsBridge {
+            program: OsString::from("emacsclient"),
+            connection_arguments: ["--socket-name", "work"]
+                .map(OsString::from)
+                .to_vec(),
+        };
+        let request = BridgeRequest {
+            operation: "list-tools",
+            name: None,
+            arguments: None,
+        };
+        let arguments = bridge.command_arguments(&request).unwrap();
+        assert_eq!(
+            &arguments[..5],
+            ["--socket-name", "work", "--eval", DISPATCH_FORM, BUILD_ID]
+                .map(OsString::from)
+                .as_slice()
+        );
+
+        let decoded = STANDARD.decode(arguments[5].as_encoded_bytes()).unwrap();
+        let value: Value = serde_json::from_slice(&decoded).unwrap();
+        assert_eq!(value, json!({"operation": "list-tools"}));
+    }
+
+    #[test]
+    fn response_decoding_preserves_success_and_domain_errors() {
+        let output = encoded_stdout(json!({
+            "ok": true,
+            "value": {"count": 3},
+            "error": null
+        }));
+        assert_eq!(
+            EmacsBridge::decode_response(&output).unwrap(),
+            json!({"count": 3})
+        );
+
+        let output = encoded_stdout(json!({
+            "ok": false,
+            "value": null,
+            "error": {"type": "tool-error", "message": "stopped"}
+        }));
+        assert_eq!(
+            EmacsBridge::decode_response(&output)
+                .unwrap_err()
+                .to_string(),
+            "Yunge tool-error: stopped"
+        );
+    }
+
+    #[test]
+    fn response_decoding_identifies_each_protocol_layer() {
+        let error = EmacsBridge::decode_response(b"not json")
+            .unwrap_err()
+            .to_string();
+        assert!(error.starts_with("invalid response from emacsclient: "));
+
+        let invalid_encoding = serde_json::to_vec("not base64!").unwrap();
+        let error = EmacsBridge::decode_response(&invalid_encoding)
+            .unwrap_err()
+            .to_string();
+        assert!(error.starts_with("invalid response encoding: "));
+
+        let invalid_response =
+            serde_json::to_vec(&STANDARD.encode(b"not json")).unwrap();
+        let error = EmacsBridge::decode_response(&invalid_response)
+            .unwrap_err()
+            .to_string();
+        assert!(error.starts_with("invalid response from Yunge: "));
+
+        let unspecified = encoded_stdout(json!({
+            "ok": false,
+            "value": null,
+            "error": null
+        }));
+        assert_eq!(
+            EmacsBridge::decode_response(&unspecified)
+                .unwrap_err()
+                .to_string(),
+            "Yunge returned an unspecified error"
+        );
+    }
+
+    #[tokio::test]
+    async fn bridge_reports_process_start_failures() {
+        let bridge = EmacsBridge {
+            program: env::temp_dir()
+                .join("missing-yunge-emacsclient")
+                .into_os_string(),
+            connection_arguments: Vec::new(),
+        };
+        let request = BridgeRequest {
+            operation: "list-tools",
+            name: None,
+            arguments: None,
+        };
+        let error = bridge.request(&request).await.unwrap_err().to_string();
+        assert!(error.starts_with("could not run emacsclient: "));
     }
 }
