@@ -21,3 +21,8 @@ features = ["server", "transport-io"]
 
 [build-dependencies]
 sha2 = "=0.10.9"
+
+[[test]]
+name = "stdio_roundtrip"
+path = "tests/stdio_roundtrip.rs"
+harness = false

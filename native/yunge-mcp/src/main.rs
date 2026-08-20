@@ -232,8 +232,13 @@ impl EmacsBridge {
             })?;
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
+            let status = output.status.code().map_or_else(
+                || output.status.to_string(),
+                |code| code.to_string(),
+            );
             return Err(BridgeError(format!(
-                "emacsclient failed: {}",
+                "emacsclient failed with status {}: {}",
+                status,
                 stderr.trim()
             )));
         }
