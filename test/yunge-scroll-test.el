@@ -5,6 +5,9 @@
 (require 'yunge-test-helper)
 (require 'yunge-scroll)
 
+(ert-deftest yunge-scroll-does-not-recenter-at-window-boundaries ()
+  (should (> scroll-conservatively 100)))
+
 (ert-deftest yunge-scroll-remaps-the-built-in-wheel-command ()
   (should
    (eq (lookup-key global-map [remap mwheel-scroll])

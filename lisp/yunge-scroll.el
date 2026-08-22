@@ -4,6 +4,12 @@
 
 (require 'mwheel)
 
+;; Keep point at the window edge instead of recentering the window when
+;; ordinary motion carries it just beyond the visible text.  Values above 100
+;; have the special meaning of never recentering, so 101 selects that behavior
+;; rather than specifying a 101-line scroll limit.
+(setq scroll-conservatively 101)
+
 (defun yunge-scroll-mwheel (event &optional argument)
   "Scroll EVENT without needlessly moving a still-visible point.
 Optional ARGUMENT retains the horizontal scrolling step accepted by
