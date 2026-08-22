@@ -1922,6 +1922,51 @@
         (regexp-quote ":ID: untitled-heading")
         (plist-get result :content))))))
 
+(ert-deftest fangcun-mcp-locates-nodes-and-bounds-fallback-reads ()
+  (fangcun-test-with-notes
+    (fangcun-db-sync)
+    (let* ((located (fangcun-mcp--locate-node '(:id "theorem")))
+           (location (plist-get located :location))
+           (first
+            (fangcun-mcp--read-node
+             '(:id "theorem" :maxLines 1 :maxCharacters 100)))
+           (next (plist-get first :nextPosition))
+           (partial
+            (fangcun-mcp--read-node
+             '(:id "theorem" :maxLines 10 :maxCharacters 3))))
+      (should (file-equal-p
+               (plist-get location :absoluteFile)
+               personal-file))
+      (should (equal (plist-get location :kind) "heading"))
+      (should (= (plist-get location :startLine) 6))
+      (should (= (plist-get location :endLine) 10))
+      (should (equal (append (plist-get location :outlinePath) nil)
+                     '("A theorem")))
+      (should (eq (plist-get location :modifiedInEmacs) :false))
+      (should
+       (equal (plist-get first :content)
+              "* [[id:source][A theorem]]\n"))
+      (should (plist-get first :hasMore))
+      (should (= (plist-get next :line) 7))
+      (should (= (plist-get next :column) 0))
+      (should (= (length (plist-get partial :content)) 3))
+      (should (= (plist-get
+                  (plist-get partial :nextPosition)
+                  :line)
+                 6))
+      (should (= (plist-get
+                  (plist-get partial :nextPosition)
+                  :column)
+                 3))
+      (should-error
+       (fangcun-mcp--read-node
+        '(:id "theorem" :startLine 5))
+       :type 'user-error)
+      (should-error
+       (fangcun-mcp--read-node
+        '(:id "theorem" :maxLines 501))
+       :type 'user-error))))
+
 (ert-deftest fangcun-mcp-ranks-and-pages-node-searches ()
   (fangcun-test-with-notes
     (fangcun-test--write-file
@@ -2226,13 +2271,24 @@
                :targetId "target"
                :afterText "Echo"
                :occurrence 2)))
-           (position (plist-get result :position)))
+           (location (plist-get result :location))
+           (anchor (plist-get result :anchor))
+           (preview (plist-get result :linePreview)))
       (should (equal (plist-get result :link)
                      "[[id:target][Target]]"))
-      (should (equal (plist-get position :line) 5))
-      (should (equal (plist-get position :column) 9))
-      (should (equal (plist-get position :relation) "after"))
-      (should (= (plist-get position :occurrence) 2))
+      (should (file-equal-p
+               (plist-get location :absoluteFile)
+               personal-file))
+      (should (= (plist-get location :line) 15))
+      (should (= (plist-get location :column) 9))
+      (should (equal (plist-get anchor :relation) "after"))
+      (should (= (plist-get anchor :occurrence) 2))
+      (should
+       (string-match-p
+        (regexp-quote "Echo Echo[[id:target][Target]].")
+        (plist-get preview :text)))
+      (should (eq (plist-get preview :truncatedBefore) :false))
+      (should (eq (plist-get preview :truncatedAfter) :false))
       (should (plist-get result :saved))
       (should (plist-get result :indexed))
       (should-not (plist-member result :content))
@@ -2262,5 +2318,14 @@
         :targetId "target"
         :beforeText "missing anchor"))
      :type 'user-error)))
+
+(ert-deftest fangcun-mcp-bounds-changed-line-previews ()
+  (with-temp-buffer
+    (insert (make-string 1000 ?x))
+    (let ((preview (fangcun-mcp--line-preview 700)))
+      (should (= (length (plist-get preview :text)) 500))
+      (should (plist-get preview :truncatedBefore))
+      (should (plist-get preview :truncatedAfter))
+      (should (= (plist-get preview :originalCharacters) 1000)))))
 
 ;;; fangcun-test.el ends here

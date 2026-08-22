@@ -265,6 +265,15 @@ fn stdio_roundtrip() -> Result<(), Box<dyn Error>> {
     let initialized = helper.initialize()?;
     assert_eq!(initialized["result"]["protocolVersion"], "2025-11-25");
     assert_eq!(initialized["result"]["serverInfo"]["name"], "yunge-mcp");
+    let instructions = initialized["result"]["instructions"]
+        .as_str()
+        .ok_or("initialize response omitted server instructions")?;
+    assert!(instructions.contains("search or read Org notes"));
+    assert!(instructions.contains("inspect backlinks"));
+    assert!(instructions.contains("configured 一隅（yiyu） note root"));
+    assert!(instructions.contains("watches saved external changes"));
+    assert!(instructions.contains("filesystem tools"));
+    assert!(instructions.contains("bounded fallback"));
 
     let tools = helper.request(json!({
         "jsonrpc": "2.0",

@@ -297,7 +297,13 @@ impl ServerHandler for YungeMcpServer {
         .with_instructions(
             "芸阁（Yunge） exposes the user's running Emacs to MCP clients. \
 Use 方寸（Fangcun） tools to search or read Org notes, inspect backlinks, \
-or create a note in a configured 一隅（yiyu） note root.",
+or create a note in a configured 一隅（yiyu） note root. Fangcun indexes \
+ordinary Org files and watches saved external changes automatically. Use \
+Fangcun tools for semantic node discovery, filesystem locations, backlinks, \
+and structured node operations. When note files are accessible, prefer the \
+client's filesystem tools for bounded reads, literal full-text search, link \
+deletion, and general content edits. Use fangcun_read_node only as a bounded \
+fallback when local file access is unavailable.",
         )
     }
 

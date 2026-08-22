@@ -58,6 +58,45 @@
       (should (plist-member properties :cursor))
       (should-not (plist-member properties :limit)))))
 
+(ert-deftest yunge-mcp-registers-locations-and-bounded-fallback-reads ()
+  (require 'fangcun-mcp)
+  (let* ((locate (gethash "fangcun_locate_node" yunge-mcp--tools))
+         (read (gethash "fangcun_read_node" yunge-mcp--tools))
+         (schema (yunge-mcp-tool-input-schema read))
+         (properties (plist-get schema :properties)))
+    (should locate)
+    (should read)
+    (dolist (property '(:startLine :startColumn :maxLines :maxCharacters))
+      (should (plist-member properties property)))
+    (should (= (plist-get (plist-get properties :maxLines) :default)
+               60))
+    (should (= (plist-get (plist-get properties :maxLines) :maximum)
+               500))
+    (should (= (plist-get
+                (plist-get properties :maxCharacters)
+                :default)
+               6000))
+    (should (= (plist-get
+                (plist-get properties :maxCharacters)
+                :maximum)
+               50000))
+    (should (string-match-p
+             "filesystem tools"
+             (yunge-mcp-tool-description locate)))
+    (should (string-match-p
+             "fallback"
+             (yunge-mcp-tool-description read)))
+    (should-not (gethash "fangcun_sync" yunge-mcp--tools))))
+
+(ert-deftest yunge-mcp-describes-watcher-first-file-workflows ()
+  (require 'fangcun-mcp)
+  (dolist (name '("fangcun_list_yiyus" "fangcun_insert_node_link"))
+    (let ((description
+           (yunge-mcp-tool-description
+            (gethash name yunge-mcp--tools))))
+      (should (string-match-p "filesystem tools" description))
+      (should (string-match-p "watches saved" description)))))
+
 (ert-deftest yunge-mcp-registers-fangcun-structural-write-tools ()
   (require 'fangcun-mcp)
   (dolist (name '("fangcun_create_heading_node"

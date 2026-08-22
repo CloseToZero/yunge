@@ -14,7 +14,11 @@ The initial tool set belongs to Fangcun:
 - =fangcun_search_nodes= searches node titles, aliases, tags, yiyu names, and
   relative files.  Results are ranked by match quality and use opaque cursor
   pagination.
-- =fangcun_read_node= returns one node's metadata and Org source.
+- =fangcun_locate_node= returns one node's absolute file, line range, outline
+  path, and unsaved-buffer state without returning its content.
+- =fangcun_read_node= is a bounded fallback for clients that cannot read the
+  located file themselves.  It returns at most 60 lines and 6,000 characters
+  by default, with hard limits of 500 lines and 50,000 characters per call.
 - =fangcun_list_backlinks= returns unique source nodes linking to one node,
   together with each source's occurrence count and first link position.  It
   uses opaque cursor pagination and can optionally include a one-line preview
@@ -27,8 +31,7 @@ The initial tool set belongs to Fangcun:
   existing IDs are retained, just like =SPC n c=.
 - =fangcun_insert_node_link= inserts an =id:= link between two indexed nodes,
   saves the source file, and refreshes its links in the index.  It inserts
-  immediately before or after exact anchor text copied from the =content=
-  returned by =fangcun_read_node=.
+  immediately before or after exact anchor text copied from a bounded read.
 
 The link-writing tool deliberately supports Fangcun =id:= links rather than
 every Org link type.  This keeps both endpoints verifiable and makes the new
@@ -41,11 +44,26 @@ titles without TODO keywords, priorities, or tags.  A missing or ambiguous
 path is rejected.  Link callers provide exactly one of =beforeText= and
 =afterText=.  A unique match needs no position calculation; when the same
 anchor occurs more than once, its one-based =occurrence= is required.  The
-result reports the resolved one-based line and zero-based character column.
-It returns the link, position, source and target metadata, and saved/indexed
-status by default.  Set =includeContent= to true only when the complete updated
-source-node content is needed.  Both write tools refuse to save a file whose
-visiting Emacs buffer already has unsaved changes.
+result reports the absolute file, resolved one-based line, zero-based character
+column, anchor occurrence, and a bounded changed-line preview.  It returns the
+link, location, source and target metadata, and saved/indexed status by default.
+Set =includeContent= to true only when the complete updated source-node content
+is needed.  Both write tools refuse to save a file whose visiting Emacs buffer
+already has unsaved changes.
+
+* Direct file workflows
+
+Fangcun yiyus contain ordinary Org files.  When those files are accessible to
+the MCP client, the client should use its own filesystem tools for normal
+bounded reads, literal full-text search, deleting links, and general content
+edits.  =fangcun_locate_node= bridges semantic node discovery to those tools
+without copying note content into the model context.
+
+Fangcun watches its configured roots and updates the index after saved external
+changes, so direct file edits do not require an MCP synchronization call.  Use
+the MCP tools for semantic node discovery, locations, backlinks, and structured
+node operations.  Keep =fangcun_read_node= as the bounded fallback when the
+client cannot access a note file directly.
 
 * Search and backlink pagination
 
