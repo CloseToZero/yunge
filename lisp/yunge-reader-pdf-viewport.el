@@ -53,6 +53,9 @@
 (defvar-local yunge-reader-pdf--pending-location nil
   "Stable PDF position waiting for a live viewport window.")
 
+(defvar-local yunge-reader-pdf--pending-viewport-anchor nil
+  "Continuous-roll viewport anchor waiting for resized page geometry.")
+
 (defvar-local yunge-reader-pdf--resize-timer nil
   "Idle timer coalescing changes to the current PDF viewport size.")
 
@@ -185,6 +188,51 @@ When SUPPRESS-SCALE is non-nil, do not update the shared effective scale."
        :x x
        :y y))))
 
+(defun yunge-reader-pdf--viewport-anchor (window)
+  "Return the continuous-roll pixel anchor currently shown in WINDOW."
+  (when (and (window-live-p window)
+             (eq (window-buffer window) (current-buffer))
+             yunge-reader-pdf--page-positions)
+    (when-let* ((page
+                 (yunge-reader-pdf--page-at-position
+                  (window-start window)))
+                (page-info (yunge-reader-pdf--page-info page))
+                (width
+                 (or (yunge-reader-pdf--display-width page)
+                     (yunge-reader-pdf--page-width page window))))
+      (list :page page
+            :page-height
+            (cdr (yunge-reader-pdf--pixel-size page-info width))
+            :vscroll (max 0 (or (window-vscroll window t) 0))))))
+
+(defun yunge-reader-pdf--rescaled-vscroll
+    (anchor page pixel-height fallback)
+  "Return ANCHOR's vscroll rescaled for PAGE at PIXEL-HEIGHT.
+Use FALLBACK when ANCHOR does not describe PAGE.  Preserve the fixed pixel
+gap below a page separately from the portion which scales with the page."
+  (let ((anchor-page (plist-get anchor :page))
+        (old-height (plist-get anchor :page-height))
+        (old-vscroll (plist-get anchor :vscroll)))
+    (if (and (eql anchor-page page)
+             (numberp old-height)
+             (> old-height 0)
+             (numberp old-vscroll)
+             (>= old-vscroll 0))
+        (let* ((page-offset (min old-vscroll old-height))
+               (gap-offset
+                (min yunge-reader-pdf-page-gap
+                     (max 0 (- old-vscroll old-height))))
+               (limit
+                (+ pixel-height
+                   (if (< page (1- (yunge-reader-pdf--page-count)))
+                       yunge-reader-pdf-page-gap
+                     0))))
+          (min limit
+               (+ (round (* pixel-height
+                            (/ (float page-offset) old-height)))
+                  gap-offset)))
+      fallback)))
+
 (defun yunge-reader-pdf--apply-pending-location (window)
   "Apply a pending stable PDF location to live WINDOW."
   (when (and yunge-reader-pdf--pending-location
@@ -215,13 +263,16 @@ When SUPPRESS-SCALE is non-nil, do not update the shared effective scale."
                       (or (yunge-reader-position-y location)
                           page-height))))
            (body-width (window-body-width window t))
-           (body-height (window-body-height window t))
-           (vertical
+           (location-vertical
             (max
              0
-             (min (max 0 (- pixel-height body-height))
+             (min pixel-height
                   (round
                    (* pixel-height (- 1.0 (/ y page-height)))))))
+           (vertical
+            (yunge-reader-pdf--rescaled-vscroll
+             yunge-reader-pdf--pending-viewport-anchor
+             page pixel-height location-vertical))
            (horizontal-pixels
             (max
              0
@@ -231,10 +282,11 @@ When SUPPRESS-SCALE is non-nil, do not update the shared effective scale."
             (max 1 (frame-char-width (window-frame window))))
            (position (yunge-reader-pdf--page-position page)))
       (setq yunge-reader-pdf--pending-location nil
+            yunge-reader-pdf--pending-viewport-anchor nil
             yunge-reader-pdf-page page)
       (goto-char position)
       (set-window-start window position t)
-      (set-window-vscroll window vertical t)
+      (set-window-vscroll window vertical t t)
       (set-window-hscroll
        window (floor (/ (float horizontal-pixels) column-width)))
       t)))
@@ -256,6 +308,7 @@ When SUPPRESS-SCALE is non-nil, do not update the shared effective scale."
            (live-window (yunge-reader--place-window window)))
       (setf (yunge-reader-position-unit restored) page)
       (setq yunge-reader-pdf--pending-location restored
+            yunge-reader-pdf--pending-viewport-anchor nil
             yunge-reader-pdf-page page)
       (goto-char position)
       (when live-window
@@ -346,8 +399,8 @@ WINDOW identifies the presentation which triggered this update."
       (yunge-reader-pdf--update-header)
       (yunge-reader-record-place source-window))))
 
-(defun yunge-reader-pdf--refresh (&optional window location)
-  "Refresh the PDF roll in WINDOW, then restore stable LOCATION."
+(defun yunge-reader-pdf--refresh (&optional window location viewport-anchor)
+  "Refresh the PDF roll in WINDOW, then restore LOCATION and VIEWPORT-ANCHOR."
   (when (and yunge-reader-pdf-view-mode yunge-reader-document)
     (setq window
           (or (and (window-live-p window)
@@ -364,7 +417,9 @@ WINDOW identifies the presentation which triggered this update."
       (when (and (yunge-reader-position-p location)
                  (not yunge-reader-pdf--pending-location))
         (setq yunge-reader-pdf--pending-location
-              (copy-yunge-reader-position location)))
+              (copy-yunge-reader-position location)
+              yunge-reader-pdf--pending-viewport-anchor
+              (copy-tree viewport-anchor t)))
       (setq yunge-reader-pdf--displayed-pages nil)
       (dotimes (page (yunge-reader-pdf--page-count))
         (yunge-reader-pdf--paint-page
@@ -396,7 +451,8 @@ WINDOW identifies the presentation which triggered this update."
   (when (timerp yunge-reader-pdf--resize-timer)
     (cancel-timer yunge-reader-pdf--resize-timer))
   (setq yunge-reader-pdf--resize-timer nil
-        yunge-reader-pdf--pending-resize nil))
+        yunge-reader-pdf--pending-resize nil
+        yunge-reader-pdf--pending-viewport-anchor nil))
 
 (defun yunge-reader-pdf--finish-resize (buffer)
   "Refresh BUFFER after its latest PDF viewport resize settles."
@@ -405,7 +461,8 @@ WINDOW identifies the presentation which triggered this update."
       (let* ((state yunge-reader-pdf--pending-resize)
              (document (plist-get state :document))
              (window (plist-get state :window))
-             (location (plist-get state :location)))
+             (location (plist-get state :location))
+             (viewport-anchor (plist-get state :viewport-anchor)))
         (setq yunge-reader-pdf--resize-timer nil
               yunge-reader-pdf--pending-resize nil)
         (when (and yunge-reader-pdf-view-mode
@@ -414,7 +471,8 @@ WINDOW identifies the presentation which triggered this update."
                    (eq (window-buffer window) buffer)
                    (yunge-reader--active-presentation-p window))
           (if (memq yunge-reader-zoom-mode '(fit-width fit-page))
-              (yunge-reader-pdf--refresh window location)
+              (yunge-reader-pdf--refresh
+               window location viewport-anchor)
             (yunge-reader-pdf--update-visible-pages window)))))))
 
 (defun yunge-reader-pdf--window-size-change (window)
@@ -433,13 +491,20 @@ WINDOW identifies the presentation which triggered this update."
                 (and (not yunge-reader-pdf--pending-location)
                      (ignore-errors
                        (yunge-reader-pdf--location
-                        yunge-reader-document window))))))
+                        yunge-reader-document window)))))
+           (viewport-anchor
+            (or (and same-view
+                     (plist-get former :viewport-anchor))
+                (and (not yunge-reader-pdf--pending-location)
+                     (ignore-errors
+                       (yunge-reader-pdf--viewport-anchor window))))))
       (setq yunge-reader-pdf--pending-resize
             (list :document yunge-reader-document
                   :window window
                   :width (window-body-width window t)
                   :height (window-body-height window t)
-                  :location location))
+                  :location location
+                  :viewport-anchor viewport-anchor))
       (unless (timerp yunge-reader-pdf--resize-timer)
         (setq yunge-reader-pdf--resize-timer
               (run-with-idle-timer

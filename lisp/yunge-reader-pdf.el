@@ -80,6 +80,7 @@
         (setq-local yunge-reader-pdf--prefetch-active nil)
         (setq-local yunge-reader-pdf--prefetch-running nil)
         (setq-local yunge-reader-pdf--pending-location nil)
+        (setq-local yunge-reader-pdf--pending-viewport-anchor nil)
         (setq-local yunge-reader-pdf--resize-timer nil)
         (setq-local yunge-reader-pdf--pending-resize nil)
         (setq-local mwheel-coalesce-scroll-events nil)
@@ -120,6 +121,7 @@
           yunge-reader-pdf--render-pending nil
           yunge-reader-pdf--displayed-pages nil
           yunge-reader-pdf--pending-location nil
+          yunge-reader-pdf--pending-viewport-anchor nil
           yunge-reader-pdf--resize-timer nil
           yunge-reader-pdf--pending-resize nil
           yunge-reader-pdf--text-cache nil
