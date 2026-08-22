@@ -222,9 +222,12 @@ available.  For MiKTeX, refresh its package database and install the explicit
 baseline:
 
 #+begin_src powershell
+initexmf --set-config-value=[MPM]AutoInstall=1
 miktex packages update-package-database
-miktex packages install preview mylatexformat amsmath amsfonts graphics
+miktex packages install preview mylatexformat amsmath amsfonts graphics cm-super
 miktex packages install mathtools xcolor ulem
+miktex fndb refresh
+miktex fontmaps configure
 #+end_src
 
 On Windows, =M-x shuying-setup= performs this setup explicitly.  It downloads
@@ -241,6 +244,9 @@ Package installation is idempotent: each package is queried immediately
 before installation and an existing package is skipped.  This avoids treating
 MiKTeX's nonzero "package is already installed" result as a setup failure,
 including when an earlier package installed a later one as a dependency.
+Every setup run also configures missing packages to install without a modal
+prompt.  Running the command again therefore migrates an existing MiKTeX
+installation as well as completing a partial package baseline.
 
 Each invocation uses a private temporary directory.  The directory and the
 downloaded installer are removed after success, ordinary failure, or process
@@ -256,8 +262,12 @@ temporary directory may remain below =var/shuying/setup/= and can be removed
 manually.
 
 MiKTeX can install a missing package on demand, but unattended preview jobs
-must not wait behind an installation dialog.  Either install the baseline
-above or configure missing-package installation to =Always= in MiKTeX Console.
+must not wait behind an installation dialog.  The setup command configures
+missing-package installation to =Always=; the equivalent manual setting is in
+MiKTeX Console.  The explicit baseline includes =cm-super= because Org's
+default T1 text encoding needs its scalable outlines when =dvisvgm= converts
+commands such as =\text= to SVG.  File and font maps are refreshed after the
+baseline so a newly installed outline is visible to the converter immediately.
 The setup command refreshes the current Emacs process after the installer
 changes =PATH=; restart Emacs if manual installation changes it instead.
 

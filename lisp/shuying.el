@@ -210,6 +210,11 @@ Refuse to clear the cache while render jobs are pending."
           (rename-file temporary-file (shuying--job-artifact-file job) t)
           (rename-file temporary-metadata-file
                        (shuying--job-metadata-file job) t)
+          ;; A cache clear followed by an identical render publishes to the
+          ;; same hashed path.  Discard any decoded image for that path before
+          ;; consumers create a new display, or Emacs can keep showing the
+          ;; pixels from the artifact that was deleted.
+          (clear-image-cache (shuying--job-artifact-file job))
           (setq artifact
                 (make-shuying-artifact
                  :path (shuying--job-artifact-file job)

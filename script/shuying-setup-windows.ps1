@@ -133,6 +133,45 @@ function Test-MiktexPackageInstalled {
     return $installed -eq 'true'
 }
 
+function Set-MiktexAutomaticPackageInstallation {
+    param([string] $Initexmf)
+
+    # MiKTeX encodes "install missing packages without asking" as 1.
+    # Set it explicitly because the unattended Basic installer currently
+    # leaves existing and new per-user installations in prompt mode.
+    Invoke-Checked `
+        $Initexmf @('--set-config-value=[MPM]AutoInstall=1')
+}
+
+function Get-ShuyingMiktexPackages {
+    return @(
+        'preview',
+        'mylatexformat',
+        'amsmath',
+        'amsfonts',
+        'graphics',
+        'mathtools',
+        'xcolor',
+        'ulem',
+        'cm-super'
+    )
+}
+
+function Get-ShuyingRequiredTexFiles {
+    return @(
+        'preview.sty',
+        'mylatexformat.ltx',
+        'amsmath.sty',
+        'amssymb.sty',
+        'mathtools.sty',
+        'graphicx.sty',
+        'xcolor.sty',
+        'ulem.sty',
+        'cm-super-t1.enc',
+        'sfrm1000.pfb'
+    )
+}
+
 function Get-InstallerMetadata {
     param(
         [string] $Content,
@@ -327,21 +366,18 @@ try {
     $binDirectory = Split-Path -Parent $miktex
     Add-DirectoryToProcessPath $binDirectory
 
+    Write-Stage 'Configuring automatic MiKTeX package installation'
+    $initexmf = Find-Application 'initexmf.exe'
+    if ([string]::IsNullOrWhiteSpace($initexmf)) {
+        throw 'MiKTeX configuration utility is unavailable: initexmf.exe'
+    }
+    Set-MiktexAutomaticPackageInstallation $initexmf
+
     Write-Stage 'Updating the MiKTeX package database'
     Invoke-Checked $miktex @('packages', 'update-package-database')
 
     Write-Stage 'Installing the Shuying TeX package baseline'
-    $packages = @(
-        'preview',
-        'mylatexformat',
-        'amsmath',
-        'amsfonts',
-        'graphics',
-        'mathtools',
-        'xcolor',
-        'ulem'
-    )
-    foreach ($package in $packages) {
+    foreach ($package in (Get-ShuyingMiktexPackages)) {
         if (Test-MiktexPackageInstalled $miktex $package) {
             Write-Output "Already installed: $package"
         }
@@ -350,6 +386,10 @@ try {
             Invoke-Checked $miktex @('packages', 'install', $package)
         }
     }
+
+    Write-Stage 'Refreshing MiKTeX file and font maps'
+    Invoke-Checked $miktex @('fndb', 'refresh')
+    Invoke-Checked $miktex @('fontmaps', 'configure')
 
     Write-Stage 'Verifying required programs'
     foreach ($program in @('latex.exe', 'dvisvgm.exe', 'kpsewhich.exe')) {
@@ -360,17 +400,7 @@ try {
 
     Write-Stage 'Verifying required TeX files'
     $kpsewhich = Find-Application 'kpsewhich.exe'
-    $files = @(
-        'preview.sty',
-        'mylatexformat.ltx',
-        'amsmath.sty',
-        'amssymb.sty',
-        'mathtools.sty',
-        'graphicx.sty',
-        'xcolor.sty',
-        'ulem.sty'
-    )
-    foreach ($file in $files) {
+    foreach ($file in (Get-ShuyingRequiredTexFiles)) {
         $located = & $kpsewhich $file
         if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($located)) {
             throw "Required TeX file is unavailable after setup: $file"

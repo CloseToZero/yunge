@@ -193,6 +193,44 @@ SHA-256:</div><div>$hash</div>
         Test-MiktexPackageInstalled 'Shuying-TestMiktex' 'xcolor'
     } 'Could not inspect MiKTeX package' 'package query failure'
 
+    $global:ShuyingTestArguments = @()
+    $global:ShuyingTestExitCode = 0
+    Set-MiktexAutomaticPackageInstallation 'Shuying-TestNative'
+    Assert-Sequence `
+        $global:ShuyingTestArguments `
+        @('--set-config-value=[MPM]AutoInstall=1') `
+        'automatic package installation configuration'
+
+    Assert-Sequence `
+        @(Get-ShuyingMiktexPackages) `
+        @(
+            'preview',
+            'mylatexformat',
+            'amsmath',
+            'amsfonts',
+            'graphics',
+            'mathtools',
+            'xcolor',
+            'ulem',
+            'cm-super'
+        ) `
+        'MiKTeX package baseline'
+    Assert-Sequence `
+        @(Get-ShuyingRequiredTexFiles) `
+        @(
+            'preview.sty',
+            'mylatexformat.ltx',
+            'amsmath.sty',
+            'amssymb.sty',
+            'mathtools.sty',
+            'graphicx.sty',
+            'xcolor.sty',
+            'ulem.sty',
+            'cm-super-t1.enc',
+            'sfrm1000.pfb'
+        ) `
+        'required TeX files'
+
     # Windows PowerShell 5.1 can decode a BOM-less script as an older code
     # page.  Build the marker from code points while still testing UTF-8 output.
     $unicodeMarker = [string]::Concat(

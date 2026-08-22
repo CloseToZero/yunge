@@ -80,6 +80,7 @@
          (shuying-backends nil)
          (shuying--pending-jobs (make-hash-table :test #'equal))
          (calls 0)
+         cleared
          artifacts)
     (unwind-protect
         (progn
@@ -95,19 +96,25 @@
                      '(:height 1.2 :depth 0.2))
                (funcall complete request nil))))
           (let ((specification (shuying-test--spec)))
-            (shuying-render
-             specification
-             (lambda (artifact error-data)
-               (should-not error-data)
-               (push artifact artifacts)))
-            (shuying-render
-             specification
-             (lambda (artifact error-data)
-               (should-not error-data)
-               (push artifact artifacts))))
+            (cl-letf (((symbol-function 'clear-image-cache)
+                       (lambda (file &optional _animation-filter)
+                         (push file cleared))))
+              (shuying-render
+               specification
+               (lambda (artifact error-data)
+                 (should-not error-data)
+                 (push artifact artifacts)))
+              (shuying-render
+               specification
+               (lambda (artifact error-data)
+                 (should-not error-data)
+                 (push artifact artifacts)))))
           (should (= calls 1))
           (should (= (length artifacts) 2))
           (should (equal (car artifacts) (cadr artifacts)))
+          (should
+           (equal cleared
+                  (list (shuying-artifact-path (car artifacts)))))
           (should
            (file-exists-p (shuying-artifact-path (car artifacts))))
           (should
