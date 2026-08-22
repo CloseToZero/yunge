@@ -58,6 +58,37 @@
       (should (plist-member properties :cursor))
       (should-not (plist-member properties :limit)))))
 
+(ert-deftest yunge-mcp-registers-fangcun-structural-write-tools ()
+  (require 'fangcun-mcp)
+  (dolist (name '("fangcun_create_heading_node"
+                  "fangcun_insert_node_link"))
+    (let* ((tool (gethash name yunge-mcp--tools))
+           (annotations (yunge-mcp-tool-annotations tool)))
+      (should tool)
+      (should (eq (plist-get annotations :readOnlyHint) :false))
+      (should (eq (plist-get annotations :destructiveHint) :false))))
+  (should
+   (plist-get
+    (yunge-mcp-tool-annotations
+     (gethash "fangcun_create_heading_node" yunge-mcp--tools))
+    :idempotentHint))
+  (should
+   (eq
+    (plist-get
+     (yunge-mcp-tool-annotations
+      (gethash "fangcun_insert_node_link" yunge-mcp--tools))
+     :idempotentHint)
+    :false))
+  (let* ((tool (gethash "fangcun_insert_node_link" yunge-mcp--tools))
+         (schema (yunge-mcp-tool-input-schema tool))
+         (properties (plist-get schema :properties)))
+    (should (plist-member properties :beforeText))
+    (should (plist-member properties :afterText))
+    (should (plist-member properties :occurrence))
+    (should (plist-member properties :includeContent))
+    (should-not (plist-member properties :line))
+    (should-not (plist-member properties :expectedLine))))
+
 (ert-deftest yunge-mcp-dispatches-tool-arguments ()
   (let ((yunge-mcp--tools (make-hash-table :test #'equal)))
     (cl-letf (((symbol-function 'yunge-mcp--load-tools) #'ignore))

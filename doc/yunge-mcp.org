@@ -22,6 +22,30 @@ The initial tool set belongs to Fangcun:
 - =fangcun_create_file_node= creates, saves, and indexes a new Org file node;
   its =file= argument is a path relative to the selected yiyu root, and missing
   parent directories are created.
+- =fangcun_create_heading_node= gives an existing heading a local =ID=, then
+  saves and indexes it.  The heading is selected by its exact outline path;
+  existing IDs are retained, just like =SPC n c=.
+- =fangcun_insert_node_link= inserts an =id:= link between two indexed nodes,
+  saves the source file, and refreshes its links in the index.  It inserts
+  immediately before or after exact anchor text copied from the =content=
+  returned by =fangcun_read_node=.
+
+The link-writing tool deliberately supports Fangcun =id:= links rather than
+every Org link type.  This keeps both endpoints verifiable and makes the new
+backlink immediately queryable.  The target title is used as the description
+by default.  A custom description is accepted, and an empty description emits
+the bare form =[[id:ID]]=.
+
+Heading paths run from the outermost heading to the target and use heading
+titles without TODO keywords, priorities, or tags.  A missing or ambiguous
+path is rejected.  Link callers provide exactly one of =beforeText= and
+=afterText=.  A unique match needs no position calculation; when the same
+anchor occurs more than once, its one-based =occurrence= is required.  The
+result reports the resolved one-based line and zero-based character column.
+It returns the link, position, source and target metadata, and saved/indexed
+status by default.  Set =includeContent= to true only when the complete updated
+source-node content is needed.  Both write tools refuse to save a file whose
+visiting Emacs buffer already has unsaved changes.
 
 * Search and backlink pagination
 

@@ -1912,6 +1912,14 @@
       (should
        (string-match-p
         (regexp-quote "* [[id:source][A theorem]]")
+        (plist-get result :content)))
+      (should-not
+       (string-match-p
+        (regexp-quote ":ID: personal-file")
+        (plist-get result :content)))
+      (should-not
+       (string-match-p
+        (regexp-quote ":ID: untitled-heading")
         (plist-get result :content))))))
 
 (ert-deftest fangcun-mcp-ranks-and-pages-node-searches ()
@@ -2105,5 +2113,154 @@
           (insert-file-contents file)
           (should (search-forward "#+title: Created note" nil t))
           (should (search-forward "Initial content." nil t)))))))
+
+(ert-deftest fangcun-mcp-creates-and-indexes-heading-nodes ()
+  (fangcun-test-with-notes
+    (fangcun-test--write-file
+     personal-file
+     (concat
+      ":PROPERTIES:\n"
+      ":ID: personal-file\n"
+      ":END:\n"
+      "#+title: Notes\n\n"
+      "* Parent :tag:\n"
+      "** TODO Child\n"
+      "Body.\n"))
+    (fangcun-db-sync)
+    (cl-letf (((symbol-function 'org-id-new)
+               (lambda (&optional _prefix) "mcp-heading")))
+      (let ((result
+             (fangcun-mcp--create-heading-node
+              '(:yiyu "personal"
+                :file "theorems.org"
+                :headingPath ("Parent" "Child")))))
+        (should (equal (plist-get result :id) "mcp-heading"))
+        (should (equal (plist-get result :title) "Child"))
+        (should (fangcun-node-from-id "mcp-heading"))
+        (should
+         (equal
+          (plist-get
+           (fangcun-mcp--create-heading-node
+            '(:yiyu "personal"
+              :file "theorems.org"
+              :headingPath ("Parent" "Child")))
+           :id)
+          "mcp-heading"))))
+    (with-temp-buffer
+      (insert-file-contents personal-file)
+      (should (search-forward ":ID:       mcp-heading" nil t)))))
+
+(ert-deftest fangcun-mcp-rejects-ambiguous-heading-paths ()
+  (fangcun-test-with-notes
+    (fangcun-test--write-file
+     personal-file
+     (concat
+      ":PROPERTIES:\n:ID: personal-file\n:END:\n"
+      "* Repeated\n* Repeated\n"))
+    (fangcun-db-sync)
+    (should-error
+     (fangcun-mcp--create-heading-node
+      '(:yiyu "personal"
+        :file "theorems.org"
+        :headingPath ("Repeated")))
+     :type 'user-error)))
+
+(ert-deftest fangcun-mcp-refuses-to-save-unrelated-buffer-changes ()
+  (fangcun-test-with-notes
+    (fangcun-test--write-file
+     personal-file
+     (concat
+      ":PROPERTIES:\n:ID: personal-file\n:END:\n"
+      "* Heading\n"))
+    (fangcun-db-sync)
+    (with-current-buffer (find-file-noselect personal-file)
+      (goto-char (point-max))
+      (insert "Unsaved.\n")
+      (should-error
+       (fangcun-mcp--create-heading-node
+        '(:yiyu "personal"
+          :file "theorems.org"
+          :headingPath ("Heading")))
+       :type 'user-error)
+      (should (buffer-modified-p))
+      (should (string-suffix-p "Unsaved.\n" (buffer-string))))
+    (with-temp-buffer
+      (insert-file-contents personal-file)
+      (should-not (search-forward "Unsaved." nil t)))))
+
+(ert-deftest fangcun-mcp-inserts-and-indexes-node-id-links ()
+  (fangcun-test-with-notes
+    (fangcun-test--write-file
+     personal-file
+     (concat
+      ":PROPERTIES:\n"
+      ":ID: personal-file\n"
+      ":END:\n"
+      "#+title: Notes\n\n"
+      "* Target\n"
+      ":PROPERTIES:\n"
+      ":ID: target\n"
+      ":END:\n\n"
+      "* Source\n"
+      ":PROPERTIES:\n"
+      ":ID: source\n"
+      ":END:\n"
+      "Echo Echo.\n"))
+    (fangcun-db-sync)
+    (should-error
+     (fangcun-mcp--insert-node-link
+      '(:sourceId "source"
+        :targetId "target"
+        :afterText "Echo"))
+     :type 'user-error)
+    (should-error
+     (fangcun-mcp--insert-node-link
+      '(:sourceId "source"
+        :targetId "target"
+        :beforeText "Echo"
+        :afterText "Echo"))
+     :type 'user-error)
+    (let* ((result
+            (fangcun-mcp--insert-node-link
+             '(:sourceId "source"
+               :targetId "target"
+               :afterText "Echo"
+               :occurrence 2)))
+           (position (plist-get result :position)))
+      (should (equal (plist-get result :link)
+                     "[[id:target][Target]]"))
+      (should (equal (plist-get position :line) 5))
+      (should (equal (plist-get position :column) 9))
+      (should (equal (plist-get position :relation) "after"))
+      (should (= (plist-get position :occurrence) 2))
+      (should (plist-get result :saved))
+      (should (plist-get result :indexed))
+      (should-not (plist-member result :content))
+      (should
+       (seq-some
+        (lambda (backlink)
+          (equal
+           (fangcun-node-id (fangcun-backlink-node backlink))
+           "source"))
+        (fangcun-backlink-list "target"))))
+    (let ((result
+           (fangcun-mcp--insert-node-link
+           '(:sourceId "source"
+              :targetId "target"
+              :beforeText "."
+              :description ""
+              :includeContent t))))
+      (should (equal (plist-get result :link) "[[id:target]]"))
+      (should
+       (string-match-p
+        (regexp-quote
+         "Echo Echo[[id:target][Target]][[id:target]].")
+        (plist-get result :content))))
+    (should-error
+     (fangcun-mcp--insert-node-link
+      '(:sourceId "source"
+        :targetId "target"
+        :beforeText "missing anchor"))
+     :type 'user-error)))
 
 ;;; fangcun-test.el ends here
