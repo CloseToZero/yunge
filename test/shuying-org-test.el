@@ -94,6 +94,104 @@
               (shuying-org--fragments))
       '(nil nil t t t)))))
 
+(ert-deftest shuying-org-previews-non-standalone-block-math-at-source ()
+  (with-temp-buffer
+    (org-mode)
+    (insert
+     "before \\[a\\]\n"
+     "\\[b\\] after\n"
+     "before $$c$$\n"
+     "  \\[\n"
+     "d\n"
+     "  \\]  \n"
+     "\\begin{equation}\n"
+     "e = f\n"
+     "\\end{equation}\n")
+    (let ((fragments (shuying-org--fragments))
+          (image '(image :type svg :data "formula")))
+      (should
+       (equal
+        (mapcar #'shuying-org-fragment-standalone-p fragments)
+        '(nil nil nil t t)))
+      (dolist (fragment fragments)
+        (let ((overlay (shuying-org--ensure-overlay fragment)))
+          (overlay-put overlay 'shuying-org-image image)
+          (shuying-org--show-overlay overlay)
+          (should (equal (overlay-get overlay 'display) image))
+          (if (shuying-org-fragment-standalone-p fragment)
+              (should (overlay-get overlay 'before-string))
+            (should-not (overlay-get overlay 'before-string))))))))
+
+(ert-deftest shuying-org-refreshes-cached-block-math-layout ()
+  (let* ((root (make-temp-file "shuying-org-" t))
+         (shuying-cache-directory root)
+         (shuying-backends nil)
+         (shuying--pending-jobs (make-hash-table :test #'equal))
+         (shuying-org-test--render-count 0)
+         scheduled)
+    (unwind-protect
+        (progn
+          (shuying-register-backend
+           'shuying-latex
+           #'shuying-org-test--render-now)
+          (cl-letf (((symbol-function 'create-image)
+                     (lambda (&rest _) 'image))
+                    ((symbol-function 'shuying-org--preamble)
+                     (lambda () "test-preamble"))
+                    ((symbol-function
+                      'shuying-org--schedule-visible-preview)
+                     (lambda (&optional _immediate)
+                       (setq scheduled t))))
+            (with-temp-buffer
+              (org-mode)
+              (insert "1. prefix \\[x = y\\]\n")
+              (let ((fragments (shuying-org--fragments)))
+                (shuying-org--preview-fragments fragments t)
+                (let ((overlay (shuying-org-test--overlay)))
+                  (should overlay)
+                  (should-not (overlay-get overlay 'before-string))
+                  (should (= shuying-org-test--render-count 1))
+
+                  (add-hook 'after-change-functions
+                            #'shuying-org--layout-context-changed nil t)
+                  (delete-region (point-min) (overlay-start overlay))
+                  (should scheduled)
+                  (shuying-org--preview-fragments
+                   (shuying-org--fragments) t)
+                  (should (eq overlay (shuying-org-test--overlay)))
+                  (should (overlay-get overlay 'before-string))
+                  (should (= shuying-org-test--render-count 1))
+
+                  (setq scheduled nil)
+                  (goto-char (point-min))
+                  (insert "prefix ")
+                  (should scheduled)
+                  (shuying-org--preview-fragments
+                   (shuying-org--fragments) t)
+                  (setq overlay (shuying-org-test--overlay))
+                  (should overlay)
+                  (should-not (overlay-get overlay 'before-string))
+                  (should (= shuying-org-test--render-count 1)))))))
+      (delete-directory root t))))
+
+(ert-deftest shuying-org-defers-layout-refresh-for-source-edits ()
+  (with-temp-buffer
+    (org-mode)
+    (insert "\\[x = y\\]\n")
+    (let* ((fragment (car (shuying-org--fragments)))
+           (overlay (shuying-org--ensure-overlay fragment))
+           scheduled)
+      (add-hook 'after-change-functions
+                #'shuying-org--layout-context-changed nil t)
+      (cl-letf (((symbol-function
+                  'shuying-org--schedule-visible-preview)
+                 (lambda (&optional _immediate)
+                   (setq scheduled t))))
+        (goto-char (+ (overlay-start overlay) 2))
+        (insert "z")
+        (should (overlay-get overlay 'shuying-org-dirty))
+        (should-not scheduled)))))
+
 (ert-deftest shuying-org-aligns-block-math-in-the-window-text-area ()
   (with-temp-buffer
     (insert "inline block")
@@ -104,6 +202,7 @@
       (dolist (overlay (list inline block))
         (overlay-put overlay 'shuying-org-image image))
       (overlay-put block 'shuying-org-block-math t)
+      (overlay-put block 'shuying-org-standalone t)
       (shuying-org--show-overlay inline)
       (shuying-org--show-overlay block)
       (should-not (overlay-get inline 'before-string))
@@ -630,12 +729,18 @@
                  (lambda (&optional immediate)
                    (setq scheduled immediate))))
         (shuying-org-mode 1)
+        (should
+         (memq #'shuying-org--layout-context-changed
+               after-change-functions))
         (setq scheduled nil
               shuying-org--visible-window-state 'visible)
         (run-hooks 'after-save-hook)
         (should-not shuying-org--visible-window-state)
         (should scheduled)
         (shuying-org-mode -1)
+        (should-not
+         (memq #'shuying-org--layout-context-changed
+               after-change-functions))
         (should-not
          (memq #'shuying-org--buffer-saved after-save-hook))))))
 

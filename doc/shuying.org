@@ -33,6 +33,9 @@ The Org integration has one small interaction boundary:
 - SVG artifacts are tightly cropped.  The Org front end, rather than TeX's
   page box, centers block math in the window text area.  Customize
   =shuying-org-block-math-alignment= to retain the source column instead.
+- Block math is centered only when its opening and closing physical lines
+  contain no other text.  Non-standalone block math remains previewed at its
+  source column because an overlay cannot reproduce TeX's line break faithfully.
 
 The Org adapter keeps a buffer-local catalog of fragment bounds and source
 text.  It builds the catalog with Org's parser, reuses it while the text is

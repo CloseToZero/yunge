@@ -21,6 +21,7 @@
   end
   value
   block-math-p
+  standalone-p
   equation-number)
 
 (defconst shuying-org--single-equation-environments
@@ -73,10 +74,10 @@
 
 (defcustom shuying-org-block-math-alignment 'center
   "Horizontal alignment of block math previews.
-`center' centers a tightly cropped image in the window text area.  When the
-image is too wide to move to the center, it remains at its source column.
-`source' always displays the image at its source column.  Inline math is not
-affected."
+`center' centers a tightly cropped, standalone block in the window text area.
+When the image is too wide to move to the center, it remains at its source
+column.  Non-standalone blocks also remain at their source columns.  `source'
+always displays block math at its source column.  Inline math is not affected."
   :type '(choice
           (const :tag "Center in the window text area" center)
           (const :tag "Keep the source column" source))
@@ -107,6 +108,38 @@ affected."
   (cons (shuying-org-fragment-beginning fragment)
         (shuying-org-fragment-end fragment)))
 
+(defun shuying-org--block-math-p (element)
+  "Return whether Org LaTeX ELEMENT contains block math."
+  (or (eq (org-element-type element) 'latex-environment)
+      (and (string-match-p
+            (rx string-start (* (any " \t\n"))
+                (or "$$" "\\[" "\\begin{"))
+            (org-element-property :value element))
+           t)))
+
+(defun shuying-org--standalone-block-math-p (element)
+  "Return whether block math ELEMENT occupies its physical lines alone."
+  (and
+   (shuying-org--block-math-p element)
+   (let ((beginning (org-element-begin element))
+         (end (- (org-element-end element)
+                 (or (org-element-property :post-blank element) 0))))
+     (save-excursion
+       (goto-char beginning)
+       (and
+        (string-match-p
+         (rx string-start (* (any " \t")) string-end)
+         (buffer-substring-no-properties
+          (line-beginning-position) beginning))
+        (progn
+          (goto-char end)
+          (skip-chars-backward " \t\r\n" beginning)
+          (string-match-p
+           (rx string-start (* (any " \t")) string-end)
+           (buffer-substring-no-properties
+            (point) (line-end-position)))))))
+   t))
+
 (defun shuying-org--latex-fragment-p (datum)
   "Return whether Org DATUM is previewable LaTeX."
   (and (org-element-type-p datum
@@ -114,14 +147,6 @@ affected."
        (string-match-p
         shuying-org--math-start-regexp
         (org-element-property :value datum))))
-
-(defun shuying-org--block-math-p (element)
-  "Return whether Org LaTeX ELEMENT contains block math."
-  (or (eq (org-element-type element) 'latex-environment)
-      (and (string-match-p
-            (rx string-start (* (any " \t\n")) (or "$$" "\\["))
-            (org-element-property :value element))
-           t)))
 
 (defun shuying-org--escaped-p (position)
   "Return whether the character at POSITION is backslash-escaped."
@@ -187,6 +212,7 @@ EQUATION-NUMBER is the next automatic number at the fragment's start."
    :value (substring-no-properties
            (org-element-property :value element))
    :block-math-p (shuying-org--block-math-p element)
+   :standalone-p (shuying-org--standalone-block-math-p element)
    :equation-number equation-number))
 
 (defun shuying-org--fragment-context-at-position (position)
@@ -299,6 +325,38 @@ Return nil when POSITION has no preview or its source is currently visible."
      (1+ (or (overlay-get overlay 'shuying-org-generation) 0)))
     (cl-pushnew overlay shuying-org--changed-overlays)))
 
+(defun shuying-org--sync-overlay-fragment (overlay fragment)
+  "Synchronize OVERLAY's source and layout state with FRAGMENT."
+  (pcase-let ((`(,beginning . ,end)
+               (shuying-org--fragment-bounds fragment)))
+    (move-overlay overlay beginning end)
+    (overlay-put overlay 'shuying-org-source-beginning beginning)
+    (overlay-put overlay 'shuying-org-block-math
+                 (shuying-org-fragment-block-math-p fragment))
+    (overlay-put overlay 'shuying-org-standalone
+                 (shuying-org-fragment-standalone-p fragment)))
+  overlay)
+
+(defun shuying-org--layout-context-changed
+    (beginning end _old-length)
+  "Schedule a layout refresh after text changes from BEGINNING to END."
+  (let ((line-beginning
+         (save-excursion
+           (goto-char beginning)
+           (line-beginning-position)))
+        (line-end
+         (save-excursion
+           (goto-char end)
+           (line-end-position))))
+    (when
+        (seq-some
+         (lambda (overlay)
+           (and (overlay-get overlay 'shuying-org-block-math)
+                (not (overlay-get overlay 'shuying-org-dirty))))
+         (shuying-org--fragment-overlays line-beginning line-end))
+      (setq shuying-org--visible-window-state nil)
+      (shuying-org--schedule-visible-preview))))
+
 (defun shuying-org--ensure-overlay (fragment)
   "Return the display overlay for FRAGMENT, creating it if needed."
   (pcase-let* ((`(,beginning . ,end)
@@ -320,11 +378,7 @@ Return nil when POSITION has no preview or its source is currently visible."
       (overlay-put overlay 'shuying-org t)
       (overlay-put overlay 'modification-hooks
                    '(shuying-org--modified)))
-    (move-overlay overlay beginning end)
-    (overlay-put overlay 'shuying-org-source-beginning beginning)
-    (overlay-put overlay 'shuying-org-block-math
-                 (shuying-org-fragment-block-math-p fragment))
-    overlay))
+    (shuying-org--sync-overlay-fragment overlay fragment)))
 
 (defun shuying-org--face-color (option attribute)
   "Resolve Org LaTeX color OPTION for face ATTRIBUTE at point."
@@ -385,6 +439,7 @@ Return nil when POSITION has no preview or its source is currently visible."
 (defun shuying-org--alignment-prefix (overlay image)
   "Return the horizontal alignment prefix for OVERLAY displaying IMAGE."
   (when (and (overlay-get overlay 'shuying-org-block-math)
+             (overlay-get overlay 'shuying-org-standalone)
              (eq shuying-org-block-math-alignment 'center))
     (propertize
      " " 'display
@@ -501,6 +556,10 @@ When AUTOMATIC is non-nil, silently retain unavailable dependency errors."
                (specification-hash
                 (shuying-render-spec-hash specification))
                (overlay (shuying-org--fragment-overlay fragment)))
+          ;; Layout context can change around an otherwise unchanged formula.
+          ;; Refresh it even when the rendered artifact remains reusable.
+          (when overlay
+            (shuying-org--sync-overlay-fragment overlay fragment))
           (if (and stale-only overlay
                    (overlay-get overlay 'shuying-org-image)
                    (equal
@@ -921,6 +980,8 @@ preview the whole buffer.  With three, clear the whole buffer."
         (setq shuying-org--visible-window-state nil)
         (add-hook 'post-command-hook
                   #'shuying-org--schedule-visible-preview nil t)
+        (add-hook 'after-change-functions
+                  #'shuying-org--layout-context-changed nil t)
         (add-hook 'window-buffer-change-functions
                   #'shuying-org--window-buffer-changed nil t)
         (add-hook 'window-size-change-functions
@@ -931,6 +992,8 @@ preview the whole buffer.  With three, clear the whole buffer."
     (remove-hook 'post-command-hook #'shuying-org--post-command t)
     (remove-hook 'post-command-hook
                  #'shuying-org--schedule-visible-preview t)
+    (remove-hook 'after-change-functions
+                 #'shuying-org--layout-context-changed t)
     (remove-hook 'window-buffer-change-functions
                  #'shuying-org--window-buffer-changed t)
     (remove-hook 'window-size-change-functions
