@@ -595,6 +595,39 @@
         (should-not
          (memq #'shuying-org--buffer-saved after-save-hook))))))
 
+(ert-deftest shuying-org-rebuilds-visible-previews-after-revert ()
+  (with-temp-buffer
+    (org-mode)
+    (insert "$x$")
+    (let (scheduled)
+      (cl-letf (((symbol-function 'shuying-org--window-state)
+                 (lambda () 'visible))
+                ((symbol-function 'shuying-org--schedule-visible-preview)
+                 (lambda (&optional immediate)
+                   (setq scheduled immediate))))
+        (shuying-org-mode 1)
+        (let* ((fragment (car (shuying-org--fragments)))
+               (overlay (shuying-org--ensure-overlay fragment)))
+          (shuying-org--set-active-fragment fragment)
+          (setq scheduled nil
+                shuying-org--changed-overlays (list overlay)
+                shuying-org--visible-window-state 'visible)
+          (run-hooks 'after-revert-hook)
+          (should-not (overlay-buffer overlay))
+          (should-not shuying-org--fragment-catalog)
+          (should-not shuying-org--catalog-tick)
+          (should-not shuying-org--active-start)
+          (should-not shuying-org--changed-overlays)
+          (should (= shuying-org--previous-point (point)))
+          (should
+           (= shuying-org--previous-tick
+              (buffer-chars-modified-tick)))
+          (should-not shuying-org--visible-window-state)
+          (should scheduled))
+        (shuying-org-mode -1)
+        (should-not
+         (memq #'shuying-org--buffer-reverted after-revert-hook))))))
+
 (ert-deftest shuying-org-tracks-widths-of-windows-showing-one-buffer ()
   (let ((buffer (generate-new-buffer " *shuying-org-window-width*")))
     (unwind-protect

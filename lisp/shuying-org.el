@@ -793,6 +793,20 @@ the next idle opportunity."
     (setq shuying-org--visible-window-state nil)
     (shuying-org--schedule-visible-preview t)))
 
+(defun shuying-org--buffer-reverted ()
+  "Discard stale preview state after reverting the Org buffer."
+  (shuying-org--cancel-visible-preview-timer)
+  (shuying-org--clear-active-fragment)
+  (setq shuying-org--fragment-catalog nil
+        shuying-org--catalog-tick nil
+        shuying-org--changed-overlays nil
+        shuying-org--previous-point (point)
+        shuying-org--previous-tick (buffer-chars-modified-tick)
+        shuying-org--visible-window-state nil)
+  (shuying-org-clear-buffer)
+  (when (shuying-org--window-state)
+    (shuying-org--schedule-visible-preview t)))
+
 (add-hook 'enable-theme-functions #'shuying-org--theme-changed)
 (add-hook 'disable-theme-functions #'shuying-org--theme-changed)
 
@@ -873,6 +887,7 @@ preview the whole buffer.  With three, clear the whole buffer."
         (add-hook 'window-size-change-functions
                   #'shuying-org--window-size-changed nil t)
         (add-hook 'after-save-hook #'shuying-org--buffer-saved nil t)
+        (add-hook 'after-revert-hook #'shuying-org--buffer-reverted nil t)
         (shuying-org--schedule-visible-preview t))
     (remove-hook 'post-command-hook #'shuying-org--post-command t)
     (remove-hook 'post-command-hook
@@ -882,6 +897,7 @@ preview the whole buffer.  With three, clear the whole buffer."
     (remove-hook 'window-size-change-functions
                  #'shuying-org--window-size-changed t)
     (remove-hook 'after-save-hook #'shuying-org--buffer-saved t)
+    (remove-hook 'after-revert-hook #'shuying-org--buffer-reverted t)
     (setq shuying-org--visible-window-state nil)
     (shuying-org--cancel-visible-preview-timer)
     (setq shuying-org--changed-overlays nil)
