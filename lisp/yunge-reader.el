@@ -295,6 +295,9 @@ unscaled coordinate system of UNIT."
 (defvar-local yunge-reader--pending-place nil
   "Persistent place waiting for the current document to finish opening.")
 
+(defvar-local yunge-reader--last-stable-place nil
+  "Last stable place captured while the primary view was visible.")
+
 (defvar-local yunge-reader--place-recording-enabled nil
   "Whether the current document may replace its persistent place.")
 
@@ -515,6 +518,7 @@ Functions run in the affected Reader buffer without arguments.")
   (setq-local yunge-reader--copy-pending nil)
   (setq-local yunge-reader--copy-task nil)
   (setq-local yunge-reader--search-task nil)
+  (setq-local yunge-reader--last-stable-place nil)
   (add-hook 'post-command-hook
             #'yunge-reader--note-view-activity nil t)
   (add-hook 'change-major-mode-hook
@@ -1022,7 +1026,8 @@ An explicit override on the current book remains unchanged."
               yunge-reader--document-entry))
     (setf (yunge-reader--document-entry-active-view
            yunge-reader--document-entry)
-          (current-buffer))))
+          (current-buffer)))
+  (yunge-reader--cache-current-place))
 
 (defun yunge-reader--complete-view-request (request success)
   "Complete REQUEST once with SUCCESS."
@@ -1260,6 +1265,27 @@ the active presentation."
   (when-let* ((place (yunge-reader--current-place window)))
     (yunge-reader--position-from-data (plist-get place :position))))
 
+(defun yunge-reader--recordable-primary-p ()
+  "Return whether the current primary view may persist its place."
+  (and yunge-reader--place-recording-enabled
+       (not yunge-reader--restoring-place)
+       (yunge-reader--primary-view-p)
+       yunge-reader-document))
+
+(defun yunge-reader--cache-current-place (&optional window)
+  "Cache the stable place in the active presentation WINDOW.
+This is best-effort bookkeeping for a view which may later become hidden."
+  (when (yunge-reader--recordable-primary-p)
+    (let ((window (yunge-reader--place-window window)))
+      (when (and window (yunge-reader--active-presentation-p window))
+        (condition-case nil
+            (when-let* ((place (yunge-reader--current-place window)))
+              (setq yunge-reader--last-stable-place
+                    (copy-tree place t)))
+          (error nil)))))
+  (and yunge-reader--last-stable-place
+       (copy-tree yunge-reader--last-stable-place t)))
+
 (defun yunge-reader--stable-place ()
   "Return the current committed view place, or nil."
   (when yunge-reader--place-recording-enabled
@@ -1270,15 +1296,21 @@ the active presentation."
   "Record the current persistent Reader place as viewed in WINDOW.
 Do nothing until document opening and any prior place restoration commit.
 Only the primary view's active presentation may replace the persistent place."
-  (let ((window (yunge-reader--place-window window)))
-    (when (and window
-               (yunge-reader--active-presentation-p window)
-               yunge-reader--place-recording-enabled
-               (not yunge-reader--restoring-place)
-               (yunge-reader--primary-view-p)
-               yunge-reader-document)
+  (let* ((explicit-window window)
+         (window (yunge-reader--place-window window)))
+    (when (yunge-reader--recordable-primary-p)
       (condition-case error-data
-          (when-let* ((place (yunge-reader--current-place window)))
+          (when-let*
+              ((place
+                (cond
+                 ((and window
+                       (yunge-reader--active-presentation-p window))
+                  (yunge-reader--current-place window))
+                 ((and (null explicit-window) (null window))
+                  (and yunge-reader--last-stable-place
+                       (copy-tree yunge-reader--last-stable-place t))))))
+            (setq yunge-reader--last-stable-place
+                  (copy-tree place t))
             (yunge-reader--store-place
              (yunge-reader-document-file yunge-reader-document)
              (yunge-reader-document-driver yunge-reader-document)
@@ -1289,6 +1321,17 @@ Only the primary view's active presentation may replace the persistent place."
           (format "Could not remember Reader place: %s"
                   (error-message-string error-data))
           :warning))))))
+
+(defun yunge-reader--save-open-places ()
+  "Commit stable places from open primary views before session state saves."
+  (dolist (buffer (reverse (buffer-list)))
+    (when (buffer-live-p buffer)
+      (with-current-buffer buffer
+        (when (derived-mode-p 'yunge-reader-mode)
+          (yunge-reader-record-place))))))
+
+(with-eval-after-load 'savehist
+  (add-hook 'savehist-save-hook #'yunge-reader--save-open-places))
 
 (defun yunge-reader--restore-view-state (place)
   "Restore generic zoom state from persistent PLACE."
@@ -1879,6 +1922,7 @@ non-nil only after opening and restoration succeed."
             yunge-reader--pending-place
             (or (and place (copy-tree place t))
                 (yunge-reader--saved-place file driver))
+            yunge-reader--last-stable-place nil
             yunge-reader--place-recording-enabled nil
             yunge-reader--document-entry entry)
       (cl-incf yunge-reader--open-generation)
@@ -2071,6 +2115,7 @@ Capture and save this view's stable place before changing the primary view."
           yunge-reader--outline-buffer nil
           yunge-reader--opening-file nil
           yunge-reader--pending-place nil
+          yunge-reader--last-stable-place nil
           yunge-reader--place-recording-enabled nil)
     (cond
      ((and document entry

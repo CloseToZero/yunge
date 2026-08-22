@@ -158,6 +158,11 @@
     (yunge-reader-mode)
     (should-not buffer-auto-save-file-name)))
 
+(ert-deftest yunge-reader-registers-open-place-savehist-hook ()
+  (require 'savehist)
+  (should
+   (memq #'yunge-reader--save-open-places savehist-save-hook)))
+
 (ert-deftest yunge-reader-keeps-one-active-window-per-logical-view ()
   (let ((buffer (generate-new-buffer " *reader-presentations*"))
         (other (generate-new-buffer " *reader-other*")))
@@ -234,6 +239,81 @@
                 2))))
       (when (buffer-live-p buffer)
         (kill-buffer buffer)))))
+
+(ert-deftest yunge-reader-savehist-captures-a-visible-primary-place ()
+  (let ((buffer (generate-new-buffer " *reader-savehist-place*"))
+        (yunge-reader-drivers nil)
+        (yunge-reader-saved-document-state nil)
+        (file (expand-file-name "savehist.pdf"))
+        (unit 17))
+    (unwind-protect
+        (save-window-excursion
+          (switch-to-buffer buffer)
+          (yunge-reader-mode)
+          (let ((driver
+                 (yunge-reader-register-driver
+                  'test
+                  :match #'ignore :open #'ignore :close #'ignore
+                  :location
+                  (lambda (_document _window)
+                    (make-yunge-reader-position :unit unit))
+                  :restore #'ignore)))
+            (setq yunge-reader-document
+                  (make-yunge-reader-document
+                   :file file :driver driver :layout 'fixed)
+                  yunge-reader--place-recording-enabled t)
+            (yunge-reader--save-open-places)
+            (should
+             (= (plist-get
+                 (plist-get
+                  (yunge-reader-test--saved-place file driver)
+                  :position)
+                 :unit)
+                17))))
+      (when (buffer-live-p buffer)
+        (kill-buffer buffer)))))
+
+(ert-deftest yunge-reader-hidden-close-saves-last-visible-place ()
+  (let ((buffer (generate-new-buffer " *reader-hidden-place*"))
+        (other (generate-new-buffer " *reader-hidden-other*"))
+        (yunge-reader-drivers nil)
+        (yunge-reader-saved-document-state nil)
+        (file (expand-file-name "hidden.pdf"))
+        (unit 23))
+    (unwind-protect
+        (save-window-excursion
+          (switch-to-buffer buffer)
+          (yunge-reader-mode)
+          (let ((driver
+                 (yunge-reader-register-driver
+                  'test
+                  :match #'ignore :open #'ignore :close #'ignore
+                  :location
+                  (lambda (_document _window)
+                    (make-yunge-reader-position :unit unit))
+                  :restore #'ignore)))
+            (setq yunge-reader-document
+                  (make-yunge-reader-document
+                   :file file :driver driver :layout 'fixed)
+                  yunge-reader--place-recording-enabled t)
+            (yunge-reader--note-view-activity)
+            (should-not
+             (yunge-reader-test--saved-place file driver))
+            (setq unit 99)
+            (switch-to-buffer other)
+            (with-current-buffer buffer
+              (yunge-reader--close-document))
+            (should
+             (= (plist-get
+                 (plist-get
+                  (yunge-reader-test--saved-place file driver)
+                  :position)
+                 :unit)
+                23))))
+      (when (buffer-live-p buffer)
+        (kill-buffer buffer))
+      (when (buffer-live-p other)
+        (kill-buffer other)))))
 
 (ert-deftest yunge-reader-evil-escape-clears-transient-highlights ()
   (yunge-test-enable-evil)
