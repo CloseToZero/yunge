@@ -30,6 +30,9 @@ The Org integration has one small interaction boundary:
 - Inline previews use the height and depth reported by =dvisvgm= to follow the
   surrounding text baseline.  Their display height is expressed in =em=, so
   buffer-local font scaling resizes cached SVGs without rerunning LaTeX.
+- SVG artifacts are tightly cropped.  The Org front end, rather than TeX's
+  page box, centers block math in the window text area.  Customize
+  =shuying-org-block-math-alignment= to retain the source column instead.
 
 The Org adapter keeps a buffer-local catalog of fragment bounds and source
 text.  It builds the catalog with Org's parser, reuses it while the text is
@@ -117,7 +120,8 @@ The direct =latex= and =dvisvgm= backend uses this pipeline:
 2. Collect misses with compatible preambles and rendering options.
 3. Reuse or asynchronously build one precompiled format for the preamble.
 4. Compile each compatible batch in one temporary TeX document.
-5. Convert every page to SVG and collect its =dvisvgm= geometry.
+5. Convert every page to a tightly bounded SVG and collect its =dvisvgm=
+   geometry.
 6. Map each SVG and its metadata back to the originating request.
 7. Publish each artifact and metadata sidecar atomically.
 8. Check the request generation before changing a buffer display.

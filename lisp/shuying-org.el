@@ -20,6 +20,7 @@
   beginning
   end
   value
+  block-math-p
   equation-number)
 
 (defconst shuying-org--single-equation-environments
@@ -70,6 +71,17 @@
   :type 'number
   :group 'shuying)
 
+(defcustom shuying-org-block-math-alignment 'center
+  "Horizontal alignment of block math previews.
+`center' centers a tightly cropped image in the window text area.  When the
+image is too wide to move to the center, it remains at its source column.
+`source' always displays the image at its source column.  Inline math is not
+affected."
+  :type '(choice
+          (const :tag "Center in the window text area" center)
+          (const :tag "Keep the source column" source))
+  :group 'shuying)
+
 (defvar-local shuying-org--visible-preview-timer nil
   "Timer for the pending visible preview update.")
 
@@ -102,6 +114,14 @@
        (string-match-p
         shuying-org--math-start-regexp
         (org-element-property :value datum))))
+
+(defun shuying-org--block-math-p (element)
+  "Return whether Org LaTeX ELEMENT contains block math."
+  (or (eq (org-element-type element) 'latex-environment)
+      (and (string-match-p
+            (rx string-start (* (any " \t\n")) (or "$$" "\\["))
+            (org-element-property :value element))
+           t)))
 
 (defun shuying-org--escaped-p (position)
   "Return whether the character at POSITION is backslash-escaped."
@@ -166,6 +186,7 @@ EQUATION-NUMBER is the next automatic number at the fragment's start."
            (or (org-element-property :post-blank element) 0))
    :value (substring-no-properties
            (org-element-property :value element))
+   :block-math-p (shuying-org--block-math-p element)
    :equation-number equation-number))
 
 (defun shuying-org--fragment-context-at-position (position)
@@ -257,6 +278,11 @@ Return nil when POSITION has no preview or its source is currently visible."
      (= (shuying-org-fragment-beginning fragment) beginning))
    fragments))
 
+(defun shuying-org--hide-overlay (overlay)
+  "Reveal the source hidden by Shuying OVERLAY."
+  (overlay-put overlay 'before-string nil)
+  (overlay-put overlay 'display nil))
+
 (defun shuying-org--modified
     (overlay after _beginning _end &optional _length)
   "Mark OVERLAY dirty after its source is modified."
@@ -264,7 +290,7 @@ Return nil when POSITION has no preview or its source is currently visible."
     (unless (overlay-get overlay 'shuying-org-source-beginning)
       (overlay-put overlay 'shuying-org-source-beginning
                    (overlay-start overlay))))
-  (overlay-put overlay 'display nil)
+  (shuying-org--hide-overlay overlay)
   (overlay-put overlay 'shuying-org-dirty t)
   (when after
     ;; Invalidate a render that began before this edit.
@@ -296,6 +322,8 @@ Return nil when POSITION has no preview or its source is currently visible."
                    '(shuying-org--modified)))
     (move-overlay overlay beginning end)
     (overlay-put overlay 'shuying-org-source-beginning beginning)
+    (overlay-put overlay 'shuying-org-block-math
+                 (shuying-org-fragment-block-math-p fragment))
     overlay))
 
 (defun shuying-org--face-color (option attribute)
@@ -354,9 +382,20 @@ Return nil when POSITION has no preview or its source is currently visible."
   (and (<= (overlay-start overlay) (point))
        (< (point) (overlay-end overlay))))
 
+(defun shuying-org--alignment-prefix (overlay image)
+  "Return the horizontal alignment prefix for OVERLAY displaying IMAGE."
+  (when (and (overlay-get overlay 'shuying-org-block-math)
+             (eq shuying-org-block-math-alignment 'center))
+    (propertize
+     " " 'display
+     `(space :align-to (- center (0.5 . ,image)))
+     'face 'default)))
+
 (defun shuying-org--show-overlay (overlay)
   "Show the cached image belonging to OVERLAY."
   (when-let* ((image (overlay-get overlay 'shuying-org-image)))
+    (overlay-put overlay 'before-string
+                 (shuying-org--alignment-prefix overlay image))
     (unless (equal (overlay-get overlay 'display) image)
       (overlay-put overlay 'display image)
       ;; Replacing source with an image can expose more text at the bottom of
@@ -388,7 +427,7 @@ Return nil when POSITION has no preview or its source is currently visible."
 (defun shuying-org--record-render-error
     (overlay error-data report-error)
   "Record OVERLAY's ERROR-DATA and call REPORT-ERROR."
-  (overlay-put overlay 'display nil)
+  (shuying-org--hide-overlay overlay)
   (overlay-put overlay 'shuying-org-dirty t)
   (overlay-put overlay 'shuying-org-error error-data)
   (overlay-put overlay 'shuying-org-specification-hash nil)
@@ -397,7 +436,7 @@ Return nil when POSITION has no preview or its source is currently visible."
 (defun shuying-org--record-display-error
     (overlay error-data report-error)
   "Record OVERLAY's display ERROR-DATA and call REPORT-ERROR."
-  (overlay-put overlay 'display nil)
+  (shuying-org--hide-overlay overlay)
   (overlay-put overlay 'shuying-org-dirty nil)
   (overlay-put overlay 'shuying-org-error error-data)
   (funcall report-error error-data))
@@ -423,7 +462,7 @@ REPORT-ERROR reports a current render failure without duplicating its batch."
               (overlay-put overlay 'shuying-org-dirty nil)
               (overlay-put overlay 'shuying-org-error nil)
               (if (shuying-org--point-inside-overlay-p overlay)
-                  (overlay-put overlay 'display nil)
+                  (shuying-org--hide-overlay overlay)
                 (shuying-org--show-overlay overlay)))
           (error
            (shuying-org--record-display-error
@@ -436,7 +475,7 @@ REPORT-ERROR reports a current render failure without duplicating its batch."
          (generation
           (1+ (or (overlay-get overlay 'shuying-org-generation) 0)))
          (buffer (current-buffer)))
-    (overlay-put overlay 'display nil)
+    (shuying-org--hide-overlay overlay)
     (overlay-put overlay 'shuying-org-dirty nil)
     (overlay-put overlay 'shuying-org-generation generation)
     (overlay-put overlay 'shuying-org-specification-hash
@@ -544,7 +583,7 @@ When AUTOMATIC is non-nil, silently retain unavailable dependency errors."
              (shuying-org--fragment-overlays beginning end))
       (if (and (= (overlay-start overlay) beginning)
                (= (overlay-end overlay) end))
-          (overlay-put overlay 'display nil)
+          (shuying-org--hide-overlay overlay)
         (delete-overlay overlay)))))
 
 (defun shuying-org--set-active-fragment (fragment)

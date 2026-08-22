@@ -515,10 +515,14 @@
             (should-not results)
             (let* ((converter-invocation (car invocations))
                    (converter-arguments (cdr converter-invocation))
+                   (converter-command
+                    (plist-get converter-arguments :command))
                    (converter-buffer
                     (plist-get converter-arguments :buffer))
                    (converter-sentinel
                     (plist-get converter-arguments :sentinel)))
+              (should (member "--bbox=min" converter-command))
+              (should-not (member "--bbox=preview" converter-command))
               (with-temp-file (expand-file-name "page-1.svg" directory)
                 (insert "first"))
               (with-temp-file (expand-file-name "page-2.svg" directory)

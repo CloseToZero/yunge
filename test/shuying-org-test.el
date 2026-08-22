@@ -79,6 +79,50 @@
         (should (eq shuying-org--visible-window-state 'settled))
         (should-not schedule-called)))))
 
+(ert-deftest shuying-org-classifies-only-block-math-for-centering ()
+  (with-temp-buffer
+    (org-mode)
+    (insert
+     "$a$\n"
+     "\\(b\\)\n"
+     "$$c$$\n"
+     "\\[d\\]\n"
+     "\\begin{equation}\ne = f\n\\end{equation}\n")
+    (should
+     (equal
+      (mapcar #'shuying-org-fragment-block-math-p
+              (shuying-org--fragments))
+      '(nil nil t t t)))))
+
+(ert-deftest shuying-org-aligns-block-math-in-the-window-text-area ()
+  (with-temp-buffer
+    (insert "inline block")
+    (let* ((image '(image :type svg :data "formula"))
+           (inline (make-overlay 1 7))
+           (block (make-overlay 8 13))
+           (shuying-org-block-math-alignment 'center))
+      (dolist (overlay (list inline block))
+        (overlay-put overlay 'shuying-org-image image))
+      (overlay-put block 'shuying-org-block-math t)
+      (shuying-org--show-overlay inline)
+      (shuying-org--show-overlay block)
+      (should-not (overlay-get inline 'before-string))
+      (let ((prefix (overlay-get block 'before-string)))
+        (should (stringp prefix))
+        (should
+         (equal
+          (get-text-property 0 'display prefix)
+          `(space :align-to (- center (0.5 . ,image))))))
+      (let ((shuying-org-block-math-alignment 'source))
+        (shuying-org--show-overlay block)
+        (should-not (overlay-get block 'before-string)))
+      (let ((shuying-org-block-math-alignment 'center))
+        (shuying-org--show-overlay block)
+        (should (overlay-get block 'before-string))
+        (shuying-org--hide-overlay block)
+        (should-not (overlay-get block 'display))
+        (should-not (overlay-get block 'before-string))))))
+
 (ert-deftest shuying-org-aligns-images-from-rendered-geometry ()
   (let ((artifact
          (make-shuying-artifact
@@ -1186,7 +1230,15 @@
                 (should (file-exists-p artifact))
                 (with-temp-buffer
                   (insert-file-contents artifact)
-                  (should (search-forward "<svg" nil t)))))))
+                  (should (search-forward "<svg" nil t))
+                  (goto-char (point-min))
+                  (should
+                   (re-search-forward
+                    "width=['\"]\\([0-9.]+\\)pt['\"]" nil t))
+                  ;; A preview-package page box is about 900pt at the
+                  ;; configured scale.  The rendered formula is much tighter.
+                  (should (< (string-to-number (match-string 1))
+                             500.0)))))))
       (delete-directory root t))))
 
 ;;; shuying-org-test.el ends here

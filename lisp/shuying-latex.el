@@ -527,7 +527,7 @@ dvisvgm zero-pads page numbers to the width of the final page number."
            converter
            (list
             "--page=1-"
-            "--bbox=preview"
+            "--bbox=min"
             "--no-fonts"
             "--verbosity=7"
             (format "--scale=%s" scale)
