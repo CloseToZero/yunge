@@ -36,6 +36,9 @@ The Org integration has one small interaction boundary:
 - Block math is centered only when its opening and closing physical lines
   contain no other text.  Non-standalone block math remains previewed at its
   source column because an overlay cannot reproduce TeX's line break faithfully.
+- Whitespace-only formulas are left as source and are not rendered.  Artifacts
+  with no visible geometry also remain source-visible without reporting an
+  error or being rendered again.
 
 The Org adapter keeps a buffer-local catalog of fragment bounds and source
 text.  It builds the catalog with Org's parser, reuses it while the text is

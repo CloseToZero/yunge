@@ -7,6 +7,7 @@
 (require 'org-element)
 (require 'seq)
 (require 'shuying-latex)
+(require 'subr-x)
 
 (declare-function org-export-get-backend "ox" (name))
 (declare-function org-export-get-environment
@@ -140,10 +141,57 @@ always displays block math at its source column.  Inline math is not affected."
             (point) (line-end-position)))))))
    t))
 
+(defun shuying-org--blank-latex-fragment-p (value)
+  "Return whether LaTeX fragment VALUE contains only delimiters and space."
+  (let ((trimmed (string-trim value)))
+    (seq-some
+     (lambda (delimiters)
+       (let ((opening (car delimiters))
+             (closing (cdr delimiters)))
+         (and (string-prefix-p opening trimmed)
+              (string-suffix-p closing trimmed)
+              (>= (length trimmed)
+                  (+ (length opening) (length closing)))
+              (string-empty-p
+               (string-trim
+                (substring trimmed
+                           (length opening)
+                           (- (length closing))))))))
+     '(("\\(" . "\\)")
+       ("\\[" . "\\]")
+       ("$$" . "$$")
+       ("$" . "$")))))
+
+(defun shuying-org--blank-latex-environment-p (value)
+  "Return whether LaTeX environment VALUE has a whitespace-only body."
+  (let ((trimmed (string-trim value)))
+    (when (string-match
+           (rx string-start "\\begin{" (group (+ (not "}"))) "}")
+           trimmed)
+      (let* ((name (match-string 1 trimmed))
+             (body-beginning (match-end 0))
+             (end-regexp
+              (concat "\\\\end{" (regexp-quote name) "}\\'")))
+        (when (string-match end-regexp trimmed body-beginning)
+          (string-empty-p
+           (string-trim
+            (substring trimmed body-beginning (match-beginning 0)))))))))
+
+(defun shuying-org--blank-math-p (element)
+  "Return whether Org LaTeX ELEMENT contains no formula content."
+  (pcase (org-element-type element)
+    ('latex-fragment
+     (shuying-org--blank-latex-fragment-p
+      (org-element-property :value element)))
+    ('latex-environment
+     (shuying-org--blank-latex-environment-p
+      (org-element-property :value element)))))
+
 (defun shuying-org--latex-fragment-p (datum)
   "Return whether Org DATUM is previewable LaTeX."
   (and (org-element-type-p datum
                            '(latex-fragment latex-environment))
+       (not (shuying-org--blank-math-p datum))
        (string-match-p
         shuying-org--math-start-regexp
         (org-element-property :value datum))))
@@ -461,23 +509,29 @@ Return nil when POSITION has no preview or its source is currently visible."
         (shuying-org--schedule-visible-preview)))))
 
 (defun shuying-org--image (artifact)
-  "Return an image display for ARTIFACT aligned to the text baseline."
+  "Return an image display for ARTIFACT aligned to the text baseline.
+Return nil when ARTIFACT has no visible geometry."
   (let* ((metadata (shuying-artifact-metadata artifact))
+         (width (plist-get metadata :width))
          (height (plist-get metadata :height))
          (depth (plist-get metadata :depth)))
-    (unless (and (numberp height)
-                 (> height 0)
-                 (numberp depth)
-                 (<= 0 depth height))
-      (error "Invalid Shuying artifact geometry: %S" metadata))
-    (let ((ascent
-           (round
-            (* 100
-               (- 1 (/ (max 0.0 (min depth height)) height))))))
-      (create-image
-       (shuying-artifact-path artifact) nil nil
-       :height (cons height 'em)
-       :ascent ascent))))
+    (if (and (numberp width) (zerop width)
+             (numberp height) (zerop height)
+             (numberp depth) (zerop depth))
+        nil
+      (unless (and (numberp height)
+                   (> height 0)
+                   (numberp depth)
+                   (<= 0 depth height))
+        (error "Invalid Shuying artifact geometry: %S" metadata))
+      (let ((ascent
+             (round
+              (* 100
+                 (- 1 (/ (max 0.0 (min depth height)) height))))))
+        (create-image
+         (shuying-artifact-path artifact) nil nil
+         :height (cons height 'em)
+         :ascent ascent)))))
 
 (defun shuying-org--record-render-error
     (overlay error-data report-error)
@@ -485,6 +539,7 @@ Return nil when POSITION has no preview or its source is currently visible."
   (shuying-org--hide-overlay overlay)
   (overlay-put overlay 'shuying-org-dirty t)
   (overlay-put overlay 'shuying-org-error error-data)
+  (overlay-put overlay 'shuying-org-empty-artifact nil)
   (overlay-put overlay 'shuying-org-specification-hash nil)
   (funcall report-error error-data))
 
@@ -494,6 +549,7 @@ Return nil when POSITION has no preview or its source is currently visible."
   (shuying-org--hide-overlay overlay)
   (overlay-put overlay 'shuying-org-dirty nil)
   (overlay-put overlay 'shuying-org-error error-data)
+  (overlay-put overlay 'shuying-org-empty-artifact nil)
   (funcall report-error error-data))
 
 (defun shuying-org--finish-render
@@ -514,9 +570,12 @@ REPORT-ERROR reports a current render failure without duplicating its batch."
               (overlay-put overlay 'shuying-org-artifact
                            (shuying-artifact-path artifact))
               (overlay-put overlay 'shuying-org-image image)
+              (overlay-put overlay 'shuying-org-empty-artifact
+                           (null image))
               (overlay-put overlay 'shuying-org-dirty nil)
               (overlay-put overlay 'shuying-org-error nil)
-              (if (shuying-org--point-inside-overlay-p overlay)
+              (if (or (null image)
+                      (shuying-org--point-inside-overlay-p overlay))
                   (shuying-org--hide-overlay overlay)
                 (shuying-org--show-overlay overlay)))
           (error
@@ -532,6 +591,7 @@ REPORT-ERROR reports a current render failure without duplicating its batch."
          (buffer (current-buffer)))
     (shuying-org--hide-overlay overlay)
     (overlay-put overlay 'shuying-org-dirty nil)
+    (overlay-put overlay 'shuying-org-empty-artifact nil)
     (overlay-put overlay 'shuying-org-generation generation)
     (overlay-put overlay 'shuying-org-specification-hash
                  specification-hash)
@@ -561,7 +621,9 @@ When AUTOMATIC is non-nil, silently retain unavailable dependency errors."
           (when overlay
             (shuying-org--sync-overlay-fragment overlay fragment))
           (if (and stale-only overlay
-                   (overlay-get overlay 'shuying-org-image)
+                   (or (overlay-get overlay 'shuying-org-image)
+                       (overlay-get overlay
+                                    'shuying-org-empty-artifact))
                    (equal
                     (overlay-get
                      overlay 'shuying-org-specification-hash)
@@ -569,7 +631,9 @@ When AUTOMATIC is non-nil, silently retain unavailable dependency errors."
               (progn
                 (overlay-put overlay 'shuying-org-dirty nil)
                 (overlay-put overlay 'shuying-org-error nil)
-                (unless (shuying-org--point-inside-overlay-p overlay)
+                (unless (or (overlay-get overlay
+                                         'shuying-org-empty-artifact)
+                            (shuying-org--point-inside-overlay-p overlay))
                   (shuying-org--show-overlay overlay)))
             (push
              (shuying-org--render-request
@@ -749,13 +813,15 @@ When AUTOMATIC is non-nil, silently retain unavailable dependency errors."
                 (org-element-parse-buffer)
                 '(latex-fragment latex-environment)
               (lambda (element)
-                (when (shuying-org--latex-fragment-p element)
-                  (let ((count (shuying-org--equation-count element)))
-                    (prog1
+                (let ((count (shuying-org--equation-count element)))
+                  (prog1
+                      (when (shuying-org--latex-fragment-p element)
                         (shuying-org--fragment-from-element
-                         element (and count equation-number))
-                      (when count
-                        (cl-incf equation-number count)))))))
+                         element (and count equation-number)))
+                    ;; A source-visible environment can still advance TeX's
+                    ;; equation counter for later previews.
+                    (when count
+                      (cl-incf equation-number count))))))
             shuying-org--catalog-tick
             (buffer-chars-modified-tick)))))
 

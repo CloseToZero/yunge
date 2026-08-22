@@ -94,6 +94,33 @@
               (shuying-org--fragments))
       '(nil nil t t t)))))
 
+(ert-deftest shuying-org-leaves-whitespace-only-math-as-source ()
+  (with-temp-buffer
+    (org-mode)
+    (insert
+     "\\(\\)\n"
+     "\\(  \\)\n"
+     "\\[  \\]\n"
+     "$$  $$\n"
+     "\\begin{equation}\n"
+     "  \n"
+     "\\end{equation}\n"
+     "\\(x\\)\n"
+     "\\[y\\]\n"
+     "\\begin{equation}\n"
+     "z\n"
+     "\\end{equation}\n")
+    (let ((fragments (shuying-org--fragments)))
+      (should
+       (equal
+        (mapcar #'shuying-org-fragment-value fragments)
+        '("\\(x\\)"
+          "\\[y\\]"
+          "\\begin{equation}\nz\n\\end{equation}\n")))
+      (should
+       (= (shuying-org-fragment-equation-number (car (last fragments)))
+          2)))))
+
 (ert-deftest shuying-org-previews-non-standalone-block-math-at-source ()
   (with-temp-buffer
     (org-mode)
@@ -247,6 +274,80 @@
       (make-shuying-artifact
        :path "formula.svg"
        :metadata metadata)))))
+
+(ert-deftest shuying-org-keeps-zero-geometry-artifacts-as-source ()
+  (let* ((root (make-temp-file "shuying-org-" t))
+         (shuying-cache-directory root)
+         (shuying-backends nil)
+         (shuying--pending-jobs (make-hash-table :test #'equal))
+         (render-count 0))
+    (unwind-protect
+        (progn
+          (shuying-register-backend
+           'shuying-latex
+           (lambda (requests complete)
+             (dolist (request requests)
+               (cl-incf render-count)
+               (with-temp-file
+                   (shuying-backend-request-output-file request)
+                 (insert "empty image"))
+               (setf (shuying-backend-request-metadata request)
+                     '(:width 0.0 :height 0.0 :depth 0.0))
+               (funcall complete request nil))))
+          (cl-letf (((symbol-function 'shuying-org--preamble)
+                     (lambda () "test-preamble")))
+            (with-temp-buffer
+              (org-mode)
+              (insert "\\(\\phantom{x}\\)")
+              (let ((fragments (shuying-org--fragments)))
+                (shuying-org--preview-fragments fragments t)
+                (let ((overlay (shuying-org-test--overlay)))
+                  (should overlay)
+                  (should (= render-count 1))
+                  (should
+                   (overlay-get overlay 'shuying-org-empty-artifact))
+                  (should-not (overlay-get overlay 'shuying-org-image))
+                  (should-not (overlay-get overlay 'display))
+                  (should-not (overlay-get overlay 'shuying-org-error))
+                  (shuying-org--preview-fragments fragments t)
+                  (should (= render-count 1)))))))
+      (delete-directory root t))))
+
+(ert-deftest shuying-org-removes-a-preview-that-becomes-blank ()
+  (let* ((root (make-temp-file "shuying-org-" t))
+         (shuying-cache-directory root)
+         (shuying-backends nil)
+         (shuying--pending-jobs (make-hash-table :test #'equal))
+         (shuying-org-test--render-count 0))
+    (unwind-protect
+        (progn
+          (shuying-register-backend
+           'shuying-latex
+           #'shuying-org-test--render-now)
+          (cl-letf (((symbol-function 'create-image)
+                     (lambda (&rest _) 'image))
+                    ((symbol-function 'shuying-org--preamble)
+                     (lambda () "test-preamble")))
+            (with-temp-buffer
+              (org-mode)
+              (insert "Before \\(x\\) after")
+              (goto-char (point-min))
+              (shuying-org-mode 1)
+              (shuying-org-preview-buffer)
+              (let ((overlay (shuying-org-test--overlay)))
+                (should overlay)
+                (should (= shuying-org-test--render-count 1))
+                (search-forward "x")
+                (shuying-org--post-command)
+                (delete-char -1)
+                (shuying-org--post-command)
+                (goto-char (point-max))
+                (shuying-org--post-command)
+                (should-not (shuying-org--fragments))
+                (should-not (overlay-buffer overlay))
+                (should-not (shuying-org-test--overlay))
+                (should (= shuying-org-test--render-count 1))))))
+      (delete-directory root t))))
 
 (ert-deftest shuying-org-records-image-construction-errors ()
   (with-temp-buffer
