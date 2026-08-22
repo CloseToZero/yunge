@@ -428,23 +428,6 @@ Return nil when POSITION has no preview or its source is currently visible."
                    '(shuying-org--modified)))
     (shuying-org--sync-overlay-fragment overlay fragment)))
 
-(defun shuying-org--face-color (option attribute)
-  "Resolve Org LaTeX color OPTION for face ATTRIBUTE at point."
-  (let ((value (plist-get org-format-latex-options option))
-        (face (face-at-point))
-        resolved)
-    (setq resolved
-          (cond
-           ((eq value 'auto)
-            (face-attribute face attribute nil 'default))
-           ((eq value 'default)
-            (face-attribute 'default attribute nil 'default))
-           (t value)))
-    (if (or (not (stringp resolved))
-            (string-prefix-p "unspecified" resolved))
-        (if (eq attribute :foreground) "Black" "Transparent")
-      resolved)))
-
 (defun shuying-org--preamble ()
   "Return the LaTeX preamble for the current Org buffer."
   (require 'ox-latex)
@@ -467,10 +450,10 @@ Return nil when POSITION has no preview or its source is currently visible."
        :backend-options
        (list :converter shuying-latex-converter-command)
        :output-format "svg"
-       :foreground
-       (shuying-org--face-color :foreground :foreground)
-       :background
-       (shuying-org--face-color :background :background)
+       ;; The SVG uses CSS currentColor, so rendering is theme-independent.
+       ;; Emacs supplies the live display face when rasterizing the image.
+       :foreground "Black"
+       :background "Transparent"
        :equation-number
        (shuying-org-fragment-equation-number fragment)
        ;; Preserve Org's established dvisvgm preview size.  Its process
@@ -533,6 +516,15 @@ Return nil when ARTIFACT has no visible geometry."
          :height (cons height 'em)
          :ascent ascent)))))
 
+(defun shuying-org--install-artifact (overlay artifact)
+  "Install ARTIFACT and its face-relative image on OVERLAY."
+  (let ((image (shuying-org--image artifact)))
+    (overlay-put overlay 'shuying-org-artifact
+                 (shuying-artifact-path artifact))
+    (overlay-put overlay 'shuying-org-image image)
+    (overlay-put overlay 'shuying-org-empty-artifact (null image))
+    image))
+
 (defun shuying-org--record-render-error
     (overlay error-data report-error)
   "Record OVERLAY's ERROR-DATA and call REPORT-ERROR."
@@ -566,12 +558,8 @@ REPORT-ERROR reports a current render failure without duplicating its batch."
           (shuying-org--record-render-error
            overlay error-data report-error)
         (condition-case display-error
-            (let ((image (shuying-org--image artifact)))
-              (overlay-put overlay 'shuying-org-artifact
-                           (shuying-artifact-path artifact))
-              (overlay-put overlay 'shuying-org-image image)
-              (overlay-put overlay 'shuying-org-empty-artifact
-                           (null image))
+            (let ((image
+                   (shuying-org--install-artifact overlay artifact)))
               (overlay-put overlay 'shuying-org-dirty nil)
               (overlay-put overlay 'shuying-org-error nil)
               (if (or (null image)
@@ -591,6 +579,8 @@ REPORT-ERROR reports a current render failure without duplicating its batch."
          (buffer (current-buffer)))
     (shuying-org--hide-overlay overlay)
     (overlay-put overlay 'shuying-org-dirty nil)
+    (overlay-put overlay 'shuying-org-artifact nil)
+    (overlay-put overlay 'shuying-org-image nil)
     (overlay-put overlay 'shuying-org-empty-artifact nil)
     (overlay-put overlay 'shuying-org-generation generation)
     (overlay-put overlay 'shuying-org-specification-hash
@@ -942,15 +932,6 @@ the next idle opportunity."
     (setq shuying-org--visible-window-state nil)
     (shuying-org--schedule-visible-preview t)))
 
-(defun shuying-org--theme-changed (&optional _theme)
-  "Recheck visible Org previews after the active theme changes."
-  (dolist (buffer (buffer-list))
-    (with-current-buffer buffer
-      (when (and (bound-and-true-p shuying-org-mode)
-                 (shuying-org--window-state))
-        (setq shuying-org--visible-window-state nil)
-        (shuying-org--schedule-visible-preview t)))))
-
 (defun shuying-org--buffer-saved ()
   "Recheck visible previews after their Org buffer is saved."
   (when (shuying-org--window-state)
@@ -970,9 +951,6 @@ the next idle opportunity."
   (shuying-org-clear-buffer)
   (when (shuying-org--window-state)
     (shuying-org--schedule-visible-preview t)))
-
-(add-hook 'enable-theme-functions #'shuying-org--theme-changed)
-(add-hook 'disable-theme-functions #'shuying-org--theme-changed)
 
 (defun shuying-org--clear-region (beginning end)
   "Remove Shuying overlays between BEGINNING and END."

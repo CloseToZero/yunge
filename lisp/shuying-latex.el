@@ -95,6 +95,19 @@ values affect the document or converter as a whole."
            values ","))
         (error "Unknown color: %s" color))))
 
+(defun shuying-latex--hex-color (color)
+  "Return COLOR as a hexadecimal RGB value."
+  (when (and color
+             (not (string-equal-ignore-case color "Transparent")))
+    (or (when-let* ((values (color-values color)))
+          (concat
+           "#"
+           (mapconcat
+            (lambda (value)
+              (format "%02x" (round (/ value 257.0))))
+            values "")))
+        (error "Unknown color: %s" color))))
+
 (defun shuying-latex--page-width (width)
   "Return the TeX text-width setup for WIDTH."
   (cond
@@ -522,9 +535,14 @@ dvisvgm zero-pads page numbers to the width of the final page number."
          (directory (shuying-latex--batch-directory batch))
          (output-pattern (expand-file-name "page-%p.svg" directory))
          (scale (or (shuying-render-spec-scale specification) 1.0))
+         (current-color
+          (shuying-latex--hex-color
+           (shuying-render-spec-foreground specification)))
          (command
           (append
            converter
+           (when current-color
+             (list (concat "--currentcolor=" current-color)))
            (list
             "--page=1-"
             "--bbox=min"

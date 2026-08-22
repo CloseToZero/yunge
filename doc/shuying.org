@@ -33,6 +33,8 @@ The Org integration has one small interaction boundary:
 - SVG artifacts are tightly cropped.  The Org front end, rather than TeX's
   page box, centers block math in the window text area.  Customize
   =shuying-org-block-math-alignment= to retain the source column instead.
+- SVG artifacts use CSS =currentColor=.  Emacs resolves it from the live
+  display face, so theme changes require neither LaTeX nor an overlay scan.
 - Block math is centered only when its opening and closing physical lines
   contain no other text.  Non-standalone block math remains previewed at its
   source column because an overlay cannot reproduce TeX's line break faithfully.

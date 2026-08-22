@@ -522,6 +522,8 @@
                    (converter-sentinel
                     (plist-get converter-arguments :sentinel)))
               (should (member "--bbox=min" converter-command))
+              (should
+               (member "--currentcolor=#000000" converter-command))
               (should-not (member "--bbox=preview" converter-command))
               (with-temp-file (expand-file-name "page-1.svg" directory)
                 (insert "first"))

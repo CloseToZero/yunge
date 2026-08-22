@@ -259,7 +259,8 @@
                (lambda (&rest values)
                  (setq arguments values)
                  'image)))
-      (should (eq (shuying-org--image artifact) 'image))
+      (should
+       (eq (shuying-org--image artifact) 'image))
       (should
        (equal arguments
                '("formula.svg" nil nil
@@ -395,6 +396,12 @@
                        '("test-latex")))
         (should-not
          (shuying-render-spec-equation-number specification))
+        (should
+         (equal (shuying-render-spec-foreground specification)
+                "Black"))
+        (should
+         (equal (shuying-render-spec-background specification)
+                "Transparent"))
         (should
          (equal
           (plist-get
@@ -734,58 +741,47 @@
         (kill-buffer buffer))
       (delete-directory root t))))
 
-(ert-deftest shuying-org-refreshes-visible-previews-after-theme-changes ()
+(ert-deftest shuying-org-leaves-svg-colors-face-relative ()
   (let* ((root (make-temp-file "shuying-org-" t))
          (shuying-cache-directory root)
          (shuying-backends nil)
          (shuying--pending-jobs (make-hash-table :test #'equal))
          (shuying-org-test--render-count 0)
          (buffer (generate-new-buffer " *shuying-org-theme*"))
-         (foreground "light")
          window-state
          ranges
-         scheduled)
+         image-arguments)
     (unwind-protect
         (progn
           (shuying-register-backend
            'shuying-latex
            #'shuying-org-test--render-now)
           (cl-letf (((symbol-function 'create-image)
-                     (lambda (file &rest _properties)
-                       (list 'image file)))
-                    ((symbol-function 'shuying-org--face-color)
-                     (lambda (_option attribute)
-                       (if (eq attribute :foreground)
-                           foreground
-                         "Transparent")))
+                     (lambda (&rest arguments)
+                       (push arguments image-arguments)
+                       (cons 'image arguments)))
                     ((symbol-function 'shuying-org--visible-ranges)
                      (lambda () ranges))
                     ((symbol-function 'shuying-org--window-state)
-                     (lambda () window-state))
-                    ((symbol-function 'shuying-org--schedule-visible-preview)
-                     (lambda (&optional immediate)
-                       (push (cons (current-buffer) immediate)
-                             scheduled))))
+                     (lambda () window-state)))
             (with-current-buffer buffer
               (org-mode)
               (insert "Visible $x$.\n")
               (setq ranges (list (cons (point-min) (point-max)))
                     window-state 'visible)
               (shuying-org-mode 1)
-              (setq scheduled nil)
               (shuying-org--preview-visible-windows)
               (should (= shuying-org-test--render-count 1))
+              (should (= (length image-arguments) 1))
+              (let ((arguments (car image-arguments)))
+                (should-not (plist-member (nthcdr 3 arguments)
+                                          :foreground))
+                (should-not (plist-member (nthcdr 3 arguments)
+                                          :background)))
               (setq shuying-org--visible-window-state nil)
               (shuying-org--preview-visible-windows)
               (should (= shuying-org-test--render-count 1))
-              (setq scheduled nil)
-              (setq foreground "dark")
-              (shuying-org--theme-changed 'dark-theme))
-            (should (equal scheduled (list (cons buffer t))))
-            (with-current-buffer buffer
-              (should-not shuying-org--visible-window-state)
-              (shuying-org--preview-visible-windows)
-              (should (= shuying-org-test--render-count 2)))))
+              (should (= (length image-arguments) 1)))))
       (when (buffer-live-p buffer)
         (kill-buffer buffer))
       (delete-directory root t))))
@@ -1444,7 +1440,9 @@
                   ;; A preview-package page box is about 900pt at the
                   ;; configured scale.  The rendered formula is much tighter.
                   (should (< (string-to-number (match-string 1))
-                             500.0)))))))
+                             500.0))
+                  (goto-char (point-min))
+                  (should (search-forward "currentColor" nil t)))))))
       (delete-directory root t))))
 
 ;;; shuying-org-test.el ends here
