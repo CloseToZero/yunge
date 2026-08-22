@@ -5,6 +5,11 @@
 (require 'yunge-evil)
 (require 'yunge-key)
 (require 'yunge-key-control)
+(require 'tab-bar)
+
+;; Unlike Winner, tab-bar history keeps a separate layout history for each
+;; tab.  This matters even though the tab bar itself stays hidden.
+(tab-bar-history-mode 1)
 
 (defconst yunge-window-action-bindings
   '(("+" enlarge-window "increase height")
@@ -18,7 +23,9 @@
     ("l" windmove-right "select right")
     ("o" delete-other-windows "keep only this window")
     ("q" delete-window "close window")
+    ("r" tab-bar-history-forward "redo layout")
     ("s" yunge-window-split-below "split below")
+    ("u" tab-bar-history-back "undo layout")
     ("v" yunge-window-split-right "split right")
     ("w" other-window "next window")))
 
@@ -36,6 +43,7 @@
     ("s/v" "split")
     ("q" "close")
     ("o" "only")
+    ("u/r" "undo/redo")
     ("=" "balance")
     ("+/-" "height")
     ("</>" "width")

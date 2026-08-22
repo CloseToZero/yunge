@@ -219,6 +219,10 @@ explicit persistent window control map when several operations are needed.
 Within that map, recognized keys remain window commands until it is exited;
 an unrecognized key exits and retains its ordinary meaning.
 
+Use ~SPC w u~ and ~SPC w r~ to undo and redo window-layout changes in the
+current tab.  Each tab keeps its own layout history.  This is distinct from
+~SPC TAB u~, which restores a closed tab.
+
 Do not make the ordinary window bindings repeat automatically.  After
 ~SPC w h~ selects a window, for example, the next ~j~ belongs to the selected
 buffer.  Only the explicit control map changes that interpretation.
