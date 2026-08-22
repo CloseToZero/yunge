@@ -3550,6 +3550,7 @@
            '((page . 1) (width . 100.0) (height . 200.0))))
     (yunge-reader-pdf--load-page-infos)
     (yunge-reader-pdf--build-roll)
+    (should-not (get-text-property 1 'help-echo))
     (puthash `(0 900 ,yunge-reader-pdf-test--original-appearance)
              '((path . "zero.png")
                (pixel-width . 900) (pixel-height . 1800))

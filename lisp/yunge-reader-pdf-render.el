@@ -609,11 +609,7 @@ Use the nearest cached render ENTRY while an exact render is unavailable."
         " "
         'yunge-reader-pdf-page page
         'keymap yunge-reader-pdf--image-map
-        'pointer 'text
-        'help-echo
-        (concat
-         "Mouse-1 selects text; Ctrl-Mouse-1 follows a link; "
-         "drag highlights text across pages")))
+        'pointer 'text))
       (unless (= page (1- count))
         (insert (propertize "\n" 'yunge-reader-pdf-page page))))
     (setq yunge-reader-pdf--page-positions positions)
