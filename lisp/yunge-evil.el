@@ -19,8 +19,16 @@
 (declare-function evil-eolp "evil-common" ())
 (declare-function evil-forward-char "evil-commands"
                   (count &optional crosslines noerror))
+(declare-function evil-goto-mark "evil-commands" (char &optional noerror))
+(declare-function evil-goto-mark-line "evil-commands"
+                  (char &optional noerror))
 (declare-function evil-make-intercept-map "evil-core")
+(declare-function evil-next-mark "evil-commands" (count))
+(declare-function evil-next-mark-line "evil-commands" (count))
+(declare-function evil-previous-mark "evil-commands" (count))
+(declare-function evil-previous-mark-line "evil-commands" (count))
 (declare-function evil-push-search-history "evil-search" (regexp forward))
+(declare-function evil-scroll-line-to-center "evil-commands" (count))
 (declare-function evil-state-auxiliary-keymaps "evil-core" (state))
 
 (defvar evil-cross-lines)
@@ -74,6 +82,52 @@ Restore point if FUNCTION signals an error or quit."
   "Clear highlights after an interactive `evil-force-normal-state'."
   (when (eq this-command 'evil-force-normal-state)
     (evil-ex-nohighlight)))
+
+(defun yunge-evil-goto-mark (char &optional noerror)
+  "Go to marker CHAR, then center its line in the selected window.
+Optional NOERROR is passed to `evil-goto-mark'."
+  (interactive (list (read-char)))
+  (evil-goto-mark char noerror)
+  (evil-scroll-line-to-center nil))
+
+(defun yunge-evil-goto-mark-line (char &optional noerror)
+  "Go to the line of marker CHAR, then center it in the selected window.
+Optional NOERROR is passed to `evil-goto-mark-line'."
+  (interactive (list (read-char)))
+  (evil-goto-mark-line char noerror)
+  (evil-scroll-line-to-center nil))
+
+(defun yunge-evil-next-mark (count)
+  "Go to the COUNTth next lowercase mark, then center its line."
+  (interactive
+   (list (when current-prefix-arg
+           (prefix-numeric-value current-prefix-arg))))
+  (evil-next-mark count)
+  (evil-scroll-line-to-center nil))
+
+(defun yunge-evil-next-mark-line (count)
+  "Go to the line of the COUNTth next lowercase mark, then center it."
+  (interactive
+   (list (when current-prefix-arg
+           (prefix-numeric-value current-prefix-arg))))
+  (evil-next-mark-line count)
+  (evil-scroll-line-to-center nil))
+
+(defun yunge-evil-previous-mark (count)
+  "Go to the COUNTth previous lowercase mark, then center its line."
+  (interactive
+   (list (when current-prefix-arg
+           (prefix-numeric-value current-prefix-arg))))
+  (evil-previous-mark count)
+  (evil-scroll-line-to-center nil))
+
+(defun yunge-evil-previous-mark-line (count)
+  "Go to the line of the COUNTth previous lowercase mark, then center it."
+  (interactive
+   (list (when current-prefix-arg
+           (prefix-numeric-value current-prefix-arg))))
+  (evil-previous-mark-line count)
+  (evil-scroll-line-to-center nil))
 
 (defun yunge-evil--handle-interactive-search-failure
     (function &rest arguments)
@@ -425,6 +479,18 @@ punctuation equivalence rather than literally."
               #'yunge-evil--repeat-find-char-with-pinyin)
   (yunge-key-define yunge-marker-map yunge-marker-bindings)
   (yunge-key-define yunge-jump-map yunge-jump-bindings)
+  (define-key global-map [remap evil-goto-mark]
+              #'yunge-evil-goto-mark)
+  (define-key global-map [remap evil-goto-mark-line]
+              #'yunge-evil-goto-mark-line)
+  (define-key global-map [remap evil-next-mark]
+              #'yunge-evil-next-mark)
+  (define-key global-map [remap evil-next-mark-line]
+              #'yunge-evil-next-mark-line)
+  (define-key global-map [remap evil-previous-mark]
+              #'yunge-evil-previous-mark)
+  (define-key global-map [remap evil-previous-mark-line]
+              #'yunge-evil-previous-mark-line)
   (yunge-evil--setup-leader)
   (yunge-key-define
    evil-motion-state-map
@@ -450,7 +516,20 @@ punctuation equivalence rather than literally."
   (evil-add-command-properties 'yunge-evil-visual-search-forward
                                :jump t :repeat nil)
   (evil-add-command-properties 'yunge-evil-visual-search-backward
-                               :jump t :repeat nil))
+                               :jump t :repeat nil)
+  (evil-add-command-properties 'yunge-evil-goto-mark
+                               :keep-visual t :repeat nil
+                               :type 'exclusive :jump t)
+  (evil-add-command-properties 'yunge-evil-goto-mark-line
+                               :keep-visual t :repeat nil
+                               :type 'line :jump t)
+  (dolist (command '(yunge-evil-next-mark
+                     yunge-evil-next-mark-line
+                     yunge-evil-previous-mark
+                     yunge-evil-previous-mark-line))
+    (evil-add-command-properties command
+                                 :keep-visual t :repeat nil
+                                 :type 'exclusive :jump t)))
 
 (with-eval-after-load 'which-key
   (yunge-key-add-which-key-descriptions
