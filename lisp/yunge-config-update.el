@@ -3,6 +3,7 @@
 ;; SPDX-License-Identifier: MIT
 
 (require 'subr-x)
+(require 'filenotify nil t)
 (require 'yunge-state)
 
 (declare-function magit-status "magit-status" (&optional directory cache))
@@ -29,6 +30,11 @@
   :type 'number
   :group 'yunge-config-update)
 
+(defcustom yunge-config-update-watch-delay 1
+  "Seconds to debounce configuration Git metadata changes."
+  :type 'number
+  :group 'yunge-config-update)
+
 (defcustom yunge-config-update-remote "origin"
   "Remote whose branch matching the current branch is checked."
   :type 'string
@@ -42,6 +48,11 @@
 (defvar yunge-config-update--process nil)
 (defvar yunge-config-update--periodic-timer nil)
 (defvar yunge-config-update--idle-timer nil)
+(defvar yunge-config-update--watch-timer nil)
+(defvar yunge-config-update--watch-descriptors nil)
+(defvar yunge-config-update--watched-paths nil)
+(defvar yunge-config-update--watching-p nil)
+(defvar yunge-config-update--local-check-pending-p nil)
 (defvar yunge-config-update--state nil)
 (defvar yunge-config-update--last-error nil)
 
@@ -121,6 +132,14 @@
   (yunge-config-update--git-output
    git "symbolic-ref" "--quiet" "--short" "HEAD"))
 
+(defun yunge-config-update--git-path (git path)
+  "Return the absolute repository path for Git PATH using GIT."
+  (when-let* ((value
+               (yunge-config-update--git-output
+                git "rev-parse" "--git-path" path))
+              ((not (string-empty-p value))))
+    (expand-file-name value yunge-config-directory)))
+
 (defun yunge-config-update--fetch-command (git branch)
   "Return the GIT command that fetches the remote copy of BRANCH."
   (list
@@ -153,7 +172,8 @@
     (setq yunge-config-update--process nil))
   (when-let* ((buffer (process-buffer process))
               ((buffer-live-p buffer)))
-    (kill-buffer buffer)))
+    (kill-buffer buffer))
+  (yunge-config-update--schedule-pending-local-check))
 
 (defun yunge-config-update--record-error (interactive format-string
                                                       &rest arguments)
@@ -233,6 +253,21 @@ process metadata."
    #'yunge-config-update--compare-sentinel
    branch interactive "git rev-list"))
 
+(defun yunge-config-update--check-local ()
+  "Asynchronously compare HEAD with the cached remote-tracking branch."
+  (cond
+   ((process-live-p yunge-config-update--process)
+    (setq yunge-config-update--local-check-pending-p t))
+   ((not (executable-find "git"))
+    (yunge-config-update--record-error nil "Git is unavailable"))
+   (t
+    (let* ((git (executable-find "git"))
+           (branch (yunge-config-update--current-branch git)))
+      (if branch
+          (yunge-config-update--start-comparison git branch nil)
+        (yunge-config-update--record-error
+         nil "Config HEAD is detached or is not a Git repository"))))))
+
 (defun yunge-config-update--fetch-sentinel (process _event)
   "Handle completion of the asynchronous Git fetch PROCESS."
   (when (and (memq (process-status process) '(exit signal))
@@ -256,6 +291,7 @@ process metadata."
 
 (defun yunge-config-update--set-state (branch ahead behind)
   "Record that BRANCH is AHEAD and BEHIND its remote counterpart."
+  (yunge-config-update--refresh-watches)
   (let* ((old-state yunge-config-update--state)
          (new-state
           (unless (and (zerop ahead) (zerop behind))
@@ -324,6 +360,84 @@ When INTERACTIVE is non-nil, report failures that scheduled checks keep quiet."
          #'yunge-config-update--fetch-sentinel
          branch interactive "git fetch"))))))
 
+(defun yunge-config-update--watch-paths ()
+  "Return existing Git metadata paths that should be watched."
+  (when-let* ((git (executable-find "git"))
+              (branch (yunge-config-update--current-branch git)))
+    (delete-dups
+     (delq
+      nil
+      (mapcar
+       (lambda (path)
+         (when-let* ((file (yunge-config-update--git-path git path))
+                     ((file-exists-p file)))
+           file))
+       (list "logs/HEAD"
+             (format "logs/refs/remotes/%s/%s"
+                     yunge-config-update-remote branch)))))))
+
+(defun yunge-config-update--remove-watches ()
+  "Remove all configuration Git metadata watches."
+  (when (fboundp 'file-notify-rm-watch)
+    (dolist (descriptor yunge-config-update--watch-descriptors)
+      (ignore-errors (file-notify-rm-watch descriptor))))
+  (setq yunge-config-update--watch-descriptors nil
+        yunge-config-update--watched-paths nil))
+
+(defun yunge-config-update--refresh-watches ()
+  "Watch Git metadata for the current local and remote branches."
+  (when (and yunge-config-update--watching-p
+             (fboundp 'file-notify-add-watch))
+    (let ((paths (yunge-config-update--watch-paths)))
+      (unless (equal paths yunge-config-update--watched-paths)
+        (yunge-config-update--remove-watches)
+        (dolist (path paths)
+          (condition-case nil
+              (push
+               (file-notify-add-watch
+                path '(change) #'yunge-config-update--watch-callback)
+               yunge-config-update--watch-descriptors)
+            (file-notify-error nil)))
+        (setq yunge-config-update--watch-descriptors
+              (nreverse yunge-config-update--watch-descriptors)
+              yunge-config-update--watched-paths paths)))))
+
+(defun yunge-config-update--schedule-pending-local-check ()
+  "Schedule a pending local comparison when no debounce timer exists."
+  (when (and yunge-config-update--watching-p
+             yunge-config-update--local-check-pending-p
+             (not (timerp yunge-config-update--watch-timer)))
+    (setq yunge-config-update--watch-timer
+          (run-at-time yunge-config-update-watch-delay nil
+                       #'yunge-config-update--run-local-check))))
+
+(defun yunge-config-update--queue-local-check ()
+  "Debounce a local comparison after Git metadata changes."
+  (when yunge-config-update--watching-p
+    (setq yunge-config-update--local-check-pending-p t)
+    (when (timerp yunge-config-update--watch-timer)
+      (cancel-timer yunge-config-update--watch-timer)
+      (setq yunge-config-update--watch-timer nil))
+    (yunge-config-update--schedule-pending-local-check)))
+
+(defun yunge-config-update--watch-callback (event)
+  "Queue a local comparison for a Git file notification EVENT."
+  (when (and yunge-config-update--watching-p
+             (memq (car event) yunge-config-update--watch-descriptors))
+    (when (eq (cadr event) 'stopped)
+      (yunge-config-update--remove-watches))
+    (yunge-config-update--queue-local-check)))
+
+(defun yunge-config-update--run-local-check ()
+  "Run a pending local comparison when no other check is active."
+  (setq yunge-config-update--watch-timer nil)
+  (when (and yunge-config-update--watching-p
+             yunge-config-update--local-check-pending-p
+             (not (process-live-p yunge-config-update--process)))
+    (setq yunge-config-update--local-check-pending-p nil)
+    (yunge-config-update--refresh-watches)
+    (yunge-config-update--check-local)))
+
 (defun yunge-config-update--run-idle-check ()
   "Run a periodic update check after its idle delay."
   (setq yunge-config-update--idle-timer nil)
@@ -341,12 +455,17 @@ When INTERACTIVE is non-nil, report failures that scheduled checks keep quiet."
 (defun yunge-config-update-stop ()
   "Stop scheduled configuration update checks."
   (interactive)
+  (setq yunge-config-update--watching-p nil
+        yunge-config-update--local-check-pending-p nil)
   (dolist (timer (list yunge-config-update--periodic-timer
-                       yunge-config-update--idle-timer))
+                       yunge-config-update--idle-timer
+                       yunge-config-update--watch-timer))
     (when (timerp timer)
       (cancel-timer timer)))
   (setq yunge-config-update--periodic-timer nil
-        yunge-config-update--idle-timer nil)
+        yunge-config-update--idle-timer nil
+        yunge-config-update--watch-timer nil)
+  (yunge-config-update--remove-watches)
   (when (process-live-p yunge-config-update--process)
     (process-put yunge-config-update--process
                  'yunge-config-update-stopping t)
@@ -356,6 +475,8 @@ When INTERACTIVE is non-nil, report failures that scheduled checks keep quiet."
   "Start immediate and periodic configuration update checks."
   (interactive)
   (yunge-config-update-stop)
+  (setq yunge-config-update--watching-p t)
+  (yunge-config-update--refresh-watches)
   (yunge-config-update-check)
   (setq yunge-config-update--periodic-timer
         (run-at-time
