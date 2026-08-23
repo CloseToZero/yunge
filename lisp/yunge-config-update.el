@@ -19,7 +19,7 @@
   :type 'number
   :group 'yunge-config-update)
 
-(defcustom yunge-config-update-idle-delay 60
+(defcustom yunge-config-update-idle-delay 5
   "Idle seconds to wait before a periodic update check."
   :type 'number
   :group 'yunge-config-update)

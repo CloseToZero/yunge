@@ -105,10 +105,10 @@
                         yunge-config-update-timeout timeout-timer)
                       properties)))))
 
-(ert-deftest yunge-config-update-periodic-check-waits-for-idle ()
+(ert-deftest yunge-config-update-periodic-check-waits-for-short-idle ()
   (let ((yunge-config-update--idle-timer nil)
         (yunge-config-update--process nil)
-        (yunge-config-update-idle-delay 45)
+        (yunge-config-update-idle-delay 5)
         arguments)
     (cl-letf (((symbol-function 'run-with-idle-timer)
                (lambda (&rest values)
@@ -117,7 +117,7 @@
               ((symbol-function 'process-live-p) #'ignore))
       (yunge-config-update--schedule-idle-check)
       (should (equal arguments
-                     '(45 nil yunge-config-update--run-idle-check)))
+                     '(5 nil yunge-config-update--run-idle-check)))
       (should (eq yunge-config-update--idle-timer 'idle-timer)))))
 
 ;;; yunge-config-update-test.el ends here
