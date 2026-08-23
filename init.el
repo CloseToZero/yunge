@@ -6,6 +6,7 @@
 (require 'yunge-autoload)
 (yunge-autoload-load)
 (require 'yunge-server)
+(require 'yunge-config-update)
 (require 'yunge-history)
 (require 'yunge-autorevert)
 (require 'yunge-edit)
