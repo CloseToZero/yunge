@@ -46,7 +46,10 @@ Apply the conflict rules before overriding these bindings:
 - ~C-d/C-u~ and ~C-f/C-b~ scroll.
 - ~/~ and ~n/N~ search text and repeat searches.
 - ~v/V/C-v~ start visual selection.
-- ~f/F/t/T~ and ~;/,~ retain character-find semantics.
+- ~f/F/t/T~ and ~;/,~ retain character-find semantics.  A lowercase ASCII
+  prompt also matches Han characters by Pinyin initial, and common ASCII
+  punctuation matches its Chinese and full-width counterparts.  Counts,
+  operators, direction, and repeat behavior remain Evil-compatible.
 - ~m~, the single quote, and the backtick retain mark semantics.
 - ~d/c/y~, ~i/a/o~, ~p~, ~r~, ~u~, and ~x~ retain their Evil meanings in
   editable buffers.

@@ -17,10 +17,13 @@
 (declare-function evil-ex-search-next "evil-commands" (count))
 (declare-function evil-exit-visual-state "evil-states" (&optional later buffer))
 (declare-function evil-eolp "evil-common" ())
+(declare-function evil-forward-char "evil-commands"
+                  (count &optional crosslines noerror))
 (declare-function evil-make-intercept-map "evil-core")
 (declare-function evil-push-search-history "evil-search" (regexp forward))
 (declare-function evil-state-auxiliary-keymaps "evil-core" (state))
 
+(defvar evil-cross-lines)
 (defvar evil-ex-last-was-search)
 (defvar evil-ex-search-count)
 (defvar evil-ex-search-direction)
@@ -29,12 +32,16 @@
 (defvar evil-ex-search-pattern)
 (defvar evil-ex-search-vim-style-regexp)
 (defvar evil-command-line-map)
+(defvar evil-last-find)
 (defvar evil-local-mode)
 (defvar evil-motion-state-map)
+(defvar evil-repeat-find-to-skip-next)
+(defvar evil-respect-visual-line-mode)
 (defvar evil-state)
 (defvar evil-visual-selection)
 (defvar help-map)
 (defvar project-prefix-map)
+(defvar visual-line-mode)
 
 (defvar yunge-evil--pinyin-search nil
   "Non-nil while an Evil search command should expand Pinyin.")
@@ -161,6 +168,115 @@ Pinyin search is literal, so its `/` and `?` remain part of PATTERN."
 (defgroup yunge nil
   "Personal Emacs configuration."
   :group 'emacs)
+
+(defcustom yunge-evil-find-char-punctuation-alist
+  '((?, . "，")
+    (?. . "。．")
+    (?? . "？")
+    (?: . "：")
+    (?! . "！")
+    (?- . "－—")
+    (?_ . "＿")
+    (?~ . "～")
+    (?/ . "／")
+    (?\\ . "、＼")
+    (?\; . "；")
+    (?\( . "（")
+    (?\) . "）")
+    (?\[ . "［【「")
+    (?\] . "］】」")
+    (?{ . "｛〖『")
+    (?} . "｝〗』")
+    (?< . "＜《〈")
+    (?> . "＞》〉")
+    (?\' . "‘’")
+    (?\" . "“”"))
+  "ASCII prompts and their additional character-find equivalents.
+The prompt itself is always matched.  Each alist value is a string whose
+characters are also matched by Evil's `f', `F', `t', and `T' commands."
+  :type '(alist :key-type character :value-type string)
+  :group 'yunge)
+
+(defun yunge-evil--find-char-regexp (char)
+  "Return the expanded character-find regexp for CHAR, or nil.
+Lowercase ASCII letters expand through Pinyin initials.  Configured ASCII
+punctuation expands through `yunge-evil-find-char-punctuation-alist'."
+  (cond
+   ((and (<= ?a char) (<= char ?z))
+    (yunge-pinyin-regexp (char-to-string char)))
+   (t
+    (when-let* ((equivalents
+                 (alist-get char
+                            yunge-evil-find-char-punctuation-alist)))
+      (regexp-opt-charset
+       (cons char (string-to-list equivalents)))))))
+
+(defun yunge-evil--find-char-expanded (count char regexp)
+  "Move to the COUNTth match for CHAR using expanded REGEXP.
+This preserves Evil's character-find bounds, cursor placement, and repeat
+state while replacing its literal search only for expanded prompts."
+  (setq count (or count 1))
+  (let ((forwardp (> count 0))
+        (visual (and evil-respect-visual-line-mode visual-line-mode))
+        case-fold-search)
+    (setq evil-last-find (list #'evil-find-char char forwardp))
+    (when forwardp
+      (evil-forward-char 1 evil-cross-lines))
+    (unless
+        (prog1
+            (re-search-forward
+             regexp
+             (cond
+              (evil-cross-lines nil)
+              ((and forwardp visual)
+               (save-excursion
+                 (end-of-visual-line)
+                 (point)))
+              (forwardp (line-end-position))
+              (visual
+               (save-excursion
+                 (beginning-of-visual-line)
+                 (point)))
+              (t (line-beginning-position)))
+             t count)
+          (when forwardp
+            (backward-char)))
+      (user-error "Can't find `%c'" char))))
+
+(defun yunge-evil--find-char-with-pinyin (function count char)
+  "Call FUNCTION for COUNT and CHAR, expanding Pinyin and punctuation."
+  (if-let* ((regexp (yunge-evil--find-char-regexp char)))
+      (yunge-evil--find-char-expanded count char regexp)
+    (funcall function count char)))
+
+(defun yunge-evil--find-char-matches-p (char candidate)
+  "Return non-nil when CANDIDATE matches expanded prompt CHAR."
+  (when-let* ((regexp (and candidate
+                           (yunge-evil--find-char-regexp char))))
+    (string-match-p regexp (char-to-string candidate))))
+
+(defun yunge-evil--repeat-find-char-with-pinyin (function count)
+  "Call repeat FUNCTION with COUNT, respecting expanded `t' and `T' matches.
+Evil increments a one-step repeat when the previous to-character target is
+adjacent.  Apply the same rule when that target matched CHAR by Pinyin or
+punctuation equivalence rather than literally."
+  (let* ((effective-count (or count 1))
+         (command (car-safe evil-last-find))
+         (char (nth 1 evil-last-find))
+         (forwardp (nth 2 evil-last-find)))
+    (when (and (eq command #'evil-find-char-to)
+               evil-repeat-find-to-skip-next
+               (= (abs effective-count) 1)
+               (integerp char))
+      (when (< effective-count 0)
+        (setq forwardp (not forwardp)))
+      (when (yunge-evil--find-char-matches-p
+             char
+             (if forwardp
+                 (char-after (1+ (point)))
+               (char-before)))
+        (setq effective-count (if (< effective-count 0) -2 2))))
+    (funcall function effective-count)))
 
 (defvar-keymap yunge-leader-map
   :doc "Global leader map.")
@@ -303,6 +419,10 @@ Pinyin search is literal, so its `/` and `?` remain part of PATTERN."
               #'yunge-evil--handle-interactive-search-failure)
   (advice-add 'evil-ex-search-previous :around
               #'yunge-evil--handle-interactive-search-failure)
+  (advice-add 'evil-find-char :around
+              #'yunge-evil--find-char-with-pinyin)
+  (advice-add 'evil-repeat-find-char :around
+              #'yunge-evil--repeat-find-char-with-pinyin)
   (yunge-key-define yunge-marker-map yunge-marker-bindings)
   (yunge-key-define yunge-jump-map yunge-jump-bindings)
   (yunge-evil--setup-leader)

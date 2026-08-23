@@ -7,6 +7,11 @@
 =yunge-pinyin= is a Pinyin query compiler shared by Evil search, Orderless,
 Avy, and any other Emacs code that accepts a regexp.
 
+Evil's ~f/F/t/T~ character-find commands also compile a lowercase ASCII
+letter as a one-letter Pinyin query.  The literal letter remains a candidate,
+while Han characters with that initial become additional candidates.  This
+uses the same bounded data and cache as the longer search commands.
+
 The public entry points are:
 
 - =yunge-pinyin-normalize= for tone and ü normalization;

@@ -21,6 +21,7 @@
 (defvar evil-ex-search-pattern)
 (defvar evil-ex-active-highlights-alist)
 (defvar evil-command-line-map)
+(defvar evil-cross-lines)
 (defvar evil-state)
 (defvar yunge-evil--pinyin-search)
 
@@ -81,7 +82,11 @@
               'evil-ex-search-next)
              (advice-member-p
               #'yunge-evil--handle-interactive-search-failure
-              'evil-ex-search-previous))
+              'evil-ex-search-previous)
+             (advice-member-p #'yunge-evil--find-char-with-pinyin
+                              'evil-find-char)
+             (advice-member-p #'yunge-evil--repeat-find-char-with-pinyin
+                              'evil-repeat-find-char))
       (error "Unexpected Evil configuration"))))
 
 (ert-deftest yunge-evil-search-patterns-do-not-expand-pinyin-by-default ()
@@ -128,6 +133,75 @@
       (let ((regexp (evil-ex-pattern-regex evil-ex-search-pattern)))
         (should (string-match-p regexp "font/src"))
         (should-not (string-match-p regexp "font_test"))))))
+
+(ert-deftest yunge-evil-find-char-matches-pinyin-and-chinese-punctuation ()
+  (yunge-test-enable-evil)
+  (with-temp-buffer
+    (insert "x保 b，c,。d.e")
+    (goto-char (point-min))
+    (evil-normal-state)
+    (save-window-excursion
+      (switch-to-buffer (current-buffer))
+      (execute-kbd-macro (kbd "f b"))
+      (should (= (point) 2))
+      (execute-kbd-macro (kbd ";"))
+      (should (= (point) 4))
+      (execute-kbd-macro (kbd "f ,"))
+      (should (= (point) 5))
+      (execute-kbd-macro (kbd ";"))
+      (should (= (point) 7))
+      (execute-kbd-macro (kbd "f ."))
+      (should (= (point) 8))
+      (execute-kbd-macro (kbd ";"))
+      (should (= (point) 10)))))
+
+(ert-deftest yunge-evil-find-char-preserves-count-and-backward-repeat ()
+  (yunge-test-enable-evil)
+  (with-temp-buffer
+    (insert "。a.b。x保b")
+    (goto-char 6)
+    (evil-normal-state)
+    (save-window-excursion
+      (switch-to-buffer (current-buffer))
+      (execute-kbd-macro (kbd "F ."))
+      (should (= (point) 5))
+      (execute-kbd-macro (kbd ";"))
+      (should (= (point) 3))
+      (execute-kbd-macro (kbd ";"))
+      (should (= (point) 1))
+      (execute-kbd-macro (kbd ","))
+      (should (= (point) 3))
+      (goto-char 6)
+      (execute-kbd-macro (kbd "2 f b"))
+      (should (= (point) 8)))))
+
+(ert-deftest yunge-evil-find-char-to-repeats-adjacent-expanded-targets ()
+  (yunge-test-enable-evil)
+  (with-temp-buffer
+    (insert "x，a，b")
+    (goto-char (point-min))
+    (evil-normal-state)
+    (save-window-excursion
+      (switch-to-buffer (current-buffer))
+      (execute-kbd-macro (kbd "t ,"))
+      (should (= (point) 1))
+      (execute-kbd-macro (kbd ";"))
+      (should (= (point) 3)))))
+
+(ert-deftest yunge-evil-find-char-keeps-operator-and-line-boundaries ()
+  (yunge-test-enable-evil)
+  (with-temp-buffer
+    (insert "ab。cd\n保")
+    (goto-char (point-min))
+    (evil-normal-state)
+    (save-window-excursion
+      (switch-to-buffer (current-buffer))
+      (execute-kbd-macro (kbd "d t ."))
+      (should (equal (buffer-string) "。cd\n保"))
+      (should-error (evil-find-char 1 ?b) :type 'user-error)
+      (let ((evil-cross-lines t))
+        (evil-find-char 1 ?b)
+        (should (= (point) 5))))))
 
 (ert-deftest yunge-evil-command-line-navigates-history-with-meta-keys ()
   (yunge-test-enable-evil)
