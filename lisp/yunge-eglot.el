@@ -53,6 +53,10 @@ Each entry is a plist containing :root, :modes, and optionally
   '(c-mode c-ts-mode c++-mode c++-ts-mode objc-mode)
   "Major modes managed together by clangd.")
 
+(defconst yunge-eglot--typescript-modes
+  '(js-mode js-ts-mode tsx-ts-mode typescript-ts-mode typescript-mode)
+  "Major modes managed together by typescript-language-server.")
+
 (defconst yunge-eglot--build-directory-regexp
   "\\(?:\\`\\|[-_]\\)build\\(?:\\'\\|[-_]\\)"
   "Regexp matching build as a distinct directory-name component.")
@@ -390,6 +394,14 @@ Offer PREFERRED first when it still names a compilation database."
    'eglot-server-programs
    (cons yunge-eglot--clangd-modes
          #'yunge-eglot--clangd-contact))
+  (add-to-list
+   'eglot-server-programs
+   '(((js-mode :language-id "javascript")
+      (js-ts-mode :language-id "javascript")
+      (tsx-ts-mode :language-id "typescriptreact")
+      (typescript-ts-mode :language-id "typescript")
+      (typescript-mode :language-id "typescript"))
+     . ("pnpm" "exec" "typescript-language-server" "--stdio")))
   (with-eval-after-load 'evil
     (evil-set-initial-state 'eglot-hierarchy-mode 'normal)
     (yunge-key-evil-define-minor-mode

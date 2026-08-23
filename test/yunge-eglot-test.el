@@ -162,6 +162,15 @@
                    yunge-eglot--clangd-modes))
     (should (eq (cdr lookup) #'yunge-eglot--clangd-contact))))
 
+(ert-deftest yunge-eglot-runs-the-project-typescript-server-through-pnpm ()
+  (require 'eglot)
+  (let ((lookup (eglot--lookup-mode 'typescript-ts-mode)))
+    (should (equal (mapcar #'car (car lookup))
+                   yunge-eglot--typescript-modes))
+    (should (equal (cdr lookup)
+                   '("pnpm" "exec" "typescript-language-server"
+                     "--stdio")))))
+
 (ert-deftest yunge-eglot-keeps-local-clangd-off-remote-projects ()
   (let ((default-directory "/ssh:test:/project/"))
     (cl-letf (((symbol-function 'eglot--executable-find)
