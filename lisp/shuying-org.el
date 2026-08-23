@@ -955,6 +955,15 @@ the next idle opportunity."
     (setq shuying-org--visible-window-state nil)
     (shuying-org--schedule-visible-preview t)))
 
+(defun shuying-org--window-scrolled (window _display-start)
+  "Schedule previews after WINDOW scrolls to its new display start."
+  (when (and (window-live-p window)
+             (eq (window-buffer window) (current-buffer)))
+    ;; Commands can move point before redisplay adjusts `window-start'.
+    ;; Their post-command pass still sees the old viewport; this hook runs
+    ;; after the new start has been installed and catches the actual scroll.
+    (shuying-org--schedule-visible-preview)))
+
 (defun shuying-org--buffer-saved ()
   "Recheck visible previews after their Org buffer is saved."
   (when (shuying-org--window-state)
@@ -1053,6 +1062,8 @@ preview the whole buffer.  With three, clear the whole buffer."
                   #'shuying-org--window-buffer-changed nil t)
         (add-hook 'window-size-change-functions
                   #'shuying-org--window-size-changed nil t)
+        (add-hook 'window-scroll-functions
+                  #'shuying-org--window-scrolled nil t)
         (add-hook 'after-save-hook #'shuying-org--buffer-saved nil t)
         (add-hook 'after-revert-hook #'shuying-org--buffer-reverted nil t)
         (shuying-org--schedule-visible-preview t))
@@ -1065,6 +1076,8 @@ preview the whole buffer.  With three, clear the whole buffer."
                  #'shuying-org--window-buffer-changed t)
     (remove-hook 'window-size-change-functions
                  #'shuying-org--window-size-changed t)
+    (remove-hook 'window-scroll-functions
+                 #'shuying-org--window-scrolled t)
     (remove-hook 'after-save-hook #'shuying-org--buffer-saved t)
     (remove-hook 'after-revert-hook #'shuying-org--buffer-reverted t)
     (setq shuying-org--visible-window-state nil)

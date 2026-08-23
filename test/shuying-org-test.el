@@ -972,6 +972,33 @@
       (when (buffer-live-p buffer)
         (kill-buffer buffer)))))
 
+(ert-deftest shuying-org-rechecks-visible-previews-after-redisplay-scroll ()
+  (let ((buffer (generate-new-buffer " *shuying-org-window-scroll*"))
+        scheduled)
+    (unwind-protect
+        (save-window-excursion
+          (set-window-buffer (selected-window) buffer)
+          (with-current-buffer buffer
+            (org-mode)
+            (cl-letf (((symbol-function
+                        'shuying-org--schedule-visible-preview)
+                       (lambda (&optional immediate)
+                         (setq scheduled (if immediate 'immediate t)))))
+              (shuying-org-mode 1)
+              (should
+               (memq #'shuying-org--window-scrolled
+                     window-scroll-functions))
+              (setq scheduled nil)
+              (shuying-org--window-scrolled
+               (selected-window) (point-min))
+              (should (eq scheduled t))
+              (shuying-org-mode -1)
+              (should-not
+               (memq #'shuying-org--window-scrolled
+                     window-scroll-functions)))))
+      (when (buffer-live-p buffer)
+        (kill-buffer buffer)))))
+
 (ert-deftest shuying-org-coalesces-viewport-preview-updates ()
   (let* ((root (make-temp-file "shuying-org-" t))
          (shuying-cache-directory root)
