@@ -63,6 +63,7 @@
     ("m" . magit-merge)
     ("p" . magit-push)
     ("r" . magit-rebase)
+    ("R" . magit-revert)
     ("X" . magit-reset)
     ("Z" . magit-stash)))
 

@@ -101,6 +101,7 @@
     ("m" magit-merge "merge")
     ("p" magit-push "push")
     ("r" magit-rebase "rebase")
+    ("R" magit-revert "revert")
     ("X" magit-reset "reset")
     ("Z" magit-stash "stash")))
 
