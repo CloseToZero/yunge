@@ -370,6 +370,9 @@
       (should (equal (fangcun-node-title personal)
                      "Personal Notes"))
       (should (equal (fangcun-node-title theorem) "A theorem"))
+      (should (equal (fangcun-node-outline-path personal) nil))
+      (should (equal (fangcun-node-outline-path theorem)
+                     '("A theorem")))
       (should (equal (fangcun-node-title untitled)
                      "untitled-heading"))
       (should (equal (fangcun-node-yiyu-id work) "work"))
@@ -731,12 +734,13 @@
          (lambda (node)
            (list (fangcun-node-id node)
                  (fangcun-node-title node)
+                 (fangcun-node-outline-path node)
                  (fangcun-node-aliases node)))
          nodes)
-        '(("file-node" "Edge" ("File" "File alias"))
-          ("normal" "Normal" ("One" "Two words"))
-          ("lowercase" "Lowercase" nil)
-          ("planned" "Planning" nil)))))))
+        '(("file-node" "Edge" nil ("File" "File alias"))
+          ("normal" "Normal" ("Normal") ("One" "Two words"))
+          ("lowercase" "Lowercase" ("Lowercase") nil)
+          ("planned" "Planning" ("Planning") nil)))))))
 
 (ert-deftest fangcun-parsing-inhibits-org-startup ()
   (fangcun-test-with-notes
@@ -1779,7 +1783,34 @@
              (funcall annotation-function (car candidate))))
         (should
          (equal (substring-no-properties annotation)
-                "  Personal › theorems.org"))))))
+                "  Personal › theorems.org › A theorem"))))))
+
+(ert-deftest fangcun-candidates-distinguish-file-and-heading-locations ()
+  (let* ((file-node
+          (make-fangcun-node
+           :id "file"
+           :yiyu-name "Personal"
+           :file "notes.org"
+           :title "Shared title"))
+         (heading-node
+          (make-fangcun-node
+           :id "heading"
+           :yiyu-name "Personal"
+           :file "notes.org"
+           :title "Shared title"
+           :outline-path '("Shared title")))
+         (file-annotation
+          (fangcun--node-annotation
+           (fangcun--node-candidate file-node)))
+         (heading-annotation
+          (fangcun--node-annotation
+           (fangcun--node-candidate heading-node))))
+    (should
+     (equal (substring-no-properties file-annotation)
+            "  Personal › notes.org (file)"))
+    (should
+     (equal (substring-no-properties heading-annotation)
+            "  Personal › notes.org › Shared title"))))
 
 (ert-deftest fangcun-candidates-hide-and-distinguish-node-ids ()
   (let* ((first

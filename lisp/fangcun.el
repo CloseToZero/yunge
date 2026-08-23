@@ -52,6 +52,7 @@ When the helper is unavailable, synchronization falls back to Emacs."
   yiyu-root
   file
   title
+  outline-path
   aliases
   tags)
 
@@ -435,6 +436,7 @@ directory or any notes below it."
     "yiyu_id TEXT NOT NULL, "
     "file TEXT NOT NULL, "
     "title TEXT NOT NULL, "
+    "outline_path TEXT NOT NULL, "
     "FOREIGN KEY (yiyu_id, file) "
     "REFERENCES files (yiyu_id, file) ON DELETE CASCADE)"))
   ;; Store aliases as rows instead of serializing them into NODES because each
@@ -574,6 +576,7 @@ RELATIVE-FILE names BUFFER's file relative to YIYU's root."
                 :yiyu-root (fangcun-yiyu-root yiyu)
                 :file relative-file
                 :title file-title
+                :outline-path nil
                 :aliases (fangcun--aliases-at-point)
                 :tags (fangcun--effective-tags-at-point))
                nodes)))
@@ -597,6 +600,10 @@ RELATIVE-FILE names BUFFER's file relative to YIYU's root."
                       :title
                       (fangcun--display-title
                        (org-get-heading t t t) id)
+                      :outline-path
+                      (mapcar
+                       #'substring-no-properties
+                       (org-get-outline-path t))
                       :aliases (fangcun--aliases-at-point)
                       :tags (fangcun--effective-tags-at-point))
                      nodes))))))
@@ -858,13 +865,14 @@ RELATIVE-FILE names BUFFER's file relative to YIYU's root."
    database
    (concat
     "INSERT INTO nodes "
-    "(id, yiyu_id, file, title) "
-    "VALUES (?, ?, ?, ?)")
+    "(id, yiyu_id, file, title, outline_path) "
+    "VALUES (?, ?, ?, ?, ?)")
    (vector
     (fangcun-node-id node)
     (fangcun-node-yiyu-id node)
     (fangcun-node-file node)
-    (fangcun-node-title node)))
+    (fangcun-node-title node)
+    (json-serialize (vconcat (fangcun-node-outline-path node)))))
   (dolist (alias (fangcun-node-aliases node))
     (sqlite-execute
      database
@@ -1619,7 +1627,9 @@ When NO-MESSAGE is non-nil, do not report the indexed counts."
    :yiyu-name (elt row 2)
    :yiyu-root (elt row 3)
    :file (elt row 4)
-   :title (elt row 5)))
+   :title (elt row 5)
+   :outline-path
+   (json-parse-string (elt row 6) :array-type 'list)))
 
 (defun fangcun--attach-node-values (nodes rows slot)
   "Attach values from SQLite ROWS to SLOT of NODES and return NODES.
@@ -1655,7 +1665,7 @@ Each row contains a node ID followed by one value."
                     database
                     (concat
                      "SELECT n.id, n.yiyu_id, y.name, y.root, "
-                     "n.file, n.title "
+                     "n.file, n.title, n.outline_path "
                      "FROM nodes AS n "
                      "JOIN yiyus AS y ON y.id = n.yiyu_id "
                      "WHERE n.id = ? LIMIT 1")
@@ -1689,7 +1699,7 @@ Each row contains a node ID followed by one value."
               database
               (concat
                "SELECT n.id, n.yiyu_id, y.name, y.root, "
-               "n.file, n.title "
+               "n.file, n.title, n.outline_path "
                "FROM nodes AS n "
                "JOIN yiyus AS y ON y.id = n.yiyu_id "
                "ORDER BY n.title COLLATE NOCASE, "
@@ -1736,9 +1746,9 @@ When MARKERP is non-nil, return the location as a marker."
 (defun fangcun--backlink-from-row (row)
   "Return a Fangcun backlink represented by SQLite ROW."
   (make-fangcun-backlink
-   :node (fangcun--node-from-row (cl-subseq row 0 6))
-   :position (elt row 6)
-   :count (and (> (length row) 7) (elt row 7))))
+   :node (fangcun--node-from-row (cl-subseq row 0 7))
+   :position (elt row 7)
+   :count (and (> (length row) 8) (elt row 8))))
 
 (defun fangcun--attach-backlink-node-data
     (database backlinks target-id)
@@ -1781,7 +1791,7 @@ When one source contains several links, retain its first occurrence."
         database
         (concat
          "SELECT n.id, n.yiyu_id, y.name, y.root, "
-         "n.file, n.title, first_link.position, "
+         "n.file, n.title, n.outline_path, first_link.position, "
          "first_link.occurrence_count "
          "FROM ("
          "SELECT source_id, MIN(position) AS position, "
@@ -1807,7 +1817,7 @@ When one source contains several links, retain its first occurrence."
         database
         (concat
          "SELECT n.id, n.yiyu_id, y.name, y.root, "
-         "n.file, n.title, l.position "
+         "n.file, n.title, n.outline_path, l.position "
          "FROM links AS l "
          "JOIN nodes AS n ON n.id = l.source_id "
          "JOIN yiyus AS y ON y.id = n.yiyu_id "
@@ -1849,9 +1859,12 @@ When one source contains several links, retain its first occurrence."
   "Return the location annotation for CANDIDATE."
   (when-let* ((node (get-text-property 0 'fangcun-node candidate)))
     (propertize
-     (format "  %s › %s"
+     (format "  %s › %s%s"
              (fangcun-node-yiyu-name node)
-             (fangcun-node-file node))
+             (fangcun-node-file node)
+             (if-let* ((outline (fangcun-node-outline-path node)))
+                 (concat " › " (string-join outline " › "))
+               " (file)"))
      'face 'completions-annotations)))
 
 (defun fangcun--read-node ()

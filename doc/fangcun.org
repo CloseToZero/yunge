@@ -82,8 +82,10 @@ events are discarded by comparing the indexed file state.  Set
 =fangcun-db-update-on-save= to =nil= to disable updates after saving.
 
 =M-x fangcun-node-find= completes over the titles and aliases of indexed nodes.
-Each candidate shows its owning yiyu and relative file.  Selecting one opens
-its file and moves to the matching Org ID.
+Each candidate shows its owning yiyu, relative file, and either =(file)= or the
+heading's full outline path.  This keeps file and heading nodes distinguishable
+when their titles and files are otherwise identical.  Selecting one opens its
+file and moves to the matching Org ID.
 
 =M-x fangcun-node-insert= uses the same completion to insert an =id:= link at
 point.  The selected title or alias becomes the link description.
