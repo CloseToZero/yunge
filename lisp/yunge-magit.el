@@ -95,6 +95,7 @@
     ("d" magit-diff "diff")
     ("f" magit-fetch "fetch")
     ("F" magit-pull "pull")
+    ("i" magit-gitignore "ignore")
     ("L" magit-log "log")
     ("M" magit-remote "remote")
     ("m" magit-merge "merge")

@@ -57,6 +57,7 @@
     ("d" . magit-diff)
     ("f" . magit-fetch)
     ("F" . magit-pull)
+    ("i" . magit-gitignore)
     ("L" . magit-log)
     ("M" . magit-remote)
     ("m" . magit-merge)
