@@ -6,6 +6,7 @@
 
 (declare-function consult--customize-args "consult"
                   (options &rest defaults))
+(declare-function consult--async-min-input "consult" (&optional min-input))
 (declare-function evil-get-command-property "evil-common")
 (declare-function evil-visual-state "evil-states")
 (declare-function yunge-jump-history--track-navigation "yunge-jump-history")
@@ -13,6 +14,7 @@
 (defvar evil-command-line-map)
 (defvar evil-eval-map)
 (defvar evil-state)
+(defvar consult-async-min-input)
 (defvar consult-source-buffer)
 
 (yunge-test-deftest-lazy-load yunge-consult
@@ -67,6 +69,11 @@
    (advice-member-p
     #'yunge-consult--suppress-reader-file-preview
     'consult--file-preview))
+  (should
+   (advice-member-p
+    #'yunge-consult--explain-async-min-input
+    'consult--async-min-input))
+  (should (= consult-async-min-input 2))
 
   (yunge-test-evil-normal-keys
    'fundamental-mode
@@ -247,6 +254,54 @@
                  (setq called (list directory initial)))))
       (yunge-consult-project-search "needle"))
     (should (equal called '(nil "needle")))))
+
+(ert-deftest yunge-consult-project-search-allows-two-character-queries ()
+  (require 'consult)
+  (yunge-test-load-package-config 'yunge-consult)
+  (let ((query (string #x4f8b #x5b50))
+        called)
+    (cl-letf (((symbol-function 'executable-find)
+               (lambda (name) (and (equal name "rg") "rg")))
+              ((symbol-function 'consult-ripgrep)
+               (lambda (&optional directory initial)
+                 (setq called
+                       (list directory initial
+                             consult-async-min-input)))))
+      (yunge-consult-project-search query))
+    (should (equal called `(nil ,query 2)))))
+
+(ert-deftest yunge-consult-async-searches-explain-short-queries ()
+  (yunge-test-enable-evil)
+  (require 'consult)
+  (yunge-test-load-package-config 'yunge-consult)
+  (with-temp-buffer
+    (let* (actions
+           (stage
+            (funcall
+             (consult--async-min-input)
+             (lambda (action) (push action actions)))))
+      (funcall stage 'setup)
+      (let ((overlay
+             (seq-find
+              (lambda (candidate)
+                (eq (overlay-get candidate 'category)
+                    'yunge-consult-min-input-notice))
+              (append (car (overlay-lists))
+                      (cdr (overlay-lists))))))
+        (should overlay)
+        (funcall stage "x")
+        (let ((notice (overlay-get overlay 'after-string)))
+          (should
+           (equal notice
+                  " [Type at least 2 characters to start search]"))
+          (should (eq (get-text-property 1 'face notice) 'warning)))
+        (funcall stage "xy")
+        (should-not (overlay-get overlay 'after-string))
+        (funcall stage (propertize "x" 'consult--force t))
+        (should-not (overlay-get overlay 'after-string))
+        (funcall stage 'destroy)
+        (should-not (overlay-buffer overlay)))
+      (should (= (length actions) 5)))))
 
 (ert-deftest yunge-consult-project-search-falls-back-to-grep ()
   (require 'consult)

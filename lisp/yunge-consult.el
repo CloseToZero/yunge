@@ -10,6 +10,7 @@
 (declare-function evil-exit-visual-state "evil-states" (&optional later buffer))
 (declare-function consult--buffer-pair "consult")
 (declare-function consult--buffer-query "consult")
+(declare-function consult--async-pipeline "consult" (&rest async))
 (declare-function consult--file-preview "consult")
 (declare-function consult-grep "consult" (&optional dir initial))
 (declare-function consult-ripgrep "consult" (&optional dir initial))
@@ -17,6 +18,52 @@
 (defvar evil-command-line-map)
 (defvar evil-eval-map)
 (defvar evil-state)
+(defvar consult-async-min-input)
+
+(defun yunge-consult--async-min-input-notice (minimum)
+  "Return an async stage showing a notice below query length MINIMUM."
+  (lambda (sink)
+    (let (overlay)
+      (lambda (action)
+        (pcase action
+          ('setup
+           (setq overlay (make-overlay (point-max) (point-max)
+                                       (current-buffer) nil t))
+           (overlay-put overlay 'category
+                        'yunge-consult-min-input-notice)
+           (overlay-put overlay 'priority 1100)
+           (funcall sink action))
+          ('destroy
+           (when overlay
+             (delete-overlay overlay))
+           (funcall sink action))
+          ((pred stringp)
+           (when (overlay-buffer overlay)
+             (move-overlay overlay (point-max) (point-max)
+                           (current-buffer))
+             (overlay-put
+              overlay 'after-string
+              (when (and (not (equal action ""))
+                         (< (length action) minimum)
+                         (not (get-text-property
+                               0 'consult--force action)))
+                (propertize
+                 (format
+                  " [Type at least %d characters to start search]"
+                  minimum)
+                 'face 'warning))))
+           (funcall sink action))
+          (_ (funcall sink action)))))))
+
+(defun yunge-consult--explain-async-min-input
+    (function &optional minimum)
+  "Add a visible input notice to Consult's async minimum FUNCTION.
+Optional MINIMUM retains the threshold accepted by
+`consult--async-min-input'."
+  (setq minimum (or minimum consult-async-min-input))
+  (consult--async-pipeline
+   (yunge-consult--async-min-input-notice minimum)
+   (funcall function minimum)))
 
 (defconst yunge-consult-file-bindings
   '(("r" consult-recent-file "find recent file")))
@@ -171,6 +218,7 @@ candidate so Consult's normal accepted-file action still opens it once."
      map yunge-consult-history-bindings)))
 
 (elpaca consult
+  (setq consult-async-min-input 2)
   (yunge-consult--setup-keys)
   (with-eval-after-load 'evil
     (yunge-consult--setup-evil)
@@ -191,6 +239,13 @@ candidate so Consult's normal accepted-file action still opens it once."
          (advice-add
           'consult--file-preview :around
           #'yunge-consult--suppress-reader-file-preview))
+       (unless
+           (advice-member-p
+            #'yunge-consult--explain-async-min-input
+            'consult--async-min-input)
+         (advice-add
+          'consult--async-min-input :around
+          #'yunge-consult--explain-async-min-input))
        (consult-customize
         consult-source-buffer :items #'yunge-consult--buffer-items)
        (consult-customize
