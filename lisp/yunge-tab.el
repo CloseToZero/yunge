@@ -33,9 +33,8 @@
 
 (let ((format
        (delete yunge-tab-mode-line-format
-               (delq 'yunge-tab-mode-line-format
-                     (copy-sequence
-                      (default-value 'mode-line-format))))))
+               (copy-sequence
+                (default-value 'mode-line-format)))))
   (setq-default
    mode-line-format
    (apply #'append
