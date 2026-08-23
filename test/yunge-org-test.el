@@ -4,6 +4,7 @@
 
 (require 'yunge-test-helper)
 
+(defvar org-latex-compiler)
 (defvar yunge-avy-candidate-project-functions)
 
 (declare-function yunge-avy-projection-beginning
@@ -46,6 +47,17 @@
   (yunge-org-test--load-config)
   (should-not org-auto-align-tags)
   (should (zerop org-tags-column)))
+
+(ert-deftest yunge-org-configures-unicode-latex-documents ()
+  (yunge-org-test--load-config)
+  (require 'ox-latex)
+  (should (equal org-latex-compiler "xelatex"))
+  (should
+   (member '("" "amssymb" t ("xelatex"))
+           org-latex-packages-alist))
+  (should
+   (member '("UTF8" "ctex" t ("xelatex"))
+           org-latex-packages-alist)))
 
 (ert-deftest yunge-org-keeps-table-navigation-without-realignment ()
   (yunge-org-test--load-config)

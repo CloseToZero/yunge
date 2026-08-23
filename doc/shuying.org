@@ -27,9 +27,10 @@ The Org integration has one small interaction boundary:
   the changed layout are also populated.
 - Saving an Org buffer or changing the active theme rechecks visible previews.
   Only formulas whose rendering inputs changed request new artifacts.
-- Inline previews use the height and depth reported by =dvisvgm= to follow the
-  surrounding text baseline.  Their display height is expressed in =em=, so
-  buffer-local font scaling resizes cached SVGs without rerunning LaTeX.
+- Inline previews use the height and depth reported by =dvisvgm=, or by
+  =preview.sty= for XDV input, to follow the surrounding text baseline.  Their
+  display height is expressed in =em=, so buffer-local font scaling resizes
+  cached SVGs without rerunning LaTeX.
 - SVG artifacts are tightly cropped.  The Org front end, rather than TeX's
   page box, centers block math in the window text area.  Customize
   =shuying-org-block-math-alignment= to retain the source column instead.
@@ -122,22 +123,32 @@ specifications share one pending job.  Compatible batches enter a FIFO queue,
 and at most =shuying-max-concurrent-batches= are owned by backends at once.  A
 batch keeps its scheduler slot until every request in it has completed.
 
-The direct =latex= and =dvisvgm= backend uses this pipeline:
+The direct TeX and =dvisvgm= backend uses this pipeline:
 
 1. Return cache hits immediately.
 2. Collect misses with compatible preambles and rendering options.
-3. Reuse or asynchronously build one precompiled format for the preamble.
+3. Reuse or asynchronously build one precompiled format when the selected
+   engine supports it.
 4. Compile each compatible batch in one temporary TeX document.
-5. Convert every page to a tightly bounded SVG and collect its =dvisvgm=
+5. Convert every page to a tightly bounded SVG and collect its baseline
    geometry.
 6. Map each SVG and its metadata back to the originating request.
 7. Publish each artifact and metadata sidecar atomically.
 8. Check the request generation before changing a buffer display.
 
-LaTeX and dvisvgm run as a nonblocking process chain.  A batch uses an isolated
-working directory below =var/shuying/work/=.  Successful work is removed after
-its artifacts are published; failed work preserves a process log buffer for
-diagnosis.
+The TeX engine and dvisvgm run as a nonblocking process chain.  A batch uses an
+isolated working directory below =var/shuying/work/=.  Successful work is
+removed after its artifacts are published; failed work preserves a process log
+buffer for diagnosis.  A page containing a TeX error is never published, even
+if the engine left a partial intermediate page, so missing text cannot become a
+silent partial preview.
+
+The Org front end uses the same export environment for its snippet preamble and
+engine choice.  This configuration defaults =org-latex-compiler= to =xelatex=
+and adds =ctex= to XeLaTeX documents, so Org export and Shuying both support
+Unicode Chinese text.  A file-local =#+LATEX_COMPILER:= overrides the default
+for both paths.  =shuying-latex-engine-command= remains an explicit preview-only
+override for diagnostics or unusual toolchains.
 
 Precompiled formats are keyed by the complete preamble, preview setup, engine,
 and Shuying cache version, then retained below =var/shuying/formats/=.  Batches
@@ -160,10 +171,14 @@ large, platform-managed state and may require administrator access.
 
 ** Required programs
 
-The rendering backend requires these commands on =exec-path=:
+The configured rendering path requires these commands on =exec-path=:
 
-- =latex= compiles a temporary document to DVI.
-- =dvisvgm= converts DVI pages to SVG.
+- =xelatex= compiles a temporary Unicode document to XDV.
+- =dvisvgm= converts XDV pages to SVG.
+
+The backend also maps =pdflatex= and =lualatex= document compilers to their DVI
+output modes.  The classic =latex= command remains available for an unset
+compiler or an explicit engine override.
 
 The setup command, package diagnostics, and conditional integration tests also
 use =kpsewhich= to locate TeX files.  It is not called while rendering a
@@ -178,9 +193,10 @@ Existing cache hits remain displayable without the external toolchain.
 Verify them with:
 
 #+begin_src shell
-latex --version
+xelatex --version
 dvisvgm --version
 kpsewhich preview.sty
+kpsewhich ctex.sty
 #+end_src
 
 ** Required TeX packages
@@ -192,7 +208,10 @@ package names.
 |-------------+---------------+---------|
 | =preview=   | =preview.sty= | Isolate fragments and report their geometry. |
 | =amsmath=   | =amsmath.sty= | Standard mathematical environments. |
-| =amsfonts=  | =amssymb.sty= | Symbols used by Org's default snippet setup. |
+| =amsfonts=  | =amssymb.sty= | Symbols such as =\mathbb= under XeLaTeX. |
+| =fontspec=  | =fontspec.sty= | Unicode font selection for XeLaTeX. |
+| =xecjk=     | =xeCJK.sty=   | CJK font and character handling. |
+| =ctex=      | =ctex.sty=    | Chinese document configuration. |
 
 The optional =mylatexformat= package provides =mylatexformat.ltx= and enables
 preamble precompilation.  Rendering still works with complete preambles when
@@ -208,9 +227,9 @@ for mathematical notes and custom preambles:
 | =xcolor=    | =xcolor.sty=         | Richer color handling. |
 | =ulem=      | =ulem.sty=           | Underline and strikeout commands. |
 
-=fontspec= is only needed with XeLaTeX or LuaLaTeX support.  Individual
-notes may introduce further dependencies through their preamble; Shuying
-should report the missing file from the TeX log rather than guess packages.
+Individual notes may introduce further dependencies through their preamble;
+Shuying reports the missing file from the TeX log rather than guessing
+packages.
 
 Verify the baseline files with:
 
@@ -223,6 +242,9 @@ kpsewhich mathtools.sty
 kpsewhich graphicx.sty
 kpsewhich xcolor.sty
 kpsewhich ulem.sty
+kpsewhich fontspec.sty
+kpsewhich xeCJK.sty
+kpsewhich ctex.sty
 #+end_src
 
 ** Windows
@@ -238,6 +260,7 @@ initexmf --set-config-value=[MPM]AutoInstall=1
 miktex packages update-package-database
 miktex packages install preview mylatexformat amsmath amsfonts graphics cm-super
 miktex packages install mathtools xcolor ulem
+miktex packages install xetex fontspec xecjk ctex
 miktex fndb refresh
 miktex fontmaps configure
 #+end_src
@@ -277,11 +300,13 @@ MiKTeX can install a missing package on demand, but unattended preview jobs
 must not wait behind an installation dialog.  The setup command configures
 missing-package installation to =Always=; the equivalent manual setting is in
 MiKTeX Console.  The explicit baseline includes =cm-super= because Org's
-default T1 text encoding needs its scalable outlines when =dvisvgm= converts
-commands such as =\text= to SVG.  File and font maps are refreshed after the
-baseline so a newly installed outline is visible to the converter immediately.
-The setup command refreshes the current Emacs process after the installer
-changes =PATH=; restart Emacs if manual installation changes it instead.
+default T1 text encoding needs its scalable outlines when a document explicitly
+selects pdfLaTeX and uses commands such as =\text=.  The XeLaTeX baseline adds
+=xetex=, =fontspec=, =xecjk=, and =ctex= for Unicode Chinese.  File and font
+maps are refreshed after installation so new fonts are visible to the
+converter immediately.  The setup command refreshes the current Emacs process
+after the installer changes =PATH=; restart Emacs if manual installation
+changes it instead.
 
 ** macOS
 
@@ -292,7 +317,7 @@ also work.  Add the required backend and packages to BasicTeX with =tlmgr=:
 #+begin_src shell
 sudo tlmgr update --self
 sudo tlmgr install dvisvgm preview mylatexformat amsmath amsfonts graphics
-sudo tlmgr install mathtools xcolor ulem
+sudo tlmgr install mathtools xcolor ulem xetex fontspec xecjk ctex
 #+end_src
 
 The DVI-to-SVG path does not need MacTeX's optional Ghostscript extras.  Those
@@ -308,7 +333,7 @@ packages are:
 #+begin_src shell
 sudo apt install texlive-latex-base texlive-latex-recommended
 sudo apt install texlive-plain-generic preview-latex-style dvisvgm
-sudo apt install texlive-latex-extra
+sudo apt install texlive-latex-extra texlive-xetex texlive-lang-chinese
 #+end_src
 
 On Arch Linux, they are:
@@ -316,6 +341,7 @@ On Arch Linux, they are:
 #+begin_src shell
 sudo pacman -S texlive-latex texlive-latexrecommended
 sudo pacman -S texlive-latexextra texlive-plaingeneric dvisvgm
+sudo pacman -S texlive-xetex texlive-langchinese
 #+end_src
 
 Other distributions divide TeX Live differently.  Their package search can
@@ -326,9 +352,9 @@ other files above.  Avoid mixing a system-managed TeX Live with =tlmgr=.
 
 Unit tests use fake backends and temporary caches, so the ordinary test suite
 does not require TeX.  The same backend contract tests cover immediate and
-deferred completion.  Conditional end-to-end tests compile a small set of
-fragments with the real =latex= and =dvisvgm= programs and verify the SVG
-output, cache reuse, and stale-result rejection.
+deferred completion.  Conditional end-to-end tests compile fragments with the
+real TeX and =dvisvgm= programs, including Chinese text through XeLaTeX, and
+verify SVG output, cache reuse, and stale-result rejection.
 
 * References
 

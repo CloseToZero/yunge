@@ -12,9 +12,13 @@
   "Shuying LaTeX dependency unavailable"
   'shuying-latex-error)
 
-(defcustom shuying-latex-engine-command '("latex")
-  "Command prefix used to compile Shuying preview documents."
-  :type '(repeat string)
+(defcustom shuying-latex-engine-command nil
+  "Optional command prefix overriding the preview front end's engine.
+When nil, a front end such as `shuying-org' chooses the command from its
+document context."
+  :type '(choice
+          (const :tag "Follow the preview front end" nil)
+          (repeat :tag "Command prefix" string))
   :group 'shuying)
 
 (defcustom shuying-latex-converter-command '("dvisvgm")
@@ -49,7 +53,7 @@ preamble with each batch instead."
   directory
   log-buffer
   tex-file
-  dvi-file
+  intermediate-file
   engine
   converter
   format-key
@@ -207,8 +211,10 @@ Load FORMAT-FILE instead of writing the full preamble when it is non-nil."
         (string-to-number (match-string 1))))))
 
 (defun shuying-latex--page-geometries (buffer font-size scale)
-  "Return page geometry from dvisvgm output in BUFFER.
-FONT-SIZE and SCALE recover the unscaled dimensions in em units."
+  "Return preview page geometry from BUFFER.
+FONT-SIZE and SCALE recover the unscaled dimensions in em units.  Prefer
+dvisvgm's baseline report.  For XDV input, combine dvisvgm's tight graphic
+size with preview.sty's scaled-point baseline report."
   (with-current-buffer buffer
     (save-excursion
       (goto-char (point-min))
@@ -230,7 +236,69 @@ FONT-SIZE and SCALE recover the unscaled dimensions in em units."
                    :height (/ height divisor)
                    :depth (/ depth divisor))
              geometries)))
-        (nreverse geometries)))))
+        (setq geometries (nreverse geometries))
+        (or geometries
+            (progn
+              (goto-char (point-min))
+              (let ((preview-regexp
+                     (concat
+                      "^! Preview: Snippet [0-9]+ ended\\.("
+                      "\\([0-9]+\\)[+]\\([0-9]+\\)x"
+                      "\\([0-9]+\\))\\.$"))
+                    (preview-divisor (* 65536.0 font-size))
+                    preview-geometries)
+                (while (re-search-forward preview-regexp nil t)
+                  (let* ((above (string-to-number (match-string 1)))
+                         (depth (string-to-number (match-string 2)))
+                         (width (string-to-number (match-string 3)))
+                         (height (+ above depth)))
+                    (push
+                     (list :width (/ width preview-divisor)
+                           :height (/ height preview-divisor)
+                           :depth (/ depth preview-divisor))
+                     preview-geometries)))
+                (setq preview-geometries
+                      (nreverse preview-geometries))
+                (goto-char (point-min))
+                (let ((graphic-regexp
+                       (concat
+                        "^  graphic size: \\("
+                        shuying-latex--number-regexp
+                        "\\)pt x \\("
+                        shuying-latex--number-regexp
+                        "\\)pt"))
+                      (graphic-divisor (* font-size scale))
+                      graphic-geometries)
+                  (while (re-search-forward graphic-regexp nil t)
+                    (push
+                     (list
+                      :width
+                      (/ (string-to-number (match-string 1))
+                         graphic-divisor)
+                      :height
+                      (/ (string-to-number (match-string 2))
+                         graphic-divisor))
+                     graphic-geometries))
+                  (setq graphic-geometries
+                        (nreverse graphic-geometries))
+                  (if (/= (length graphic-geometries)
+                          (length preview-geometries))
+                      preview-geometries
+                    (cl-mapcar
+                     (lambda (graphic preview)
+                       (let* ((height (plist-get graphic :height))
+                              (preview-height
+                               (plist-get preview :height))
+                              (depth-ratio
+                               (if (zerop preview-height)
+                                   0.0
+                                 (/ (plist-get preview :depth)
+                                    preview-height))))
+                         (list :width (plist-get graphic :width)
+                               :height height
+                               :depth (* height depth-ratio))))
+                     graphic-geometries
+                     preview-geometries))))))))))
 
 (defun shuying-latex--format-key (specification engine)
   "Return the precompiled format key for SPECIFICATION and ENGINE."
@@ -411,17 +479,6 @@ dvisvgm zero-pads page numbers to the width of the final page number."
     (expand-file-name
      (concat "page-" padding page-string ".svg") directory)))
 
-(defun shuying-latex--empty-svg-page-p (file)
-  "Return whether dvisvgm FILE contains an empty page group."
-  (with-temp-buffer
-    (insert-file-contents-literally file)
-    (goto-char (point-min))
-    (re-search-forward
-     (concat
-      "<g[^>]*\\bid=['\"]page[0-9]+['\"][^>]*"
-      "\\(?:/>\\|>[ \t\r\n]*</g>\\)")
-     nil t)))
-
 (defun shuying-latex--errored-pages (buffer)
   "Return preview page numbers containing LaTeX errors in BUFFER."
   (with-current-buffer buffer
@@ -481,13 +538,9 @@ dvisvgm zero-pads page numbers to the width of the final page number."
          for page-file = (shuying-latex--page-file
                            directory page page-count)
          for errored-page = (memq page errored-pages)
-         for unusable-page = (and errored-page
-                                  (file-exists-p page-file)
-                                  (shuying-latex--empty-svg-page-p
-                                   page-file))
          do
          (if (and (file-exists-p page-file) geometry
-                  (not unusable-page))
+                  (not errored-page))
              (condition-case error-data
                  (progn
                    (copy-file
@@ -504,11 +557,11 @@ dvisvgm zero-pads page numbers to the width of the final page number."
             complete request
             (cond
              (process-error)
-             (unusable-page
+             (errored-page
               (list
                'shuying-latex-error
                (format
-                "LaTeX produced an empty preview page %d; see %s"
+                "LaTeX reported an error on preview page %d; see %s"
                 page (buffer-name log-buffer))))
              (t
               (list
@@ -550,7 +603,7 @@ dvisvgm zero-pads page numbers to the width of the final page number."
             "--verbosity=7"
             (format "--scale=%s" scale)
             (concat "--output=" output-pattern)
-            (shuying-latex--batch-dvi-file batch)))))
+            (shuying-latex--batch-intermediate-file batch)))))
     (let ((default-directory (file-name-as-directory directory)))
       (make-process
        :name "shuying-dvisvgm"
@@ -568,7 +621,8 @@ dvisvgm zero-pads page numbers to the width of the final page number."
   (when (memq (process-status process) '(exit signal))
     (cond
      ((and (eq (process-status process) 'exit)
-           (file-exists-p (shuying-latex--batch-dvi-file batch)))
+           (file-exists-p
+            (shuying-latex--batch-intermediate-file batch)))
       (when-let* ((format-file
                    (shuying-latex--batch-suspect-format-file batch)))
         ;; The same document compiled with the complete preamble, so the
@@ -661,6 +715,13 @@ FORMAT-KEY identifies the persistent format for invalidation."
     (error
      (shuying-latex--complete-all batch error-data))))
 
+(defun shuying-latex--intermediate-extension (engine)
+  "Return the dvisvgm input extension produced by ENGINE."
+  (if (string-equal-ignore-case
+       (file-name-base (car engine)) "xelatex")
+      "xdv"
+    "dvi"))
+
 (defun shuying-latex-render-batch (requests complete)
   "Render compatible REQUESTS asynchronously and call COMPLETE for each."
   (when requests
@@ -685,7 +746,11 @@ FORMAT-KEY identifies the persistent format for invalidation."
             (make-temp-file
              (expand-file-name "latex-" shuying-work-directory) t))
            (tex-file (expand-file-name "input.tex" directory))
-           (dvi-file (expand-file-name "input.dvi" directory))
+           (intermediate-file
+            (expand-file-name
+             (concat "input."
+                     (shuying-latex--intermediate-extension engine))
+             directory))
            (log-buffer (generate-new-buffer "*Shuying LaTeX*"))
            (batch
             (make-shuying-latex--batch
@@ -694,7 +759,7 @@ FORMAT-KEY identifies the persistent format for invalidation."
              :directory directory
              :log-buffer log-buffer
              :tex-file tex-file
-             :dvi-file dvi-file
+             :intermediate-file intermediate-file
              :engine engine
              :converter converter)))
       (buffer-disable-undo log-buffer)

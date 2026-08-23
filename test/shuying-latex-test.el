@@ -24,6 +24,14 @@
    (equal shuying-latex-format-directory
           (yunge-var-subdirectory "shuying/formats"))))
 
+(ert-deftest shuying-latex-selects-the-engine-intermediate-format ()
+  (should
+   (equal (shuying-latex--intermediate-extension
+           '("C:/tex/xelatex.exe" "-no-pdf"))
+          "xdv"))
+  (should
+   (equal (shuying-latex--intermediate-extension '("latex")) "dvi")))
+
 (ert-deftest shuying-latex-batch-key-excludes-fragment-inputs ()
   (let ((first (shuying-latex-test--spec "$x$"))
         (second (shuying-latex-test--spec "$y$")))
@@ -192,7 +200,32 @@
       (should (< (abs (- (plist-get (cadr geometries) :depth) 0.44))
                  0.0001)))))
 
-(ert-deftest shuying-latex-rejects-only-errored-empty-svg-pages ()
+(ert-deftest shuying-latex-extracts-xdv-geometry-from-preview-output ()
+  (with-temp-buffer
+    (insert
+     "! Preview: Snippet 1 started.\n"
+     "! Preview: Snippet 1 ended.(524288+131072x983040).\n")
+    (let ((geometry
+           (car (shuying-latex--page-geometries
+                 (current-buffer) 10.0 1.7))))
+      (should (< (abs (- (plist-get geometry :width) 1.5)) 0.0001))
+      (should (< (abs (- (plist-get geometry :height) 1.0)) 0.0001))
+      (should (< (abs (- (plist-get geometry :depth) 0.2)) 0.0001)))))
+
+(ert-deftest shuying-latex-combines-xdv-tight-size-and-baseline ()
+  (with-temp-buffer
+    (insert
+     "! Preview: Snippet 1 started.\n"
+     "! Preview: Snippet 1 ended.(524288+131072x983040).\n"
+     "  graphic size: 17pt x 8.5pt (16bp x 8bp)\n")
+    (let ((geometry
+           (car (shuying-latex--page-geometries
+                 (current-buffer) 10.0 1.7))))
+      (should (< (abs (- (plist-get geometry :width) 1.0)) 0.0001))
+      (should (< (abs (- (plist-get geometry :height) 0.5)) 0.0001))
+      (should (< (abs (- (plist-get geometry :depth) 0.1)) 0.0001)))))
+
+(ert-deftest shuying-latex-rejects-every-errored-svg-page ()
   (let* ((root (make-temp-file "shuying-latex-test-" t))
          (directory (expand-file-name "work" root))
          (log-buffer (generate-new-buffer " *Shuying LaTeX test*"))
@@ -217,7 +250,7 @@
            :log-buffer log-buffer)))
     (make-directory directory)
     (with-temp-file (expand-file-name "page-1.svg" directory)
-      (insert "<svg><g id='page1'/></svg>"))
+      (insert "<svg><g id='page1'><path d='partial'/></g></svg>"))
     (with-temp-file (expand-file-name "page-2.svg" directory)
       (insert "<svg><g id='page2'/></svg>"))
     (with-current-buffer log-buffer
@@ -242,7 +275,7 @@
              (eq (car (cdr first-result)) 'shuying-latex-error))
             (should
              (string-match-p
-              "empty preview page 1"
+              "error on preview page 1"
               (error-message-string (cdr first-result))))
             (should-not (file-exists-p first-output))
             (should-not (cdr second-result))
@@ -393,7 +426,7 @@
            :directory directory
            :log-buffer log-buffer
            :tex-file tex-file
-           :dvi-file (expand-file-name "input.dvi" directory)
+           :intermediate-file (expand-file-name "input.dvi" directory)
            :engine '("latex")
            :format-key "format-key"
            :format-file format-file))
@@ -430,7 +463,8 @@
           (with-temp-buffer
             (insert-file-contents tex-file)
             (should (search-forward "\\documentclass" nil t)))
-          (with-temp-file (shuying-latex--batch-dvi-file batch))
+          (with-temp-file
+              (shuying-latex--batch-intermediate-file batch))
           (shuying-latex--compilation-sentinel
            batch
            (shuying-backend-request-specification request)
@@ -525,6 +559,8 @@
               (should
                (member "--currentcolor=#000000" converter-command))
               (should-not (member "--bbox=preview" converter-command))
+              (should (equal (car (last converter-command))
+                             (expand-file-name "input.dvi" directory)))
               (with-temp-file (expand-file-name "page-1.svg" directory)
                 (insert "first"))
               (with-temp-file (expand-file-name "page-2.svg" directory)

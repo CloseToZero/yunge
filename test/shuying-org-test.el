@@ -5,6 +5,7 @@
 (require 'yunge-test-helper)
 (require 'shuying-org)
 
+(defvar org-latex-compiler)
 (defvar shuying-org-test--render-count 0)
 (defvar shuying-org-test--backend-call-count 0)
 
@@ -164,7 +165,7 @@
           (cl-letf (((symbol-function 'create-image)
                      (lambda (&rest _) 'image))
                     ((symbol-function 'shuying-org--preamble)
-                     (lambda () "test-preamble"))
+                     (lambda (&optional _info) "test-preamble"))
                     ((symbol-function
                       'shuying-org--schedule-visible-preview)
                      (lambda (&optional _immediate)
@@ -296,7 +297,7 @@
                      '(:width 0.0 :height 0.0 :depth 0.0))
                (funcall complete request nil))))
           (cl-letf (((symbol-function 'shuying-org--preamble)
-                     (lambda () "test-preamble")))
+                     (lambda (&optional _info) "test-preamble")))
             (with-temp-buffer
               (org-mode)
               (insert "\\(\\phantom{x}\\)")
@@ -328,7 +329,7 @@
           (cl-letf (((symbol-function 'create-image)
                      (lambda (&rest _) 'image))
                     ((symbol-function 'shuying-org--preamble)
-                     (lambda () "test-preamble")))
+                     (lambda (&optional _info) "test-preamble")))
             (with-temp-buffer
               (org-mode)
               (insert "Before \\(x\\) after")
@@ -409,6 +410,27 @@
            :converter)
           '("test-dvisvgm")))
         (should (= (shuying-render-spec-scale specification) 1.7))))))
+
+(ert-deftest shuying-org-follows-the-org-latex-compiler ()
+  (dolist (case '(("pdflatex" . ("pdflatex" "-output-format=dvi"))
+                  ("xelatex" . ("xelatex" "-no-pdf"))
+                  ("lualatex" . ("lualatex" "--output-format=dvi"))))
+    (should
+     (equal
+      (shuying-org--latex-engine-command
+      (list :latex-compiler (car case)))
+      (cdr case)))))
+
+(ert-deftest shuying-org-honors-a-buffer-latex-compiler ()
+  (let ((org-latex-compiler "xelatex")
+        (shuying-latex-engine-command nil))
+    (with-temp-buffer
+      (org-mode)
+      (insert "#+LATEX_COMPILER: pdflatex\n\n$x$\n")
+      (should
+       (equal (shuying-org--latex-engine-command
+               (shuying-org--latex-info))
+              '("pdflatex" "-output-format=dvi"))))))
 
 (ert-deftest shuying-org-previews-only-explicit-latex-math ()
   (with-temp-buffer
@@ -802,7 +824,7 @@
                      (lambda (file &rest _properties)
                        (list 'image file)))
                     ((symbol-function 'shuying-org--preamble)
-                     (lambda () preamble)))
+                     (lambda (&optional _info) preamble)))
             (with-temp-buffer
               (org-mode)
               (insert "$x$")
@@ -1257,7 +1279,7 @@
                      (lambda (file &rest _properties)
                        (list 'image file)))
                     ((symbol-function 'shuying-org--preamble)
-                     (lambda ()
+                     (lambda (&optional _info)
                        (cl-incf preamble-count)
                        "test-preamble")))
             (with-temp-buffer
@@ -1401,24 +1423,30 @@
                                  'shuying-org-artifact))))))))
       (delete-directory root t))))
 
-(ert-deftest shuying-org-renders-svg-with-latex-and-dvisvgm ()
-  (unless (and (executable-find "latex")
+(ert-deftest shuying-org-renders-chinese-svg-with-xelatex-and-dvisvgm ()
+  (unless (and (executable-find "xelatex")
                (executable-find "dvisvgm")
                (executable-find "kpsewhich")
                (= (call-process "kpsewhich" nil nil nil
-                                "preview.sty")
-                  0))
-    (ert-skip "The LaTeX preview toolchain is unavailable"))
+                                 "preview.sty")
+                  0)
+               (= (call-process "kpsewhich" nil nil nil "ctex.sty") 0))
+    (ert-skip "The XeLaTeX Chinese preview toolchain is unavailable"))
   (let* ((root (make-temp-file "shuying-org-" t))
          (shuying-cache-directory root)
-         (shuying--pending-jobs (make-hash-table :test #'equal)))
+         (shuying--pending-jobs (make-hash-table :test #'equal))
+         (org-latex-compiler "xelatex")
+         (org-latex-packages-alist
+          '(("" "amssymb" t ("xelatex"))
+            ("UTF8" "ctex" t ("xelatex")))))
     (unwind-protect
         (progn
           (with-temp-buffer
             (org-mode)
             (insert
-             "\\[(x+y)^n = \\sum_{k=0}^{n} "
-             "\\binom{n}{k} x^{n-k} y^k.\\]\n")
+             "\\[\\mathbb{N}: (x+y)^n = \\sum_{k=0}^{n} "
+             "\\binom{n}{k} x^{n-k} y^k, "
+             "\\quad \\text{是归纳集}.\\]\n")
             (goto-char (point-max))
             (shuying-org-preview-buffer)
             (let ((overlay (shuying-org-test--overlay)))
@@ -1430,6 +1458,13 @@
               (let ((artifact
                      (overlay-get overlay 'shuying-org-artifact)))
                 (should (file-exists-p artifact))
+                (let* ((cached
+                        (shuying--read-artifact
+                         artifact
+                         (shuying--artifact-metadata-file artifact)))
+                       (metadata (shuying-artifact-metadata cached)))
+                  (should (< (plist-get metadata :width) 20.0))
+                  (should (< (plist-get metadata :height) 4.0)))
                 (with-temp-buffer
                   (insert-file-contents artifact)
                   (should (search-forward "<svg" nil t))

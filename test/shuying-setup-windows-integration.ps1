@@ -212,7 +212,11 @@ SHA-256:</div><div>$hash</div>
             'mathtools',
             'xcolor',
             'ulem',
-            'cm-super'
+            'cm-super',
+            'xetex',
+            'fontspec',
+            'xecjk',
+            'ctex'
         ) `
         'MiKTeX package baseline'
     Assert-Sequence `
@@ -227,7 +231,10 @@ SHA-256:</div><div>$hash</div>
             'xcolor.sty',
             'ulem.sty',
             'cm-super-t1.enc',
-            'sfrm1000.pfb'
+            'sfrm1000.pfb',
+            'fontspec.sty',
+            'xeCJK.sty',
+            'ctex.sty'
         ) `
         'required TeX files'
 

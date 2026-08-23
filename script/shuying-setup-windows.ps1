@@ -153,7 +153,11 @@ function Get-ShuyingMiktexPackages {
         'mathtools',
         'xcolor',
         'ulem',
-        'cm-super'
+        'cm-super',
+        'xetex',
+        'fontspec',
+        'xecjk',
+        'ctex'
     )
 }
 
@@ -168,7 +172,10 @@ function Get-ShuyingRequiredTexFiles {
         'xcolor.sty',
         'ulem.sty',
         'cm-super-t1.enc',
-        'sfrm1000.pfb'
+        'sfrm1000.pfb',
+        'fontspec.sty',
+        'xeCJK.sty',
+        'ctex.sty'
     )
 }
 
@@ -392,7 +399,12 @@ try {
     Invoke-Checked $miktex @('fontmaps', 'configure')
 
     Write-Stage 'Verifying required programs'
-    foreach ($program in @('latex.exe', 'dvisvgm.exe', 'kpsewhich.exe')) {
+    foreach ($program in @(
+            'latex.exe',
+            'xelatex.exe',
+            'dvisvgm.exe',
+            'kpsewhich.exe'
+        )) {
         if ([string]::IsNullOrWhiteSpace((Find-Application $program))) {
             throw "Required program is unavailable after setup: $program"
         }

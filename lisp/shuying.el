@@ -27,7 +27,7 @@ A batch retains its slot until all of its requests complete."
   :type '(integer :match (lambda (_widget value) (> value 0)))
   :group 'shuying)
 
-(defconst shuying-cache-format-version 4
+(defconst shuying-cache-format-version 5
   "Version included in Shuying render specification hashes.")
 
 (defconst shuying--cache-file-regexp

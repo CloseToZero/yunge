@@ -57,6 +57,8 @@
 (defvar org-id-link-consider-parent-id)
 (defvar org-id-link-to-org-use-id)
 (defvar org-auto-align-tags)
+(defvar org-latex-compiler)
+(defvar org-latex-packages-alist)
 (defvar org-link-angle-re)
 (defvar org-link-bracket-re)
 (defvar org-link-plain-re)
@@ -95,6 +97,13 @@
       org-auto-align-tags nil
       org-tags-column 0
       org-table-automatic-realign nil)
+
+(with-eval-after-load 'ox-latex
+  (setq org-latex-compiler "xelatex")
+  (add-to-list 'org-latex-packages-alist
+               '("" "amssymb" t ("xelatex")))
+  (add-to-list 'org-latex-packages-alist
+               '("UTF8" "ctex" t ("xelatex"))))
 
 (defun yunge-org-table--parse-line (separator)
   "Return the current table line split around SEPARATOR.

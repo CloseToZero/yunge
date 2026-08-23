@@ -428,16 +428,37 @@ Return nil when POSITION has no preview or its source is currently visible."
                    '(shuying-org--modified)))
     (shuying-org--sync-overlay-fragment overlay fragment)))
 
-(defun shuying-org--preamble ()
-  "Return the LaTeX preamble for the current Org buffer."
+(defun shuying-org--latex-info ()
+  "Return the LaTeX export environment for the current Org buffer."
   (require 'ox-latex)
-  (org-latex-make-preamble
-   (org-export-get-environment (org-export-get-backend 'latex))
-   org-format-latex-header
-   'snippet))
+  (org-export-get-environment (org-export-get-backend 'latex)))
 
-(defun shuying-org--render-spec (fragment preamble)
-  "Return the render specification for Org FRAGMENT using PREAMBLE."
+(defun shuying-org--preamble (&optional info)
+  "Return the LaTeX preamble for the current Org buffer.
+INFO, when non-nil, is an existing LaTeX export environment."
+  (org-latex-make-preamble
+   (or info (shuying-org--latex-info))
+   org-format-latex-header 'snippet))
+
+(defun shuying-org--latex-engine-command (&optional info)
+  "Return the preview engine for the current Org buffer.
+INFO, when non-nil, is an existing LaTeX export environment."
+  (or shuying-latex-engine-command
+      (let ((compiler
+             (downcase
+              (or (plist-get (or info (shuying-org--latex-info))
+                             :latex-compiler)
+                  ""))))
+        (pcase compiler
+          ((or "" "latex") '("latex"))
+          ("pdflatex" '("pdflatex" "-output-format=dvi"))
+          ("xelatex" '("xelatex" "-no-pdf"))
+          ("lualatex" '("lualatex" "--output-format=dvi"))
+          (_ (error "Unsupported Org LaTeX compiler: %s" compiler))))))
+
+(defun shuying-org--render-spec (fragment preamble &optional engine)
+  "Return the render specification for Org FRAGMENT.
+PREAMBLE and optional ENGINE describe its LaTeX document context."
   (let ((bounds (shuying-org--fragment-bounds fragment)))
     (save-excursion
       (goto-char (car bounds))
@@ -445,7 +466,7 @@ Return nil when POSITION has no preview or its source is currently visible."
        :source
        (shuying-org-fragment-value fragment)
        :preamble preamble
-       :engine shuying-latex-engine-command
+       :engine (or engine (shuying-org--latex-engine-command))
        :backend 'shuying-latex
        :backend-options
        (list :converter shuying-latex-converter-command)
@@ -597,12 +618,14 @@ REPORT-ERROR reports a current render failure without duplicating its batch."
 When STALE-ONLY is non-nil, reuse overlays whose render inputs still match.
 When AUTOMATIC is non-nil, silently retain unavailable dependency errors."
   (when fragments
-    (let ((preamble (shuying-org--preamble))
-          error-reported
-          requests)
+    (let* ((info (shuying-org--latex-info))
+           (preamble (shuying-org--preamble info))
+           (engine (shuying-org--latex-engine-command info))
+           error-reported
+           requests)
       (dolist (fragment fragments)
         (let* ((specification
-                (shuying-org--render-spec fragment preamble))
+                (shuying-org--render-spec fragment preamble engine))
                (specification-hash
                 (shuying-render-spec-hash specification))
                (overlay (shuying-org--fragment-overlay fragment)))
