@@ -1887,7 +1887,7 @@
         (should-not (buffer-narrowed-p))
         (should (equal (org-id-get) "theorem"))))))
 
-(ert-deftest fangcun-mcp-searches-and-reads-nodes ()
+(ert-deftest fangcun-mcp-searches-nodes ()
   (fangcun-test-with-notes
     (fangcun-db-sync)
     (let* ((search
@@ -1900,40 +1900,20 @@
                (equal
                 (plist-get (plist-get result :node) :id)
                 "theorem"))
-             matches))
-           (result (fangcun-mcp--read-node '(:id "theorem"))))
+             matches)))
       (should match)
       (should
        (equal
         (plist-get (plist-get match :node) :title)
         "A theorem"))
       (should
-       (seq-contains-p (plist-get match :matchedFields) "title"))
-      (should
-       (string-match-p
-        (regexp-quote "* [[id:source][A theorem]]")
-        (plist-get result :content)))
-      (should-not
-       (string-match-p
-        (regexp-quote ":ID: personal-file")
-        (plist-get result :content)))
-      (should-not
-       (string-match-p
-        (regexp-quote ":ID: untitled-heading")
-        (plist-get result :content))))))
+       (seq-contains-p (plist-get match :matchedFields) "title")))))
 
-(ert-deftest fangcun-mcp-locates-nodes-and-bounds-fallback-reads ()
+(ert-deftest fangcun-mcp-locates-nodes-without-reading-content ()
   (fangcun-test-with-notes
     (fangcun-db-sync)
     (let* ((located (fangcun-mcp--locate-node '(:id "theorem")))
-           (location (plist-get located :location))
-           (first
-            (fangcun-mcp--read-node
-             '(:id "theorem" :maxLines 1 :maxCharacters 100)))
-           (next (plist-get first :nextPosition))
-           (partial
-            (fangcun-mcp--read-node
-             '(:id "theorem" :maxLines 10 :maxCharacters 3))))
+           (location (plist-get located :location)))
       (should (file-equal-p
                (plist-get location :absoluteFile)
                personal-file))
@@ -1943,29 +1923,7 @@
       (should (equal (append (plist-get location :outlinePath) nil)
                      '("A theorem")))
       (should (eq (plist-get location :modifiedInEmacs) :false))
-      (should
-       (equal (plist-get first :content)
-              "* [[id:source][A theorem]]\n"))
-      (should (plist-get first :hasMore))
-      (should (= (plist-get next :line) 7))
-      (should (= (plist-get next :column) 0))
-      (should (= (length (plist-get partial :content)) 3))
-      (should (= (plist-get
-                  (plist-get partial :nextPosition)
-                  :line)
-                 6))
-      (should (= (plist-get
-                  (plist-get partial :nextPosition)
-                  :column)
-                 3))
-      (should-error
-       (fangcun-mcp--read-node
-        '(:id "theorem" :startLine 5))
-       :type 'user-error)
-      (should-error
-       (fangcun-mcp--read-node
-        '(:id "theorem" :maxLines 501))
-       :type 'user-error))))
+      (should-not (plist-member located :content)))))
 
 (ert-deftest fangcun-mcp-ranks-and-pages-node-searches ()
   (fangcun-test-with-notes
@@ -2096,16 +2054,15 @@
              backlinks))
            (first-page
             (fangcun-mcp--list-backlinks
-             '(:id "target" :pageSize 1 :includePreview t)))
+             '(:id "target" :pageSize 1)))
            (cursor (plist-get first-page :nextCursor))
            (second-page
             (fangcun-mcp--list-backlinks
              (list
               :id "target"
               :pageSize 1
-              :cursor cursor
-              :includePreview t)))
-           (preview-backlinks
+              :cursor cursor)))
+           (paged-backlinks
             (append
              (plist-get first-page :backlinks)
              (plist-get second-page :backlinks)
@@ -2121,19 +2078,17 @@
       (should-not
        (seq-some
         (lambda (backlink)
-          (plist-member backlink :preview))
+          (plist-member backlink :content))
         backlinks))
-      (should (= (length preview-backlinks) 2))
+      (should (= (length paged-backlinks) 2))
       (should (stringp cursor))
       (should-not (plist-member second-page :nextCursor))
       (should
        (seq-every-p
         (lambda (backlink)
-          (and (plist-member backlink :preview)
-               (string-match-p
-                "id:target"
-                (plist-get backlink :preview))))
-        preview-backlinks))
+          (and (plist-member backlink :source)
+               (plist-member backlink :firstPosition)))
+        paged-backlinks))
       (should-error
        (fangcun-mcp--list-backlinks
         (list :id "source" :cursor cursor))
@@ -2148,8 +2103,7 @@
               (fangcun-mcp--create-file-node
                '(:yiyu "personal"
                   :file "note/created.org"
-                  :title "Created note"
-                  :content "Initial content.")))
+                  :title "Created note")))
              (file (expand-file-name "note/created.org" personal-root)))
         (should (equal (plist-get result :id) "mcp-created"))
         (should (file-exists-p file))
@@ -2157,7 +2111,7 @@
         (with-temp-buffer
           (insert-file-contents file)
           (should (search-forward "#+title: Created note" nil t))
-          (should (search-forward "Initial content." nil t)))))))
+          (should-not (search-forward "Initial content." nil t)))))))
 
 (ert-deftest fangcun-mcp-creates-and-indexes-heading-nodes ()
   (fangcun-test-with-notes
@@ -2232,100 +2186,5 @@
     (with-temp-buffer
       (insert-file-contents personal-file)
       (should-not (search-forward "Unsaved." nil t)))))
-
-(ert-deftest fangcun-mcp-inserts-and-indexes-node-id-links ()
-  (fangcun-test-with-notes
-    (fangcun-test--write-file
-     personal-file
-     (concat
-      ":PROPERTIES:\n"
-      ":ID: personal-file\n"
-      ":END:\n"
-      "#+title: Notes\n\n"
-      "* Target\n"
-      ":PROPERTIES:\n"
-      ":ID: target\n"
-      ":END:\n\n"
-      "* Source\n"
-      ":PROPERTIES:\n"
-      ":ID: source\n"
-      ":END:\n"
-      "Echo Echo.\n"))
-    (fangcun-db-sync)
-    (should-error
-     (fangcun-mcp--insert-node-link
-      '(:sourceId "source"
-        :targetId "target"
-        :afterText "Echo"))
-     :type 'user-error)
-    (should-error
-     (fangcun-mcp--insert-node-link
-      '(:sourceId "source"
-        :targetId "target"
-        :beforeText "Echo"
-        :afterText "Echo"))
-     :type 'user-error)
-    (let* ((result
-            (fangcun-mcp--insert-node-link
-             '(:sourceId "source"
-               :targetId "target"
-               :afterText "Echo"
-               :occurrence 2)))
-           (location (plist-get result :location))
-           (anchor (plist-get result :anchor))
-           (preview (plist-get result :linePreview)))
-      (should (equal (plist-get result :link)
-                     "[[id:target][Target]]"))
-      (should (file-equal-p
-               (plist-get location :absoluteFile)
-               personal-file))
-      (should (= (plist-get location :line) 15))
-      (should (= (plist-get location :column) 9))
-      (should (equal (plist-get anchor :relation) "after"))
-      (should (= (plist-get anchor :occurrence) 2))
-      (should
-       (string-match-p
-        (regexp-quote "Echo Echo[[id:target][Target]].")
-        (plist-get preview :text)))
-      (should (eq (plist-get preview :truncatedBefore) :false))
-      (should (eq (plist-get preview :truncatedAfter) :false))
-      (should (plist-get result :saved))
-      (should (plist-get result :indexed))
-      (should-not (plist-member result :content))
-      (should
-       (seq-some
-        (lambda (backlink)
-          (equal
-           (fangcun-node-id (fangcun-backlink-node backlink))
-           "source"))
-        (fangcun-backlink-list "target"))))
-    (let ((result
-           (fangcun-mcp--insert-node-link
-           '(:sourceId "source"
-              :targetId "target"
-              :beforeText "."
-              :description ""
-              :includeContent t))))
-      (should (equal (plist-get result :link) "[[id:target]]"))
-      (should
-       (string-match-p
-        (regexp-quote
-         "Echo Echo[[id:target][Target]][[id:target]].")
-        (plist-get result :content))))
-    (should-error
-     (fangcun-mcp--insert-node-link
-      '(:sourceId "source"
-        :targetId "target"
-        :beforeText "missing anchor"))
-     :type 'user-error)))
-
-(ert-deftest fangcun-mcp-bounds-changed-line-previews ()
-  (with-temp-buffer
-    (insert (make-string 1000 ?x))
-    (let ((preview (fangcun-mcp--line-preview 700)))
-      (should (= (length (plist-get preview :text)) 500))
-      (should (plist-get preview :truncatedBefore))
-      (should (plist-get preview :truncatedAfter))
-      (should (= (plist-get preview :originalCharacters) 1000)))))
 
 ;;; fangcun-test.el ends here

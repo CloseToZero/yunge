@@ -296,14 +296,17 @@ impl ServerHandler for YungeMcpServer {
         )
         .with_instructions(
             "芸阁（Yunge） exposes the user's running Emacs to MCP clients. \
-Use 方寸（Fangcun） tools to search or read Org notes, inspect backlinks, \
-or create a note in a configured 一隅（yiyu） note root. Fangcun indexes \
-ordinary Org files and watches saved external changes automatically. Use \
-Fangcun tools for semantic node discovery, filesystem locations, backlinks, \
-and structured node operations. When note files are accessible, prefer the \
-client's filesystem tools for bounded reads, literal full-text search, link \
-deletion, and general content edits. Use fangcun_read_node only as a bounded \
-fallback when local file access is unavailable.",
+方寸（Fangcun） indexes ordinary Org files in configured 一隅（yiyu） note \
+roots and watches saved external changes automatically. Use Fangcun tools to \
+discover roots, search indexed node metadata, locate nodes, inspect semantic \
+backlinks, create file nodes with IDs, and assign IDs to existing headings. \
+Use the client's filesystem tools for reading, literal full-text search, link \
+editing, and general content changes. Write standard Org syntax directly: \
+ID links are [[id:NODE-ID][DESCRIPTION]] or [[id:NODE-ID]]. To jump to a \
+named target inside an ID node, use [[id:NODE-ID::target][DESCRIPTION]] and \
+define <<target>> there. Standalone target links are [[target][DESCRIPTION]] \
+or [[target]]. Radio targets are <<<radio target>>>; later exact plain-text \
+occurrences in the same document become links automatically.",
         )
     }
 

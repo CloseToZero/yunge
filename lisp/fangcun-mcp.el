@@ -14,33 +14,11 @@
 (defconst fangcun-mcp--maximum-page-size 100
   "Maximum number of results returned by a paginated tool call.")
 
-(defconst fangcun-mcp--default-read-lines 60
-  "Default maximum lines returned by one node read.")
-
-(defconst fangcun-mcp--maximum-read-lines 500
-  "Maximum lines returned by one node read.")
-
-(defconst fangcun-mcp--default-read-characters 6000
-  "Default maximum characters returned by one node read.")
-
-(defconst fangcun-mcp--maximum-read-characters 50000
-  "Maximum characters returned by one node read.")
-
-(defconst fangcun-mcp--maximum-line-preview-characters 500
-  "Maximum characters returned in a changed-line preview.")
-
 (defconst fangcun-mcp--read-only-annotations
   '(:readOnlyHint t
     :destructiveHint :false
     :openWorldHint :false)
   "MCP annotations shared by read-only Fangcun tools.")
-
-(defconst fangcun-mcp--additive-write-annotations
-  '(:readOnlyHint :false
-    :destructiveHint :false
-    :idempotentHint :false
-    :openWorldHint :false)
-  "MCP annotations shared by additive Fangcun write tools.")
 
 (defun fangcun-mcp--required-string (arguments property)
   "Return the non-empty string PROPERTY from ARGUMENTS."
@@ -405,12 +383,6 @@ KEY-PREDICATE returns non-nil for a valid decoded sort key."
          (save-excursion
            (org-end-of-subtree t t)))))))
 
-(defun fangcun-mcp--node-source-in-buffer (node)
-  "Return NODE's Org source from the current buffer."
-  (pcase-let ((`(,beginning . ,end)
-               (fangcun-mcp--node-region-in-buffer node)))
-    (buffer-substring-no-properties beginning end)))
-
 (defun fangcun-mcp--node-absolute-file (node)
   "Return the absolute file name containing NODE."
   (expand-file-name
@@ -468,133 +440,6 @@ KEY-PREDICATE returns non-nil for a valid decoded sort key."
         :location
         (fangcun-mcp--node-location-in-buffer disk-node file))))))
 
-(defun fangcun-mcp--read-node-source (node)
-  "Return NODE's Org source, reusing a visiting buffer when possible."
-  (let ((file (fangcun-mcp--node-absolute-file node)))
-    (unless (file-regular-p file)
-      (user-error "Fangcun node file no longer exists: %s" file))
-    (if-let* ((buffer (find-buffer-visiting file)))
-        (with-current-buffer buffer
-          (fangcun-mcp--node-source-in-buffer node))
-      (with-temp-buffer
-        (setq default-directory (file-name-directory file))
-        (insert-file-contents file)
-        (let ((org-inhibit-startup t))
-          (delay-mode-hooks (org-mode)))
-        (fangcun-mcp--node-source-in-buffer node)))))
-
-(defun fangcun-mcp--bounded-integer
-    (arguments property default minimum maximum)
-  "Return integer PROPERTY in ARGUMENTS bounded by MINIMUM and MAXIMUM.
-Use DEFAULT when PROPERTY is absent."
-  (let ((value
-         (if (plist-member arguments property)
-             (plist-get arguments property)
-           default)))
-    (unless (and (integerp value)
-                 (<= minimum value maximum))
-      (user-error "%s must be an integer between %d and %d"
-                  property minimum maximum))
-    value))
-
-(defun fangcun-mcp--integer-at-least (arguments property minimum)
-  "Return integer PROPERTY from ARGUMENTS after checking MINIMUM."
-  (let ((value (plist-get arguments property)))
-    (unless (and (integerp value) (>= value minimum))
-      (user-error "%s must be an integer of at least %d"
-                  property minimum))
-    value))
-
-(defun fangcun-mcp--source-position (position)
-  "Return the absolute one-based line and zero-based column at POSITION."
-  (save-excursion
-    (goto-char position)
-    (list
-     :line (line-number-at-pos position t)
-     :column (- position (line-beginning-position)))))
-
-(defun fangcun-mcp--read-node-chunk-in-buffer
-    (node file arguments)
-  "Read a bounded chunk of NODE from FILE using MCP ARGUMENTS."
-  (pcase-let* ((`(,beginning . ,end)
-                (fangcun-mcp--node-region-in-buffer node))
-               (location
-                (fangcun-mcp--node-location-in-buffer node file))
-               (node-start-line (plist-get location :startLine))
-               (node-end-line (plist-get location :endLine))
-               (start-line
-                (if (plist-member arguments :startLine)
-                    (fangcun-mcp--integer-at-least
-                     arguments :startLine 1)
-                  node-start-line))
-               (start-column
-                (if (plist-member arguments :startColumn)
-                    (fangcun-mcp--integer-at-least
-                     arguments :startColumn 0)
-                  0))
-               (maximum-lines
-                (fangcun-mcp--bounded-integer
-                 arguments :maxLines
-                 fangcun-mcp--default-read-lines 1
-                 fangcun-mcp--maximum-read-lines))
-               (maximum-characters
-                (fangcun-mcp--bounded-integer
-                 arguments :maxCharacters
-                 fangcun-mcp--default-read-characters 1
-                 fangcun-mcp--maximum-read-characters)))
-    (unless (<= node-start-line start-line node-end-line)
-      (user-error
-       ":startLine must be within node lines %d through %d"
-       node-start-line node-end-line))
-    (goto-char (point-min))
-    (unless (zerop (forward-line (1- start-line)))
-      (user-error ":startLine is outside the source file: %d"
-                  start-line))
-    (let ((line-beginning (point))
-          (line-end (line-end-position)))
-      (when (> start-column (- line-end line-beginning))
-        (user-error ":startColumn is outside source line %d: %d"
-                    start-line start-column))
-      (goto-char (+ line-beginning start-column)))
-    (let ((chunk-beginning (point)))
-      (unless (<= beginning chunk-beginning end)
-        (user-error "Requested position is outside the source node"))
-      (let* ((line-limit
-              (save-excursion
-                (forward-line maximum-lines)
-                (point)))
-             (character-limit
-              (min end (+ chunk-beginning maximum-characters)))
-             (chunk-end (min end line-limit character-limit))
-             (has-more (< chunk-end end))
-             (start-position
-              (fangcun-mcp--source-position chunk-beginning))
-             (end-position
-              (fangcun-mcp--source-position chunk-end)))
-        (append
-         (list
-          :node (fangcun-mcp--node-object node)
-          :location location
-          :content
-          (buffer-substring-no-properties chunk-beginning chunk-end)
-          :range
-          (list
-           :start start-position
-           :endExclusive end-position)
-          :hasMore (if has-more t :false))
-         (when has-more
-           (list :nextPosition end-position)))))))
-
-(defun fangcun-mcp--read-node (arguments)
-  "Read a bounded Fangcun node chunk described by MCP ARGUMENTS."
-  (let* ((id (fangcun-mcp--required-string arguments :id))
-         (node (fangcun-mcp--node-by-id id)))
-    (fangcun-mcp--call-with-node-disk-buffer
-     node
-     (lambda (disk-node file)
-       (fangcun-mcp--read-node-chunk-in-buffer
-        disk-node file arguments)))))
-
 (defun fangcun-mcp--backlink-key (backlink)
   "Return the stable display-order key for BACKLINK."
   (let ((node (fangcun-backlink-node backlink)))
@@ -616,7 +461,6 @@ Use DEFAULT when PROPERTY is absent."
 (defun fangcun-mcp--list-backlinks (arguments)
   "List backlinks described by MCP ARGUMENTS."
   (let* ((id (fangcun-mcp--required-string arguments :id))
-         (include-preview (plist-get arguments :includePreview))
          (target (fangcun-mcp--node-by-id id))
          (page-size (fangcun-mcp--page-size arguments))
          (cursor-key
@@ -624,18 +468,18 @@ Use DEFAULT when PROPERTY is absent."
            (plist-get arguments :cursor)
            "list-backlinks" id
            #'fangcun-mcp--valid-backlink-key-p))
-          (results
-           (sort
-            (mapcar
-             (lambda (backlink)
-               (list
-                :backlink backlink
-                :key (fangcun-mcp--backlink-key backlink)))
-             (fangcun-backlink-list id))
-            (lambda (left right)
-              (fangcun-mcp--string-key-before-p
-               (plist-get left :key)
-               (plist-get right :key)))))
+         (results
+          (sort
+           (mapcar
+            (lambda (backlink)
+              (list
+               :backlink backlink
+               :key (fangcun-mcp--backlink-key backlink)))
+            (fangcun-backlink-list id))
+           (lambda (left right)
+             (fangcun-mcp--string-key-before-p
+              (plist-get left :key)
+              (plist-get right :key)))))
          (remaining
           (fangcun-mcp--items-after-key
            results cursor-key
@@ -647,10 +491,7 @@ Use DEFAULT when PROPERTY is absent."
          (backlinks
           (mapcar
            (lambda (result) (plist-get result :backlink))
-           items))
-         (previews
-          (when include-preview
-            (fangcun--backlink-previews backlinks))))
+           items)))
     (append
      (list
       :target (fangcun-mcp--node-object target)
@@ -658,17 +499,14 @@ Use DEFAULT when PROPERTY is absent."
       (vconcat
        (mapcar
         (lambda (backlink)
-          (append
-           (list
-            :source
-            (fangcun-mcp--node-object
-             (fangcun-backlink-node backlink))
-            :occurrenceCount
-            (or (fangcun-backlink-count backlink) 1)
-            :firstPosition
-            (fangcun-backlink-position backlink))
-           (when include-preview
-             (list :preview (gethash backlink previews)))))
+          (list
+           :source
+           (fangcun-mcp--node-object
+            (fangcun-backlink-node backlink))
+           :occurrenceCount
+           (or (fangcun-backlink-count backlink) 1)
+           :firstPosition
+           (fangcun-backlink-position backlink)))
         backlinks)))
      (when next-key
        (list
@@ -765,169 +603,15 @@ Refuse to save an already modified visiting buffer."
      (or (fangcun-node-from-id id)
          (user-error "Created Fangcun node was not indexed: %s" id)))))
 
-(defun fangcun-mcp--link-anchor (arguments)
-  "Return the validated link anchor described by ARGUMENTS."
-  (let ((before-p (plist-member arguments :beforeText))
-        (after-p (plist-member arguments :afterText)))
-    (when (eq (not before-p) (not after-p))
-      (user-error "Specify exactly one of :beforeText and :afterText"))
-    (let* ((relation (if before-p "before" "after"))
-           (property (if before-p :beforeText :afterText))
-           (text (fangcun-mcp--required-string arguments property))
-           (occurrence
-            (when (plist-member arguments :occurrence)
-              (fangcun-mcp--integer-at-least
-               arguments :occurrence 1))))
-      (list :relation relation
-            :text text
-            :occurrence occurrence))))
-
-(defun fangcun-mcp--goto-link-anchor (node anchor)
-  "Move to the insertion point for ANCHOR in NODE and describe it."
-  (pcase-let* ((`(,beginning . ,end)
-                (fangcun-mcp--node-region-in-buffer node))
-               (relation (plist-get anchor :relation))
-               (text (plist-get anchor :text))
-               (requested-occurrence
-                (plist-get anchor :occurrence))
-               (matches nil))
-    (save-restriction
-      (narrow-to-region beginning end)
-      (goto-char (point-min))
-      (while (search-forward text nil t)
-        (push (cons (match-beginning 0) (match-end 0)) matches))
-      (setq matches (nreverse matches))
-      (unless matches
-        (user-error "Link anchor does not exist in the source node: %S"
-                    text))
-      (when (and (null requested-occurrence) (cdr matches))
-        (user-error
-         (concat
-          "Link anchor occurs %d times in the source node; "
-          "specify :occurrence")
-         (length matches)))
-      (let* ((occurrence (or requested-occurrence 1))
-             (match (nth (1- occurrence) matches)))
-        (unless match
-          (user-error
-           "Link anchor has only %d occurrences, not %d"
-           (length matches) occurrence))
-        (goto-char
-         (if (equal relation "before")
-             (car match)
-           (cdr match)))
-        (list
-         :line (line-number-at-pos (point) t)
-         :column (- (point) (line-beginning-position))
-         :relation relation
-         :occurrence occurrence)))))
-
-(defun fangcun-mcp--line-preview (position)
-  "Return a bounded changed-line preview around POSITION."
-  (save-excursion
-    (goto-char position)
-    (let* ((beginning (line-beginning-position))
-           (end (line-end-position))
-           (maximum fangcun-mcp--maximum-line-preview-characters)
-           (available (- end beginning))
-           (half (/ maximum 2))
-           (window-beginning
-            (max beginning
-                 (min (- position half)
-                      (- end maximum))))
-           (window-end (min end (+ window-beginning maximum))))
-      (list
-       :text
-       (buffer-substring-no-properties window-beginning window-end)
-       :startColumn (- window-beginning beginning)
-       :truncatedBefore (if (> window-beginning beginning) t :false)
-       :truncatedAfter (if (< window-end end) t :false)
-       :originalCharacters available))))
-
-(defun fangcun-mcp--insert-node-link (arguments)
-  "Insert a Fangcun ID link described by MCP ARGUMENTS."
-  (let* ((source-id
-          (fangcun-mcp--required-string arguments :sourceId))
-         (target-id
-          (fangcun-mcp--required-string arguments :targetId))
-         (anchor (fangcun-mcp--link-anchor arguments))
-         (include-content (plist-get arguments :includeContent))
-         (description
-          (if (plist-member arguments :description)
-              (plist-get arguments :description)
-            nil))
-         (source (fangcun-mcp--node-by-id source-id))
-         (target (fangcun-mcp--node-by-id target-id))
-         (yiyus (fangcun--ensure-session))
-         (yiyu
-          (fangcun-mcp--yiyu-by-id
-           (fangcun-node-yiyu-id source) yiyus))
-         (file
-          (expand-file-name
-           (fangcun-node-file source)
-           (fangcun-yiyu-root yiyu))))
-    (unless (memq include-content '(nil t))
-      (user-error ":includeContent must be a boolean"))
-    (unless (or (not (plist-member arguments :description))
-                (stringp description))
-      (user-error ":description must be a string"))
-    (let* ((resolved-description
-            (if (plist-member arguments :description)
-                description
-              (fangcun-node-title target)))
-           (link
-            (org-link-make-string
-             (concat "id:" target-id)
-             (unless (string-empty-p resolved-description)
-               resolved-description)))
-           (write-result
-            (fangcun-mcp--call-with-org-file-edit
-             file yiyu
-             (lambda ()
-               (let* ((position
-                       (fangcun-mcp--goto-link-anchor
-                        source anchor))
-                      (insertion-point (point)))
-                 (insert link)
-                 (list
-                  :location
-                  (list
-                   :absoluteFile file
-                   :line (plist-get position :line)
-                   :column (plist-get position :column))
-                  :anchor
-                  (list
-                   :relation (plist-get position :relation)
-                   :occurrence (plist-get position :occurrence))
-                  :linePreview
-                  (fangcun-mcp--line-preview insertion-point))))))
-           (updated-source (fangcun-mcp--node-by-id source-id))
-           (updated-target (fangcun-mcp--node-by-id target-id)))
-      (append
-       (list
-        :source (fangcun-mcp--node-object updated-source)
-        :target (fangcun-mcp--node-object updated-target)
-        :link link
-        :location (plist-get write-result :location)
-        :anchor (plist-get write-result :anchor)
-        :linePreview (plist-get write-result :linePreview)
-        :saved t
-        :indexed t)
-       (when include-content
-         (list
-          :content
-          (fangcun-mcp--read-node-source updated-source)))))))
-
 (defun fangcun-mcp--create-file-node (arguments)
   "Create and index a Fangcun file node from MCP ARGUMENTS."
   (let* ((yiyu-id
           (fangcun-mcp--required-string arguments :yiyu))
          (relative-file
           (fangcun-mcp--required-string arguments :file))
-         (title (or (plist-get arguments :title) ""))
-         (content (or (plist-get arguments :content) "")))
-    (unless (and (stringp title) (stringp content))
-      (user-error ":title and :content must be strings"))
+         (title (or (plist-get arguments :title) "")))
+    (unless (stringp title)
+      (user-error ":title must be a string"))
     (when (file-name-absolute-p relative-file)
       (user-error ":file must be relative to the yiyu root"))
     (let* ((yiyus (fangcun--ensure-session))
@@ -948,10 +632,6 @@ Refuse to save an already modified visiting buffer."
           (unless (string-empty-p title)
             (insert "#+title: " title "\n"))
           (insert "\n")
-          (unless (string-empty-p content)
-            (insert content)
-            (unless (bolp)
-              (insert "\n")))
           (goto-char (point-min))
           (org-entry-put (point) "ID" id)
           (write-region (point-min) (point-max) file nil 'silent))
@@ -968,7 +648,7 @@ Refuse to save an already modified visiting buffer."
   "including their identifiers, display names, and absolute root paths. "
   "These are ordinary Org files: when a root is accessible, use the "
   "client's filesystem tools for normal reads, literal full-text search, "
-  "link deletion, and general edits. Fangcun watches saved external "
+  "link editing, and general edits. Fangcun watches saved external "
   "changes and updates its index automatically.")
  '(:type "object" :additionalProperties :false)
  #'fangcun-mcp--list-yiyus
@@ -1011,41 +691,12 @@ Refuse to save an already modified visiting buffer."
  fangcun-mcp--read-only-annotations)
 
 (yunge-mcp-register-tool
- "fangcun_read_node"
- (concat
-  "Read a bounded on-disk chunk of an indexed 方寸（Fangcun） note node. "
-  "Use this fallback only when the client cannot access the located file "
-  "with its own filesystem tools. Continue with nextPosition while "
-  "hasMore is true; every call has line and character limits.")
- '(:type "object"
-   :properties
-   (:id (:type "string" :description "方寸（Fangcun） node ID")
-    :startLine
-    (:type "integer" :minimum 1
-     :description
-     "Optional absolute one-based line, normally from nextPosition")
-    :startColumn
-    (:type "integer" :minimum 0
-     :description
-     "Optional zero-based column, normally from nextPosition")
-    :maxLines
-    (:type "integer" :minimum 1 :maximum 500 :default 60
-     :description "Maximum lines returned by this call")
-    :maxCharacters
-    (:type "integer" :minimum 1 :maximum 50000 :default 6000
-     :description "Maximum characters returned by this call"))
-   :required ["id"]
-   :additionalProperties :false)
- #'fangcun-mcp--read-node
- fangcun-mcp--read-only-annotations)
-
-(yunge-mcp-register-tool
  "fangcun_list_backlinks"
  (concat
-  "List unique 方寸（Fangcun） note nodes containing indexed Org links "
-  "to a target node. Each result includes its occurrence count and first "
-  "position. Results are returned one cursor page at a time; source-line "
-  "previews can be included on request.")
+  "List unique 方寸（Fangcun） nodes containing indexed Org ID links "
+  "to a target node. This uses Fangcun's cross-一隅（yiyu） link graph "
+  "and reports each owning source node, occurrence count, and first "
+  "position without reading note content. Results use cursor pagination.")
  '(:type "object"
    :properties
    (:id (:type "string" :description "Target 方寸（Fangcun） node ID")
@@ -1054,12 +705,7 @@ Refuse to save an already modified visiting buffer."
      :description "Maximum source nodes to return in this page")
     :cursor
     (:type "string"
-     :description "Opaque nextCursor from the preceding backlink page")
-    :includePreview
-    (:type "boolean"
-     :description
-     "Include the first occurrence preview for each source node"
-     :default :false))
+     :description "Opaque nextCursor from the preceding backlink page"))
    :required ["id"]
    :additionalProperties :false)
  #'fangcun-mcp--list-backlinks
@@ -1069,27 +715,32 @@ Refuse to save an already modified visiting buffer."
  "fangcun_create_file_node"
  (concat
   "Create and save a new 方寸（Fangcun） Org file with a file-level "
-  "note node in a configured 一隅（yiyu）.")
+  "note node in a configured 一隅（yiyu）. The file receives a unique "
+  "Org ID as part of the same operation and is indexed before return. "
+  "Add note content afterward with the client's filesystem tools.")
  '(:type "object"
    :properties
     (:yiyu
      (:type "string" :description "Configured 一隅（yiyu） ID")
      :file
      (:type "string"
-      :description "Portable .org path relative to the 一隅（yiyu） root")
-     :title (:type "string" :description "Optional Org title")
-    :content (:type "string" :description "Optional initial Org content"))
+     :description "Portable .org path relative to the 一隅（yiyu） root")
+     :title (:type "string" :description "Optional Org title"))
    :required ["yiyu" "file"]
    :additionalProperties :false)
  #'fangcun-mcp--create-file-node
- fangcun-mcp--additive-write-annotations)
+ '(:readOnlyHint :false
+   :destructiveHint :false
+   :idempotentHint :false
+   :openWorldHint :false))
 
 (yunge-mcp-register-tool
  "fangcun_create_heading_node"
  (concat
   "Give one existing Org heading its own 方寸（Fangcun） node ID, then "
-  "save and index the file. An existing local ID is retained. The exact "
-  "heading path excludes TODO keywords, priorities, and tags.")
+  "save and index the file. Emacs generates the ID; an existing local ID "
+  "is retained. The exact heading path excludes TODO keywords, priorities, "
+  "and tags.")
  '(:type "object"
    :properties
    (:yiyu
@@ -1110,49 +761,6 @@ Refuse to save an already modified visiting buffer."
    :destructiveHint :false
    :idempotentHint t
    :openWorldHint :false))
-
-(yunge-mcp-register-tool
- "fangcun_insert_node_link"
- (concat
-  "Insert an Org id: link from one indexed 方寸（Fangcun） node to "
-  "another, then save and reindex the source file. Copy a unique exact "
-  "beforeText or afterText anchor from a bounded file read; when it "
-  "repeats, select its one-based occurrence. The target title is the "
-  "default description; pass an empty description for a bare link. The "
-  "result includes the absolute write location and a bounded line preview. "
-  "Full updated content is omitted unless includeContent is true. For link "
-  "deletion or general edits, use the client's filesystem tools; Fangcun "
-  "watches saved changes and updates its index automatically.")
- '(:type "object"
-   :properties
-   (:sourceId
-    (:type "string" :description "Source 方寸（Fangcun） node ID")
-    :targetId
-    (:type "string" :description "Target 方寸（Fangcun） node ID")
-    :beforeText
-    (:type "string" :minLength 1
-     :description "Insert immediately before this exact source text")
-    :afterText
-    (:type "string" :minLength 1
-     :description "Insert immediately after this exact source text")
-    :occurrence
-    (:type "integer" :minimum 1
-     :description
-     "One-based anchor occurrence; required only when the anchor repeats")
-    :description
-    (:type "string"
-     :description
-     "Optional link description; empty creates [[id:ID]]")
-    :includeContent
-    (:type "boolean" :default :false
-     :description "Include the complete updated source-node content"))
-   :required ["sourceId" "targetId"]
-   :oneOf
-   [(:required ["beforeText"])
-    (:required ["afterText"])]
-   :additionalProperties :false)
- #'fangcun-mcp--insert-node-link
- fangcun-mcp--additive-write-annotations)
 
 (provide 'fangcun-mcp)
 

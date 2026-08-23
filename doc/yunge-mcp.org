@@ -7,7 +7,7 @@ Emacs.  Emacs owns tool definitions, editor state, and application semantics;
 the executable does not evaluate caller-supplied Lisp or access application
 databases itself.
 
-The initial tool set belongs to Fangcun:
+The minimal tool set belongs to Fangcun:
 
 - =fangcun_list_yiyus= lists the configured note roots by identifier,
   display name, and absolute root path.
@@ -16,54 +16,45 @@ The initial tool set belongs to Fangcun:
   pagination.
 - =fangcun_locate_node= returns one node's absolute file, line range, outline
   path, and unsaved-buffer state without returning its content.
-- =fangcun_read_node= is a bounded fallback for clients that cannot read the
-  located file themselves.  It returns at most 60 lines and 6,000 characters
-  by default, with hard limits of 500 lines and 50,000 characters per call.
 - =fangcun_list_backlinks= returns unique source nodes linking to one node,
   together with each source's occurrence count and first link position.  It
-  uses opaque cursor pagination and can optionally include a one-line preview
-  of the first occurrence.
+  uses opaque cursor pagination and does not read note content.
 - =fangcun_create_file_node= creates, saves, and indexes a new Org file node;
   its =file= argument is a path relative to the selected yiyu root, and missing
-  parent directories are created.
+  parent directories are created.  It writes the file-level ID and optional
+  title; agents add note content afterward with their filesystem tools.
 - =fangcun_create_heading_node= gives an existing heading a local =ID=, then
   saves and indexes it.  The heading is selected by its exact outline path;
   existing IDs are retained, just like =SPC n c=.
-- =fangcun_insert_node_link= inserts an =id:= link between two indexed nodes,
-  saves the source file, and refreshes its links in the index.  It inserts
-  immediately before or after exact anchor text copied from a bounded read.
-
-The link-writing tool deliberately supports Fangcun =id:= links rather than
-every Org link type.  This keeps both endpoints verifiable and makes the new
-backlink immediately queryable.  The target title is used as the description
-by default.  A custom description is accepted, and an empty description emits
-the bare form =[[id:ID]]=.
 
 Heading paths run from the outermost heading to the target and use heading
 titles without TODO keywords, priorities, or tags.  A missing or ambiguous
-path is rejected.  Link callers provide exactly one of =beforeText= and
-=afterText=.  A unique match needs no position calculation; when the same
-anchor occurs more than once, its one-based =occurrence= is required.  The
-result reports the absolute file, resolved one-based line, zero-based character
-column, anchor occurrence, and a bounded changed-line preview.  It returns the
-link, location, source and target metadata, and saved/indexed status by default.
-Set =includeContent= to true only when the complete updated source-node content
-is needed.  Both write tools refuse to save a file whose visiting Emacs buffer
-already has unsaved changes.
+path is rejected.  The file-node tool generates a file-level ID while creating
+the file, so a new note is never temporarily an unindexed plain Org file.  Both
+ID tools index their saved result before returning.  The heading tool refuses
+to save a file whose visiting Emacs buffer already has unsaved changes.
 
 * Direct file workflows
 
 Fangcun yiyus contain ordinary Org files.  When those files are accessible to
-the MCP client, the client should use its own filesystem tools for normal
-bounded reads, literal full-text search, deleting links, and general content
-edits.  =fangcun_locate_node= bridges semantic node discovery to those tools
-without copying note content into the model context.
+the MCP client, the client uses its own filesystem tools for reading, literal
+full-text search, inserting or deleting links, and general content edits.
+=fangcun_locate_node= bridges semantic node discovery to those tools without
+copying note content into the model context.
 
 Fangcun watches its configured roots and updates the index after saved external
 changes, so direct file edits do not require an MCP synchronization call.  Use
-the MCP tools for semantic node discovery, locations, backlinks, and structured
-node operations.  Keep =fangcun_read_node= as the bounded fallback when the
-client cannot access a note file directly.
+the MCP tools only for root discovery, indexed node search, node locations,
+semantic backlinks, and ID-bearing node creation.
+
+Agents write standard Org links and targets directly.  An ID link is
+=[[id:NODE-ID][DESCRIPTION]]= or the bare =[[id:NODE-ID]]= form.  To jump to a
+named target inside that ID node, use
+=[[id:NODE-ID::target][DESCRIPTION]]= and define =<<target>>= there.  A
+standalone target link is =[[target][DESCRIPTION]]= or =[[target]]=.  A radio
+target is =<<<radio target>>>=; later exact plain-text occurrences in the same
+document become links automatically.  Fangcun needs no separate tool for these
+or for other ordinary Org link formats.
 
 * Search and backlink pagination
 
@@ -81,8 +72,7 @@ why it matched without depending on an internal numeric score.
 
 Backlinks are paged by unique source node rather than individual link
 occurrence.  Repeated links in one source produce one result containing
-=occurrenceCount= and =firstPosition=.  With =includePreview= enabled, the
-preview belongs to that first occurrence.
+=occurrenceCount= and =firstPosition=.
 
 Run =M-x yunge-mcp-setup= to build and install the server, then declare it in
 the user configuration of selected AI agents.  The prompt always lists every

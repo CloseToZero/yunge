@@ -17,7 +17,7 @@ The internal request is a JSON object with an =operation= member:
 
 #+begin_src json
 {"operation":"list-tools"}
-{"operation":"call-tool","name":"fangcun_read_node",
+{"operation":"call-tool","name":"fangcun_locate_node",
  "arguments":{"id":"node-id"}}
 #+end_src
 

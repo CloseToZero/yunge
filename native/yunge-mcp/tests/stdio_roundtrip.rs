@@ -268,12 +268,17 @@ fn stdio_roundtrip() -> Result<(), Box<dyn Error>> {
     let instructions = initialized["result"]["instructions"]
         .as_str()
         .ok_or("initialize response omitted server instructions")?;
-    assert!(instructions.contains("search or read Org notes"));
-    assert!(instructions.contains("inspect backlinks"));
-    assert!(instructions.contains("configured 一隅（yiyu） note root"));
+    assert!(instructions.contains("configured 一隅（yiyu） note roots"));
+    assert!(instructions.contains("inspect semantic backlinks"));
+    assert!(instructions.contains("create file nodes with IDs"));
+    assert!(instructions.contains("assign IDs to existing headings"));
     assert!(instructions.contains("watches saved external changes"));
     assert!(instructions.contains("filesystem tools"));
-    assert!(instructions.contains("bounded fallback"));
+    assert!(instructions.contains("[[id:NODE-ID][DESCRIPTION]]"));
+    assert!(instructions.contains("[[id:NODE-ID::target][DESCRIPTION]]"));
+    assert!(instructions.contains("[[target][DESCRIPTION]]"));
+    assert!(instructions.contains("<<<radio target>>>"));
+    assert!(instructions.contains("plain-text occurrences"));
 
     let tools = helper.request(json!({
         "jsonrpc": "2.0",
