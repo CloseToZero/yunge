@@ -5,8 +5,11 @@
 (require 'yunge-test-helper)
 
 (defvar org-latex-compiler)
+(defvar org-mark-ring)
+(defvar org-mark-ring-length)
 (defvar yunge-avy-candidate-project-functions)
 
+(declare-function org-mark-ring-push "org" (&optional pos buffer))
 (declare-function yunge-avy-projection-beginning
                   "yunge-avy" (projection))
 (declare-function yunge-avy-projection-end
@@ -196,6 +199,25 @@
     (should (equal opened-with '(nil find-file)))
     (should (eq (cdr (assq 'file org-link-frame-setup))
                 #'find-file-other-window))))
+
+(ert-deftest yunge-org-silences-mark-ring-push-confirmation ()
+  (yunge-org-test--load-config)
+  (require 'org)
+  (should (advice-member-p #'yunge-org--silence-mark-ring-push
+                           'org-mark-ring-push))
+  (with-temp-buffer
+    (insert "mark")
+    (let ((org-mark-ring (list (make-marker)))
+          (org-mark-ring-length 1)
+          displayed)
+      (cl-letf (((symbol-function 'message)
+                 (lambda (&rest _arguments)
+                   (unless inhibit-message (setq displayed t)))))
+        (org-mark-ring-push))
+      (should-not displayed)
+      (should (eq (marker-buffer (car org-mark-ring))
+                  (current-buffer)))
+      (should (= (marker-position (car org-mark-ring)) (point))))))
 
 (ert-deftest yunge-org-moves-to-the-outermost-heading ()
   (yunge-org-test--load-config)

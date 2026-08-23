@@ -461,6 +461,11 @@ On headings, stay before trailing tags and fold ellipses."
          (cons (cons 'file #'find-file) org-link-frame-setup)))
     (org-open-at-point)))
 
+(defun yunge-org--silence-mark-ring-push (function &rest arguments)
+  "Call FUNCTION with ARGUMENTS without displaying its confirmation."
+  (let ((inhibit-message t))
+    (apply function arguments)))
+
 (defun yunge-org--insert-link-at-normal-state-eol
     (function &rest arguments)
   "Call FUNCTION at the insertion side of a Normal-state EOL.
@@ -475,6 +480,8 @@ Keep point unchanged when FUNCTION is editing a region or existing link."
 
 (advice-add 'org-insert-link :around
             #'yunge-org--insert-link-at-normal-state-eol)
+(advice-add 'org-mark-ring-push :around
+            #'yunge-org--silence-mark-ring-push)
 (yunge-jump-history-track-command 'org-open-at-point)
 
 (defun yunge-org-open-fold ()
