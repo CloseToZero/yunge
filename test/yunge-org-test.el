@@ -99,7 +99,7 @@
      'normal
      '(("0" . yunge-org-beginning-of-line)
        ("$" . yunge-org-end-of-line)
-       ("RET" . org-open-at-point)
+       ("RET" . yunge-org-open-at-point-same-window)
        ("<C-return>" . yunge-org-insert-heading-below)
        ("<C-S-return>" . yunge-org-insert-todo-heading-below)
        ("I" . yunge-org-insert-line)
@@ -180,6 +180,22 @@
      '(("SPC m p" . shuying-org-preview)
        ("SPC m P" . shuying-org-preview-buffer)
        ("SPC m t" . org-todo)))))
+
+(ert-deftest yunge-org-opens-file-links-in-the-selected-window-locally ()
+  (yunge-org-test--load-config)
+  (let ((org-link-frame-setup
+         '((file . find-file-other-window)
+           (gnus . org-gnus-no-new-news)))
+        opened-with)
+    (cl-letf (((symbol-function 'org-open-at-point)
+               (lambda (&optional argument)
+                 (setq opened-with
+                       (list argument
+                             (cdr (assq 'file org-link-frame-setup)))))))
+      (yunge-org-open-at-point-same-window))
+    (should (equal opened-with '(nil find-file)))
+    (should (eq (cdr (assq 'file org-link-frame-setup))
+                #'find-file-other-window))))
 
 (ert-deftest yunge-org-moves-to-the-outermost-heading ()
   (yunge-org-test--load-config)

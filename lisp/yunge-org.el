@@ -37,6 +37,7 @@
 (declare-function org-insert-todo-heading-respect-content
                   "org" (&optional arg))
 (declare-function org-move-item-down "org-list" ())
+(declare-function org-open-at-point "org" (&optional arg))
 (declare-function org-region-active-p "org" ())
 (declare-function org-table-insert-row "org-table" (&optional arg))
 (declare-function org-table-begin "org-table" ())
@@ -61,6 +62,7 @@
 (defvar org-latex-packages-alist)
 (defvar org-link-angle-re)
 (defvar org-link-bracket-re)
+(defvar org-link-frame-setup)
 (defvar org-link-plain-re)
 (defvar org-mode-map)
 (defvar org-src-mode-map)
@@ -308,7 +310,7 @@ When LEFT is non-nil, also move the hline segment to the left."
     ("]c" org-babel-next-src-block "next source block")))
 
 (defconst yunge-org-normal-bindings
-  `(("RET" org-open-at-point "open at point")
+  `(("RET" yunge-org-open-at-point-same-window "open here")
     ("<C-return>" yunge-org-insert-heading-below
      "insert heading below")
     ("<C-S-return>" yunge-org-insert-todo-heading-below
@@ -451,6 +453,13 @@ On headings, stay before trailing tags and fold ellipses."
   (interactive)
   (yunge-org--insert-heading-below
    #'org-insert-todo-heading-respect-content))
+
+(defun yunge-org-open-at-point-same-window ()
+  "Open at point, preferring the selected window for file links."
+  (interactive)
+  (let ((org-link-frame-setup
+         (cons (cons 'file #'find-file) org-link-frame-setup)))
+    (org-open-at-point)))
 
 (defun yunge-org--insert-link-at-normal-state-eol
     (function &rest arguments)
