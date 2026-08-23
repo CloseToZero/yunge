@@ -8,6 +8,7 @@
 (defvar org-latex-compiler)
 (defvar shuying-org-test--render-count 0)
 (defvar shuying-org-test--backend-call-count 0)
+(defvar view-mode-hook)
 
 (defun shuying-org-test--render-now
     (requests complete)
@@ -55,6 +56,45 @@
       (shuying-org--enter-fragment fragment)
       (should-not (overlay-get outer 'display))
       (should-not (overlay-buffer inner)))))
+
+(ert-deftest shuying-org-keeps-the-preview-at-point-in-view-mode ()
+  (let* ((root (make-temp-file "shuying-org-" t))
+         (shuying-cache-directory root)
+         (shuying-backends nil)
+         (shuying--pending-jobs (make-hash-table :test #'equal))
+         (shuying-org-test--render-count 0))
+    (unwind-protect
+        (progn
+          (shuying-register-backend
+           'shuying-latex
+           #'shuying-org-test--render-now)
+          (cl-letf (((symbol-function 'create-image)
+                     (lambda (file &rest _properties)
+                       (list 'image file))))
+            (with-temp-buffer
+              (org-mode)
+              (insert "$x$")
+              (goto-char (point-min))
+              (shuying-org-mode 1)
+              (should
+               (memq #'shuying-org--view-mode-changed view-mode-hook))
+              (view-mode 1)
+              (should buffer-read-only)
+              (should (= shuying-org-test--render-count 1))
+              (should
+               (overlay-get (shuying-org-test--overlay) 'display))
+              (shuying-org--post-command)
+              (should
+               (overlay-get (shuying-org-test--overlay) 'display))
+              (view-mode -1)
+              (should-not buffer-read-only)
+              (should-not
+               (overlay-get (shuying-org-test--overlay) 'display))
+              (shuying-org-mode -1)
+              (should-not
+               (memq #'shuying-org--view-mode-changed
+                     view-mode-hook)))))
+      (delete-directory root t))))
 
 (ert-deftest shuying-org-rechecks-viewport-after-displaying-an-image ()
   (with-temp-buffer

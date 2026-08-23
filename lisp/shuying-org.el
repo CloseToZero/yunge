@@ -99,6 +99,10 @@ always displays block math at its source column.  Inline math is not affected."
 (defvar-local shuying-org--catalog-tick nil
   "Buffer modification tick of `shuying-org--fragment-catalog'.")
 
+(defun shuying-org--viewing-p ()
+  "Return whether the current buffer is being read with View mode."
+  (bound-and-true-p view-mode))
+
 (defun shuying-org--catalog-current-p ()
   "Return whether the fragment catalog describes the current text."
   (equal shuying-org--catalog-tick
@@ -488,6 +492,11 @@ PREAMBLE and optional ENGINE describe its LaTeX document context."
   (and (<= (overlay-start overlay) (point))
        (< (point) (overlay-end overlay))))
 
+(defun shuying-org--source-visible-p (overlay)
+  "Return whether OVERLAY should reveal its source at point."
+  (and (not (shuying-org--viewing-p))
+       (shuying-org--point-inside-overlay-p overlay)))
+
 (defun shuying-org--alignment-prefix (overlay image)
   "Return the horizontal alignment prefix for OVERLAY displaying IMAGE."
   (when (and (overlay-get overlay 'shuying-org-block-math)
@@ -584,7 +593,7 @@ REPORT-ERROR reports a current render failure without duplicating its batch."
               (overlay-put overlay 'shuying-org-dirty nil)
               (overlay-put overlay 'shuying-org-error nil)
               (if (or (null image)
-                      (shuying-org--point-inside-overlay-p overlay))
+                      (shuying-org--source-visible-p overlay))
                   (shuying-org--hide-overlay overlay)
                 (shuying-org--show-overlay overlay)))
           (error
@@ -646,7 +655,7 @@ When AUTOMATIC is non-nil, silently retain unavailable dependency errors."
                 (overlay-put overlay 'shuying-org-error nil)
                 (unless (or (overlay-get overlay
                                          'shuying-org-empty-artifact)
-                            (shuying-org--point-inside-overlay-p overlay))
+                            (shuying-org--source-visible-p overlay))
                   (shuying-org--show-overlay overlay)))
             (push
              (shuying-org--render-request
@@ -773,7 +782,8 @@ When AUTOMATIC is non-nil, silently retain unavailable dependency errors."
               (setq refresh-visible t)))))
       (shuying-org--clear-active-fragment)
       (when current
-        (shuying-org--enter-fragment current)
+        (unless (shuying-org--viewing-p)
+          (shuying-org--enter-fragment current))
         (shuying-org--set-active-fragment current)))
     (unless current
       (when-let* ((completed
@@ -815,6 +825,17 @@ When AUTOMATIC is non-nil, silently retain unavailable dependency errors."
     (setq shuying-org--previous-point (point)
           shuying-org--previous-tick
           (buffer-chars-modified-tick))))
+
+(defun shuying-org--view-mode-changed ()
+  "Synchronize the preview at point after View mode changes."
+  (when (bound-and-true-p shuying-org-mode)
+    (if-let* ((fragment (shuying-org--fragment-at-point)))
+        (progn
+          (if (shuying-org--viewing-p)
+              (shuying-org--leave-fragment fragment)
+            (shuying-org--enter-fragment fragment))
+          (shuying-org--set-active-fragment fragment))
+      (shuying-org--clear-active-fragment))))
 
 (defun shuying-org--rebuild-fragment-catalog ()
   "Parse and remember every Org LaTeX fragment in the current buffer."
@@ -1066,6 +1087,7 @@ preview the whole buffer.  With three, clear the whole buffer."
                   #'shuying-org--window-scrolled nil t)
         (add-hook 'after-save-hook #'shuying-org--buffer-saved nil t)
         (add-hook 'after-revert-hook #'shuying-org--buffer-reverted nil t)
+        (add-hook 'view-mode-hook #'shuying-org--view-mode-changed nil t)
         (shuying-org--schedule-visible-preview t))
     (remove-hook 'post-command-hook #'shuying-org--post-command t)
     (remove-hook 'post-command-hook
@@ -1080,6 +1102,7 @@ preview the whole buffer.  With three, clear the whole buffer."
                  #'shuying-org--window-scrolled t)
     (remove-hook 'after-save-hook #'shuying-org--buffer-saved t)
     (remove-hook 'after-revert-hook #'shuying-org--buffer-reverted t)
+    (remove-hook 'view-mode-hook #'shuying-org--view-mode-changed t)
     (setq shuying-org--visible-window-state nil)
     (shuying-org--cancel-visible-preview-timer)
     (setq shuying-org--changed-overlays nil)
