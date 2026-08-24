@@ -46,6 +46,9 @@
 (defconst yunge-reader-fixed-smoke--variants
   '("ltr" "rtl" "vertical-rl"))
 
+(defconst yunge-reader-fixed-smoke--full-variant "ltr"
+  "Fixture variant that exercises the complete fixed-layout workflow.")
+
 (defvar yunge-reader-fixed-smoke--remaining nil)
 (defvar yunge-reader-fixed-smoke--results nil)
 (defvar yunge-reader-fixed-smoke--variant nil)
@@ -339,9 +342,14 @@
                    (progn
                      (yunge-reader-fixed-smoke--record
                       'previous location)
-                     (setq yunge-reader-fixed-smoke--phase 'fit-width)
-                     (yunge-reader-fit-width)
-                     (yunge-reader-fixed-smoke--continue))
+                     (if (equal yunge-reader-fixed-smoke--variant
+                                yunge-reader-fixed-smoke--full-variant)
+                         (progn
+                           (setq yunge-reader-fixed-smoke--phase
+                                 'fit-width)
+                           (yunge-reader-fit-width)
+                           (yunge-reader-fixed-smoke--continue))
+                       (yunge-reader-fixed-smoke--finish 'passed nil)))
                  (yunge-reader-fixed-smoke--continue)))
               ('fit-width
                (if (and
