@@ -2587,7 +2587,7 @@
        (equal captured-properties
               '(:base-uri "C:/cache/page.png"))))))
 
-(ert-deftest yunge-reader-pdf-caches-page-text-once ()
+(ert-deftest yunge-reader-pdf-caches-page-text-and-builds-hit-index-lazily ()
   (with-temp-buffer
     (yunge-reader-mode)
     (yunge-reader-pdf-view-mode 1)
@@ -2604,9 +2604,11 @@
       (should (= requests 1))
       (should (eq (gethash 0 yunge-reader-pdf--text-cache)
                   result))
-      (should
-       (yunge-reader-pdf--hit-index-p
-        (gethash 0 yunge-reader-pdf--text-hit-cache))))))
+      (should-not (gethash 0 yunge-reader-pdf--text-hit-cache))
+      (let ((index (yunge-reader-pdf--page-hit-index 0 result)))
+        (should (yunge-reader-pdf--hit-index-p index))
+        (should (eq (gethash 0 yunge-reader-pdf--text-hit-cache)
+                    index))))))
 
 (ert-deftest yunge-reader-pdf-redisplays-an-asynchronous-search-overlay ()
   (with-temp-buffer

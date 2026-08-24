@@ -12,9 +12,6 @@
 (require 'yunge-reader-pdf-protocol)
 (require 'yunge-reader-pdf-viewport)
 
-(declare-function yunge-reader-pdf--make-hit-index
-                  "yunge-reader-pdf-interaction" (page text-layer))
-
 (defvar yunge-reader-pdf--image-map)
 (defvar yunge-reader-pdf-view-mode)
 
@@ -956,12 +953,7 @@ Use the nearest cached render ENTRY while an exact render is unavailable."
                    :warning))
               (when (and (hash-table-p yunge-reader-pdf--text-cache)
                           (yunge-reader-pdf--retain-page-p page))
-                (puthash page result yunge-reader-pdf--text-cache)
-                (when (hash-table-p yunge-reader-pdf--text-hit-cache)
-                  (puthash
-                   page
-                   (yunge-reader-pdf--make-hit-index page result)
-                   yunge-reader-pdf--text-hit-cache)))
+                (puthash page result yunge-reader-pdf--text-cache))
               (let ((repainted
                      (when (and
                             (memq page
