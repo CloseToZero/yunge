@@ -58,7 +58,7 @@ CHILD is the currently executing task owned by a composite operation."
       :warning))))
 
 (defun yunge-reader-task-finish (task state value error-data)
-  "Finish composite Reader TASK once with STATE, VALUE, and ERROR-DATA."
+  "Finish active Reader TASK once with STATE, VALUE, and ERROR-DATA."
   (when (yunge-reader-task-active-p task)
     (when-let* ((timer (yunge-reader-task-timer task)))
       (when (timerp timer)
@@ -118,30 +118,46 @@ CHILD is the currently executing task owned by a composite operation."
       t)))
 
 (cl-defun yunge-reader-task-create
-    (operation complete &key owner timeout revision)
-  "Create a running composite task for OPERATION and COMPLETE.
+    (operation complete
+     &key owner timeout revision id session
+     (state 'running)
+     (cancel-function #'yunge-reader-task--cancel-composite)
+     (timeout-function #'yunge-reader-task--timeout-composite))
+  "Create an active task for OPERATION and COMPLETE.
 OWNER groups related work.  TIMEOUT is an optional positive number of seconds.
-REVISION is opaque state identifying the user intent served by the task."
+REVISION is opaque state identifying the user intent served by the task.  ID,
+SESSION, STATE, CANCEL-FUNCTION, and TIMEOUT-FUNCTION let an execution backend
+describe its pending work while this library retains task construction and
+terminal completion."
   (unless (functionp complete)
     (error "Reader completion must be a function: %S" complete))
+  (unless (memq state '(queued sent running))
+    (error "Reader task initial state must be active: %S" state))
+  (unless (functionp cancel-function)
+    (error "Reader task cancellation must be a function: %S"
+           cancel-function))
+  (unless (functionp timeout-function)
+    (error "Reader task timeout must be a function: %S"
+           timeout-function))
   (when (and timeout
              (not (and (numberp timeout) (> timeout 0))))
     (error "Reader task timeout must be positive: %S" timeout))
   (let* ((created-at (float-time))
          (task
           (yunge-reader-task--make
+           :id id
            :operation operation
            :owner owner
            :revision revision
-           :state 'running
+           :state state
            :created-at created-at
            :deadline (and timeout (+ created-at timeout))
            :complete complete
-           :cancel-function #'yunge-reader-task--cancel-composite)))
+           :session session
+           :cancel-function cancel-function)))
     (when timeout
       (setf (yunge-reader-task-timer task)
-            (run-at-time timeout nil
-                         #'yunge-reader-task--timeout-composite task)))
+            (run-at-time timeout nil timeout-function task)))
     task))
 
 (defun yunge-reader-task-adopt-child (task child)

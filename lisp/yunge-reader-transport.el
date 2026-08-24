@@ -47,34 +47,6 @@
   "Forget retired request ID from SESSION."
   (remhash id (yunge-reader-transport--session-retired session)))
 
-(defun yunge-reader-transport--invoke-complete
-    (session task value error-data)
-  "Safely complete TASK from SESSION with VALUE or ERROR-DATA."
-  (when-let* ((complete
-               (prog1 (yunge-reader-task-complete task)
-                 (setf (yunge-reader-task-complete task) nil))))
-    (condition-case callback-error
-        (funcall complete value error-data)
-      (error
-       (display-warning
-        'yunge-reader
-        (format "%s callback for %s failed: %s"
-                (yunge-reader-transport--session-label session)
-                (yunge-reader-task-operation task)
-                (error-message-string callback-error))
-        :warning)))))
-
-(defun yunge-reader-transport--finish-task
-    (session task state value error-data)
-  "Finish TASK in SESSION once with STATE, VALUE, and ERROR-DATA."
-  (when-let* ((timer (yunge-reader-task-timer task)))
-    (when (timerp timer)
-      (cancel-timer timer))
-    (setf (yunge-reader-task-timer task) nil))
-  (setf (yunge-reader-task-state task) state)
-  (yunge-reader-transport--invoke-complete
-   session task value error-data))
-
 (defun yunge-reader-transport--cancel-task
     (task state error-data)
   "Cancel live TASK with terminal STATE and ERROR-DATA."
@@ -90,9 +62,7 @@
              id (yunge-reader-transport--session-outbound session)))
       (when (eq (yunge-reader-task-state task) 'sent)
         (yunge-reader-transport--retire session task))
-      (yunge-reader-transport--finish-task
-       session task state nil error-data)
-      t)))
+      (yunge-reader-task-finish task state nil error-data))))
 
 (defun yunge-reader-transport--cancel-request (task reason)
   "Cancel transport TASK for REASON."
@@ -203,10 +173,10 @@ of writing that line to the process input pipe."
                (yunge-reader-transport--session-label session) id message))
       (remhash id callbacks)
       (if (alist-get 'ok message)
-          (yunge-reader-transport--finish-task
-           session task 'completed (alist-get 'result message) nil)
-        (yunge-reader-transport--finish-task
-         session task 'failed nil
+          (yunge-reader-task-finish
+           task 'completed (alist-get 'result message) nil)
+        (yunge-reader-task-finish
+         task 'failed nil
          (funcall
           (yunge-reader-transport--session-response-error-function
            session)
@@ -257,19 +227,17 @@ of seconds.  REVISION is opaque client state used to reject stale work."
     (error "Reader transport timeout must be positive: %S" timeout))
   (let* ((id
           (cl-incf (yunge-reader-transport--session-next-id session)))
-         (created-at (float-time))
          (task
-          (yunge-reader-task--make
+          (yunge-reader-task-create
+           operation complete
            :id id
-           :operation operation
            :owner owner
+           :timeout timeout
            :revision revision
            :state 'queued
-           :created-at created-at
-           :deadline (and timeout (+ created-at timeout))
-           :complete complete
            :session session
-           :cancel-function #'yunge-reader-transport--cancel-request))
+           :cancel-function #'yunge-reader-transport--cancel-request
+           :timeout-function #'yunge-reader-transport--timeout-task))
          (request
           (append
            (list (cons 'id id) (cons 'op operation))
@@ -281,10 +249,6 @@ of seconds.  REVISION is opaque client state used to reject stale work."
           (json-serialize request :null-object nil :false-object :false)))
     (puthash id task
              (yunge-reader-transport--session-callbacks session))
-    (when timeout
-      (setf (yunge-reader-task-timer task)
-            (run-at-time timeout nil
-                         #'yunge-reader-transport--timeout-task task)))
     (if (yunge-reader-transport--ready-p session process)
         (progn
           (setf (yunge-reader-task-state task) 'sent)
@@ -305,8 +269,7 @@ of seconds.  REVISION is opaque client state used to reject stale work."
     (clrhash (yunge-reader-transport--session-retired session))
     (setf (yunge-reader-transport--session-outbound session) nil)
     (dolist (task tasks)
-      (yunge-reader-transport--finish-task
-       session task 'failed nil error-data))))
+      (yunge-reader-task-finish task 'failed nil error-data))))
 
 (defun yunge-reader-transport--filter (process output)
   "Collect and handle complete NDJSON messages in PROCESS OUTPUT."
