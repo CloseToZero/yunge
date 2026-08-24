@@ -391,8 +391,9 @@ Return nil when POSITION has no preview or its source is currently visible."
 
 (defun shuying-org--layout-context-changed
     (beginning end _old-length)
-  "Schedule a layout refresh after text changes from BEGINNING to END."
-  (let ((line-beginning
+  "Schedule a preview refresh after text changes from BEGINNING to END."
+  (let ((undo-change (bound-and-true-p undo-in-progress))
+        (line-beginning
          (save-excursion
            (goto-char beginning)
            (line-beginning-position)))
@@ -400,14 +401,18 @@ Return nil when POSITION has no preview or its source is currently visible."
          (save-excursion
            (goto-char end)
            (line-end-position))))
-    (when
-        (seq-some
-         (lambda (overlay)
-           (and (overlay-get overlay 'shuying-org-block-math)
-                (not (overlay-get overlay 'shuying-org-dirty))))
-         (shuying-org--fragment-overlays line-beginning line-end))
+    (when (or
+           ;; Undo can recreate a formula after its overlay was deleted.
+           ;; With no overlay modification hook left to report the change,
+           ;; force visible-fragment discovery at the next idle opportunity.
+           undo-change
+           (seq-some
+            (lambda (overlay)
+              (and (overlay-get overlay 'shuying-org-block-math)
+                   (not (overlay-get overlay 'shuying-org-dirty))))
+            (shuying-org--fragment-overlays line-beginning line-end)))
       (setq shuying-org--visible-window-state nil)
-      (shuying-org--schedule-visible-preview))))
+      (shuying-org--schedule-visible-preview undo-change))))
 
 (defun shuying-org--ensure-overlay (fragment)
   "Return the display overlay for FRAGMENT, creating it if needed."

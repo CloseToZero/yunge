@@ -692,6 +692,64 @@
                 (shuying-org-test--overlay) 'shuying-org-dirty)))))
       (delete-directory root t))))
 
+(ert-deftest shuying-org-repreviews-a-formula-recreated-by-undo ()
+  (let* ((root (make-temp-file "shuying-org-" t))
+         (shuying-cache-directory root)
+         (shuying-backends nil)
+         (shuying--pending-jobs (make-hash-table :test #'equal))
+         (shuying-org-test--render-count 0)
+         scheduled)
+    (unwind-protect
+        (progn
+          (shuying-register-backend
+           'shuying-latex
+           #'shuying-org-test--render-now)
+          (cl-letf (((symbol-function 'create-image)
+                     (lambda (file &rest _properties)
+                       (list 'image file)))
+                    ((symbol-function 'shuying-org--window-state)
+                     (lambda () 'visible))
+                    ((symbol-function 'shuying-org--visible-ranges)
+                     (lambda () (list (cons (point-min) (point-max)))))
+                    ((symbol-function
+                      'shuying-org--schedule-visible-preview)
+                     (lambda (&optional immediate)
+                       (setq scheduled immediate))))
+            (with-temp-buffer
+              (org-mode)
+              (insert "$n$\n")
+              (goto-char (point-max))
+              (shuying-org-mode 1)
+              (shuying-org-preview-buffer)
+              (should (= shuying-org-test--render-count 1))
+              (buffer-enable-undo)
+              (setq buffer-undo-list nil
+                    scheduled nil)
+              (delete-region (point-min) (1- (point-max)))
+              (undo-boundary)
+              (shuying-org--post-command)
+              (should-not (shuying-org-test--overlay))
+              ;; Model the visible pass that observed the formula-less text.
+              (setq shuying-org--visible-window-state 'visible
+                    scheduled nil)
+              (goto-char (point-max))
+              ;; Model an undo front end that preserves a cursor outside the
+              ;; restored source, without issuing another cursor command.
+              (save-excursion
+                (undo-only 1))
+              (should (equal (buffer-string) "$n$\n"))
+              (should (= (point) (point-max)))
+              ;; Undo must schedule the restored source without waiting for
+              ;; another cursor command to run `post-command-hook'.
+              (should scheduled)
+              (should-not shuying-org--visible-window-state)
+              (shuying-org--preview-visible-windows)
+              (should (= shuying-org-test--render-count 1))
+              (should
+               (overlay-get
+                (shuying-org-test--overlay) 'display)))))
+      (delete-directory root t))))
+
 (ert-deftest shuying-org-restores-a-cache-hit-after-catalog-change ()
   (let* ((root (make-temp-file "shuying-org-" t))
          (shuying-cache-directory root)
