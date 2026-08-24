@@ -43,6 +43,10 @@ preamble with each batch instead."
   "\\usepackage[active,tightpage,auctex]{preview}\n"
   "LaTeX setup that emits one page and geometry for each preview.")
 
+(defconst shuying-latex--dvisvgm-pgf-driver
+  "\\def\\pgfsysdriver{pgfsys-dvisvgm.def}\n"
+  "Preview-only PGF driver setup for the dvisvgm converter.")
+
 (defconst shuying-latex--number-regexp
   "[-+]?\\(?:[0-9]+\\(?:\\.[0-9]*\\)?\\|\\.[0-9]+\\)"
   "Regexp matching a decimal number in renderer output.")
@@ -131,12 +135,30 @@ values affect the document or converter as a whole."
   (insert (shuying-render-spec-source specification))
   (insert "\n\\end{preview}\n"))
 
+(defun shuying-latex--uses-dvisvgm-p (specification)
+  "Return non-nil when SPECIFICATION uses dvisvgm as its converter."
+  (when-let* ((converter
+               (plist-get
+                (shuying-render-spec-backend-options specification)
+                :converter))
+              (program (car-safe converter)))
+    (string-equal-ignore-case (file-name-base program) "dvisvgm")))
+
+(defun shuying-latex--preview-preamble (specification)
+  "Return the complete preview preamble for SPECIFICATION."
+  (let ((preamble (shuying-render-spec-preamble specification)))
+    (concat
+     (when (shuying-latex--uses-dvisvgm-p specification)
+       shuying-latex--dvisvgm-pgf-driver)
+     preamble
+     (unless (or (string-empty-p preamble)
+                 (string-suffix-p "\n" preamble))
+       "\n")
+     shuying-latex--preview-package)))
+
 (defun shuying-latex--write-preamble (specification)
   "Insert the reusable preamble for SPECIFICATION at point."
-  (insert (shuying-render-spec-preamble specification))
-  (unless (bolp)
-    (insert "\n"))
-  (insert shuying-latex--preview-package))
+  (insert (shuying-latex--preview-preamble specification)))
 
 (defun shuying-latex--write-document (requests file &optional format-file)
   "Write a batch document for REQUESTS to FILE.
@@ -309,8 +331,7 @@ size with preview.sty's scaled-point baseline report."
    (encode-coding-string
     (prin1-to-string
      (list
-      (shuying-render-spec-preamble specification)
-      shuying-latex--preview-package
+      (shuying-latex--preview-preamble specification)
       engine
       (shuying-render-spec-cache-version specification)))
     'utf-8-unix)))

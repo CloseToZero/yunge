@@ -58,9 +58,33 @@
             (shuying-latex--format-key second engine)))
     (setf (shuying-render-spec-preamble second)
           (shuying-render-spec-preamble first))
+    (setf (shuying-render-spec-backend-options second)
+          '(:converter ("other-converter")))
+    (should-not
+     (equal (shuying-latex--format-key first engine)
+            (shuying-latex--format-key second engine)))
     (should-not
      (equal (shuying-latex--format-key first engine)
             (shuying-latex--format-key first '("other-latex"))))))
+
+(ert-deftest shuying-latex-selects-the-pgf-driver-for-its-converter ()
+  (let ((specification (shuying-latex-test--spec "$x$")))
+    (setf (shuying-render-spec-preamble specification)
+          "\\documentclass{article}\n\\usepackage{tikz-cd}\n")
+    (with-temp-buffer
+      (shuying-latex--write-preamble specification)
+      (should
+       (string-prefix-p
+        "\\def\\pgfsysdriver{pgfsys-dvisvgm.def}\n"
+        (buffer-string)))
+      (should
+       (< (string-match-p "pgfsys-dvisvgm" (buffer-string))
+          (string-match-p "usepackage{tikz-cd}" (buffer-string)))))
+    (setf (shuying-render-spec-backend-options specification)
+          '(:converter ("other-converter")))
+    (with-temp-buffer
+      (shuying-latex--write-preamble specification)
+      (should-not (search-forward "pgfsysdriver" nil t)))))
 
 (ert-deftest shuying-latex-uses-a-cache-hit-without-the-toolchain ()
   (let* ((root (make-temp-file "shuying-latex-test-" t))
@@ -651,6 +675,60 @@
               (insert-file-contents
                (shuying-artifact-path (car result)))
               (should (search-forward "<svg" nil t)))))
+      (delete-directory root t))))
+
+(ert-deftest shuying-latex-renders-tikz-paths-from-xdv ()
+  (unless (and (executable-find "xelatex")
+               (executable-find "dvisvgm")
+               (executable-find "kpsewhich")
+               (= (call-process "kpsewhich" nil nil nil "preview.sty")
+                  0)
+               (= (call-process "kpsewhich" nil nil nil "tikz-cd.sty")
+                  0)
+               (= (call-process
+                   "kpsewhich" nil nil nil "pgfsys-dvisvgm.def")
+                  0))
+    (ert-skip "The XeLaTeX TikZ preview toolchain is unavailable"))
+  (let* ((root (make-temp-file "shuying-latex-test-" t))
+         (shuying-work-directory (expand-file-name "work" root))
+         (specification
+          (shuying-latex-test--spec
+           (concat
+            "\\[\\begin{tikzcd}\n"
+            "G \\arrow[r, \"\\varphi\"] "
+            "\\arrow[d, \"p\"'] & G' \\\\\n"
+            "G/K \\arrow[ur, \"\\widetilde{\\varphi}\"']\n"
+            "\\end{tikzcd}\\]")))
+         (output (expand-file-name "tikz.svg" root))
+         (request
+          (make-shuying-backend-request
+           :specification specification
+           :output-file output))
+         done
+         error-data)
+    (setf (shuying-render-spec-preamble specification)
+          "\\documentclass{article}\n\\usepackage{tikz-cd}\n"
+          (shuying-render-spec-engine specification)
+          '("xelatex" "-no-pdf"))
+    (unwind-protect
+        (progn
+          (shuying-latex-render-batch
+           (list request)
+           (lambda (_request error)
+             (setq done t
+                   error-data error)))
+          (with-timeout
+              (30 (ert-fail "Timed out rendering a TikZ preview"))
+            (while (not done)
+              (accept-process-output nil 0.05)))
+          (should-not error-data)
+          (should (file-exists-p output))
+          (with-temp-buffer
+            (insert-file-contents output)
+            (should (search-forward "</defs>" nil t))
+            ;; Font outlines live in `defs'.  A path after it is actual TikZ
+            ;; drawing output rather than one of the diagram's text glyphs.
+            (should (re-search-forward "<path\\(?:[[:space:]]\\|>\\)" nil t))))
       (delete-directory root t))))
 
 (ert-deftest shuying-latex-renders-equations-from-their-document-numbers ()
