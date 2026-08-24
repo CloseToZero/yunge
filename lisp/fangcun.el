@@ -1502,11 +1502,17 @@ When READ-DISK is non-nil, ignore an unsaved visiting buffer."
   "Reconcile file events queued by the native monitor."
   (setq fangcun--native-event-timer nil)
   (let ((full-sync fangcun--native-pending-full-sync-p)
-        files)
+        missing-files
+        existing-files)
     (setq fangcun--native-pending-full-sync-p nil)
     (maphash
      (lambda (file _value)
-       (push file files))
+       ;; A rename can report its old and new Org paths as separate events.
+       ;; Remove every vanished path first so that a node ID may move to its
+       ;; new file without colliding with the row still owned by the old one.
+       (if (file-regular-p file)
+           (push file existing-files)
+         (push file missing-files)))
      fangcun--native-pending-files)
     (clrhash fangcun--native-pending-files)
     (when (and fangcun--session-active-p
@@ -1514,7 +1520,7 @@ When READ-DISK is non-nil, ignore an unsaved visiting buffer."
       (condition-case error-data
           (if full-sync
               (fangcun--sync-yiyus fangcun--session-yiyus t)
-            (dolist (file files)
+            (dolist (file (nconc missing-files existing-files))
               (fangcun--reconcile-file file)))
         (error
          (display-warning

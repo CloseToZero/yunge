@@ -64,7 +64,8 @@ After installing recursive watches, =watch= emits =ready= and then any of:
 =event= identifies the Org files affected by an unambiguous filesystem event.
 Emacs reconciles those files after it becomes idle.  =rescan= means that the
 event cannot be represented safely as file paths, such as an ambiguous
-directory change; Emacs schedules a full incremental sync instead.
+directory change, or must be applied atomically, such as a rename that moves
+an Org ID between file paths; Emacs schedules a full incremental sync instead.
 
 An =error= from the watch backend also schedules a full incremental sync.  A
 fatal process error emits the same message when possible and exits nonzero.

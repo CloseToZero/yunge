@@ -1302,6 +1302,32 @@
       (should (zerop (hash-table-count
                       fangcun--native-pending-files))))))
 
+(ert-deftest fangcun-native-events-reconcile-a-renamed-file-before-its-new-path ()
+  (fangcun-test-with-notes
+    (fangcun-db-sync)
+    (let ((renamed
+           (expand-file-name "renamed.org" personal-root)))
+      ;; Simulate a rename performed outside Emacs, so only the native event
+      ;; batch reconciles the database.  Insert the paths in the order that
+      ;; previously made the new path run before the vanished old path.
+      (let ((fangcun--session-active-p nil))
+        (rename-file personal-file renamed))
+      (fangcun-test--write-file
+       renamed
+       (concat
+        ":PROPERTIES:\n"
+        ":ID: personal-file\n"
+        ":END:\n"
+        "#+title: Renamed personal notes\n"))
+      (puthash personal-file t fangcun--native-pending-files)
+      (puthash renamed t fangcun--native-pending-files)
+      (fangcun--process-native-events)
+      (let ((node (fangcun-node-from-id "personal-file")))
+        (should node)
+        (should (equal (fangcun-node-file node) "renamed.org"))
+        (should (equal (fangcun-node-title node)
+                       "Renamed personal notes"))))))
+
 (ert-deftest fangcun-native-monitor-output-belongs-to-its-process ()
   (let ((fangcun--native-watch-process 'current-monitor)
         (properties (make-hash-table :test #'equal))

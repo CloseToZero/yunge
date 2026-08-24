@@ -130,10 +130,11 @@ fn structural_change(event: &Event) -> bool {
     match event.kind {
         EventKind::Create(CreateKind::Folder)
         | EventKind::Remove(RemoveKind::Folder)
-        | EventKind::Remove(RemoveKind::Any) => true,
-        EventKind::Modify(ModifyKind::Name(_)) => {
-            event.paths.iter().any(|path| !org_path(path))
-        }
+        | EventKind::Remove(RemoveKind::Any)
+        // A rename can move an Org ID from the old file key to the new one.
+        // Reconcile the two paths as one incremental scan instead of exposing
+        // backend-dependent rename path ordering to Emacs.
+        | EventKind::Modify(ModifyKind::Name(_)) => true,
         EventKind::Any | EventKind::Other => true,
         _ => false,
     }
@@ -358,6 +359,16 @@ mod tests {
     fn ambiguous_removal_requests_a_rescan() {
         let event = Event::new(EventKind::Remove(RemoveKind::Any))
             .add_path(PathBuf::from("removed-directory"));
+        assert!(matches!(event_message(event), Some(Message::Rescan)));
+    }
+
+    #[test]
+    fn org_rename_requests_a_rescan() {
+        let event = Event::new(EventKind::Modify(ModifyKind::Name(
+            notify::event::RenameMode::Both,
+        )))
+        .add_path(PathBuf::from("old.org"))
+        .add_path(PathBuf::from("renamed.org"));
         assert!(matches!(event_message(event), Some(Message::Rescan)));
     }
 
