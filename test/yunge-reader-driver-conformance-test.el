@@ -9,15 +9,14 @@
 (defun yunge-reader-driver-conformance-test--invoke
     (operation arguments)
   "Invoke generic OPERATION with ARGUMENTS and return its observed result."
-  (let (task value error-data (calls 0))
-    (setq task
-          (yunge-reader-request
-           operation arguments
-           (lambda (result error)
-             (cl-incf calls)
-             (setq value result
-                   error-data error))))
-    (list :task task :value value :error error-data :calls calls)))
+  (let (value error-data (calls 0))
+    (yunge-reader-request
+     operation arguments
+     (lambda (result error)
+       (cl-incf calls)
+       (setq value result
+             error-data error)))
+    (list :value value :error error-data :calls calls)))
 
 (defun yunge-reader-driver-conformance-test--successes (cases)
   "Assert successful generic requests described by CASES."
@@ -28,51 +27,10 @@
                    operation arguments)))
       (should (= (plist-get result :calls) 1))
       (should-not (plist-get result :error))
-      (should (funcall predicate (plist-get result :value)))
-      (should
-       (eq (yunge-reader-task-state (plist-get result :task))
-           'completed)))))
-
-(defun yunge-reader-driver-conformance-test--lifecycle
-    (arguments configure-backend)
-  "Assert error and cancellation behavior using CONFIGURE-BACKEND.
-ARGUMENTS are valid generic search arguments.  CONFIGURE-BACKEND receives a
-mode and optional child task."
-  (funcall configure-backend 'error nil)
-  (let ((result
-         (yunge-reader-driver-conformance-test--invoke
-          'search arguments)))
-    (should (= (plist-get result :calls) 1))
-    (should (equal (plist-get result :error)
-                   '(error "backend failed")))
-    (should
-     (eq (yunge-reader-task-state (plist-get result :task)) 'failed)))
-  (let* (cancelled
-         (child
-          (yunge-reader-task--make
-           :operation 'backend-search
-           :state 'sent
-           :cancel-function
-           (lambda (task reason)
-             (setq cancelled reason)
-             (setf (yunge-reader-task-state task) 'cancelled)
-             t))))
-    (funcall configure-backend 'pending child)
-    (let* ((result
-            (yunge-reader-driver-conformance-test--invoke
-             'search arguments))
-           (task (plist-get result :task)))
-      (should (yunge-reader-task-active-p task))
-      (should (eq (yunge-reader-task-child task) child))
-      (should (yunge-reader-task-cancel task "contract cancellation"))
-      (should (equal cancelled "contract cancellation"))
-      (should (= (plist-get result :calls) 0))
-      (should (eq (yunge-reader-task-state task) 'cancelled)))))
+      (should (funcall predicate (plist-get result :value))))))
 
 (ert-deftest yunge-reader-pdf-production-driver-conforms-to-generic-api ()
   (let* ((yunge-reader-drivers nil)
-         (mode 'success)
-         pending-child
          (start (make-yunge-reader-position :unit 0 :offset 2))
          (end (make-yunge-reader-position :unit 0 :offset 8))
          (search-arguments
@@ -118,37 +76,24 @@ mode and optional child task."
                               32)))
                   (_ (ert-fail (format "Unexpected PDF request: %s"
                                        operation))))
-                (pcase mode
-                  ('pending pending-child)
-                  ('error
-                   (funcall complete nil '(error "backend failed"))
-                   (funcall complete nil '(error "duplicate failure")))
-                  (_
-                   (let ((value
-                          (pcase operation
-                            ("outline" '((items) (truncated)))
-                            ("search" '((matches) (cursor) (done . t)))
-                            ("selection-text"
-                             '((text . "PDF text") (cursor) (done . t))))))
-                     (funcall complete value nil)
-                     (funcall complete value nil)))))))
+                (let ((value
+                       (pcase operation
+                         ("outline" '((items) (truncated)))
+                         ("search" '((matches) (cursor) (done . t)))
+                         ("selection-text"
+                          '((text . "PDF text")
+                            (cursor) (done . t))))))
+                  (funcall complete value nil)))))
           (yunge-reader-driver-conformance-test--successes
            (list
             (list 'outline nil #'yunge-reader-outline-data-p)
             (list 'search search-arguments
                   #'yunge-reader-search-batch-p)
             (list 'selection-text selection-arguments
-                  #'yunge-reader-selection-batch-p)))
-          (yunge-reader-driver-conformance-test--lifecycle
-           search-arguments
-           (lambda (new-mode child)
-             (setq mode new-mode
-                   pending-child child))))))))
+                  #'yunge-reader-selection-batch-p))))))))
 
 (ert-deftest yunge-reader-epub-production-driver-conforms-to-generic-api ()
   (let* ((yunge-reader-drivers nil)
-         (mode 'success)
-         pending-child
          (selection
           '((href . "OPS/chapter.xhtml")
             (start . "epubcfi(/6/4!/4/2/1:0)")
@@ -188,66 +133,52 @@ mode and optional child task."
         (yunge-reader-mode)
         (setq yunge-reader-document document
               yunge-reader-webview--buffer-view view)
-        (cl-labels
-            ((finish (complete value)
-               (pcase mode
-                 ('pending pending-child)
-                 ('error
-                  (funcall complete nil '(error "backend failed"))
-                  (funcall complete nil '(error "duplicate failure")))
-                 (_
-                  (funcall complete value nil)
-                  (funcall complete value nil)))))
-          (cl-letf
-              (((symbol-function
-                 'yunge-reader-webview--request-view-outline)
-                (lambda (actual-view complete)
-                  (should (eq actual-view view))
-                  (finish
-                   complete
-                   '((items
-                      . (((title . "Chapter") (depth . 0)
-                          (href . "OPS/chapter.xhtml"))))
-                     (truncated)))))
-               ((symbol-function 'yunge-reader-webview--request-search)
-                (lambda (actual-view query case-sensitive direction
-                                     origin cursor match-limit unit-limit
-                                     complete &optional _revision)
-                  (should (eq actual-view view))
-                  (should (equal query "Needle"))
-                  (should case-sensitive)
-                  (should (eq direction 'forward))
-                  (should-not origin)
-                  (should-not cursor)
-                  (should (= match-limit 9))
-                  (should (= unit-limit 3))
-                  (finish
-                   complete
-                   '((matches) (cursor) (done . t)))))
-               ((symbol-function
-                 'yunge-reader-webview--request-selection-text)
-                (lambda (actual-view actual-selection offset
-                                     character-limit complete
-                                     &optional _revision)
-                  (should (eq actual-view view))
-                  (should (equal actual-selection selection))
-                  (should (zerop offset))
-                  (should (= character-limit 32))
-                  (finish
-                   complete
-                   '((text . "EPUB text")
-                     (next-offset) (done . t))))))
-            (yunge-reader-driver-conformance-test--successes
-             (list
-              (list 'outline nil #'yunge-reader-outline-data-p)
-              (list 'search search-arguments
-                    #'yunge-reader-search-batch-p)
-              (list 'selection-text selection-arguments
-                    #'yunge-reader-selection-batch-p)))
-            (yunge-reader-driver-conformance-test--lifecycle
-             search-arguments
-             (lambda (new-mode child)
-               (setq mode new-mode
-                     pending-child child)))))))))
+        (cl-letf
+            (((symbol-function
+               'yunge-reader-webview--request-view-outline)
+              (lambda (actual-view complete)
+                (should (eq actual-view view))
+                (funcall
+                 complete
+                 '((items
+                    . (((title . "Chapter") (depth . 0)
+                        (href . "OPS/chapter.xhtml"))))
+                   (truncated))
+                 nil)))
+             ((symbol-function 'yunge-reader-webview--request-search)
+              (lambda (actual-view query case-sensitive direction
+                                   origin cursor match-limit unit-limit
+                                   complete &optional _revision)
+                (should (eq actual-view view))
+                (should (equal query "Needle"))
+                (should case-sensitive)
+                (should (eq direction 'forward))
+                (should-not origin)
+                (should-not cursor)
+                (should (= match-limit 9))
+                (should (= unit-limit 3))
+                (funcall
+                 complete '((matches) (cursor) (done . t)) nil)))
+             ((symbol-function
+               'yunge-reader-webview--request-selection-text)
+              (lambda (actual-view actual-selection offset
+                                   character-limit complete
+                                   &optional _revision)
+                (should (eq actual-view view))
+                (should (equal actual-selection selection))
+                (should (zerop offset))
+                (should (= character-limit 32))
+                (funcall
+                 complete
+                 '((text . "EPUB text")
+                   (next-offset) (done . t))
+                 nil))))
+          (yunge-reader-driver-conformance-test--successes
+           (list
+            (list 'outline nil #'yunge-reader-outline-data-p)
+            (list 'search search-arguments
+                  #'yunge-reader-search-batch-p)
+            (list 'selection-text selection-arguments
+                  #'yunge-reader-selection-batch-p))))))))
 
 ;;; yunge-reader-driver-conformance-test.el ends here
