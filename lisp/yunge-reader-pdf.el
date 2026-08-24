@@ -212,6 +212,46 @@ following search command may already have tried to position its result."
       :page-limit (yunge-reader-search-request-unit-limit arguments))
      complete)))
 
+(defun yunge-reader-pdf--outline-position-before-p (left right)
+  "Return non-nil when PDF position LEFT precedes RIGHT visually."
+  (let ((left-page (yunge-reader-position-unit left))
+        (right-page (yunge-reader-position-unit right))
+        (left-y (yunge-reader-position-y left))
+        (right-y (yunge-reader-position-y right)))
+    (and (natnump left-page)
+         (natnump right-page)
+         (numberp left-y)
+         (numberp right-y)
+         (or (< left-page right-page)
+             (and (= left-page right-page)
+                  (> left-y right-y))))))
+
+(defun yunge-reader-pdf--outline-position-not-after-p (left right)
+  "Return non-nil when PDF position LEFT is at or before RIGHT."
+  (or (equal left right)
+      (yunge-reader-pdf--outline-position-before-p left right)))
+
+(defun yunge-reader-pdf--outline-index (document window outline)
+  "Return OUTLINE index nearest the current PDF location in WINDOW."
+  (when-let* ((current (yunge-reader-pdf--location document window)))
+    (let (best-index best-position)
+      (cl-loop
+       for item in (yunge-reader-outline-data-items outline)
+       for index from 0
+       for action = (yunge-reader-outline-item-action item)
+       for position = (and action
+                           (eq (yunge-reader-action-type action) 'location)
+                           (yunge-reader-action-position action))
+       when (and position
+                 (yunge-reader-pdf--outline-position-not-after-p
+                  position current)
+                 (or (null best-position)
+                     (yunge-reader-pdf--outline-position-not-after-p
+                      best-position position)))
+       do (setq best-index index
+                best-position position))
+      best-index)))
+
 
 (defun yunge-reader-pdf-register ()
   "Register the PDF driver."
@@ -223,6 +263,7 @@ following search command may already have tried to position its result."
    :attach #'yunge-reader-pdf--attach
    :detach #'yunge-reader-pdf--detach
    :outline #'yunge-reader-pdf--request-outline
+   :outline-index #'yunge-reader-pdf--outline-index
    :search #'yunge-reader-pdf--request-search-capability
    :selection-text #'yunge-reader-pdf--request-selection-text-capability
    :location #'yunge-reader-pdf--location

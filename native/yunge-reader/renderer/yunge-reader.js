@@ -26,6 +26,7 @@ import {
     initialTargets,
     initialNavigationState,
     outlineFromBook,
+    outlineIndexFromItem,
     readerKey,
     readingStyleCSS,
     reduceNavigation,
@@ -87,12 +88,16 @@ let generation = 0
 let current = null
 
 const post = (event, {
-    message, location, outline, selection, key, repeat, uri, user, scale,
+    message, location, outline, outlineIndex, selection, key, repeat, uri,
+    user, scale,
 } = {}) => {
     const payload = { protocol: 2, event }
     if (message) payload.message = String(message).slice(0, 4096)
     if (location) payload.location = location
     if (outline) payload.outline = outline
+    if (Number.isSafeInteger(outlineIndex)) {
+        payload['outline-index'] = outlineIndex
+    }
     if (selection !== undefined) payload.selection = selection
     if (key) payload.key = key
     if (typeof repeat === 'boolean') payload.repeat = repeat
@@ -635,7 +640,11 @@ const flushLocation = session => {
     session.locationTimer = null
     const user = session.locationUser
     session.locationUser = false
-    post('location', { location: session.location, user })
+    post('location', {
+        location: session.location,
+        outlineIndex: session.outlineIndex,
+        user,
+    })
 }
 
 const queueLocation = (session, relocation) => {
@@ -651,6 +660,7 @@ const queueLocation = (session, relocation) => {
         && !(reason === 'scroll' && userMovement)) return
     try {
         session.location = locatorFromRelocation(session.book, relocation)
+        session.outlineIndex = outlineIndexFromItem(relocation?.tocItem)
         session.locationUser ||= userMovement
     } catch (error) {
         console.warn(error)
@@ -1119,6 +1129,7 @@ const open = async ({
             }
         })
         await view.open(book)
+        const outline = outlineFromBook(book.toc)
         if (view.isFixedLayout) {
             if (style != null) {
                 throw new Error(
@@ -1153,6 +1164,7 @@ const open = async ({
             book,
             view,
             location: null,
+            outlineIndex: null,
             locationUser: false,
             locationTimer: null,
             selection: null,
@@ -1207,12 +1219,15 @@ const open = async ({
         if (mine !== generation || current !== session) return
         if (restoredLocation) session.location = location
         session.location ??= locatorFromRelocation(book, view.lastLocation)
+        session.outlineIndex ??=
+            outlineIndexFromItem(view.lastLocation?.tocItem)
         if (session.locationTimer) clearTimeout(session.locationTimer)
         session.locationTimer = null
         session.opening = false
         post('publication-ready', {
             location: session.location,
-            outline: outlineFromBook(book.toc),
+            outline,
+            outlineIndex: session.outlineIndex,
         })
     } catch (error) {
         if (mine !== generation) return

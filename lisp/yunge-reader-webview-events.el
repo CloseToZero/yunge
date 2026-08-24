@@ -62,6 +62,15 @@
       (error "Malformed EPUB location user flag: %S" message))
     user))
 
+(defun yunge-reader-webview--event-outline-index (message)
+  "Return the optional bounded outline index carried by MESSAGE."
+  (when-let* ((entry (assq 'outline-index message)))
+    (let ((index (cdr entry)))
+      (unless (and (natnump index)
+                   (< index yunge-reader-webview--max-outline-items))
+        (error "Malformed EPUB outline index: %S" message))
+      index)))
+
 (defun yunge-reader-webview--event-outline (message)
   "Return the validated EPUB outline carried by event MESSAGE."
   (let ((outline (alist-get 'outline message)))

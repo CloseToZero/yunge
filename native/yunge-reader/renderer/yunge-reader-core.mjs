@@ -12,6 +12,7 @@ const MAX_TOC_TOTAL_TEXT_BYTES = 384 * 1024
 const MAX_VIEWPORT_COORDINATE = 1000000
 const MIN_FIXED_SCALE = 0.25
 const MAX_FIXED_SCALE = 8.0
+const outlineIndices = new WeakMap()
 
 const APPEARANCE_COLOR_KEYS = Object.freeze([
     'foreground',
@@ -277,6 +278,7 @@ export const outlineFromBook = toc => {
             }
             const entry = { title: title.value, depth }
             if (href) entry.href = href
+            outlineIndices.set(item, items.length)
             items.push(entry)
             textBytes += size
             childDepth++
@@ -286,6 +288,12 @@ export const outlineFromBook = toc => {
         } else pushChildren(item?.subitems, childDepth)
     }
     return Object.freeze({ items, truncated })
+}
+
+export const outlineIndexFromItem = item => {
+    const index = item && typeof item === 'object'
+        ? outlineIndices.get(item) : undefined
+    return Number.isSafeInteger(index) ? index : null
 }
 
 const firstTocHref = items => {

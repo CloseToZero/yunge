@@ -9,11 +9,11 @@ use super::protocol::{PROTOCOL_VERSION, RENDERER_ACCELERATORS, Response};
 use super::{
     EpubAppearance, EpubLocator, EpubNavigationTarget, EpubOutline,
     EpubSearchCursor, EpubSearchMatch, EpubSelection, EpubStyle, EpubZoom,
-    MAX_EPUB_EXTERNAL_URI_BYTES, MAX_EPUB_SEARCH_RESULT_BYTES,
-    MAX_EPUB_SELECTION_CHARACTERS, MAX_EPUB_SELECTION_RESULT_BYTES,
-    MAX_RENDERER_ERROR_BYTES, MAX_RENDERER_MESSAGE_BYTES, NavigationCommand,
-    SearchDirection, ViewEvent, ViewEventPayload, ViewSearchParams,
-    ViewSelectionTextParams,
+    MAX_EPUB_EXTERNAL_URI_BYTES, MAX_EPUB_OUTLINE_ITEMS,
+    MAX_EPUB_SEARCH_RESULT_BYTES, MAX_EPUB_SELECTION_CHARACTERS,
+    MAX_EPUB_SELECTION_RESULT_BYTES, MAX_RENDERER_ERROR_BYTES,
+    MAX_RENDERER_MESSAGE_BYTES, NavigationCommand, SearchDirection, ViewEvent,
+    ViewEventPayload, ViewSearchParams, ViewSelectionTextParams,
 };
 
 #[cfg(test)]
@@ -194,6 +194,8 @@ enum RendererMessage {
     Location {
         protocol: u32,
         location: EpubLocator,
+        #[serde(default, rename = "outline-index")]
+        outline_index: Option<u32>,
         user: bool,
     },
     NavigationError {
@@ -208,6 +210,8 @@ enum RendererMessage {
         protocol: u32,
         location: EpubLocator,
         outline: EpubOutline,
+        #[serde(default, rename = "outline-index")]
+        outline_index: Option<u32>,
     },
     ScrollBarsError {
         protocol: u32,
@@ -694,13 +698,19 @@ fn event_body(view: u64, request: &HttpRequest<String>) -> Option<ViewEvent> {
         RendererMessage::Location {
             protocol,
             location,
+            outline_index,
             user,
         } => {
-            if protocol != PROTOCOL_VERSION {
+            if protocol != PROTOCOL_VERSION
+                || outline_index.is_some_and(|index| {
+                    index as usize >= MAX_EPUB_OUTLINE_ITEMS
+                })
+            {
                 return None;
             }
             ViewEventPayload::Location {
                 location: location.validate().ok()?,
+                outline_index,
                 user,
             }
         }
@@ -718,13 +728,21 @@ fn event_body(view: u64, request: &HttpRequest<String>) -> Option<ViewEvent> {
             protocol,
             location,
             outline,
+            outline_index,
         } => {
             if protocol != PROTOCOL_VERSION {
                 return None;
             }
+            let outline = outline.validate().ok()?;
+            if outline_index
+                .is_some_and(|index| index as usize >= outline.items.len())
+            {
+                return None;
+            }
             ViewEventPayload::PublicationReady {
                 location: location.validate().ok()?,
-                outline: outline.validate().ok()?,
+                outline,
+                outline_index,
             }
         }
         RendererMessage::ScrollBarsError { protocol, message } => {

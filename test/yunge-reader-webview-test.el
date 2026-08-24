@@ -354,6 +354,17 @@
      (yunge-reader-webview--event-location-user
       `((user . "yes") (location . ,location))))))
 
+(ert-deftest yunge-reader-webview-validates-bounded-outline-indices ()
+  (should (= (yunge-reader-webview--event-outline-index
+              '((outline-index . 3)))
+             3))
+  (should-not (yunge-reader-webview--event-outline-index nil))
+  (dolist (index `(-1 "3" ,yunge-reader-webview--max-outline-items))
+    (should-error
+     (yunge-reader-webview--event-outline-index
+      `((outline-index . ,index)))
+     :type 'error)))
+
 (ert-deftest yunge-reader-webview-validates-bounded-epub-targets ()
   (should
    (yunge-reader-webview--valid-target-p
@@ -1493,6 +1504,7 @@
                 . ((cfi . "epubcfi(/6/4!/4/2)")
                    (href . "OPS/chapter.xhtml")
                    (fraction . 0.25)))
+               (outline-index . 1)
                (outline
                 . ((items
                     . (((title . "Part One") (depth . 0))
@@ -1513,6 +1525,10 @@
           (should (= location-notifications 1))
           (should-not location-user)
           (should
+           (= (yunge-reader-webview--surface-outline-index
+               (yunge-reader-webview--view-surface view))
+              1))
+          (should
            (yunge-reader-webview--view-outline-ready view))
           (should-not outline-error)
           (should
@@ -1524,12 +1540,17 @@
              (event . "location")
              (view . 6)
              (user . t)
+             (outline-index . 0)
              (location
               . ((cfi . "epubcfi(/6/6!/4/2)")
                  (href . "OPS/next.xhtml")
                  (fraction . 0.3)))))
           (should (= location-notifications 2))
           (should location-user)
+          (should
+           (zerop
+            (yunge-reader-webview--surface-outline-index
+             (yunge-reader-webview--view-surface view))))
           (should
            (equal (yunge-reader-webview--view-location view)
                    '((cfi . "epubcfi(/6/6!/4/2)")

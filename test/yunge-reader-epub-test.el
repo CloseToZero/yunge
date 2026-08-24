@@ -1338,6 +1338,18 @@
                 "OPS/chapter.xhtml#start"))
         (should-not (yunge-reader-position-offset position))))))
 
+(ert-deftest yunge-reader-epub-locates-the-renderers-current-outline-item ()
+  (with-temp-buffer
+    (let* ((surface
+            (yunge-reader-epub-test--surface
+             8 'ready :window 'reader-window :outline-index 3))
+           (yunge-reader-webview--buffer-view
+            (yunge-reader-webview--make-view :surface surface)))
+      (should
+       (= (yunge-reader-epub--outline-index
+           'document 'reader-window 'outline)
+          3)))))
+
 (ert-deftest yunge-reader-epub-restores-before-or-after-surface-ready ()
   (let* ((location
           (yunge-reader-epub-test--location nil 18.0 24.0))

@@ -40,6 +40,7 @@
   appearance
   style
   zoom
+  outline-index
   desired-scroll-bar-mode
   scroll-bar-mode
   location

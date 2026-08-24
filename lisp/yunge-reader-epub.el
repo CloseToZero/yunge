@@ -1024,6 +1024,21 @@ VALUES is an alist containing complete, already bounded property values."
          (yunge-reader-epub--native-error
           "The EPUB renderer returned an invalid outline"))))))
 
+(defun yunge-reader-epub--outline-index (_document window _outline)
+  "Return the current EPUB outline item index for WINDOW."
+  (when-let* ((view yunge-reader-webview--buffer-view)
+              ((not (yunge-reader-webview--view-destroyed view)))
+              (surface
+               (or (yunge-reader-webview--view-surface-for-window
+                    view window)
+                   (when-let* ((current
+                                (yunge-reader-webview--view-surface view))
+                               ((eq window
+                                    (yunge-reader-webview--surface-window
+                                     current))))
+                     current))))
+    (yunge-reader-webview--surface-outline-index surface)))
+
 (defun yunge-reader-epub--document-view (document)
   "Return DOCUMENT's current compatible EPUB view, or nil."
   (let ((handle (yunge-reader-document-handle document))
@@ -1357,6 +1372,7 @@ VALUES is an alist containing complete, already bounded property values."
    :attach #'yunge-reader-epub--attach
    :detach #'yunge-reader-epub--detach
    :outline #'yunge-reader-epub--request-outline
+   :outline-index #'yunge-reader-epub--outline-index
    :search #'yunge-reader-epub--request-search
    :selection-text #'yunge-reader-epub--request-selection-text
    :location #'yunge-reader-epub--location

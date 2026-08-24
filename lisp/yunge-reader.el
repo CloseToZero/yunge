@@ -125,6 +125,8 @@ whose format-specific view they initialize or tear down.  OUTLINE-FUNCTION,
 SEARCH-FUNCTION, and SELECTION-TEXT-FUNCTION are explicit asynchronous
 capabilities.  Each receives a document, its argument value, and a completion
 function, which it calls with a value and an error value.
+OUTLINE-INDEX-FUNCTION receives a document, window, and loaded outline and
+returns the zero-based item index nearest the current reading location.
 LOCATION-FUNCTION receives a document and window and returns a stable
 `yunge-reader-position'.  RESTORE-FUNCTION receives a document, position,
 and window and returns non-nil after accepting the location."
@@ -135,6 +137,7 @@ and window and returns non-nil after accepting the location."
   attach-function
   detach-function
   outline-function
+  outline-index-function
   search-function
   selection-text-function
   location-function
@@ -556,13 +559,14 @@ Functions run in the affected Reader buffer without arguments.")
 
 (cl-defun yunge-reader-register-driver
     (name &key match open close attach detach
-          outline search selection-text location restore)
+          outline outline-index search selection-text location restore)
   "Register a reader driver NAME.
 MATCH, OPEN, CLOSE, OUTLINE, SEARCH, and SELECTION-TEXT follow the contracts
 documented by `yunge-reader-driver'.  Capabilities are optional; attempting an
 unsupported operation completes with an error.  ATTACH and DETACH are an
 optional pair whose omitted default performs no buffer-specific setup.
-LOCATION and RESTORE are another optional pair.
+OUTLINE-INDEX locates the current item in a loaded outline.  LOCATION and
+RESTORE are another optional pair.
 Registering NAME again atomically replaces its old definition and gives the
 new definition highest precedence."
   (unless (symbolp name)
@@ -572,10 +576,12 @@ new definition highest precedence."
       (error "Reader driver %s has a non-function member: %S"
              name function)))
   (dolist (function
-           (delq nil (list outline search selection-text)))
+           (delq nil (list outline outline-index search selection-text)))
     (unless (functionp function)
       (error "Reader driver %s has a non-function capability: %S"
              name function)))
+  (when (and outline-index (null outline))
+    (error "Reader driver %s locates an outline it cannot provide" name))
   (unless (eq (null attach) (null detach))
     (error "Reader driver %s must define both view functions" name))
   (unless (eq (null location) (null restore))
@@ -593,6 +599,7 @@ new definition highest precedence."
           :attach-function (or attach #'ignore)
           :detach-function (or detach #'ignore)
           :outline-function outline
+          :outline-index-function outline-index
           :search-function search
           :selection-text-function selection-text
           :location-function location

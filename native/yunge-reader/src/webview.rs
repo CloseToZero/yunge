@@ -119,6 +119,11 @@ enum ViewEventPayload {
     FocusLost,
     Location {
         location: EpubLocator,
+        #[serde(
+            rename = "outline-index",
+            skip_serializing_if = "Option::is_none"
+        )]
+        outline_index: Option<u32>,
         user: bool,
     },
     NavigationError {
@@ -130,6 +135,11 @@ enum ViewEventPayload {
     PublicationReady {
         location: EpubLocator,
         outline: EpubOutline,
+        #[serde(
+            rename = "outline-index",
+            skip_serializing_if = "Option::is_none"
+        )]
+        outline_index: Option<u32>,
     },
     ScrollBarsError {
         message: String,
@@ -1799,6 +1809,7 @@ mod tests {
                     r#"{"protocol":2,"event":"publication-ready","#,
                     r#""location":{"cfi":"epubcfi(/6/4)","#,
                     r#""href":"OPS/chapter.xhtml","fraction":0.25},"#,
+                    r#""outline-index":0,"#,
                     r#""outline":{"items":[{"title":"Chapter","#,
                     r#""depth":0,"href":"OPS/chapter.xhtml#start"}],"#,
                     r#""truncated":false}}"#,
@@ -1812,6 +1823,7 @@ mod tests {
                 "kind": "event",
                 "event": "publication-ready",
                 "view": 7,
+                "outline-index": 0,
                 "location": {
                     "cfi": "epubcfi(/6/4)",
                     "href": "OPS/chapter.xhtml",
@@ -1833,6 +1845,7 @@ mod tests {
             .body(
                 concat!(
                     r#"{"protocol":2,"event":"location","user":true,"#,
+                    r#""outline-index":0,"#,
                     r#""location":{"#,
                     r#""cfi":"epubcfi(/6/6)","#,
                     r#""href":"OPS/next.xhtml"}}"#,
@@ -1846,6 +1859,7 @@ mod tests {
                 "kind": "event",
                 "event": "location",
                 "view": 7,
+                "outline-index": 0,
                 "location": {
                     "cfi": "epubcfi(/6/6)",
                     "href": "OPS/next.xhtml",
@@ -2145,6 +2159,18 @@ mod tests {
                         r#""selection":{"href":"OPS/chapter.xhtml","#,
                         r#""start":"epubcfi(/6/4)","#,
                         r#""end":"epubcfi(/6/4)"}}"#,
+                    )
+                    .into(),
+                )
+                .unwrap(),
+            HttpRequest::builder()
+                .uri(APP_URL)
+                .body(
+                    concat!(
+                        r#"{"protocol":2,"event":"location","user":true,"#,
+                        r#""outline-index":4096,"location":{"#,
+                        r#""cfi":"epubcfi(/6/6)","#,
+                        r#""href":"OPS/next.xhtml"}}"#,
                     )
                     .into(),
                 )

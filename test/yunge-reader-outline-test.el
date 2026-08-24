@@ -21,6 +21,7 @@
    yunge-reader-outline-mode-map
    '(("G" . yunge-reader-outline-last-item)
      ("RET" . yunge-reader-outline-visit)
+     ("gc" . yunge-reader-outline-current-item)
      ("gg" . yunge-reader-outline-first-item)
      ("gf" . yunge-reader-outline-show)
      ("j" . yunge-reader-outline-next-item)
@@ -34,6 +35,7 @@
      'normal
      '(("G" . yunge-reader-outline-last-item)
        ("RET" . yunge-reader-outline-visit)
+       ("gc" . yunge-reader-outline-current-item)
        ("gg" . yunge-reader-outline-first-item)
        ("gf" . yunge-reader-outline-show)
        ("j" . yunge-reader-outline-next-item)
@@ -78,6 +80,47 @@
     (should (= (yunge-reader-outline--index-at-point) 3))
     (yunge-reader-outline-first-item)
     (should (zerop (yunge-reader-outline--index-at-point)))))
+
+(ert-deftest yunge-reader-outline-locates-and-reveals-the-current-item ()
+  (let* ((reader (generate-new-buffer " *reader outline current*"))
+         (driver
+         (yunge-reader--make-driver
+           :name 'test
+           :close-function #'ignore
+           :outline-index-function
+           (lambda (_document window outline)
+             (should (eq window 'reader-window))
+             (should (yunge-reader-outline-data-p outline))
+             2)))
+         (document
+          (make-yunge-reader-document :driver driver :layout 'fixed)))
+    (unwind-protect
+        (progn
+          (with-current-buffer reader
+            (yunge-reader-mode)
+            (setq yunge-reader-document document))
+          (with-temp-buffer
+            (yunge-reader-outline-mode)
+            (setq yunge-reader-outline--reader-buffer reader)
+            (yunge-reader-outline-set-data
+             (make-yunge-reader-outline-data
+              :items
+              (list
+               (yunge-reader-outline-test--item "Part" 0 1)
+               (yunge-reader-outline-test--item "Chapter" 1 2)
+               (yunge-reader-outline-test--item "Section" 2 3)
+               (yunge-reader-outline-test--item "Appendix" 0 4))))
+            (puthash 0 t yunge-reader-outline--collapsed)
+            (yunge-reader-outline--render)
+            (should (= (count-lines (point-min) (point-max)) 2))
+            (cl-letf
+                (((symbol-function 'yunge-reader-outline--target)
+                  (lambda () (list reader 'reader-window))))
+              (yunge-reader-outline-current-item))
+            (should-not
+             (gethash 0 yunge-reader-outline--collapsed))
+            (should (= (yunge-reader-outline--index-at-point) 2))))
+      (kill-buffer reader))))
 
 (ert-deftest yunge-reader-outline-routes-visit-and-show-focus ()
   (let ((yunge-reader--document-registry

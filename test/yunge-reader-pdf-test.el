@@ -1515,6 +1515,37 @@
                 (yunge-reader-action-position width))
                150.0))))
 
+(ert-deftest yunge-reader-pdf-locates-the-nearest-preceding-outline-item ()
+  (let* ((position
+          (lambda (page y)
+            (make-yunge-reader-action
+             :type 'location
+             :position
+             (make-yunge-reader-position :unit page :x 0.0 :y y))))
+         (outline
+          (make-yunge-reader-outline-data
+           :items
+           (list
+            (make-yunge-reader-outline-item
+             :title "Front" :depth 0
+             :action (funcall position 0 700.0))
+            (make-yunge-reader-outline-item
+             :title "Chapter" :depth 0
+             :action (funcall position 2 700.0))
+            (make-yunge-reader-outline-item
+             :title "Section" :depth 1
+             :action (funcall position 2 450.0))
+            (make-yunge-reader-outline-item
+             :title "Next" :depth 0
+             :action (funcall position 3 700.0))))))
+    (cl-letf (((symbol-function 'yunge-reader-pdf--location)
+               (lambda (_document _window)
+                 (make-yunge-reader-position
+                  :unit 2 :x 0.0 :y 400.0))))
+      (should (= (yunge-reader-pdf--outline-index
+                  'document 'window outline)
+                 2)))))
+
 (ert-deftest yunge-reader-pdf-accepts-an-empty-native-outline ()
   (let* ((document
           (make-yunge-reader-document

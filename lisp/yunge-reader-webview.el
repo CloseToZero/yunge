@@ -247,6 +247,8 @@ SURFACE defaults to VIEW's active presentation."
   "Store VIEW's locator from MESSAGE for SURFACE and notify its owner.
 An INITIAL publication location has no direct-user origin."
   (let ((location (yunge-reader-webview--event-location message))
+        (outline-index
+         (yunge-reader-webview--event-outline-index message))
         (user
          (unless initial
            (yunge-reader-webview--event-location-user message))))
@@ -254,7 +256,9 @@ An INITIAL publication location has no direct-user origin."
                       (yunge-reader-webview--current-surface view)))
     (when surface
       (setf (yunge-reader-webview--surface-location surface)
-            (copy-tree location)))
+            (copy-tree location)
+            (yunge-reader-webview--surface-outline-index surface)
+            outline-index))
     (when (or (null surface)
               (yunge-reader-webview--surface-active-p view surface))
       (setf (yunge-reader-webview--view-location view)

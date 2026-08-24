@@ -20,6 +20,7 @@ A floating-point value is interpreted as a fraction of the frame width."
 (defconst yunge-reader-outline-normal-bindings
   '(("G" yunge-reader-outline-last-item "last item")
     ("RET" yunge-reader-outline-visit "visit")
+    ("gc" yunge-reader-outline-current-item "current section")
     ("gg" yunge-reader-outline-first-item "first item")
     ("gf" yunge-reader-outline-show "show in reader")
     ("j" yunge-reader-outline-next-item "next item")
@@ -32,6 +33,7 @@ A floating-point value is interpreted as a fraction of the frame width."
   :parent special-mode-map
   "G" #'yunge-reader-outline-last-item
   "RET" #'yunge-reader-outline-visit
+  "g c" #'yunge-reader-outline-current-item
   "g g" #'yunge-reader-outline-first-item
   "g f" #'yunge-reader-outline-show
   "j" #'yunge-reader-outline-next-item
@@ -385,6 +387,64 @@ When SELECT-READER is non-nil, leave the Reader window selected."
   (forward-line -1)
   (unless (yunge-reader-outline--item-at-point)
     (user-error "This document has no outline items")))
+
+(defun yunge-reader-outline--expand-item-ancestors (index)
+  "Expand every collapsed ancestor of the item at INDEX."
+  (let ((depth
+         (yunge-reader-outline-item-depth
+          (aref yunge-reader-outline--items index)))
+        changed)
+    (cl-loop for candidate downfrom (1- index) to 0
+             for candidate-depth =
+             (yunge-reader-outline-item-depth
+              (aref yunge-reader-outline--items candidate))
+             when (< candidate-depth depth)
+             do (progn
+                  (setq depth candidate-depth)
+                  (when (gethash
+                         candidate yunge-reader-outline--collapsed)
+                    (setq changed t)
+                    (remhash candidate
+                             yunge-reader-outline--collapsed))))
+    (when changed
+      (yunge-reader-outline--render))))
+
+(defun yunge-reader-outline-current-item ()
+  "Move to the outline item nearest the current Reader location."
+  (interactive)
+  (unless yunge-reader-outline--data
+    (user-error "The document outline is not loaded"))
+  (let ((outline yunge-reader-outline--data))
+    (pcase-let* ((`(,reader ,window)
+                  (yunge-reader-outline--target))
+                 (index
+                  (with-current-buffer reader
+                    (let* ((document yunge-reader-document)
+                           (driver
+                            (and document
+                                 (yunge-reader-document-driver document)))
+                           (function
+                            (and driver
+                                 (yunge-reader-driver-outline-index-function
+                                  driver))))
+                      (unless function
+                        (user-error
+                         (concat
+                          "This Reader format cannot locate its current "
+                          "section")))
+                      (funcall function document window outline)))))
+      (unless (and (natnump index)
+                   (< index (length yunge-reader-outline--items)))
+        (user-error "No outline item matches the current Reader location"))
+      (yunge-reader-outline--expand-item-ancestors index)
+      (when-let* ((position
+                   (text-property-any
+                    (point-min) (point-max)
+                    'yunge-reader-outline-index index)))
+        (goto-char position)
+        (beginning-of-line)
+        (when (get-buffer-window (current-buffer))
+          (recenter))))))
 
 (defun yunge-reader-outline-toggle ()
   "Toggle the children of the outline item at point."

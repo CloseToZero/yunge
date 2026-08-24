@@ -24,6 +24,7 @@ import {
     initialTargets,
     initialNavigationState,
     outlineFromBook,
+    outlineIndexFromItem,
     readerKey,
     READER_CHARACTER_KEYS,
     readingStyleCSS,
@@ -170,7 +171,7 @@ test('validates persistent EPUB locations and transient selections', () => {
 })
 
 test('flattens and bounds publication outlines', () => {
-    const outline = outlineFromBook([
+    const toc = [
         {
             label: '  Part\n One  ',
             href: 'OPS/part.xhtml',
@@ -180,7 +181,8 @@ test('flattens and bounds publication outlines', () => {
             }],
         },
         { label: 'Unsafe', href: '../outside.xhtml' },
-    ])
+    ]
+    const outline = outlineFromBook(toc)
     assert.deepEqual(outline.items, [
         { title: 'Part One', depth: 0, href: 'OPS/part.xhtml' },
         {
@@ -191,6 +193,10 @@ test('flattens and bounds publication outlines', () => {
         { title: 'Unsafe', depth: 0 },
     ])
     assert.equal(outline.truncated, true)
+    assert.equal(outlineIndexFromItem(toc[0]), 0)
+    assert.equal(outlineIndexFromItem(toc[0].subitems[0]), 1)
+    assert.equal(outlineIndexFromItem(toc[1]), 2)
+    assert.equal(outlineIndexFromItem({}), null)
 
     const longTitle = outlineFromBook([{
         label: '界'.repeat(400),
