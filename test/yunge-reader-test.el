@@ -176,10 +176,7 @@
             (should (eq (yunge-reader--presentation-window) first))
             (select-window second)
             (yunge-reader--note-view-activity)
-            (should
-             (eq (yunge-reader-presentation-window
-                  yunge-reader--active-presentation)
-                 second))
+            (should (eq yunge-reader--active-presentation second))
             (let ((windows (yunge-reader--presentation-windows)))
               (should (= (length windows) 2))
               (should (memq first windows))

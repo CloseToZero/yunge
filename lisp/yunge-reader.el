@@ -188,11 +188,6 @@ and window and returns non-nil after accepting the location."
 (defvar yunge-reader--request-task nil
   "Dynamically bound composite task for the current driver request.")
 
-(cl-defstruct (yunge-reader-presentation
-               (:constructor yunge-reader--make-presentation))
-  "One live Emacs window presenting a logical Reader view."
-  window)
-
 (cl-defstruct yunge-reader-position
   "A stable position in a document.
 UNIT names a page or reflowable content unit.  OFFSET is a text offset or
@@ -308,10 +303,7 @@ unscaled coordinate system of UNIT."
   "Whether the current view is restoring a persistent place.")
 
 (defvar-local yunge-reader--active-presentation nil
-  "Active `yunge-reader-presentation' for this logical Reader view.")
-
-(defvar-local yunge-reader--presentations nil
-  "Live Reader presentations indexed by their Emacs windows.")
+  "Active Emacs window for this logical Reader view.")
 
 (defvar-local yunge-reader-zoom-mode 'fit-width
   "Current zoom mode: `manual', `fit-width', or `fit-page'.")
@@ -517,8 +509,6 @@ Functions run in the affected Reader buffer without arguments.")
   (setq-local yunge-reader--document-entry nil)
   (setq-local yunge-reader--view-attached nil)
   (setq-local yunge-reader--active-presentation nil)
-  (setq-local yunge-reader--presentations
-              (make-hash-table :test #'eq))
   (setq-local yunge-reader--outline-buffer nil)
   (setq-local yunge-reader--copy-generation 0)
   (setq-local yunge-reader--copy-pending nil)
@@ -1187,38 +1177,9 @@ An explicit override on the current book remains unchanged."
   (and (window-live-p window)
        (eq (window-buffer window) (current-buffer))))
 
-(defun yunge-reader--sync-presentations ()
-  "Synchronize and return this Reader view's live presentations."
-  (unless (hash-table-p yunge-reader--presentations)
-    (setq yunge-reader--presentations (make-hash-table :test #'eq)))
-  (let ((windows (get-buffer-window-list (current-buffer) nil t))
-        stale)
-    (maphash
-     (lambda (window _presentation)
-       (unless (memq window windows)
-         (push window stale)))
-     yunge-reader--presentations)
-    (dolist (window stale)
-      (remhash window yunge-reader--presentations))
-    (dolist (window windows)
-      (unless (gethash window yunge-reader--presentations)
-        (puthash window
-                 (yunge-reader--make-presentation :window window)
-                 yunge-reader--presentations)))
-    (when (and yunge-reader--active-presentation
-               (not (gethash
-                     (yunge-reader-presentation-window
-                      yunge-reader--active-presentation)
-                     yunge-reader--presentations)))
-      (setq yunge-reader--active-presentation nil))
-    (mapcar (lambda (window)
-              (gethash window yunge-reader--presentations))
-            windows)))
-
 (defun yunge-reader--presentation-windows ()
   "Return every live window presenting the current Reader view."
-  (mapcar #'yunge-reader-presentation-window
-          (yunge-reader--sync-presentations)))
+  (get-buffer-window-list (current-buffer) nil t))
 
 (defun yunge-reader--activate-presentation (&optional window)
   "Make WINDOW the current logical view's active presentation.
@@ -1226,22 +1187,17 @@ WINDOW defaults to the selected window.  Return the accepted window, or
   nil when it does not display the current Reader buffer."
   (let ((window (or window (selected-window))))
     (when (yunge-reader--presentation-window-p window)
-      (yunge-reader--sync-presentations)
-      (setq yunge-reader--active-presentation
-            (gethash window yunge-reader--presentations))
+      (setq yunge-reader--active-presentation window)
       window)))
 
 (defun yunge-reader--presentation-window ()
   "Return and retain the active window for this logical Reader view."
   (or (yunge-reader--activate-presentation)
-      (progn
-        (yunge-reader--sync-presentations)
-        (when-let* ((presentation yunge-reader--active-presentation))
-          (yunge-reader-presentation-window presentation)))
-      (when-let* ((presentation
-                   (car (yunge-reader--sync-presentations))))
-        (setq yunge-reader--active-presentation presentation)
-        (yunge-reader-presentation-window presentation))))
+      (and (yunge-reader--presentation-window-p
+            yunge-reader--active-presentation)
+           yunge-reader--active-presentation)
+      (when-let* ((window (car (yunge-reader--presentation-windows))))
+        (setq yunge-reader--active-presentation window))))
 
 (defun yunge-reader--active-presentation-p (window)
   "Return whether WINDOW is the current view's active presentation."
