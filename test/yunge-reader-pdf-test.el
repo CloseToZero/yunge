@@ -141,6 +141,44 @@
            ("p" nil "go to page")
            ("r" nil "refresh")))))
 
+(ert-deftest yunge-reader-pdf-resynchronizes-a-returned-window-before-search ()
+  (with-temp-buffer
+    (yunge-reader-mode)
+    (yunge-reader-pdf-view-mode 1)
+    (setq yunge-reader-document 'document)
+    (should
+     (memq #'yunge-reader-pdf--window-buffer-changed
+           window-buffer-change-functions))
+    (let ((buffer (current-buffer))
+          events)
+      (cl-letf (((symbol-function 'window-live-p)
+                 (lambda (_window) t))
+                ((symbol-function 'selected-window)
+                 (lambda () 'reader-window))
+                ((symbol-function 'window-buffer)
+                 (lambda (_window) buffer))
+                ((symbol-function 'yunge-reader--activate-presentation)
+                 (lambda (window) (push (list 'activate window) events)))
+                ((symbol-function 'yunge-reader-pdf--update-visible-pages)
+                 (lambda (window)
+                   (should yunge-reader-pdf--programmatic-scroll)
+                   (push (list 'visible window) events)))
+                ((symbol-function
+                  'yunge-reader-pdf--scroll-to-search-result)
+                 (lambda ()
+                   (should yunge-reader-pdf--programmatic-scroll)
+                   (push '(search) events))))
+        (yunge-reader-pdf--window-buffer-changed 'reader-window)
+        (should
+         (equal (nreverse events)
+                '((activate reader-window)
+                  (visible reader-window)
+                  (search))))))
+    (yunge-reader-pdf-view-mode -1)
+    (should-not
+     (memq #'yunge-reader-pdf--window-buffer-changed
+           window-buffer-change-functions))))
+
 (ert-deftest yunge-reader-pdf-scrolls-half-windows-by-pixels ()
   (let (scrolls updates
         (yunge-reader-search-query "needle")

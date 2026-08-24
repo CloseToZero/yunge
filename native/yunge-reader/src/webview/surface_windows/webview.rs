@@ -25,9 +25,10 @@ use windows::Win32::UI::Input::KeyboardAndMouse::SetFocus;
 use windows::Win32::UI::WindowsAndMessaging::{
     CS_HREDRAW, CS_VREDRAW, CreateWindowExW, DefWindowProcW, DestroyWindow,
     GW_CHILD, GetWindow, HCURSOR, HICON, HWND_TOP, RegisterClassExW, SW_HIDE,
-    SW_SHOW, SWP_ASYNCWINDOWPOS, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOOWNERZORDER,
-    SWP_NOSIZE, SWP_NOZORDER, SetWindowPos, ShowWindow, WINDOW_EX_STYLE,
-    WM_SETFOCUS, WNDCLASSEXW, WS_CHILD, WS_CLIPCHILDREN, WS_VISIBLE,
+    SW_SHOWNA, SWP_ASYNCWINDOWPOS, SWP_NOACTIVATE, SWP_NOMOVE,
+    SWP_NOOWNERZORDER, SWP_NOSIZE, SWP_NOZORDER, SetWindowPos, ShowWindow,
+    WINDOW_EX_STYLE, WM_SETFOCUS, WNDCLASSEXW, WS_CHILD, WS_CLIPCHILDREN,
+    WS_VISIBLE,
 };
 use windows::core::{HSTRING, Interface, PCWSTR, PWSTR, w};
 
@@ -166,8 +167,10 @@ impl NativeWebView {
 
     pub(super) fn set_visible(&self, visible: bool) -> Result<(), String> {
         unsafe {
-            let _ =
-                ShowWindow(self.hwnd, if visible { SW_SHOW } else { SW_HIDE });
+            let _ = ShowWindow(
+                self.hwnd,
+                if visible { SW_SHOWNA } else { SW_HIDE },
+            );
             self.controller
                 .SetIsVisible(visible)
                 .map_err(|error| error.to_string())?;

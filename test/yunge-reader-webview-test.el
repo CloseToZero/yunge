@@ -2171,6 +2171,49 @@
       (kill-buffer buffer)
       (kill-buffer other))))
 
+(ert-deftest yunge-reader-webview-releases-focus-before-hiding-persistent-surface ()
+  (let* ((surface
+          (yunge-reader-webview-test--surface
+           16 'ready :window 'window :native-focused t))
+         (view
+          (yunge-reader-webview--make-view
+           :surface surface
+           :buffer (current-buffer)
+           :persistent t))
+         (yunge-reader-webview--process 'fake-webview-process)
+         (yunge-reader-webview--views
+          (make-hash-table :test #'eql))
+         requests)
+    (puthash 16 view yunge-reader-webview--views)
+    (cl-letf
+        (((symbol-function 'yunge-reader-webview--visible-windows)
+          (lambda (_view) nil))
+         ((symbol-function 'yunge-reader-webview--visible-window)
+          (lambda (_view) nil))
+         ((symbol-function 'process-live-p)
+          (lambda (_process) t))
+         ((symbol-function 'yunge-reader-webview--request)
+          (lambda (operation parameters complete)
+            (push (list operation parameters complete) requests))))
+      (yunge-reader-webview--sync-view view))
+    (should
+     (equal (mapcar #'car (reverse requests))
+            '("view-focus-parent" "view-clear-selection" "view-visible")))
+    (should
+     (yunge-reader-webview--surface-native-focused surface))
+    (should
+     (yunge-reader-webview--surface-focus-release-pending surface))
+    (let ((request
+           (seq-find
+            (lambda (value)
+              (equal (car value) "view-focus-parent"))
+            requests)))
+      (funcall (nth 2 request) nil nil))
+    (should-not
+     (yunge-reader-webview--surface-native-focused surface))
+    (should-not
+     (yunge-reader-webview--surface-focus-release-pending surface))))
+
 (ert-deftest yunge-reader-webview-releases-hidden-failed-surfaces ()
   (let* ((system-type 'darwin)
          (view

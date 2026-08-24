@@ -644,12 +644,14 @@ queued creation request."
                   (unless (eq other surface)
                     (yunge-reader-webview--release-surface
                      view nil other)))
-                (setf (yunge-reader-webview--view-surface view) surface
-                      (yunge-reader-webview--surface-native-focused surface)
-                      nil
-                      (yunge-reader-webview--surface-focus-release-pending
-                       surface)
-                      nil)
+                (setf (yunge-reader-webview--view-surface view) surface)
+                ;; Hiding a native child does not reliably return keyboard
+                ;; focus.  Keep the recorded state until the native request
+                ;; completes so a quick return cannot strand the first key.
+                (when
+                    (yunge-reader-webview--surface-native-focused surface)
+                  (let ((yunge-reader-webview--operation-surface surface))
+                    (yunge-reader-webview--request-parent-focus view)))
                 (yunge-reader-webview--clear-view-selection view)
                 (yunge-reader-webview--set-view-selection view nil)
                 (yunge-reader-webview--set-view-visible view nil surface)))

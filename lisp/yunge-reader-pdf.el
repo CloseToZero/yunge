@@ -92,6 +92,8 @@
                   #'yunge-reader-pdf--appearance-changed nil t)
         (add-hook 'yunge-reader-search-result-hook
                   #'yunge-reader-pdf--search-result-changed nil t)
+        (add-hook 'window-buffer-change-functions
+                  #'yunge-reader-pdf--window-buffer-changed nil t)
         (add-hook 'window-size-change-functions
                   #'yunge-reader-pdf--window-size-change nil t)
         (add-hook 'window-scroll-functions
@@ -107,6 +109,8 @@
                  #'yunge-reader-pdf--appearance-changed t)
     (remove-hook 'yunge-reader-search-result-hook
                  #'yunge-reader-pdf--search-result-changed t)
+    (remove-hook 'window-buffer-change-functions
+                 #'yunge-reader-pdf--window-buffer-changed t)
     (remove-hook 'window-size-change-functions
                  #'yunge-reader-pdf--window-size-change t)
     (remove-hook 'window-scroll-functions
@@ -134,6 +138,20 @@
           yunge-reader-pdf--prefetch-queue nil
           yunge-reader-pdf--prefetch-active nil
           yunge-reader-pdf--prefetch-running nil)))
+
+(defun yunge-reader-pdf--window-buffer-changed (window)
+  "Resynchronize the PDF view when selected WINDOW starts showing it.
+Window buffer restoration finishes during redisplay, after an immediately
+following search command may already have tried to position its result."
+  (when (and yunge-reader-pdf-view-mode
+             yunge-reader-document
+             (window-live-p window)
+             (eq window (selected-window))
+             (eq (window-buffer window) (current-buffer)))
+    (yunge-reader--activate-presentation window)
+    (let ((yunge-reader-pdf--programmatic-scroll t))
+      (yunge-reader-pdf--update-visible-pages window)
+      (yunge-reader-pdf--scroll-to-search-result))))
 
 (with-eval-after-load 'evil
   (yunge-key-evil-define-minor-mode
