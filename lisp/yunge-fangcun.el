@@ -6,7 +6,11 @@
 (require 'fangcun-loader)
 (require 'yunge-key)
 
+(declare-function org-in-regexp "org")
+(declare-function org-region-active-p "org")
+
 (defvar fangcun-backlinks-mode-map)
+(defvar org-link-bracket-re)
 
 (defvar-keymap yunge-fangcun-backlink-map
   :doc "Fangcun backlink commands.")
@@ -31,8 +35,21 @@
     ("gr" revert-buffer "refresh")
     ,@yunge-key-button-navigation-bindings))
 
+(defun yunge-fangcun--insert-node-link-at-normal-state-eol
+    (function &rest arguments)
+  "Call FUNCTION at the insertion side of a Normal-state EOL.
+Keep point on an active region or existing ID link so Fangcun can replace that
+context."
+  (if (or (org-region-active-p)
+          (and (org-in-regexp org-link-bracket-re 1)
+               (string-prefix-p
+                "id:" (match-string-no-properties 1))))
+      (apply function arguments)
+    (apply #'yunge-evil-call-after-normal-state-eol
+           function arguments)))
+
 (advice-add 'fangcun-node-insert :around
-            #'yunge-evil-call-after-normal-state-eol)
+            #'yunge-fangcun--insert-node-link-at-normal-state-eol)
 
 (yunge-key-define yunge-fangcun-backlink-map
                   yunge-fangcun-backlink-bindings)

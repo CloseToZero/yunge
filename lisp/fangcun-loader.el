@@ -22,9 +22,13 @@ Each entry has the form (ID :name NAME :root ROOT)."
 
 (declare-function fangcun--setup-file-updates "fangcun" ())
 
+(autoload 'fangcun--id-complete "fangcun")
+(autoload 'fangcun--id-description "fangcun")
 (autoload 'fangcun--id-find "fangcun")
 
 ;; Keep Fangcun available as an Org ID source even before a yiyu file is open.
+(advice-add 'org-id-complete :around #'fangcun--id-complete)
+(advice-add 'org-id-description :before-until #'fangcun--id-description)
 (advice-add 'org-id-find :before-until #'fangcun--id-find)
 
 (defun fangcun-loader--managed-file-p (file)

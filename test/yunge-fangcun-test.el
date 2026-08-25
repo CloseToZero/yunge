@@ -17,8 +17,13 @@
        (require 'yunge-fangcun)
        (when (featurep 'fangcun)
          (error "Fangcun loaded before an ID lookup"))
-       (unless (autoloadp (symbol-function 'fangcun--id-find))
-         (error "The Fangcun ID resolver is not autoloaded"))
+       (dolist (function
+                '(fangcun--id-complete
+                  fangcun--id-description
+                  fangcun--id-find))
+         (unless (autoloadp (symbol-function function))
+           (error "The Fangcun Org ID adapter is not autoloaded: %s"
+                  function)))
        (let ((org-id-locations (make-hash-table :test #'equal)))
          (org-id-find "not-a-fangcun-id"))
        (unless (featurep 'fangcun)
@@ -117,15 +122,16 @@
   (require 'fangcun)
 
   (should
-   (advice-member-p #'yunge-evil-call-after-normal-state-eol
-                    'fangcun-node-insert))
+   (advice-member-p
+    #'yunge-fangcun--insert-node-link-at-normal-state-eol
+    'fangcun-node-insert))
   (with-temp-buffer
     (org-mode)
     (insert "Theorem:")
     (backward-char)
     (evil-normal-state)
     (cl-letf (((symbol-function 'fangcun--read-node)
-               (lambda ()
+               (lambda (&optional _initial-input)
                  (make-fangcun-node
                   :id "theorem" :title "A theorem")))
               ((symbol-function 'fangcun--ensure-session) #'ignore))
@@ -133,5 +139,73 @@
     (should
      (equal (buffer-string)
             "Theorem:[[id:theorem][A theorem]]"))))
+
+(ert-deftest yunge-fangcun-replaces-an-evil-visual-selection ()
+  (yunge-test-enable-evil)
+  (require 'yunge-fangcun)
+  (require 'fangcun)
+
+  (with-temp-buffer
+    (org-mode)
+    (insert "contraction argument")
+    (set-mark (point-min))
+    (activate-mark)
+    (evil-visual-state)
+    (cl-letf (((symbol-function 'fangcun--read-node)
+               (lambda (&optional initial-input)
+                 (should-not initial-input)
+                 (make-fangcun-node
+                  :id "theorem" :title "A theorem")))
+              ((symbol-function 'fangcun--ensure-session) #'ignore))
+      (fangcun-node-insert))
+    (should
+     (equal
+      (buffer-string)
+      "[[id:theorem][contraction argument]]"))))
+
+(ert-deftest yunge-fangcun-retargets-an-id-link-at-normal-state-eol ()
+  (yunge-test-enable-evil)
+  (require 'yunge-fangcun)
+  (require 'fangcun)
+
+  (with-temp-buffer
+    (org-mode)
+    (insert "[[id:old][old wording]]")
+    (backward-char)
+    (evil-normal-state)
+    (cl-letf (((symbol-function 'fangcun--read-node)
+               (lambda (&optional initial-input)
+                 (should (equal initial-input "old wording"))
+                 (make-fangcun-node
+                  :id "theorem" :title "A theorem")))
+              ((symbol-function 'fangcun--ensure-session) #'ignore))
+      (fangcun-node-insert))
+    (should
+     (equal
+     (buffer-string)
+      "[[id:theorem][old wording]]"))))
+
+(ert-deftest yunge-fangcun-inserts-after-a-non-id-link-at-eol ()
+  (yunge-test-enable-evil)
+  (require 'yunge-fangcun)
+  (require 'fangcun)
+
+  (with-temp-buffer
+    (org-mode)
+    (insert "[[https://example.com][Example]]")
+    (backward-char)
+    (evil-normal-state)
+    (cl-letf (((symbol-function 'fangcun--read-node)
+               (lambda (&optional _initial-input)
+                 (make-fangcun-node
+                  :id "theorem" :title "A theorem")))
+              ((symbol-function 'fangcun--ensure-session) #'ignore))
+      (fangcun-node-insert))
+    (should
+     (equal
+      (buffer-string)
+      (concat
+       "[[https://example.com][Example]]"
+       "[[id:theorem][A theorem]]")))))
 
 ;;; yunge-fangcun-test.el ends here

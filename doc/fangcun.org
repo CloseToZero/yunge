@@ -88,7 +88,18 @@ when their titles and files are otherwise identical.  Selecting one opens its
 file and moves to the matching Org ID.
 
 =M-x fangcun-node-insert= uses the same completion to insert an =id:= link at
-point.  The selected title or alias becomes the link description.
+point.  With an active region, completion starts unfiltered; the selected text
+is replaced by the link while remaining its description.  On an existing
+=id:= link, the command changes the target while preserving its description.
+Otherwise, the selected title or alias becomes the link description.
+
+Fangcun IDs remain ordinary Org =id:= links.  Org's general
+=M-x org-insert-link= command therefore keeps every standard link type while
+its =id:= completion also offers Fangcun nodes.  Selecting the distinguished
+=Org heading…= candidate enters Org's native heading completion, including its
+ability to create an ID when necessary.  Fangcun supplies default descriptions
+for both heading and file nodes without copying its database into
+=org-id-locations=.
 
 =M-x fangcun-node-set-tags= edits the local tags of the node at point.  File
 nodes use =#+filetags=; heading nodes use heading tags.  Fangcun indexes each

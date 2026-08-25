@@ -1873,8 +1873,9 @@ When one source contains several links, retain its first occurrence."
                " (file)"))
      'face 'completions-annotations)))
 
-(defun fangcun--read-node ()
-  "Read and return a Fangcun node."
+(defun fangcun--read-node (&optional initial-input)
+  "Read and return a Fangcun node.
+INITIAL-INPUT seeds the node completion minibuffer."
   (let* ((nodes (fangcun-node-list))
           (candidates
            (mapcan #'fangcun--node-candidates nodes))
@@ -1884,8 +1885,60 @@ When one source contains several links, retain its first occurrence."
     (unless candidates
       (user-error "No Fangcun nodes; run `fangcun-db-sync' first"))
     (let ((choice
-           (completing-read "Fangcun node: " candidates nil t)))
+           (completing-read
+            "Fangcun node: " candidates nil t initial-input)))
       (cdr (assoc choice candidates)))))
+
+(defun fangcun--org-id-native-candidate ()
+  "Return the completion candidate dispatching to native Org IDs."
+  (propertize
+   (concat
+    "Org heading…"
+    (propertize "⁣org-id" 'invisible t))
+   'fangcun-org-id-native t))
+
+(defun fangcun--id-complete (function &optional argument)
+  "Complete an Org ID through Fangcun before calling FUNCTION.
+ARGUMENT is the optional argument originally passed to
+`org-id-complete'.  Native Org heading completion remains available as a
+distinguished candidate."
+  (if (null fangcun-yiyus)
+      (funcall function argument)
+    (fangcun--ensure-session)
+    (let* ((nodes (fangcun-node-list))
+           (candidates
+            (mapcan #'fangcun--node-candidates nodes)))
+      (if (null candidates)
+          (funcall function argument)
+        (let* ((native (fangcun--org-id-native-candidate))
+               (completion-extra-properties
+                '(:category fangcun-node
+                  :annotation-function fangcun--node-annotation))
+               (choice
+                (completing-read
+                 "ID target: "
+                 (append candidates (list native)) nil t)))
+          (if (equal choice native)
+              (funcall function argument)
+            (concat
+             "id:"
+             (fangcun-node-id (cdr (assoc choice candidates))))))))))
+
+(defun fangcun--id-description (link description)
+  "Return Fangcun's description for Org ID LINK, or nil.
+An existing non-empty DESCRIPTION always wins.  Returning nil lets
+`org-id-description' handle IDs outside the Fangcun database."
+  (or (org-string-nw-p description)
+      (when (and (stringp link)
+                 (string-prefix-p "id:" link)
+                 (file-exists-p fangcun-database-file))
+        (let* ((path (org-link-unescape (substring link 3)))
+               (id
+                (if (string-match "::" path)
+                    (substring path 0 (match-beginning 0))
+                  path)))
+          (when-let* ((node (fangcun-node-from-id id)))
+            (fangcun-node-title node))))))
 
 (defun fangcun--valid-tag-p (tag)
   "Return non-nil when TAG is a valid Org tag name."
@@ -2181,17 +2234,58 @@ new ID available through the Fangcun index."
 ;;;###autoload
 (defun fangcun-node-insert ()
   "Choose a Fangcun node and insert an Org ID link to it.
-The chosen title or alias becomes the link description."
+An active region becomes the link description without filtering completion.
+When point is on an existing ID link, replace its target while preserving its
+description.  Otherwise, the chosen title or alias becomes the description."
   (interactive)
   (unless (derived-mode-p 'org-mode)
     (user-error "Fangcun node links can only be inserted in Org buffers"))
   (fangcun--ensure-session)
-  (let ((node (fangcun--read-node)))
-    (insert
-     (org-link-make-string
-      (concat "id:" (fangcun-node-id node))
-      (fangcun-node-title node)))
-    node))
+  (let* ((regionp (org-region-active-p))
+         (element
+          (and (not regionp)
+               (let ((context (org-element-context)))
+                 (and (eq (org-element-type context) 'link)
+                      (equal (org-element-property :type context) "id")
+                      context))))
+         (begin
+          (cond
+           (regionp (region-beginning))
+           (element (org-element-property :begin element))))
+         (end
+          (cond
+           (regionp (region-end))
+           (element (org-element-property :end element))))
+         (description
+          (cond
+           (regionp
+            (org-link-display-format
+             (buffer-substring-no-properties begin end)))
+           ((and element
+                 (org-element-property :contents-begin element))
+            (buffer-substring-no-properties
+             (org-element-property :contents-begin element)
+             (org-element-property :contents-end element)))))
+         (begin-marker
+          (and begin (set-marker (make-marker) begin)))
+         (end-marker
+          (and end (set-marker (make-marker) end))))
+    (unwind-protect
+        (atomic-change-group
+          (let ((node (fangcun--read-node (and element description))))
+            (when (and begin-marker end-marker)
+              (delete-region begin-marker end-marker)
+              (goto-char begin-marker))
+            (insert
+             (org-link-make-string
+              (concat "id:" (fangcun-node-id node))
+              (or description (fangcun-node-title node))))
+            node))
+      (when begin-marker
+        (set-marker begin-marker nil))
+      (when end-marker
+        (set-marker end-marker nil))
+      (deactivate-mark))))
 
 ;;;###autoload
 (defun fangcun-node-set-tags (&optional tags)

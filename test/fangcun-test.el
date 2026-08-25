@@ -273,6 +273,9 @@
 
 (ert-deftest fangcun-resolves-org-ids-through-its-database ()
   (should (advice-member-p #'fangcun--id-find 'org-id-find))
+  (should (advice-member-p #'fangcun--id-complete 'org-id-complete))
+  (should
+   (advice-member-p #'fangcun--id-description 'org-id-description))
   (fangcun-test-with-notes
     (fangcun-db-sync)
     (let ((org-id-locations nil))
@@ -1926,6 +1929,135 @@
           (should
            (equal (buffer-string)
                   "[[id:theorem][Fixed point theorem]]")))))))
+
+(ert-deftest fangcun-replaces-an-active-region-with-an-id-link ()
+  (fangcun-test-with-notes
+    (fangcun-db-sync)
+    (with-temp-buffer
+      (org-mode)
+      (insert "the contraction argument")
+      (set-mark (point-min))
+      (activate-mark)
+      (let ((transient-mark-mode t)
+            initial-input)
+        (cl-letf
+            (((symbol-function 'completing-read)
+              (lambda (_prompt collection &optional _predicate
+                                _require-match initial &rest _arguments)
+                (setq initial-input initial)
+                (car
+                 (seq-find
+                  (lambda (item)
+                    (string-prefix-p "A theorem" (car item)))
+                  collection)))))
+          (let ((node (fangcun-node-insert)))
+            (should (equal (fangcun-node-id node) "theorem"))))
+        (should-not initial-input)
+        (should
+         (equal
+          (buffer-string)
+          "[[id:theorem][the contraction argument]]"))
+        (should-not mark-active)))))
+
+(ert-deftest fangcun-retargets-an-id-link-without-changing-its-description ()
+  (fangcun-test-with-notes
+    (fangcun-db-sync)
+    (with-temp-buffer
+      (org-mode)
+      (insert "[[id:personal-file][the original wording]]")
+      (search-backward "original")
+      (let (initial-input)
+        (cl-letf
+            (((symbol-function 'completing-read)
+              (lambda (_prompt collection &optional _predicate
+                                _require-match initial &rest _arguments)
+                (setq initial-input initial)
+                (car
+                 (seq-find
+                  (lambda (item)
+                    (string-prefix-p "A theorem" (car item)))
+                  collection)))))
+          (fangcun-node-insert))
+        (should (equal initial-input "the original wording"))
+        (should
+         (equal
+          (buffer-string)
+          "[[id:theorem][the original wording]]"))))))
+
+(ert-deftest fangcun-preserves-region-text-when-insertion-quits ()
+  (fangcun-test-with-notes
+    (fangcun-db-sync)
+    (with-temp-buffer
+      (org-mode)
+      (insert "selected wording")
+      (set-mark (point-min))
+      (activate-mark)
+      (let ((transient-mark-mode t)
+            quit-seen)
+        (cl-letf (((symbol-function 'completing-read)
+                   (lambda (&rest _arguments) (keyboard-quit))))
+          (condition-case nil
+              (fangcun-node-insert)
+            (quit (setq quit-seen t))))
+        (should quit-seen)
+        (should (equal (buffer-string) "selected wording"))
+        (should-not mark-active)))))
+
+(ert-deftest fangcun-completes-org-id-links-with-fangcun-nodes ()
+  (fangcun-test-with-notes
+    (fangcun-db-sync)
+    (let (original-called)
+      (cl-letf
+          (((symbol-function 'completing-read)
+            (lambda (_prompt collection &rest _arguments)
+              (car
+               (seq-find
+                (lambda (item)
+                  (and (consp item)
+                       (string-prefix-p "A theorem" (car item))))
+                collection)))))
+        (should
+         (equal
+          (fangcun--id-complete
+           (lambda (&optional _argument)
+             (setq original-called t)
+             "id:outside")
+           nil)
+          "id:theorem")))
+      (should-not original-called))))
+
+(ert-deftest fangcun-org-id-completion-retains-the-native-org-path ()
+  (fangcun-test-with-notes
+    (fangcun-db-sync)
+    (let (original-called)
+      (cl-letf
+          (((symbol-function 'completing-read)
+            (lambda (_prompt collection &rest _arguments)
+              (seq-find
+               (lambda (item)
+                 (and (stringp item)
+                      (string-prefix-p "Org heading" item)))
+               collection))))
+        (should
+         (equal
+          (fangcun--id-complete
+           (lambda (&optional _argument)
+             (setq original-called t)
+             "id:outside")
+           nil)
+          "id:outside")))
+      (should original-called))))
+
+(ert-deftest fangcun-describes-file-node-ids-for-org-link-insertion ()
+  (fangcun-test-with-notes
+    (fangcun-db-sync)
+    (should
+     (equal (org-id-description "id:personal-file" nil)
+            "Personal Notes"))
+    (should
+     (equal
+      (org-id-description "id:personal-file" "Selected wording")
+      "Selected wording"))))
 
 (ert-deftest fangcun-insert-requires-org-mode ()
   (with-temp-buffer
