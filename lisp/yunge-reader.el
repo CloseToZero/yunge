@@ -505,6 +505,12 @@ Functions run in the affected Reader buffer without arguments.")
              (derived-mode-p 'yunge-reader-mode))
     (yunge-reader--clear-transient-highlights)))
 
+(defun yunge-reader--prevent-evil-editing-state
+    (function &rest arguments)
+  "Run Evil editing-state FUNCTION unless this is a Reader buffer."
+  (unless (derived-mode-p 'yunge-reader-mode)
+    (apply function arguments)))
+
 (define-derived-mode yunge-reader-mode special-mode "Yunge Reader"
   "Major mode shared by Yunge Reader document adapters."
   (auto-save-mode -1)
@@ -532,10 +538,10 @@ Functions run in the affected Reader buffer without arguments.")
   (evil-set-initial-state 'yunge-reader-mode 'normal)
   (yunge-key-evil-define 'normal yunge-reader-mode-map
                          yunge-reader-normal-bindings)
-  (yunge-key-evil-define
-   '(insert replace) yunge-reader-mode-map
-   '(("<escape>" evil-force-normal-state nil)
-     ("C-[" evil-force-normal-state nil)))
+  (advice-add 'evil-insert-state :around
+              #'yunge-reader--prevent-evil-editing-state)
+  (advice-add 'evil-replace-state :around
+              #'yunge-reader--prevent-evil-editing-state)
   (yunge-key-evil-define
    'normal yunge-reader-mode-map
    '(("q" evil-record-macro nil)))

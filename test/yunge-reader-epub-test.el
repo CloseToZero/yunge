@@ -1053,7 +1053,7 @@
       (should (eq (key-binding (kbd "<escape>"))
                   'evil-force-normal-state))
       (evil-insert-state 1)
-      (should (eq evil-state 'insert))
+      (should (eq evil-state 'normal))
       (yunge-reader-epub--accelerator view "<escape>")
       (should (eq evil-state 'normal))
       (dolist (key '("<escape>" "C-g"))
