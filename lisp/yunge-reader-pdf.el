@@ -166,15 +166,8 @@ following search command may already have tried to position its result."
   "Return native PDF value from stable Reader ORIGIN, or nil."
   (when origin
     (and (yunge-reader-position-p origin)
-         (let* ((page (yunge-reader-position-unit origin))
-                (offset
-                 (or (yunge-reader-position-offset origin)
-                     (when (and (numberp (yunge-reader-position-x origin))
-                                (numberp (yunge-reader-position-y origin)))
-                       (yunge-reader-pdf--nearest-text-offset
-                        page
-                        (yunge-reader-position-x origin)
-                        (yunge-reader-position-y origin))))))
+         (let ((page (yunge-reader-position-unit origin))
+               (offset (yunge-reader-position-offset origin)))
            (and (natnump (yunge-reader-position-unit origin))
                 (or (null offset) (natnump offset))
                 `((page . ,page)

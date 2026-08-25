@@ -735,6 +735,10 @@ target search page.  It projects the first drawable match character into
 display pixels, then adjusts window vertical and horizontal scrolling.  The
 match stays correctly anchored across zoom changes because its source of truth
 is the PDFium page and character range, not the image or buffer position.
+An ordinary viewport location starts search at the current page boundary;
+only an exact text endpoint, such as a prior match, supplies a character
+offset.  Search therefore includes the current page consistently and does not
+change its starting point according to whether page text happens to be cached.
 
 * Native service lifecycle
 

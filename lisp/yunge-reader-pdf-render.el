@@ -125,23 +125,6 @@
       (yunge-reader-pdf--update-visible-pages window)
       (yunge-reader-pdf--force-redisplay))))
 
-(defun yunge-reader-pdf--nearest-text-offset (page x y)
-  "Return PAGE character offset nearest canonical X and Y, or nil."
-  (when-let* ((text-layer
-               (and yunge-reader-pdf--text-cache
-                    (gethash page yunge-reader-pdf--text-cache))))
-    (let (best-offset best-distance)
-      (dolist (character (alist-get 'characters text-layer))
-        (when (yunge-reader-pdf--selectable-character-p character)
-          (when-let* ((distance
-                       (yunge-reader-pdf--character-distance
-                        x y character)))
-            (when (or (null best-distance)
-                      (< distance best-distance))
-              (setq best-offset (alist-get 'index character)
-                    best-distance distance)))))
-      best-offset)))
-
 (defun yunge-reader-pdf--cache-key (page width appearance)
   "Return an immutable render key for PAGE, WIDTH, and APPEARANCE."
   (let* ((file (yunge-reader-document-file yunge-reader-document))
@@ -524,25 +507,25 @@ Use the nearest cached render ENTRY while an exact render is unavailable."
 
 (defun yunge-reader-pdf--search-result-changed ()
   "Repaint and visit the current PDF search result."
-  (if (not (and yunge-reader-search-highlight-visible
-                yunge-reader-search-result))
-      (when yunge-reader-pdf--displayed-pages
-        (yunge-reader-pdf--paint-pages
-         yunge-reader-pdf--displayed-pages)
-        (yunge-reader-pdf--force-redisplay))
-    (let ((page
-           (yunge-reader-position-unit
-            (yunge-reader-search-result-start
-             yunge-reader-search-result)))
-          (yunge-reader-pdf--programmatic-scroll t))
-      (when (and (natnump page)
-                 (< page (yunge-reader-pdf--page-count)))
-        (yunge-reader-pdf--set-page page)
-        (yunge-reader-pdf--request-text page)
-        (yunge-reader-pdf--paint-pages
-         yunge-reader-pdf--displayed-pages)
-        (yunge-reader-pdf--scroll-to-search-result)
-        (yunge-reader-pdf--force-redisplay)))))
+  (let ((yunge-reader-pdf--programmatic-scroll t))
+    (if (not (and yunge-reader-search-highlight-visible
+                  yunge-reader-search-result))
+        (when yunge-reader-pdf--displayed-pages
+          (yunge-reader-pdf--paint-pages
+           yunge-reader-pdf--displayed-pages)
+          (yunge-reader-pdf--force-redisplay))
+      (let ((page
+             (yunge-reader-position-unit
+              (yunge-reader-search-result-start
+               yunge-reader-search-result))))
+        (when (and (natnump page)
+                   (< page (yunge-reader-pdf--page-count)))
+          (yunge-reader-pdf--set-page page)
+          (yunge-reader-pdf--request-text page)
+          (yunge-reader-pdf--paint-pages
+           yunge-reader-pdf--displayed-pages)
+          (yunge-reader-pdf--scroll-to-search-result)
+          (yunge-reader-pdf--force-redisplay))))))
 
 (defun yunge-reader-pdf--paint-page
     (page &optional width appearance window)
