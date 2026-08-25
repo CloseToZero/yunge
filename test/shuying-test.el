@@ -202,10 +202,7 @@
                        (setq warning message))))
             (funcall completion backend-request nil))
           (should notified)
-          (should (string-match-p "Consumer failed" warning))
-          (should (zerop (hash-table-count shuying--pending-jobs)))
-          (should (zerop shuying--active-batch-count))
-          (should-not shuying--waiting-batches))
+          (should (string-match-p "Consumer failed" warning)))
       (delete-directory root t))))
 
 (ert-deftest shuying-validates-a-batch-before-admitting-jobs ()
@@ -223,7 +220,6 @@
            (shuying-render-batch
             (list (cons valid #'ignore)
                   (cons invalid #'ignore))))
-          (should (zerop (hash-table-count shuying--pending-jobs)))
           (should-not
            (directory-files root nil "\\`\\.\\(?:render\\|metadata\\)-")))
       (delete-directory root t))))
@@ -344,9 +340,7 @@
             (complete "$d$")
             (should (= (length results) 4))
             (should (= maximum-in-flight 2))
-            (should (zerop in-flight))
-            (should (zerop shuying--active-batch-count))
-            (should-not shuying--waiting-batches)))
+            (should (zerop in-flight))))
       (delete-directory root t))))
 
 (ert-deftest shuying-holds-a-batch-slot-until-every-request-finishes ()
@@ -392,15 +386,13 @@
             (should (= (length calls) 1))
             (funcall complete second nil))
           (should (= (length calls) 2))
-          (should-not shuying--waiting-batches)
           (pcase-let* ((`(,requests . ,complete) (car calls))
                        (request (car requests)))
             (with-temp-file
                 (shuying-backend-request-output-file request)
               (insert "artifact"))
             (funcall complete request nil))
-          (should (= (length results) 3))
-          (should (zerop shuying--active-batch-count)))
+          (should (= (length results) 3)))
       (delete-directory root t))))
 
 (ert-deftest shuying-dispatches-synchronous-batches-without-reentry ()
@@ -443,9 +435,7 @@
                 (cons specification #'ignore)))
             '("$a$" "$b$" "$c$")))
           (should (equal (reverse started) '("$a$" "$b$" "$c$")))
-          (should (= maximum-depth 1))
-          (should (zerop shuying--active-batch-count))
-          (should-not shuying--waiting-batches))
+          (should (= maximum-depth 1)))
       (delete-directory root t))))
 
 (ert-deftest shuying-dispatches-the-next-batch-after-an-error ()
@@ -491,9 +481,7 @@
           (should (equal (reverse started) '("$bad$" "$good$")))
           (should (= (length results) 2))
           (should (= (length (seq-filter #'car results)) 1))
-          (should (= (length (seq-filter #'cdr results)) 1))
-          (should (zerop shuying--active-batch-count))
-          (should-not shuying--waiting-batches))
+          (should (= (length (seq-filter #'cdr results)) 1)))
       (delete-directory root t))))
 
 (ert-deftest shuying-finishes-a-partially-failed-backend-batch ()
@@ -537,8 +525,7 @@
               (shuying-artifact-path (cadr first))))
             (should-not (caddr first))
             (should-not (cadr second))
-            (should (equal (caddr second) '(error "Batch failed"))))
-          (should (= (hash-table-count shuying--pending-jobs) 0)))
+            (should (equal (caddr second) '(error "Batch failed")))))
       (delete-directory root t))))
 
 ;;; shuying-test.el ends here

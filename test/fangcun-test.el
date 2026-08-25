@@ -1267,15 +1267,16 @@
         (save-buffer))
       (should-not (file-exists-p fangcun-database-file)))))
 
-(ert-deftest fangcun-native-events-debounce-idle-work ()
+(ert-deftest fangcun-native-events-reconcile-each-path-once ()
   (let ((fangcun--native-event-timer nil)
         (fangcun--native-pending-files
          (make-hash-table :test #'equal))
         (fangcun--native-pending-full-sync-p nil)
-        (fangcun--session-active-p nil)
+        (fangcun--session-active-p t)
         timers
         scheduled
-        cancelled)
+        cancelled
+        reconciled)
     (cl-letf (((symbol-function 'run-with-idle-timer)
                (lambda (_seconds _repeat function &rest arguments)
                  (let ((timer (make-symbol "native-event-timer")))
@@ -1286,24 +1287,37 @@
                (lambda (timer) (memq timer timers)))
               ((symbol-function 'cancel-timer)
                (lambda (timer)
-                 (push timer cancelled))))
-      (fangcun--queue-native-files '("C:/notes/one.org"))
-      (let ((first fangcun--native-event-timer))
+                 (push timer cancelled)))
+              ((symbol-function 'file-exists-p)
+               (lambda (_file) t))
+              ((symbol-function 'file-regular-p)
+               (lambda (_file) t))
+              ((symbol-function 'fangcun--reconcile-file)
+               (lambda (file) (push file reconciled))))
+      (cl-labels
+          ((run-latest
+            ()
+            (pcase-let ((`(,_timer ,function ,arguments)
+                         (seq-find
+                          (lambda (entry)
+                            (not (memq (car entry) cancelled)))
+                          scheduled)))
+              (apply function arguments))))
+        (fangcun--queue-native-files
+         '("C:/notes/one.org" "C:/notes/one.org"))
         (fangcun--queue-native-files '("C:/notes/two.org"))
-        (should (memq first cancelled))
-        (should-not (eq first fangcun--native-event-timer)))
-      (should (= (hash-table-count
-                  fangcun--native-pending-files)
-                 2))
-      (pcase-let ((`(,_timer ,function ,arguments)
-                   (seq-find
-                    (lambda (entry)
-                      (eq (car entry) fangcun--native-event-timer))
-                    scheduled)))
-        (apply function arguments))
-      (should-not fangcun--native-event-timer)
-      (should (zerop (hash-table-count
-                      fangcun--native-pending-files))))))
+        (run-latest)
+        (should
+         (equal
+          (sort (mapcar #'file-name-nondirectory reconciled) #'string<)
+          '("one.org" "two.org")))
+
+        (setq reconciled nil)
+        (fangcun--queue-native-files '("C:/notes/one.org"))
+        (run-latest)
+        (should
+         (equal (mapcar #'file-name-nondirectory reconciled)
+                '("one.org")))))))
 
 (ert-deftest fangcun-native-events-reconcile-a-renamed-file-before-its-new-path ()
   (fangcun-test-with-notes

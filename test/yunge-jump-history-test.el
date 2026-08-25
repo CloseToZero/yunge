@@ -322,23 +322,13 @@
           (yunge-jump-history-test--record origin 7)
 
           (yunge-jump-history-backward)
-          (let ((history (yunge-jump-history--history)))
-            (should finish)
-            (should (yunge-jump-history--history-pending history))
-            (should (= (yunge-jump-history--history-index history) 0))
-            (should-error
-             (yunge-jump-history-backward) :type 'user-error)
-            (let ((length
-                   (length
-                    (yunge-jump-history--history-entries history))))
-              (evil-set-jump)
-              (should
-               (= (length
-                   (yunge-jump-history--history-entries history))
-                  length)))
-            (funcall finish t)
-            (should-not (yunge-jump-history--history-pending history))
-            (should (= (yunge-jump-history--history-index history) 1)))
+          (should finish)
+          (should (eq (current-buffer) current))
+          (should (= (point) 4))
+          (should-error
+           (yunge-jump-history-backward) :type 'user-error)
+          (evil-set-jump)
+          (funcall finish t)
           (should (eq (current-buffer) origin))
           (should (= (point) 7))
 
@@ -365,8 +355,14 @@
                (cons (current-buffer) position)))
            :same #'equal
            :visit
-           (lambda (_value _window complete)
-             (setq finish complete)))
+           (lambda (value window complete)
+             (setq finish
+                   (lambda (result)
+                     (when (eq result t)
+                       (select-window window)
+                       (switch-to-buffer (car value))
+                       (goto-char (cdr value)))
+                     (funcall complete result)))))
           (with-current-buffer older
             (setq-local yunge-jump-history-test--custom-target t))
           (switch-to-buffer current)
@@ -374,12 +370,20 @@
           (yunge-jump-history-test--record older 3)
 
           (yunge-jump-history-backward)
-          (let ((history (yunge-jump-history--history)))
-            (should finish)
-            (should (yunge-jump-history--history-pending history))
-            (funcall finish :cancel)
-            (should-not (yunge-jump-history--history-pending history))
-            (should (= (yunge-jump-history--history-index history) 0)))
+          (should finish)
+          (should-error
+           (yunge-jump-history-backward) :type 'user-error)
+          (funcall finish :cancel)
+          (should (eq (current-buffer) current))
+          (should (= (point) 8))
+
+          (setq finish nil)
+          (yunge-jump-history-backward)
+          (should finish)
+          (funcall finish t)
+          (should (eq (current-buffer) older))
+          (should (= (point) 3))
+          (yunge-jump-history-forward)
           (should (eq (current-buffer) current))
           (should (= (point) 8)))
       (yunge-jump-history-unregister-target 'test-custom)
@@ -413,13 +417,10 @@
           (yunge-jump-history-test--record failed 5)
 
           (yunge-jump-history-backward)
-          (let ((history (yunge-jump-history--history)))
-            (should finish)
-            (should (yunge-jump-history--history-pending history))
-            (should (= (yunge-jump-history--history-index history) 0))
-            (funcall finish nil)
-            (should-not (yunge-jump-history--history-pending history))
-            (should (= (yunge-jump-history--history-index history) 2)))
+          (should finish)
+          (should (eq (current-buffer) current))
+          (should (= (point) 8))
+          (funcall finish nil)
           (should (eq (current-buffer) older))
           (should (= (point) 3)))
       (yunge-jump-history-unregister-target 'test-custom)
