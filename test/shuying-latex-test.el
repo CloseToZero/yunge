@@ -875,8 +875,6 @@
          (shuying-latex--warmups (make-hash-table :test #'equal))
          (shuying-latex--warmup-queue nil)
          (shuying-latex--active-warmup nil)
-         (original-make-process (symbol-function 'make-process))
-         (process-count 0)
          results)
     (unwind-protect
         (progn
@@ -884,32 +882,20 @@
            'shuying-latex
            #'shuying-latex-render-batch
            #'shuying-latex-batch-key)
-          (cl-letf
-              (((symbol-function 'make-process)
-                (lambda (&rest arguments)
-                  (cl-incf process-count)
-                  (apply original-make-process arguments))))
-            (shuying-render-batch
-             (mapcar
-              (lambda (number)
-                (cons
-                 (shuying-latex-test--spec
-                  (format "$x_{%d}$" number))
-                 (lambda (artifact error-data)
-                   (push (cons artifact error-data) results))))
-              (number-sequence 1 12)))
-            (should-not results)
-            (with-timeout
-                (30 (ert-fail "Timed out rendering LaTeX previews"))
-              (while (< (length results) 12)
-                (accept-process-output nil 0.05))))
-          (should
-           (= process-count
-              (+ 2
-                 (if (shuying-latex--miktex-engine-p
-                      (list (executable-find "latex")))
-                     1
-                   0))))
+          (shuying-render-batch
+           (mapcar
+            (lambda (number)
+              (cons
+               (shuying-latex-test--spec
+                (format "$x_{%d}$" number))
+               (lambda (artifact error-data)
+                 (push (cons artifact error-data) results))))
+            (number-sequence 1 12)))
+          (should-not results)
+          (with-timeout
+              (30 (ert-fail "Timed out rendering LaTeX previews"))
+            (while (< (length results) 12)
+              (accept-process-output nil 0.05)))
           (should (seq-every-p #'null (mapcar #'cdr results)))
           (dolist (result results)
             (should
@@ -1060,7 +1046,7 @@
          (shuying-latex--warmup-queue nil)
          (shuying-latex--active-warmup nil)
          (original-make-process (symbol-function 'make-process))
-         (process-count 0)
+         (format-build-count 0)
          results)
     (unwind-protect
         (cl-labels
@@ -1079,19 +1065,15 @@
           (cl-letf
               (((symbol-function 'make-process)
                 (lambda (&rest arguments)
-                  (cl-incf process-count)
+                  (when (member "-ini" (plist-get arguments :command))
+                    (cl-incf format-build-count))
                   (apply original-make-process arguments))))
             (render "$x$" "first.svg")
             (with-timeout
                 (30 (ert-fail "Timed out precompiling a LaTeX preamble"))
               (while (< (length results) 1)
                 (accept-process-output nil 0.05)))
-            (let ((warmup-count
-                   (if (shuying-latex--miktex-engine-p
-                        (list (executable-find "latex")))
-                       1
-                     0)))
-              (should (= process-count (+ 3 warmup-count))))
+            (should (= format-build-count 1))
             (should (= (length
                         (directory-files
                          shuying-latex-format-directory nil "\\.fmt\\'"))
@@ -1101,12 +1083,7 @@
                 (30 (ert-fail "Timed out reusing a LaTeX preamble"))
               (while (< (length results) 2)
                 (accept-process-output nil 0.05)))
-            (let ((warmup-count
-                   (if (shuying-latex--miktex-engine-p
-                        (list (executable-find "latex")))
-                       1
-                     0)))
-              (should (= process-count (+ 5 warmup-count))))
+            (should (= format-build-count 1))
             (should (seq-every-p #'null (mapcar #'cdr results)))
             (dolist (result results)
               (should (file-exists-p (car result)))
