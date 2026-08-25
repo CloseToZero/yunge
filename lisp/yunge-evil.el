@@ -22,6 +22,8 @@
 (declare-function evil-make-intercept-map "evil-core")
 (declare-function evil-push-search-history "evil-search" (regexp forward))
 (declare-function evil-state-auxiliary-keymaps "evil-core" (state))
+(declare-function project-current "project" (&optional maybe-prompt directory))
+(declare-function project-root "project" (project))
 
 (defvar evil-cross-lines)
 (defvar evil-ex-last-was-search)
@@ -287,6 +289,9 @@ punctuation equivalence rather than literally."
 (defvar-keymap yunge-file-map
   :doc "Global file command map.")
 
+(defvar-keymap yunge-file-copy-map
+  :doc "Global file path copy command map.")
+
 (defvar-keymap yunge-go-map
   :doc "Global context-sensitive destination map.")
 
@@ -334,11 +339,38 @@ punctuation equivalence rather than literally."
   (interactive)
   (dired yunge-config-directory))
 
+(defun yunge-copy-current-file-absolute-path ()
+  "Copy the current buffer's absolute file path."
+  (interactive)
+  (unless buffer-file-name
+    (user-error "The current buffer is not visiting a file"))
+  (let ((file (expand-file-name buffer-file-name)))
+    (kill-new file)
+    (message "Copied file path: %s" file)))
+
+(defun yunge-copy-current-file-project-path ()
+  "Copy the current buffer's project-relative file path."
+  (interactive)
+  (unless buffer-file-name
+    (user-error "The current buffer is not visiting a file"))
+  (let* ((file (expand-file-name buffer-file-name))
+         (project (project-current nil (file-name-directory file))))
+    (unless project
+      (user-error "The current file is not in a project"))
+    (let ((path (file-relative-name file (project-root project))))
+      (kill-new path)
+      (message "Copied project file path: %s" path))))
+
+(defconst yunge-file-copy-bindings
+  '(("p" yunge-copy-current-file-absolute-path "absolute path")
+    ("P" yunge-copy-current-file-project-path "project path")))
+
 (defconst yunge-file-bindings
-  '(("c" yunge-open-config-directory "open config directory")
+  `(("c" yunge-open-config-directory "open config directory")
     ("d" dired "open directory")
     ("f" find-file "find file")
-    ("s" save-buffer "save file")))
+    ("s" save-buffer "save file")
+    ("y" ,yunge-file-copy-map "copy")))
 
 (defconst yunge-quit-bindings
   '(("f" delete-frame "delete frame")
@@ -363,6 +395,7 @@ punctuation equivalence rather than literally."
                   yunge-leader-map-bindings)
 (yunge-key-define yunge-buffer-map yunge-buffer-bindings)
 (yunge-key-define yunge-file-map yunge-file-bindings)
+(yunge-key-define yunge-file-copy-map yunge-file-copy-bindings)
 (yunge-key-define yunge-quit-map yunge-quit-bindings)
 
 (defun yunge-evil--normal-localleader ()
@@ -459,6 +492,8 @@ punctuation equivalence rather than literally."
    yunge-buffer-map yunge-buffer-bindings)
   (yunge-key-add-which-key-descriptions
    yunge-file-map yunge-file-bindings)
+  (yunge-key-add-which-key-descriptions
+   yunge-file-copy-map yunge-file-copy-bindings)
   (yunge-key-add-which-key-descriptions
    yunge-jump-map yunge-jump-bindings)
   (yunge-key-add-which-key-descriptions

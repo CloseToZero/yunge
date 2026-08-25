@@ -157,9 +157,9 @@ inconsistently from keyboard modifiers and the source application."
 (yunge-key-define yunge-dired-regexp-map yunge-dired-regexp-bindings)
 
 (defconst yunge-dired-copy-bindings
-  '(("a" yunge-dired-copy-absolute-path "absolute path")
-    ("f" yunge-dired-copy-filename "filename")
-    ("p" yunge-dired-copy-project-path "project path")))
+  '(("f" yunge-dired-copy-filename "filename")
+    ("p" yunge-dired-copy-absolute-path "absolute path")
+    ("P" yunge-dired-copy-project-path "project path")))
 
 (defvar-keymap yunge-dired-copy-map
   :doc "Keymap for copying Dired file names and paths.")

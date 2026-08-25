@@ -108,8 +108,8 @@
        ("% r" . dired-do-rename-regexp)
        ("w" . evil-forward-word-begin)
        ("y f" . yunge-dired-copy-filename)
-       ("y a" . yunge-dired-copy-absolute-path)
-       ("y p" . yunge-dired-copy-project-path)
+       ("y p" . yunge-dired-copy-absolute-path)
+       ("y P" . yunge-dired-copy-project-path)
        ("SPC m a m" . dired-do-chmod)
        ("SPC m e" . yunge-dired-open-directory-externally)
        ("SPC m h" . dired-summary)
@@ -141,7 +141,8 @@
     (yunge-test-which-key-prefix-bindings
      'dired-mode "%" '(("m" nil "mark names")))
     (yunge-test-which-key-prefix-bindings
-     'dired-mode "y" '(("a" nil "absolute path")))
+     'dired-mode "y" '(("p" nil "absolute path")
+                        ("P" nil "project path")))
     (yunge-test-which-key-prefix-bindings
      'dired-mode "SPC m" '(("a" nil "+attribute")
                             ("e" nil "open in file manager")

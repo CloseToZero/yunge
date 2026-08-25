@@ -386,6 +386,41 @@
       (call-interactively #'yunge-open-config-directory))
     (should (equal opened-directory yunge-config-directory))))
 
+(ert-deftest yunge-evil-copies-current-file-absolute-path ()
+  (yunge-test-enable-evil)
+  (with-temp-buffer
+    (let* ((buffer-file-name "relative/file.el")
+           (expected (expand-file-name buffer-file-name))
+           (kill-ring nil))
+      (call-interactively #'yunge-copy-current-file-absolute-path)
+      (should (equal (current-kill 0) expected)))))
+
+(ert-deftest yunge-evil-copies-current-file-project-path ()
+  (yunge-test-enable-evil)
+  (with-temp-buffer
+    (let* ((root (expand-file-name "project/" temporary-file-directory))
+           (buffer-file-name (expand-file-name "lisp/file.el" root))
+           (project 'project)
+           (kill-ring nil))
+      (cl-letf (((symbol-function 'project-current)
+                 (lambda (_maybe-prompt directory)
+                   (should (equal directory
+                                  (file-name-directory buffer-file-name)))
+                   project))
+                ((symbol-function 'project-root)
+                 (lambda (candidate)
+                   (should (eq candidate project))
+                   root)))
+        (call-interactively #'yunge-copy-current-file-project-path))
+      (should (equal (current-kill 0) "lisp/file.el")))))
+
+(ert-deftest yunge-evil-rejects-copying-a-path-from-a-non-file-buffer ()
+  (yunge-test-enable-evil)
+  (with-temp-buffer
+    (should-error
+     (call-interactively #'yunge-copy-current-file-absolute-path)
+     :type 'user-error)))
+
 (ert-deftest yunge-evil-leader-exposes-overridden-marker-command ()
   (yunge-test-enable-evil)
   (yunge-key-evil-define
@@ -438,6 +473,10 @@
         (yunge-test-key "SPC f d" 'dired)
         (yunge-test-key "SPC f f" 'find-file)
         (yunge-test-key "SPC f s" 'save-buffer)
+        (yunge-test-key
+         "SPC f y p" 'yunge-copy-current-file-absolute-path)
+        (yunge-test-key
+         "SPC f y P" 'yunge-copy-current-file-project-path)
         (yunge-test-key "SPC h f" 'describe-function)
         (yunge-test-key "SPC p p" 'project-switch-project)
         (yunge-test-key "SPC q f" 'delete-frame)
@@ -504,7 +543,13 @@
    '(("c" nil "open config directory")
      ("d" nil "open directory")
      ("f" nil "find file")
-     ("s" nil "save file")))
+     ("s" nil "save file")
+     ("y" nil "+copy")))
+
+  (yunge-test-which-key-prefix-bindings
+   'yunge-test-buffer-mode "SPC f y"
+   '(("p" nil "absolute path")
+     ("P" nil "project path")))
 
   (yunge-test-which-key-prefix-bindings
    'yunge-test-buffer-mode "SPC j"

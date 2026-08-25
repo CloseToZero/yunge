@@ -190,6 +190,9 @@ Group global commands under prefixes by purpose:
 - ~SPC w~ operates on windows.
 
 Use ~SPC SPC~ to execute a command by name.
+Use ~SPC f y p~ to copy the current buffer's absolute path and
+~SPC f y P~ to copy its project-relative path.  Dired uses the same ~y p~/~y P~
+distinction for selected files.
 Use ~SPC t d~ to toggle between the configured dark and light themes.
 Use ~SPC t i l~ or ~SPC t i d~ to enter fullscreen with the light or dark
 theme.  These commands keep an already-fullscreen frame fullscreen.  Use
