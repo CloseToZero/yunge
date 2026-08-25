@@ -216,7 +216,8 @@ SHA-256:</div><div>$hash</div>
             'xetex',
             'fontspec',
             'xecjk',
-            'ctex'
+            'ctex',
+            'zhnumber'
         ) `
         'MiKTeX package baseline'
     Assert-Sequence `
@@ -234,7 +235,8 @@ SHA-256:</div><div>$hash</div>
             'sfrm1000.pfb',
             'fontspec.sty',
             'xeCJK.sty',
-            'ctex.sty'
+            'ctex.sty',
+            'zhnumber.sty'
         ) `
         'required TeX files'
 

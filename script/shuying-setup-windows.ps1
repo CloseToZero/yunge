@@ -157,7 +157,8 @@ function Get-ShuyingMiktexPackages {
         'xetex',
         'fontspec',
         'xecjk',
-        'ctex'
+        'ctex',
+        'zhnumber'
     )
 }
 
@@ -175,7 +176,8 @@ function Get-ShuyingRequiredTexFiles {
         'sfrm1000.pfb',
         'fontspec.sty',
         'xeCJK.sty',
-        'ctex.sty'
+        'ctex.sty',
+        'zhnumber.sty'
     )
 }
 

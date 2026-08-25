@@ -212,6 +212,7 @@ package names.
 | =fontspec=  | =fontspec.sty= | Unicode font selection for XeLaTeX. |
 | =xecjk=     | =xeCJK.sty=   | CJK font and character handling. |
 | =ctex=      | =ctex.sty=    | Chinese document configuration. |
+| =zhnumber=  | =zhnumber.sty= | Chinese number support loaded by =ctex=. |
 
 The optional =mylatexformat= package provides =mylatexformat.ltx= and enables
 preamble precompilation.  Rendering still works with complete preambles when
@@ -245,6 +246,7 @@ kpsewhich ulem.sty
 kpsewhich fontspec.sty
 kpsewhich xeCJK.sty
 kpsewhich ctex.sty
+kpsewhich zhnumber.sty
 #+end_src
 
 ** Windows
@@ -260,7 +262,7 @@ initexmf --set-config-value=[MPM]AutoInstall=1
 miktex packages update-package-database
 miktex packages install preview mylatexformat amsmath amsfonts graphics cm-super
 miktex packages install mathtools xcolor ulem
-miktex packages install xetex fontspec xecjk ctex
+miktex packages install xetex fontspec xecjk ctex zhnumber
 miktex fndb refresh
 miktex fontmaps configure
 #+end_src
@@ -302,11 +304,13 @@ missing-package installation to =Always=; the equivalent manual setting is in
 MiKTeX Console.  The explicit baseline includes =cm-super= because Org's
 default T1 text encoding needs its scalable outlines when a document explicitly
 selects pdfLaTeX and uses commands such as =\text=.  The XeLaTeX baseline adds
-=xetex=, =fontspec=, =xecjk=, and =ctex= for Unicode Chinese.  File and font
-maps are refreshed after installation so new fonts are visible to the
-converter immediately.  The setup command refreshes the current Emacs process
-after the installer changes =PATH=; restart Emacs if manual installation
-changes it instead.
+=xetex=, =fontspec=, =xecjk=, =ctex=, and =zhnumber= for Unicode Chinese.
+=zhnumber= is explicit rather than left to MiKTeX's on-demand installer because
+parallel first-preview jobs cannot safely share package-manager maintenance.
+File and font maps are refreshed after installation so new fonts are visible
+to the converter immediately.  The setup command refreshes the current Emacs
+process after the installer changes =PATH=; restart Emacs if manual
+installation changes it instead.
 
 ** macOS
 
@@ -317,7 +321,7 @@ also work.  Add the required backend and packages to BasicTeX with =tlmgr=:
 #+begin_src shell
 sudo tlmgr update --self
 sudo tlmgr install dvisvgm preview mylatexformat amsmath amsfonts graphics
-sudo tlmgr install mathtools xcolor ulem xetex fontspec xecjk ctex
+sudo tlmgr install mathtools xcolor ulem xetex fontspec xecjk ctex zhnumber
 #+end_src
 
 The DVI-to-SVG path does not need MacTeX's optional Ghostscript extras.  Those
