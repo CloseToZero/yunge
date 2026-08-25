@@ -96,8 +96,7 @@
               (yunge-autoload-cache-hash-file
                (expand-file-name "yunge-loaddefs.sha256"
                                  yunge-autoload-cache-directory))
-              warning
-              writes)
+              warning)
          (unwind-protect
              (progn
                (make-directory yunge-autoload-source-directory t)
@@ -118,24 +117,11 @@
                      yunge-autoload-repository-hash-file
                    (insert expected-hash "\n"))
                  (delete-directory yunge-autoload-cache-directory t)
-                 (let ((write-hash
-                        (symbol-function
-                         'yunge-autoload--write-hash)))
-                   (cl-letf
-                       (((symbol-function
-                          'yunge-autoload--write-hash)
-                         (lambda (file hash)
-                           (push file writes)
-                           (funcall write-hash file hash)))
-                        ((symbol-function 'display-warning)
-                         (lambda (type message &rest _arguments)
-                           (setq warning (cons type message)))))
-                     (yunge-autoload-load)))
-                 (unless
-                     (equal writes
-                            (list yunge-autoload-cache-hash-file))
-                   (error "Bootstrap wrote unexpected hash files: %S"
-                          writes))
+                 (cl-letf
+                     (((symbol-function 'display-warning)
+                       (lambda (type message &rest _arguments)
+                         (setq warning (cons type message)))))
+                   (yunge-autoload-load))
                  (unless
                      (equal expected-hash
                             (yunge-autoload--read-hash

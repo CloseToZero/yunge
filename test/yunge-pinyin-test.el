@@ -154,23 +154,29 @@
 
 (ert-deftest yunge-pinyin-caches-grammar-results-separately ()
   (require 'yunge-pinyin)
-  (let ((yunge-pinyin-regexp-cache-size 8))
+  (let ((yunge-pinyin-regexp-cache-size 8)
+        (calls 0)
+        (original (symbol-function 'yunge-pinyin--segment-run)))
     (unwind-protect
         (progn
           (yunge-pinyin-clear-cache)
-          (should (equal (yunge-pinyin-regexp "beijx" 'structured)
-                         "beijx"))
-          (should (string-match-p
-                   (yunge-pinyin-regexp "beijx" 'permissive)
-                   "背景像素"))
-          (should
-           (gethash (yunge-pinyin--regexp-cache-key
-                     "beijx" 'structured)
-                    yunge-pinyin--regexp-cache))
-          (should
-           (gethash (yunge-pinyin--regexp-cache-key
-                     "beijx" 'permissive)
-                    yunge-pinyin--regexp-cache)))
+          (cl-letf (((symbol-function 'yunge-pinyin--segment-run)
+                     (lambda (run grammar)
+                       (cl-incf calls)
+                       (funcall original run grammar))))
+            (let ((structured
+                   (yunge-pinyin-regexp "beijx" 'structured))
+                  (permissive
+                   (yunge-pinyin-regexp "beijx" 'permissive)))
+              (should (equal structured "beijx"))
+              (should (string-match-p permissive "背景像素"))
+              (should
+               (equal structured
+                      (yunge-pinyin-regexp "beijx" 'structured)))
+              (should
+               (equal permissive
+                      (yunge-pinyin-regexp "beijx" 'permissive)))
+              (should (= calls 2)))))
       (yunge-pinyin-clear-cache))))
 
 (ert-deftest yunge-pinyin-frequency-levels-preserve-bounded-results ()

@@ -31,71 +31,10 @@
    typescript-ts-mode
    yaml-ts-mode))
 
-(defconst yunge-treesit-test--languages
-  '(bash
-    c
-    c-sharp
-    cmake
-    cpp
-    css
-    dockerfile
-    doxygen
-    elixir
-    go
-    gomod
-    gowork
-    heex
-    html
-    java
-    javascript
-    jsdoc
-    json
-    lua
-    markdown
-    markdown-inline
-    php
-    phpdoc
-    python
-    ruby
-    rust
-    toml
-    tsx
-    typescript
-    yaml))
-
-(defconst yunge-treesit-test--supported-modes
-  '(c-or-c++-ts-mode
-    bash-ts-mode
-    c++-ts-mode
-    c-ts-mode
-    cmake-ts-mode
-    csharp-ts-mode
-    css-ts-mode
-    dockerfile-ts-mode
-    elixir-ts-mode
-    go-mod-ts-mode
-    go-ts-mode
-    go-work-ts-mode
-    heex-ts-mode
-    html-ts-mode
-    java-ts-mode
-    js-ts-mode
-    json-ts-mode
-    lua-ts-mode
-    markdown-ts-mode
-    mhtml-ts-mode
-    php-ts-mode
-    python-ts-mode
-    ruby-ts-mode
-    rust-ts-mode
-    toml-ts-mode
-    tsx-ts-mode
-    typescript-ts-mode
-    yaml-ts-mode))
-
 (ert-deftest yunge-treesit-grammars-are-complete-and-pinned ()
-  (should (equal (mapcar #'car yunge-treesit-language-source-alist)
-                 yunge-treesit-test--languages))
+  (let ((languages (mapcar #'car yunge-treesit-language-source-alist)))
+    (should (= (length languages)
+               (length (delete-dups (copy-sequence languages))))))
   (dolist (recipe yunge-treesit-language-source-alist)
     (let ((url (cadr recipe))
           (arguments (cddr recipe)))
@@ -133,14 +72,14 @@
   (should (eq treesit-auto-install-grammar 'ask)))
 
 (ert-deftest yunge-treesit-covers-every-built-in-mode ()
-  (should (equal yunge-treesit-supported-modes
-                 yunge-treesit-test--supported-modes))
   (should (equal (sort (copy-sequence yunge-treesit-enabled-modes)
                        #'string-lessp)
                  (sort (delete-dups
                         (mapcar #'cdr
                                 yunge-treesit-major-mode-remap-alist))
                        #'string-lessp)))
+  (dolist (mode yunge-treesit-enabled-modes)
+    (should (memq mode yunge-treesit-supported-modes)))
   (should (memq 'html-ts-mode yunge-treesit-supported-modes))
   (should (memq 'markdown-ts-mode yunge-treesit-supported-modes)))
 

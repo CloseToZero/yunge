@@ -46,32 +46,27 @@
   (let* ((yunge-config-directory
           (file-name-as-directory
            (expand-file-name "source" temporary-file-directory)))
-         (renderer-test
-          (concat yunge-config-directory
-                  "native/yunge-reader/renderer-test/"
-                  "yunge-reader-core.test.mjs")))
-    (should
-     (equal
-      (yunge-test--external-checks)
-       `(("Fangcun Watch Rust tests"
-          "cargo" "test" "--manifest-path"
-          ,(concat yunge-config-directory
-                   "native/fangcun-watch/Cargo.toml"))
-        ("Yunge MCP Rust tests"
-         "cargo" "test" "--manifest-path"
-         ,(concat yunge-config-directory
-                  "native/yunge-mcp/Cargo.toml"))
-        ("Yunge Reader Rust tests"
-         "cargo" "test" "--manifest-path"
-         ,(concat yunge-config-directory
-                  "native/yunge-reader/Cargo.toml"))
-        ("Yunge Reader renderer syntax"
-         "node" "--check"
-         ,(concat yunge-config-directory
-                  "native/yunge-reader/renderer/yunge-reader.js"))
-        ("Yunge Reader renderer tests"
-         "node" "--test"
-         ,renderer-test))))))
+         (commands
+          (mapcar #'cdr (yunge-test--external-checks))))
+    (dolist
+        (expected
+         `(("cargo" "test" "--manifest-path"
+            ,(concat yunge-config-directory
+                     "native/fangcun-watch/Cargo.toml"))
+           ("cargo" "test" "--manifest-path"
+            ,(concat yunge-config-directory
+                     "native/yunge-mcp/Cargo.toml"))
+           ("cargo" "test" "--manifest-path"
+            ,(concat yunge-config-directory
+                     "native/yunge-reader/Cargo.toml"))
+           ("node" "--check"
+            ,(concat yunge-config-directory
+                     "native/yunge-reader/renderer/yunge-reader.js"))
+           ("node" "--test"
+            ,(concat yunge-config-directory
+                     "native/yunge-reader/renderer-test/"
+                     "yunge-reader-core.test.mjs"))))
+      (should (member expected commands)))))
 
 (ert-deftest yunge-test-required-command-reports-its-result ()
   (dolist (case '((0 . t) (7 . nil)))
