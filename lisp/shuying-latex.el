@@ -72,11 +72,32 @@ preamble with each batch instead."
   built-file
   target-file)
 
+(cl-defstruct shuying-latex--warmup
+  key
+  callbacks
+  specification
+  engine
+  directory
+  log-buffer
+  attempts)
+
 (defvar shuying-latex--format-builds (make-hash-table :test #'equal)
   "LaTeX format builds currently shared by waiting batches.")
 
 (defvar shuying-latex--failed-formats (make-hash-table :test #'equal)
   "LaTeX formats which failed during the current Emacs session.")
+
+(defvar shuying-latex--warmed-preambles (make-hash-table :test #'equal)
+  "MiKTeX preambles warmed during the current Emacs session.")
+
+(defvar shuying-latex--warmups (make-hash-table :test #'equal)
+  "MiKTeX preamble warm-ups shared by compatible waiting batches.")
+
+(defvar shuying-latex--warmup-queue nil
+  "MiKTeX preamble warm-ups waiting for the installer lane.")
+
+(defvar shuying-latex--active-warmup nil
+  "MiKTeX preamble warm-up currently owning the installer lane.")
 
 (defun shuying-latex-batch-key (specification)
   "Return the compatibility key for SPECIFICATION.
@@ -342,6 +363,164 @@ size with preview.sty's scaled-point baseline report."
          (downcase (file-name-base (car engine))) "latex")
     "latex"))
 
+(defun shuying-latex--miktex-engine-p (engine)
+  "Return non-nil when resolved ENGINE belongs to MiKTeX."
+  (and (eq system-type 'windows-nt)
+       (string-match-p
+        "[/\\\\]miktex[/\\\\]"
+        (downcase (expand-file-name (car engine))))))
+
+(defun shuying-latex--installer-arguments (engine enabled)
+  "Return MiKTeX installer arguments for ENGINE.
+ENABLED permits package installation; otherwise disable it."
+  (when (shuying-latex--miktex-engine-p engine)
+    (list (if enabled "-enable-installer" "-disable-installer"))))
+
+(defun shuying-latex--write-warmup-document (specification file)
+  "Write a preamble-only warm-up for SPECIFICATION to FILE."
+  (let ((write-region-inhibit-fsync t)
+        (coding-system-for-write 'utf-8-unix))
+    (with-temp-file file
+      (shuying-latex--write-preamble specification)
+      (insert "\\begin{document}\n\\end{document}\n"))))
+
+(defun shuying-latex--complete-warmup (warmup error-data)
+  "Complete WARMUP with ERROR-DATA and release its waiting batches."
+  (when (eq warmup shuying-latex--active-warmup)
+    (let ((key (shuying-latex--warmup-key warmup))
+          (directory (shuying-latex--warmup-directory warmup))
+          (log-buffer (shuying-latex--warmup-log-buffer warmup))
+          (callbacks
+           (nreverse (shuying-latex--warmup-callbacks warmup))))
+      (unless error-data
+        (puthash key t shuying-latex--warmed-preambles))
+      (remhash key shuying-latex--warmups)
+      (setq shuying-latex--active-warmup nil)
+      (when (and directory (file-directory-p directory))
+        (delete-directory directory t))
+      (when (and (not error-data) (buffer-live-p log-buffer))
+        (kill-buffer log-buffer))
+      ;; Start the next writer before callbacks can enqueue newer warm-ups.
+      (shuying-latex--run-warmup-queue)
+      (dolist (callback callbacks)
+        (condition-case callback-error
+            (funcall callback error-data)
+          (error
+           (display-warning
+            'shuying
+            (format "Shuying warm-up callback failed: %s"
+                    (error-message-string callback-error))
+            :error)))))))
+
+(defun shuying-latex--warmup-sentinel (warmup process _event)
+  "Continue WARMUP after its preamble PROCESS exits."
+  (when (and (eq warmup shuying-latex--active-warmup)
+             (memq (process-status process) '(exit signal)))
+    (cond
+     ((and (eq (process-status process) 'exit)
+           (zerop (process-exit-status process)))
+      (shuying-latex--complete-warmup warmup nil))
+     ((and (eq (process-status process) 'exit)
+           (< (shuying-latex--warmup-attempts warmup) 2))
+      ;; MiKTeX can install a missing package yet fail the process that
+      ;; discovered it.  Retry only after that installer has exited.
+      (with-current-buffer (shuying-latex--warmup-log-buffer warmup)
+        (goto-char (point-max))
+        (insert "\nRetrying the warmed LaTeX preamble.\n"))
+      (shuying-latex--start-warmup-attempt warmup))
+     (t
+      (shuying-latex--complete-warmup
+       warmup
+       (shuying-latex--process-error
+        "LaTeX preamble warm-up" process
+        (shuying-latex--warmup-log-buffer warmup)))))))
+
+(defun shuying-latex--start-warmup-attempt (warmup)
+  "Start one serialized MiKTeX preamble WARMUP attempt."
+  (cl-incf (shuying-latex--warmup-attempts warmup))
+  (let* ((directory (shuying-latex--warmup-directory warmup))
+         (engine (shuying-latex--warmup-engine warmup))
+         (source-file (expand-file-name "preamble.tex" directory))
+         (command
+          (append
+           engine
+           (shuying-latex--installer-arguments engine t)
+           (list
+            "-interaction=nonstopmode"
+            (concat "-output-directory=" directory)
+            source-file))))
+    (condition-case error-data
+        (let ((default-directory (file-name-as-directory directory)))
+          (make-process
+           :name "shuying-latex-warmup"
+           :buffer (shuying-latex--warmup-log-buffer warmup)
+           :command command
+           :connection-type 'pipe
+           :noquery t
+           :sentinel
+           (lambda (process event)
+             (shuying-latex--warmup-sentinel
+              warmup process event))))
+      (error
+       (with-current-buffer (shuying-latex--warmup-log-buffer warmup)
+         (goto-char (point-max))
+         (insert (error-message-string error-data) "\n"))
+       (shuying-latex--complete-warmup warmup error-data)))))
+
+(defun shuying-latex--start-warmup (warmup)
+  "Prepare and start the serialized MiKTeX preamble WARMUP."
+  (condition-case error-data
+      (let* ((directory
+              (progn
+                (make-directory shuying-work-directory t)
+                (make-temp-file
+                 (expand-file-name "warmup-" shuying-work-directory) t)))
+             (log-buffer
+              (generate-new-buffer "*Shuying LaTeX warm-up*"))
+             (source-file (expand-file-name "preamble.tex" directory)))
+        (setf (shuying-latex--warmup-directory warmup) directory
+              (shuying-latex--warmup-log-buffer warmup) log-buffer)
+        (buffer-disable-undo log-buffer)
+        (shuying-latex--write-warmup-document
+         (shuying-latex--warmup-specification warmup) source-file)
+        (shuying-latex--start-warmup-attempt warmup))
+    (error
+     (shuying-latex--complete-warmup warmup error-data))))
+
+(defun shuying-latex--run-warmup-queue ()
+  "Start the next MiKTeX preamble warm-up when its lane is free."
+  (unless shuying-latex--active-warmup
+    (when-let* ((warmup (pop shuying-latex--warmup-queue)))
+      (setq shuying-latex--active-warmup warmup)
+      (shuying-latex--start-warmup warmup))))
+
+(defun shuying-latex--ensure-preamble-warm
+    (specification engine callback)
+  "Warm SPECIFICATION's MiKTeX preamble, then call CALLBACK.
+Compatible preambles share one warm-up.  Distinct cold preambles serialize
+through one installer lane.  CALLBACK receives nil on success or an error."
+  (if (not (shuying-latex--miktex-engine-p engine))
+      (funcall callback nil)
+    (let* ((key (shuying-latex--format-key specification engine))
+           (warmup (gethash key shuying-latex--warmups)))
+      (cond
+       ((gethash key shuying-latex--warmed-preambles)
+        (funcall callback nil))
+       (warmup
+        (push callback (shuying-latex--warmup-callbacks warmup)))
+       (t
+        (setq warmup
+              (make-shuying-latex--warmup
+               :key key
+               :callbacks (list callback)
+               :specification specification
+               :engine engine
+               :attempts 0))
+        (puthash key warmup shuying-latex--warmups)
+        (setq shuying-latex--warmup-queue
+              (nconc shuying-latex--warmup-queue (list warmup)))
+        (shuying-latex--run-warmup-queue))))))
+
 (defun shuying-latex--complete-format-build (build success)
   "Complete BUILD with SUCCESS and notify its waiting batches."
   (let* ((key (shuying-latex--format-build-key build))
@@ -409,6 +588,7 @@ CALLBACK receives the resulting format file, or nil on failure."
          (command
           (append
            engine
+           (shuying-latex--installer-arguments engine nil)
            (list
             "-interaction=nonstopmode"
             (concat "-output-directory=" directory)
@@ -688,6 +868,8 @@ dvisvgm zero-pads page numbers to the width of the final page number."
          (command
           (append
            (shuying-latex--batch-engine batch)
+           (shuying-latex--installer-arguments
+            (shuying-latex--batch-engine batch) nil)
            (when-let* ((format-file
                         (shuying-latex--batch-format-file batch)))
              (list
@@ -743,6 +925,21 @@ FORMAT-KEY identifies the persistent format for invalidation."
       "xdv"
     "dvi"))
 
+(defun shuying-latex--continue-batch-after-warmup
+    (batch specification engine error-data)
+  "Continue BATCH after SPECIFICATION's ENGINE warm-up.
+ERROR-DATA completes the batch without starting ordinary compiler work."
+  (if error-data
+      (shuying-latex--complete-all batch error-data)
+    (condition-case continue-error
+        (shuying-latex--ensure-format
+         specification engine
+         (lambda (format-key format-file)
+           (shuying-latex--start-batch
+            batch specification format-key format-file)))
+      (error
+       (shuying-latex--complete-all batch continue-error)))))
+
 (defun shuying-latex-render-batch (requests complete)
   "Render compatible REQUESTS asynchronously and call COMPLETE for each."
   (when requests
@@ -785,11 +982,11 @@ FORMAT-KEY identifies the persistent format for invalidation."
              :converter converter)))
       (buffer-disable-undo log-buffer)
       (condition-case error-data
-          (shuying-latex--ensure-format
+          (shuying-latex--ensure-preamble-warm
            specification engine
-           (lambda (format-key format-file)
-             (shuying-latex--start-batch
-              batch specification format-key format-file)))
+           (lambda (warmup-error)
+             (shuying-latex--continue-batch-after-warmup
+              batch specification engine warmup-error)))
         (error
          (shuying-latex--cleanup batch nil)
          (signal (car error-data) (cdr error-data)))))))

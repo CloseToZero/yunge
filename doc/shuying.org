@@ -127,14 +127,15 @@ The direct TeX and =dvisvgm= backend uses this pipeline:
 
 1. Return cache hits immediately.
 2. Collect misses with compatible preambles and rendering options.
-3. Reuse or asynchronously build one precompiled format when the selected
+3. Warm each new MiKTeX preamble through a serialized installer lane.
+4. Reuse or asynchronously build one precompiled format when the selected
    engine supports it.
-4. Compile each compatible batch in one temporary TeX document.
-5. Convert every page to a tightly bounded SVG and collect its baseline
+5. Compile each compatible batch in one temporary TeX document.
+6. Convert every page to a tightly bounded SVG and collect its baseline
    geometry.
-6. Map each SVG and its metadata back to the originating request.
-7. Publish each artifact and metadata sidecar atomically.
-8. Check the request generation before changing a buffer display.
+7. Map each SVG and its metadata back to the originating request.
+8. Publish each artifact and metadata sidecar atomically.
+9. Check the request generation before changing a buffer display.
 
 The TeX engine and dvisvgm run as a nonblocking process chain.  A batch uses an
 isolated working directory below =var/shuying/work/=.  Successful work is
@@ -159,15 +160,29 @@ Shuying retries the batch once with the complete preamble.  The format is only
 discarded when that retry succeeds, distinguishing a stale format from an
 ordinary error in the fragment or preamble.
 
+MiKTeX warm-ups use the same complete-preamble key, independently of fragment
+source.  Consequently, changes to =#+LATEX_HEADER=, =#+LATEX_HEADER_EXTRA=,
+the document class, compiler, or other Org export inputs produce a new cold
+key.  Compatible requests share one warm-up, while distinct cold keys queue
+behind one package-installer lane.  MiKTeX is allowed to install missing
+packages only in that lane; format builds and ordinary batch compilers disable
+the installer explicitly.  A failed warm-up is retried once because MiKTeX can
+install a discovered package while still failing the process that requested
+it.  Warm state is session-local, and stale Org request generations still
+prevent an older preamble result from replacing a newer preview.
+
 Backends encapsulate process topology and artifact production.  Other engines
 or image formats do not add conditionals throughout the scheduler or the Org
 adapter.
 
 * External environment
 
-Shuying diagnoses missing tools, but does not silently install a TeX
-distribution or modify the system package database.  A TeX installation is
-large, platform-managed state and may require administrator access.
+Shuying diagnoses missing tools and never silently installs a TeX distribution.
+A TeX installation is large, platform-managed state and may require
+administrator access.  MiKTeX is the one package-management exception: its
+configured on-demand installer may add a missing package during the serialized
+preamble warm-up described above.  Use =M-x shuying-setup= to install and verify
+the supported baseline explicitly.
 
 ** Required programs
 
@@ -305,12 +320,12 @@ MiKTeX Console.  The explicit baseline includes =cm-super= because Org's
 default T1 text encoding needs its scalable outlines when a document explicitly
 selects pdfLaTeX and uses commands such as =\text=.  The XeLaTeX baseline adds
 =xetex=, =fontspec=, =xecjk=, =ctex=, and =zhnumber= for Unicode Chinese.
-=zhnumber= is explicit rather than left to MiKTeX's on-demand installer because
-parallel first-preview jobs cannot safely share package-manager maintenance.
-File and font maps are refreshed after installation so new fonts are visible
-to the converter immediately.  The setup command refreshes the current Emacs
-process after the installer changes =PATH=; restart Emacs if manual
-installation changes it instead.
+=zhnumber= remains explicit so the supported baseline is deterministic without
+depending on a first preview.  Packages introduced by custom preambles can use
+the serialized warm-up instead.  File and font maps are refreshed after
+installation so new fonts are visible to the converter immediately.  The
+setup command refreshes the current Emacs process after the installer changes
+=PATH=; restart Emacs if manual installation changes it instead.
 
 ** macOS
 

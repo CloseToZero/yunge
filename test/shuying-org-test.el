@@ -936,6 +936,32 @@
                 (should (= shuying-org-test--render-count 2))))))
       (delete-directory root t))))
 
+(ert-deftest shuying-org-latex-header-changes-the-warmup-key ()
+  (with-temp-buffer
+    (org-mode)
+    (insert "#+LATEX_HEADER: \\usepackage{first-package}\n\n$x$\n")
+    (let* ((fragment (car (shuying-org--fragments)))
+           (first-preamble (shuying-org--preamble))
+           (first
+            (shuying-org--render-spec
+             fragment first-preamble '("xelatex" "-no-pdf"))))
+      (goto-char (point-min))
+      (search-forward "first-package")
+      (replace-match "second-package")
+      (let* ((second-preamble (shuying-org--preamble))
+             (second
+              (shuying-org--render-spec
+               fragment second-preamble '("xelatex" "-no-pdf"))))
+        (should (string-match-p "first-package" first-preamble))
+        (should (string-match-p "second-package" second-preamble))
+        (should-not (equal first-preamble second-preamble))
+        (should-not
+         (equal
+          (shuying-latex--format-key
+           first '("C:/MiKTeX/miktex/bin/x64/xelatex.exe" "-no-pdf"))
+          (shuying-latex--format-key
+           second '("C:/MiKTeX/miktex/bin/x64/xelatex.exe" "-no-pdf"))))))))
+
 (ert-deftest shuying-org-rechecks-preview-context-after-save ()
   (with-temp-buffer
     (org-mode)

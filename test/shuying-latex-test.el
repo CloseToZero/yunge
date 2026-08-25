@@ -67,6 +67,242 @@
      (equal (shuying-latex--format-key first engine)
             (shuying-latex--format-key first '("other-latex"))))))
 
+(ert-deftest shuying-latex-recognizes-miktex-installer-policy ()
+  (let ((system-type 'windows-nt)
+        (miktex
+         '("C:/Programs/MiKTeX/miktex/bin/x64/xelatex.exe" "-no-pdf"))
+        (tex-live '("C:/texlive/bin/windows/xelatex.exe" "-no-pdf")))
+    (should (shuying-latex--miktex-engine-p miktex))
+    (should-not (shuying-latex--miktex-engine-p tex-live))
+    (should
+     (equal (shuying-latex--installer-arguments miktex t)
+            '("-enable-installer")))
+    (should
+     (equal (shuying-latex--installer-arguments miktex nil)
+            '("-disable-installer")))
+    (should-not (shuying-latex--installer-arguments tex-live t))))
+
+(ert-deftest shuying-latex-serializes-warmups-across-preamble-changes ()
+  (let* ((root (make-temp-file "shuying-latex-warmup-test-" t))
+         (system-type 'windows-nt)
+         (shuying-work-directory (expand-file-name "work" root))
+         (shuying-latex--warmed-preambles
+          (make-hash-table :test #'equal))
+         (shuying-latex--warmups (make-hash-table :test #'equal))
+         (shuying-latex--warmup-queue nil)
+         (shuying-latex--active-warmup nil)
+         (engine
+          '("C:/Programs/MiKTeX/miktex/bin/x64/xelatex.exe" "-no-pdf"))
+         (first (shuying-latex-test--spec "$x$"))
+         (same-preamble (shuying-latex-test--spec "$y$"))
+         (changed-preamble (shuying-latex-test--spec "$x$"))
+         invocations
+         completions)
+    (setf (shuying-render-spec-preamble changed-preamble)
+          "\\documentclass{article}\n\\usepackage{new-header}\n")
+    (unwind-protect
+        (cl-letf
+            (((symbol-function 'make-process)
+              (lambda (&rest arguments)
+                (let ((process (make-symbol "warmup-process")))
+                  (setq invocations
+                        (nconc invocations
+                               (list (cons process arguments))))
+                  process)))
+             ((symbol-function 'process-status)
+              (lambda (_process) 'exit))
+             ((symbol-function 'process-exit-status)
+              (lambda (_process) 0)))
+          (shuying-latex--ensure-preamble-warm
+           first engine
+           (lambda (error-data)
+             (push (cons 'first error-data) completions)))
+          (shuying-latex--ensure-preamble-warm
+           same-preamble engine
+           (lambda (error-data)
+             (push (cons 'same error-data) completions)))
+          ;; This represents a changed final preamble after LATEX_HEADER edits.
+          (shuying-latex--ensure-preamble-warm
+           changed-preamble engine
+           (lambda (error-data)
+             (push (cons 'changed error-data) completions)))
+          (should (= (length invocations) 1))
+          (should (= (length shuying-latex--warmup-queue) 1))
+          (should (= (hash-table-count shuying-latex--warmups) 2))
+          (let* ((first-invocation (car invocations))
+                 (arguments (cdr first-invocation))
+                 (command (plist-get arguments :command)))
+            (should (member "-enable-installer" command))
+            (should-not (member "-disable-installer" command))
+            (funcall (plist-get arguments :sentinel)
+                     (car first-invocation) "finished\n"))
+          (should (= (length invocations) 2))
+          (should (= (length completions) 2))
+          (should (seq-every-p #'null (mapcar #'cdr completions)))
+          (let* ((second-invocation (cadr invocations))
+                 (arguments (cdr second-invocation)))
+            (funcall (plist-get arguments :sentinel)
+                     (car second-invocation) "finished\n"))
+          (should (= (length completions) 3))
+          (should-not (cdr (assq 'changed completions)))
+          (should (= (hash-table-count
+                      shuying-latex--warmed-preambles)
+                     2))
+          (should (= (hash-table-count shuying-latex--warmups) 0))
+          (should-not shuying-latex--warmup-queue)
+          (should-not shuying-latex--active-warmup))
+      (delete-directory root t))))
+
+(ert-deftest shuying-latex-retries-one-failed-miktex-warmup ()
+  (let* ((root (make-temp-file "shuying-latex-warmup-retry-" t))
+         (system-type 'windows-nt)
+         (shuying-work-directory (expand-file-name "work" root))
+         (shuying-latex--warmed-preambles
+          (make-hash-table :test #'equal))
+         (shuying-latex--warmups (make-hash-table :test #'equal))
+         (shuying-latex--warmup-queue nil)
+         (shuying-latex--active-warmup nil)
+         (engine
+          '("C:/Programs/MiKTeX/miktex/bin/x64/xelatex.exe" "-no-pdf"))
+         invocations
+         result)
+    (unwind-protect
+        (cl-letf
+            (((symbol-function 'make-process)
+              (lambda (&rest arguments)
+                (let ((process (make-symbol "warmup-process")))
+                  (setq invocations
+                        (nconc invocations
+                               (list (cons process arguments))))
+                  process)))
+             ((symbol-function 'process-status)
+              (lambda (_process) 'exit))
+             ((symbol-function 'process-exit-status)
+              (lambda (process)
+                (if (eq process (caar invocations)) 1 0))))
+          (shuying-latex--ensure-preamble-warm
+           (shuying-latex-test--spec "$x$") engine
+           (lambda (error-data) (setq result (or error-data 'success))))
+          (let* ((first (car invocations))
+                 (sentinel (plist-get (cdr first) :sentinel)))
+            (funcall sentinel (car first) "failed\n"))
+          (should (= (length invocations) 2))
+          (should-not result)
+          (let* ((second (cadr invocations))
+                 (sentinel (plist-get (cdr second) :sentinel)))
+            (funcall sentinel (car second) "finished\n"))
+          (should (eq result 'success))
+          (should (= (hash-table-count
+                      shuying-latex--warmed-preambles)
+                     1)))
+      (delete-directory root t))))
+
+(ert-deftest shuying-latex-bounds-failed-miktex-warmup-retries ()
+  (let* ((root (make-temp-file "shuying-latex-warmup-failure-" t))
+         (system-type 'windows-nt)
+         (shuying-work-directory (expand-file-name "work" root))
+         (shuying-latex--warmed-preambles
+          (make-hash-table :test #'equal))
+         (shuying-latex--warmups (make-hash-table :test #'equal))
+         (shuying-latex--warmup-queue nil)
+         (shuying-latex--active-warmup nil)
+         (engine
+          '("C:/Programs/MiKTeX/miktex/bin/x64/xelatex.exe" "-no-pdf"))
+         invocations
+         result)
+    (unwind-protect
+        (cl-letf
+            (((symbol-function 'make-process)
+              (lambda (&rest arguments)
+                (let ((process (make-symbol "warmup-process")))
+                  (setq invocations
+                        (nconc invocations
+                               (list (cons process arguments))))
+                  process)))
+             ((symbol-function 'process-status)
+              (lambda (_process) 'exit))
+             ((symbol-function 'process-exit-status)
+              (lambda (_process) 1)))
+          (shuying-latex--ensure-preamble-warm
+           (shuying-latex-test--spec "$x$") engine
+           (lambda (error-data) (setq result error-data)))
+          (let* ((first (car invocations))
+                 (sentinel (plist-get (cdr first) :sentinel)))
+            (funcall sentinel (car first) "failed\n"))
+          (let* ((second (cadr invocations))
+                 (sentinel (plist-get (cdr second) :sentinel)))
+            (funcall sentinel (car second) "failed\n"))
+          (should (= (length invocations) 2))
+          (should (eq (car result) 'shuying-latex-error))
+          (should-not shuying-latex--active-warmup)
+          (should (= (hash-table-count shuying-latex--warmups) 0))
+          (should (= (hash-table-count
+                      shuying-latex--warmed-preambles)
+                     0)))
+      (dolist (buffer (buffer-list))
+        (when (string-prefix-p "*Shuying LaTeX warm-up*"
+                               (buffer-name buffer))
+          (kill-buffer buffer)))
+      (delete-directory root t))))
+
+(ert-deftest shuying-latex-disables-miktex-installer-for-rendering ()
+  (let* ((root (make-temp-file "shuying-latex-installer-test-" t))
+         (system-type 'windows-nt)
+         (directory (expand-file-name "work" root))
+         (log-buffer (generate-new-buffer " *Shuying installer test*"))
+         (engine
+          '("C:/Programs/MiKTeX/miktex/bin/x64/xelatex.exe" "-no-pdf"))
+         (specification (shuying-latex-test--spec "$x$"))
+         (batch
+          (make-shuying-latex--batch
+           :directory directory
+           :log-buffer log-buffer
+           :tex-file (expand-file-name "input.tex" directory)
+           :engine engine))
+         invocation)
+    (make-directory directory t)
+    (unwind-protect
+        (cl-letf (((symbol-function 'make-process)
+                   (lambda (&rest arguments)
+                     (setq invocation arguments)
+                     'latex-process)))
+          (shuying-latex--start-compiler batch specification)
+          (let ((command (plist-get invocation :command)))
+            (should (member "-disable-installer" command))
+            (should-not (member "-enable-installer" command))))
+      (when (buffer-live-p log-buffer)
+        (kill-buffer log-buffer))
+      (delete-directory root t))))
+
+(ert-deftest shuying-latex-disables-miktex-installer-for-format-builds ()
+  (let* ((root (make-temp-file "shuying-latex-format-policy-" t))
+         (system-type 'windows-nt)
+         (shuying-work-directory (expand-file-name "work" root))
+         (shuying-latex-format-directory (expand-file-name "formats" root))
+         (shuying-latex--format-builds
+          (make-hash-table :test #'equal))
+         (engine
+          '("C:/Programs/MiKTeX/miktex/bin/x64/latex.exe"))
+         (specification (shuying-latex-test--spec "$x$"))
+         invocation)
+    (unwind-protect
+        (cl-letf (((symbol-function 'make-process)
+                   (lambda (&rest arguments)
+                     (setq invocation arguments)
+                     'format-process)))
+          (shuying-latex--start-format-build
+           "format-key" specification engine "latex" #'ignore)
+          (let ((command (plist-get invocation :command)))
+            (should (member "-disable-installer" command))
+            (should-not (member "-enable-installer" command))))
+      (maphash
+       (lambda (_key build)
+         (when (buffer-live-p
+                (shuying-latex--format-build-log-buffer build))
+           (kill-buffer (shuying-latex--format-build-log-buffer build))))
+       shuying-latex--format-builds)
+      (delete-directory root t))))
+
 (ert-deftest shuying-latex-selects-the-pgf-driver-for-its-converter ()
   (let ((specification (shuying-latex-test--spec "$x$")))
     (setf (shuying-render-spec-preamble specification)
@@ -634,6 +870,11 @@
          (shuying-latex-precompile-preamble nil)
          (shuying-backends nil)
          (shuying--pending-jobs (make-hash-table :test #'equal))
+         (shuying-latex--warmed-preambles
+          (make-hash-table :test #'equal))
+         (shuying-latex--warmups (make-hash-table :test #'equal))
+         (shuying-latex--warmup-queue nil)
+         (shuying-latex--active-warmup nil)
          (original-make-process (symbol-function 'make-process))
          (process-count 0)
          results)
@@ -662,7 +903,13 @@
                 (30 (ert-fail "Timed out rendering LaTeX previews"))
               (while (< (length results) 12)
                 (accept-process-output nil 0.05))))
-          (should (= process-count 2))
+          (should
+           (= process-count
+              (+ 2
+                 (if (shuying-latex--miktex-engine-p
+                      (list (executable-find "latex")))
+                     1
+                   0))))
           (should (seq-every-p #'null (mapcar #'cdr results)))
           (dolist (result results)
             (should
@@ -807,6 +1054,11 @@
           (make-hash-table :test #'equal))
          (shuying-latex--failed-formats
           (make-hash-table :test #'equal))
+         (shuying-latex--warmed-preambles
+          (make-hash-table :test #'equal))
+         (shuying-latex--warmups (make-hash-table :test #'equal))
+         (shuying-latex--warmup-queue nil)
+         (shuying-latex--active-warmup nil)
          (original-make-process (symbol-function 'make-process))
          (process-count 0)
          results)
@@ -834,7 +1086,12 @@
                 (30 (ert-fail "Timed out precompiling a LaTeX preamble"))
               (while (< (length results) 1)
                 (accept-process-output nil 0.05)))
-            (should (= process-count 3))
+            (let ((warmup-count
+                   (if (shuying-latex--miktex-engine-p
+                        (list (executable-find "latex")))
+                       1
+                     0)))
+              (should (= process-count (+ 3 warmup-count))))
             (should (= (length
                         (directory-files
                          shuying-latex-format-directory nil "\\.fmt\\'"))
@@ -844,7 +1101,12 @@
                 (30 (ert-fail "Timed out reusing a LaTeX preamble"))
               (while (< (length results) 2)
                 (accept-process-output nil 0.05)))
-            (should (= process-count 5))
+            (let ((warmup-count
+                   (if (shuying-latex--miktex-engine-p
+                        (list (executable-find "latex")))
+                       1
+                     0)))
+              (should (= process-count (+ 5 warmup-count))))
             (should (seq-every-p #'null (mapcar #'cdr results)))
             (dolist (result results)
               (should (file-exists-p (car result)))
