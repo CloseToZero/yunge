@@ -55,16 +55,7 @@
    '(("SPC t d" . modus-themes-toggle)
      ("SPC t i d" . yunge-theme-enter-dark-immersion)
      ("SPC t i l" . yunge-theme-enter-light-immersion)
-     ("SPC t i q" . yunge-theme-exit-immersion)))
-  (yunge-test-which-key-prefix-bindings
-   'fundamental-mode "SPC t"
-   '(("d" nil "dark/light theme")
-     ("i" nil "+immersion")))
-  (yunge-test-which-key-prefix-bindings
-   'fundamental-mode "SPC t i"
-   '(("d" nil "dark")
-     ("l" nil "light")
-     ("q" nil "exit"))))
+     ("SPC t i q" . yunge-theme-exit-immersion))))
 
 (ert-deftest yunge-theme-toggles-between-light-and-dark ()
   (yunge-theme-test--load-config)

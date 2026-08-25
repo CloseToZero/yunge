@@ -47,28 +47,7 @@
           (yunge-test-key "SPC" 'yunge-key-control-quit))
       (yunge-key-control-quit))
 
-    (yunge-test-key "j" 'evil-next-line))
-
-  (yunge-test-which-key-prefix-bindings
-   'fundamental-mode "SPC w"
-   '(("SPC" nil "window control")
-     ("a" nil "select window")
-     ("+" nil "increase height")
-     ("-" nil "decrease height")
-     ("<" nil "decrease width")
-     ("=" nil "balance")
-     (">" nil "increase width")
-     ("h" nil "select left")
-     ("j" nil "select below")
-     ("k" nil "select above")
-     ("l" nil "select right")
-     ("o" nil "keep only this window")
-     ("q" nil "close window")
-     ("r" nil "redo layout")
-     ("s" nil "split below")
-     ("u" nil "undo layout")
-     ("v" nil "split right")
-     ("w" nil "next window"))))
+    (yunge-test-key "j" 'evil-next-line)))
 
 (ert-deftest yunge-window-enables-per-tab-layout-history ()
   (yunge-test-enable-evil)

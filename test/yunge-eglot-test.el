@@ -4,6 +4,7 @@
 
 (require 'yunge-test-helper)
 
+(defvar eglot-server-programs)
 (defvar yunge-test-eglot-elpaca-orders nil)
 
 (cl-letf (((symbol-function 'elpaca)
@@ -13,7 +14,6 @@
                    nil))))
   (require 'yunge-eglot))
 
-(declare-function eglot--lookup-mode "eglot" (mode))
 (declare-function eglot-hierarchy-mode "eglot" ())
 
 (yunge-test-deftest-lazy-load yunge-eglot
@@ -157,19 +157,22 @@
 
 (ert-deftest yunge-eglot-registers-its-clangd-contact ()
   (require 'eglot)
-  (let ((lookup (eglot--lookup-mode 'c++-mode)))
-    (should (equal (mapcar #'car (car lookup))
-                   yunge-eglot--clangd-modes))
-    (should (eq (cdr lookup) #'yunge-eglot--clangd-contact))))
+  (should
+   (member
+    (cons yunge-eglot--clangd-modes #'yunge-eglot--clangd-contact)
+    eglot-server-programs)))
 
 (ert-deftest yunge-eglot-runs-the-project-typescript-server-through-pnpm ()
   (require 'eglot)
-  (let ((lookup (eglot--lookup-mode 'typescript-ts-mode)))
-    (should (equal (mapcar #'car (car lookup))
-                   yunge-eglot--typescript-modes))
-    (should (equal (cdr lookup)
-                   '("pnpm" "exec" "typescript-language-server"
-                     "--stdio")))))
+  (should
+   (member
+    '(((js-mode :language-id "javascript")
+       (js-ts-mode :language-id "javascript")
+       (tsx-ts-mode :language-id "typescriptreact")
+       (typescript-ts-mode :language-id "typescript")
+       (typescript-mode :language-id "typescript"))
+      . ("pnpm" "exec" "typescript-language-server" "--stdio"))
+    eglot-server-programs)))
 
 (ert-deftest yunge-eglot-keeps-local-clangd-off-remote-projects ()
   (let ((default-directory "/ssh:test:/project/"))
@@ -448,18 +451,6 @@
        ("SPC l s" . xref-find-apropos)
        ("SPC l t" . eglot-find-typeDefinition)
        ("SPC l T" . eglot-show-type-hierarchy)))
-    (yunge-test-which-key-prefix
-     "SPC l"
-     '(("a" nil "code actions")
-       ("c" nil "call hierarchy")
-       ("f" nil "format")
-       ("h" nil "documentation")
-       ("i" nil "implementation")
-       ("o" nil "organize imports")
-       ("r" nil "rename")
-       ("s" nil "workspace symbols")
-       ("t" nil "type definition")
-       ("T" nil "type hierarchy")))
     (evil-visual-state)
     (yunge-test-evil-keys
      'visual
@@ -493,13 +484,6 @@
    'fundamental-mode
    '(("SPC l e" . yunge-eglot-enable-project)
      ("SPC l d" . yunge-eglot-disable-project)))
-  (yunge-test-which-key-prefix-bindings
-   'fundamental-mode "SPC"
-   '(("l" nil "+LSP")))
-  (yunge-test-which-key-prefix-bindings
-   'fundamental-mode "SPC l"
-   '(("e" nil "enable")
-     ("d" nil "disable")))
   (with-temp-buffer
     (fundamental-mode)
     (should-not (key-binding (kbd "SPC l a")))

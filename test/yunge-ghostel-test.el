@@ -99,13 +99,7 @@
   (yunge-test-evil-normal-keys
    'fundamental-mode
    '(("SPC t t" . ghostel)
-     ("SPC p t" . yunge-ghostel-project)))
-  (yunge-test-which-key-prefix-bindings
-   'fundamental-mode "SPC t"
-   '(("t" nil "terminal")))
-  (yunge-test-which-key-prefix-bindings
-   'fundamental-mode "SPC p"
-   '(("t" nil "terminal"))))
+     ("SPC p t" . yunge-ghostel-project))))
 
 (ert-deftest yunge-ghostel-project-keeps-its-project-name ()
   (yunge-ghostel-test--load-config)

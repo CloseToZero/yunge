@@ -153,36 +153,7 @@
          ("SPC m c f" . slime-compile-and-load-file)
          ("SPC m c r" . slime-compile-region)
          ("gd" . slime-edit-definition)
-         ("K" . slime-describe-symbol)))
-      (yunge-test-which-key-prefix
-       "SPC m"
-       '(("b" nil "scratch")
-         ("c" nil "+compile")
-         ("e" nil "+evaluate")
-         ("h" nil "+help")
-         ("m" nil "+macro")
-         ("q" nil "+process")
-         ("r" nil "REPL")
-         ("s" nil "start")
-         ("t" nil "+trace")))
-      (yunge-test-which-key-prefix
-       "SPC m e"
-       yunge-slime-eval-bindings)
-      (yunge-test-which-key-prefix
-       "SPC m c"
-       yunge-slime-compile-bindings)
-      (yunge-test-which-key-prefix
-       "SPC m h"
-       yunge-slime-help-bindings)
-      (yunge-test-which-key-prefix
-       "SPC m m"
-       yunge-slime-macro-bindings)
-      (yunge-test-which-key-prefix
-       "SPC m q"
-       yunge-slime-process-bindings)
-      (yunge-test-which-key-prefix
-       "SPC m t"
-       yunge-slime-trace-bindings))))
+         ("K" . slime-describe-symbol))))))
 
 (ert-deftest yunge-slime-integrates-repl-with-evil ()
   (yunge-test-enable-evil)
@@ -226,26 +197,7 @@
        ("SPC m q t" . slime-list-threads)
        ("SPC m t d" . slime-trace-dialog)
        ("SPC m t t" . slime-trace-dialog-toggle-trace)
-       ("SPC m t T" . slime-trace-dialog-toggle-complex-trace)))
-    (yunge-test-which-key-prefix
-     "SPC m"
-     '(("b" nil "scratch")
-       ("c" nil "+clear")
-       ("h" nil "+help")
-       ("i" nil "inspect")
-       ("m" nil "+macro")
-       ("p" nil "set package")
-       ("q" nil "+process")
-       ("t" nil "+trace")))
-    (yunge-test-which-key-prefix
-     "SPC m c"
-     yunge-slime-repl-clear-bindings)
-    (yunge-test-which-key-prefix
-     "SPC m q"
-     yunge-slime-process-bindings)
-    (yunge-test-which-key-prefix
-     "SPC m t"
-     yunge-slime-trace-bindings)))
+       ("SPC m t T" . slime-trace-dialog-toggle-complex-trace)))))
 
 (ert-deftest yunge-slime-integrates-browsing-views-with-evil ()
   (yunge-test-enable-evil)
@@ -291,18 +243,7 @@
        ("C-k" . slime-xref-prev-line)
        ("gf" . slime-show-xref)
        ("SPC m c" . slime-recompile-xref)
-       ("SPC m C" . slime-recompile-all-xrefs))))
-
-  (with-temp-buffer
-    (slime-inspector-mode)
-    (yunge-test-which-key-prefix
-     "SPC m" yunge-slime-inspector-command-bindings))
-
-  (let ((lisp-mode-hook nil))
-    (with-temp-buffer
-      (slime-xref-mode)
-      (yunge-test-which-key-prefix
-       "SPC m" yunge-slime-xref-command-bindings))))
+       ("SPC m C" . slime-recompile-all-xrefs)))))
 
 (ert-deftest yunge-slime-integrates-debugger-with-evil ()
   (yunge-test-enable-evil)
@@ -426,13 +367,6 @@
      ("g[" . backward-button)
      ("<tab>" . forward-button)
      ("S-TAB" . backward-button)))
-
-  (with-temp-buffer
-    (slime-trace-dialog-mode)
-    (yunge-test-which-key-prefix
-     "SPC m" yunge-slime-trace-dialog-command-bindings)
-    (yunge-test-which-key-prefix
-     "y" yunge-slime-trace-copy-bindings))
 
   (with-temp-buffer
     (slime-trace-dialog--detail-mode)

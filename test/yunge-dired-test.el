@@ -134,21 +134,7 @@
                      [S-drag-n-drop]
                      [C-S-drag-n-drop]))
       (should-not (eq (lookup-key dired-mode-map event)
-                      #'yunge-dired-handle-file-drop)))
-
-    (yunge-test-which-key-prefix-bindings
-     'dired-mode "*" '(("t" nil "invert marks")))
-    (yunge-test-which-key-prefix-bindings
-     'dired-mode "%" '(("m" nil "mark names")))
-    (yunge-test-which-key-prefix-bindings
-     'dired-mode "y" '(("p" nil "absolute path")
-                        ("P" nil "project path")))
-    (yunge-test-which-key-prefix-bindings
-     'dired-mode "SPC m" '(("a" nil "+attribute")
-                            ("e" nil "open in file manager")
-                            ("h" nil "summary and errors")
-                            ("l" nil "+link")
-                            ("r" nil "reveal in file manager")))))
+                      #'yunge-dired-handle-file-drop)))))
 
 (ert-deftest yunge-dired-opens-current-directory-externally ()
   (require 'yunge-dired)

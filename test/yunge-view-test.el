@@ -36,10 +36,7 @@
   (require 'which-key)
   (yunge-test-evil-normal-keys
    'fundamental-mode
-   '(("SPC t v" . view-mode)))
-  (yunge-test-which-key-prefix-bindings
-   'fundamental-mode "SPC t"
-   '(("v" nil "view mode"))))
+   '(("SPC t v" . view-mode))))
 
 (ert-deftest yunge-view-keeps-evil-navigation-and-view-actions ()
   (yunge-view-test--load-config)

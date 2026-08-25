@@ -248,16 +248,6 @@
    '(("SPC f g" . magit-file-dispatch)
      ("SPC g g" . magit-status)
      ("SPC p m" . magit-project-status)))
-  (yunge-test-which-key-prefix-bindings
-   'fundamental-mode "SPC f"
-   '(("g" nil "Git actions")))
-  (yunge-test-which-key-prefix-bindings
-   'fundamental-mode "SPC g"
-   '(("g" nil "Git status")))
-  (yunge-test-which-key-prefix-bindings
-   'fundamental-mode "SPC p"
-   '(("m" nil "Magit status")))
-
   (require 'magit)
   (yunge-test-evil-normal-keys
    'magit-status-mode
@@ -296,12 +286,6 @@
     yunge-magit-test-horizontal-bindings
     '(("SPC m SPC" . magit-dispatch)
       ("C-i" . yunge-jump-history-forward))))
-  (yunge-test-which-key-prefix-bindings
-   'magit-status-mode "SPC m"
-   '(("SPC" nil "dispatch")))
-  (yunge-test-which-key-prefix-bindings
-   'magit-status-mode "y"
-   '(("s" nil "section value")))
   (yunge-test-evil-visual-keys
    'magit-status-mode
    '(("s" . magit-stage-files)

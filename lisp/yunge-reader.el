@@ -120,8 +120,9 @@ An omitted format also defaults to `original'."
 MATCH-FUNCTION receives an absolute file name.  OPEN-FUNCTION receives that
 file and a completion function, which it calls with HANDLE, a properties
 plist, and an error value.  CLOSE-FUNCTION receives a `yunge-reader-document'.
-ATTACH-FUNCTION and DETACH-FUNCTION receive a document in the Reader buffer
-whose format-specific view they initialize or tear down.  OUTLINE-FUNCTION,
+ATTACH-FUNCTION receives a document and its optional initial place in the
+Reader buffer whose format-specific view it initializes.  DETACH-FUNCTION
+receives the document whose view it tears down.  OUTLINE-FUNCTION,
 SEARCH-FUNCTION, and SELECTION-TEXT-FUNCTION are explicit asynchronous
 capabilities.  Each receives a document, its argument value, and a completion
 function, which it calls with a value and an error value.
@@ -1596,14 +1597,14 @@ Only the primary view's active presentation may replace the persistent place."
     (insert (apply #'format format-string arguments) "\n")
     (set-buffer-modified-p nil)))
 
-(defun yunge-reader--attach-view (document)
-  "Attach DOCUMENT's driver view to the current Reader buffer."
+(defun yunge-reader--attach-view (document initial-place)
+  "Attach DOCUMENT's driver view with INITIAL-PLACE to the current buffer."
   (let* ((driver (yunge-reader-document-driver document))
          (attach (yunge-reader-driver-attach-function driver)))
     ;; DETACH must be able to clean up a partially attached view when ATTACH
     ;; signals after installing buffer-local state.
     (setq yunge-reader--view-attached t)
-    (funcall attach document)))
+    (funcall attach document initial-place)))
 
 (defun yunge-reader--detach-view (document)
   "Detach DOCUMENT's driver view from the current Reader buffer."
@@ -1748,7 +1749,9 @@ Only the primary view's active presentation may replace the persistent place."
         (let (accepted prepare-error)
           (condition-case error-data
               (progn
-                (yunge-reader--attach-view document)
+                (yunge-reader--attach-view
+                 document (and yunge-reader--pending-place
+                               (copy-tree yunge-reader--pending-place t)))
                 (setq accepted (yunge-reader--restore-open-place)))
             (error (setq prepare-error error-data)))
           (if prepare-error

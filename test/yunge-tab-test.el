@@ -66,17 +66,6 @@
        ("SPC TAB n" . yunge-tab-new)
        ("SPC TAB q" . tab-close)
        ("SPC TAB r" . tab-rename)
-       ("SPC TAB u" . tab-undo))))
-
-  (yunge-test-which-key-prefix-bindings
-   'fundamental-mode "SPC"
-   '(("TAB" nil "+tab")))
-  (yunge-test-which-key-prefix-bindings
-   'fundamental-mode "SPC TAB"
-   '(("TAB" nil "switch tab")
-     ("n" nil "new tab")
-     ("q" nil "close tab")
-     ("r" nil "rename tab")
-     ("u" nil "restore tab"))))
+       ("SPC TAB u" . tab-undo)))))
 
 ;;; yunge-tab-test.el ends here

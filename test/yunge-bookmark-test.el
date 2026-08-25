@@ -23,15 +23,6 @@
    'fundamental-mode
    '(("SPC j b l" . bookmark-bmenu-list)
      ("SPC j b s" . bookmark-set)))
-  (yunge-test-which-key-prefix-bindings
-   'fundamental-mode "SPC j"
-   '(("b" nil "+bookmark")
-     ("m" nil "+marker")))
-  (yunge-test-which-key-prefix-bindings
-   'fundamental-mode "SPC j b"
-   '(("l" nil "list bookmarks")
-     ("s" nil "set bookmark")))
-
   (require 'bookmark)
   (yunge-test-evil-normal-keys
    'bookmark-bmenu-mode

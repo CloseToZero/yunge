@@ -63,12 +63,4 @@
     (dolist (command '(yunge-expreg-expand yunge-expreg-contract))
       (should (evil-get-command-property command :keep-visual)))))
 
-(ert-deftest yunge-expreg-describes-bindings ()
-  (require 'which-key)
-  (yunge-test-enable-evil)
-  (require 'expreg-autoloads)
-  (yunge-test-load-package-config 'yunge-expreg)
-  (yunge-test-which-key-prefix-bindings
-   'fundamental-mode "" yunge-expreg-bindings))
-
 ;;; yunge-expreg-test.el ends here

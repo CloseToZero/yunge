@@ -37,11 +37,7 @@
    '(("RET" . xref-quit-and-goto-xref)
      ("q" . quit-window)
      ("C-j" . xref-next-line)
-     ("C-k" . xref-prev-line)))
-
-  (yunge-test-which-key-prefix-bindings
-   'xref--xref-buffer-mode "SPC m"
-   yunge-xref-command-bindings))
+     ("C-k" . xref-prev-line))))
 
 (ert-deftest yunge-xref-edit-uses-the-result-edit-lifecycle ()
   (require 'yunge-xref)

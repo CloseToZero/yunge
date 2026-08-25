@@ -2080,14 +2080,38 @@
     (should (= location-notifications 1))
     (should (= selection-notifications 1))))
 
-(ert-deftest yunge-reader-webview-moves-before-synchronizing-focus ()
-  (let (calls)
-    (cl-letf (((symbol-function 'yunge-reader-webview--sync-views)
-               (lambda (&rest _arguments) (push 'views calls)))
-              ((symbol-function 'yunge-reader-webview--sync-native-focus)
-               (lambda (&rest _arguments) (push 'focus calls))))
-      (yunge-reader-webview--window-selection-changed 'frame)
-      (should (equal (nreverse calls) '(views focus))))))
+(ert-deftest yunge-reader-webview-releases-old-focus-after-moving ()
+  (let* ((first
+          (yunge-reader-webview-test--surface
+           40 'ready :window 'first :native-focused t))
+         (second
+          (yunge-reader-webview-test--surface
+           41 'ready :window 'second))
+         (view (yunge-reader-webview--make-view :surface first))
+         (yunge-reader-webview--logical-views
+          (make-hash-table :test #'eq))
+         requests)
+    (yunge-reader-webview--register-surface view first)
+    (yunge-reader-webview--register-surface view second)
+    (puthash view t yunge-reader-webview--logical-views)
+    (cl-letf (((symbol-function 'yunge-reader-webview--visible-windows)
+               (lambda (_view) '(first second)))
+              ((symbol-function 'yunge-reader-webview--visible-window)
+               (lambda (_view) 'second))
+              ((symbol-function 'yunge-reader-webview--sync-surface)
+               #'ignore)
+              ((symbol-function 'selected-window)
+               (lambda () 'second))
+              ((symbol-function 'process-live-p)
+               (lambda (_process) t))
+              ((symbol-function 'yunge-reader-webview--request)
+               (lambda (operation parameters _complete &rest _options)
+                 (push (list operation parameters) requests))))
+      (yunge-reader-webview--window-selection-changed 'frame))
+    (should (eq (yunge-reader-webview--view-surface view) second))
+    (should
+     (equal requests
+            '(("view-focus-parent" ((view . 40))))))))
 
 (ert-deftest yunge-reader-webview-destroys-a-replaced-window-view ()
   (let* ((buffer (generate-new-buffer " *webview owner*"))

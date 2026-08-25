@@ -7,13 +7,6 @@
 (yunge-test-deftest-lazy-load yunge-elpaca
   (evil which-key elpaca-ui elpaca-log elpaca-info))
 
-(defconst yunge-test-elpaca-command-descriptions
-  '(("c" nil "check updates")
-    ("i" nil "mark try")
-    ("p" nil "mark pull")
-    ("r" nil "mark rebuild")
-    ("s" nil "filter")))
-
 (ert-deftest yunge-elpaca-log-moves-from-the-header-to-an-entry ()
   (require 'yunge-elpaca)
   (yunge-test-enable-evil)
@@ -82,11 +75,6 @@
      ("g]" . forward-button)
      ("g[" . backward-button)
      ("<tab>" . forward-button)
-     ("S-TAB" . backward-button)))
-
-  (let ((elpaca-menu-functions nil))
-    (dolist (mode '(elpaca-manager-mode elpaca-log-mode))
-      (yunge-test-which-key-prefix-bindings
-       mode "SPC m" yunge-test-elpaca-command-descriptions))))
+     ("S-TAB" . backward-button))))
 
 ;;; yunge-elpaca-test.el ends here

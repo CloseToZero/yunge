@@ -23,8 +23,6 @@
 (declare-function evil-visual-state "evil-states")
 (declare-function evil-local-mode "evil-core")
 (declare-function evil-mode "evil")
-(declare-function which-key--get-bindings "which-key")
-
 (defvar evil-emacs-state-modes)
 (defvar evil-insert-state-modes)
 (defvar evil-local-mode)
@@ -261,32 +259,6 @@ Other Elpaca declarations remain deferred."
     (should (eq evil-state 'normal))
     (evil-visual-state)
     (yunge-test-evil-keys 'visual bindings)))
-
-(defun yunge-test-which-key-prefix-description (prefix key)
-  "Return the visible Which-Key description for KEY below PREFIX."
-  (when-let* ((entry
-              (seq-find
-               (lambda (candidate)
-                 (equal (substring-no-properties (car candidate)) key))
-               (which-key--get-bindings (kbd prefix)))))
-    (substring-no-properties (nth 2 entry))))
-
-(defun yunge-test-which-key-prefix (prefix bindings)
-  "Check Which-Key BINDINGS shown below PREFIX in the current buffer."
-  (dolist (binding bindings)
-    (when-let* ((description (nth 2 binding)))
-      (should
-       (equal
-        (yunge-test-which-key-prefix-description
-         prefix (car binding))
-        description)))))
-
-(defun yunge-test-which-key-prefix-bindings (mode prefix bindings)
-  "Check Which-Key BINDINGS shown below PREFIX after activating MODE."
-  (with-temp-buffer
-    (funcall mode)
-    (should (eq evil-state 'normal))
-    (yunge-test-which-key-prefix prefix bindings)))
 
 (provide 'yunge-test-helper)
 

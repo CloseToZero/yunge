@@ -510,43 +510,42 @@ USER is non-nil when direct reader movement produced the location."
   (max yunge-reader-webview--epub-fixed-scale-min
        (min yunge-reader-webview--epub-fixed-scale-max scale)))
 
-(defun yunge-reader-epub--initial-font-scale ()
-  "Return the font scale to use before the EPUB surface opens."
+(defun yunge-reader-epub--initial-font-scale (&optional place)
+  "Return the font scale for optional initial PLACE."
   (yunge-reader-epub--font-scale
    (cond
-    ((null yunge-reader--pending-place)
+    ((null place)
      yunge-reader-epub-default-font-scale)
-    ((eq (plist-get yunge-reader--pending-place :zoom-mode)
-         'manual)
-     (plist-get yunge-reader--pending-place :scale))
+    ((eq (plist-get place :zoom-mode) 'manual)
+     (plist-get place :scale))
     (t
      (error
       "EPUB place has an unsupported zoom mode: %S"
-      (plist-get yunge-reader--pending-place :zoom-mode))))))
+      (plist-get place :zoom-mode))))))
 
-(defun yunge-reader-epub--initial-fixed-zoom-state ()
-  "Return initial fixed-layout zoom mode and retained manual scale."
-  (if (null yunge-reader--pending-place)
+(defun yunge-reader-epub--initial-fixed-zoom-state (&optional place)
+  "Return fixed-layout zoom mode and scale for optional initial PLACE."
+  (if (null place)
       (cons
        'fit-page
        (yunge-reader-epub--fixed-scale
         yunge-reader-epub-default-fixed-scale))
-    (let ((mode (plist-get yunge-reader--pending-place :zoom-mode))
+    (let ((mode (plist-get place :zoom-mode))
           (scale
            (yunge-reader-epub--fixed-scale
-            (plist-get yunge-reader--pending-place :scale))))
+            (plist-get place :scale))))
       (unless (memq mode '(manual fit-width fit-page))
         (error "EPUB place has an unsupported zoom mode: %S" mode))
       (cons mode scale))))
 
-(defun yunge-reader-epub--configure-zoom (layout)
-  "Configure Reader zoom state for EPUB LAYOUT and return renderer zoom."
+(defun yunge-reader-epub--configure-zoom (layout &optional initial-place)
+  "Configure zoom for EPUB LAYOUT and optional INITIAL-PLACE."
   (pcase layout
     ('reflow
      (let ((default
             (yunge-reader-epub--font-scale
              yunge-reader-epub-default-font-scale))
-           (scale (yunge-reader-epub--initial-font-scale)))
+           (scale (yunge-reader-epub--initial-font-scale initial-place)))
        (setq-local yunge-reader-default-scale default)
        (setq-local yunge-reader-minimum-scale
                    yunge-reader-epub-minimum-font-scale)
@@ -558,7 +557,8 @@ USER is non-nil when direct reader movement produced the location."
        scale))
     ('fixed
      (pcase-let* ((`(,mode . ,scale)
-                   (yunge-reader-epub--initial-fixed-zoom-state)))
+                  (yunge-reader-epub--initial-fixed-zoom-state
+                   initial-place)))
        (setq-local yunge-reader-default-scale
                    (yunge-reader-epub--fixed-scale
                     yunge-reader-epub-default-fixed-scale))
@@ -796,8 +796,8 @@ VALUES is an alist containing complete, already bounded property values."
               ((not (yunge-reader-webview--view-destroyed view))))
     (yunge-reader-webview--refresh-view-appearance view)))
 
-(defun yunge-reader-epub--attach (document)
-  "Attach a persistent EPUB WebView for DOCUMENT."
+(defun yunge-reader-epub--attach (document initial-place)
+  "Attach a persistent EPUB WebView for DOCUMENT at INITIAL-PLACE."
   (let ((handle (yunge-reader-document-handle document))
         (layout (yunge-reader-document-layout document)))
     (unless (and (yunge-reader-epub-handle-p handle)
@@ -805,7 +805,8 @@ VALUES is an alist containing complete, already bounded property values."
       (error "EPUB document has no live publication"))
     (unless (memq layout '(fixed reflow))
       (error "EPUB document has invalid layout: %S" layout))
-    (let* ((zoom (yunge-reader-epub--configure-zoom layout))
+    (let* ((zoom
+            (yunge-reader-epub--configure-zoom layout initial-place))
            (font-scale
             (and (eq layout 'reflow) zoom))
            (style

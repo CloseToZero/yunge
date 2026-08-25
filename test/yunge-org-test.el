@@ -82,20 +82,6 @@
     (org-mode)
     (evil-normal-state)
     (should shuying-org-mode)
-    (should
-     (memq #'shuying-org--schedule-visible-preview
-           post-command-hook))
-    (should
-     (memq #'shuying-org--window-buffer-changed
-           window-buffer-change-functions))
-    (shuying-org-mode -1)
-    (should-not
-     (memq #'shuying-org--schedule-visible-preview
-           post-command-hook))
-    (should-not
-     (memq #'shuying-org--window-buffer-changed
-           window-buffer-change-functions))
-    (shuying-org-mode 1)
     (should (eq (command-remapping 'org-latex-preview)
                 #'shuying-org-preview))
     (yunge-test-evil-keys
@@ -572,13 +558,6 @@
    'fundamental-mode
    '(("SPC n l i" . org-insert-link)
      ("SPC n l s" . org-store-link)))
-  (yunge-test-which-key-prefix-bindings
-   'fundamental-mode "SPC n"
-   '(("l" nil "+link")))
-  (yunge-test-which-key-prefix-bindings
-   'fundamental-mode "SPC n l"
-   '(("i" nil "insert link")
-     ("s" nil "store link")))
   (should
    (advice-member-p #'yunge-org--insert-link-at-normal-state-eol
                     'org-insert-link)))

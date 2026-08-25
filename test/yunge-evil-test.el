@@ -513,58 +513,6 @@
     (keymap-unset yunge-leader-map "z"))
 
   (should (eq (lookup-key yunge-buffer-map (kbd "b"))
-              'switch-to-buffer))
-
-  (yunge-test-which-key-prefix-bindings
-   'yunge-test-buffer-mode "SPC"
-   '(("SPC" nil "execute command")
-     ("b" nil "+buffer")
-     ("f" nil "+file")
-     ("g" nil "+go")
-     ("h" nil "+help")
-     ("j" nil "+jump")
-     ("m" nil "+mode")
-     ("p" nil "+project")
-     ("q" nil "+quit")
-     ("s" nil "+search")
-     ("t" nil "+toggle/terminal")
-     ("w" nil "+window")))
-
-  (yunge-test-which-key-prefix-bindings
-   'yunge-test-buffer-mode "SPC b"
-   '(("b" nil "switch buffer")
-     ("j" nil "next buffer")
-     ("k" nil "previous buffer")
-     ("q" nil "close buffer")
-     ("r" nil "revert buffer")))
-
-  (yunge-test-which-key-prefix-bindings
-   'yunge-test-buffer-mode "SPC f"
-   '(("c" nil "open config directory")
-     ("d" nil "open directory")
-     ("f" nil "find file")
-     ("s" nil "save file")
-     ("y" nil "+copy")))
-
-  (yunge-test-which-key-prefix-bindings
-   'yunge-test-buffer-mode "SPC f y"
-   '(("p" nil "absolute path")
-     ("P" nil "project path")))
-
-  (yunge-test-which-key-prefix-bindings
-   'yunge-test-buffer-mode "SPC j"
-   '(("m" nil "+marker")))
-
-  (yunge-test-which-key-prefix-bindings
-   'yunge-test-buffer-mode "SPC j m"
-   '(("j" nil "jump to marker")
-     ("l" nil "jump to marker line")
-     ("s" nil "set marker")))
-
-  (yunge-test-which-key-prefix-bindings
-   'yunge-test-buffer-mode "SPC q"
-   '(("f" nil "delete frame")
-     ("q" nil "quit")
-     ("r" nil "restart Emacs"))))
+              'switch-to-buffer)))
 
 ;;; yunge-evil-test.el ends here

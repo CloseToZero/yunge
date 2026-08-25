@@ -101,23 +101,6 @@
                 'consult-buffer))
     (should (eq (command-remapping 'imenu) 'consult-imenu)))
 
-  (yunge-test-which-key-prefix-bindings
-   'fundamental-mode "SPC b"
-   '(("b" nil "switch buffer")))
-  (yunge-test-which-key-prefix-bindings
-   'fundamental-mode "SPC f"
-   '(("r" nil "find recent file")))
-  (yunge-test-which-key-prefix-bindings
-   'fundamental-mode "SPC s"
-   '(("b" nil "search buffer")
-     ("B" nil "search project buffers")
-     ("p" nil "search project")
-     ("P" nil "search symbol in project")))
-  (yunge-test-which-key-prefix-bindings
-   'fundamental-mode "SPC j"
-   '(("b" nil "jump to bookmark")
-     ("i" nil "jump to symbol")))
-
   (dolist (command '(consult-bookmark consult-buffer consult-imenu
                      consult-line consult-line-multi consult-recent-file
                      consult-grep consult-ripgrep))

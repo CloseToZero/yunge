@@ -173,7 +173,7 @@ following search command may already have tried to position its result."
                 `((page . ,page)
                   (offset . ,offset)))))))
 
-(defun yunge-reader-pdf--attach (_document)
+(defun yunge-reader-pdf--attach (_document _initial-place)
   "Attach the PDF view adapter to the current Reader buffer."
   (yunge-reader-pdf-view-mode 1))
 

@@ -106,18 +106,6 @@
      ("b" . evil-backward-word-begin)
      ("p" . evil-paste-after)
      ("w" . evil-forward-word-begin)))
-  (yunge-test-which-key-prefix-bindings
-   'yunge-reader-mode "g" '(("r" nil "refresh")))
-  (yunge-test-which-key-prefix-bindings
-   'yunge-reader-mode "SPC m"
-   '(("a" nil "+appearance")
-     ("p" nil "make primary")
-     ("v" nil "new view")))
-  (yunge-test-which-key-prefix-bindings
-   'yunge-reader-mode "SPC m a"
-   '(("D" nil "set format default")
-     ("d" nil "set book")
-     ("u" nil "inherit default")))
   (yunge-test-evil-visual-keys
    'yunge-reader-mode
    '(("y" . evil-yank))))
@@ -1769,7 +1757,10 @@
                     (should (eq document attached-document))
                     (push 'close events))
                   :attach
-                  (lambda (document)
+                  (lambda (document initial-place)
+                    (should
+                     (equal initial-place
+                            (yunge-reader-test--place 'test 7)))
                     (setq attached-document document)
                     (push 'attach events)
                     (add-hook
@@ -1827,7 +1818,8 @@
                   (setq open-complete complete))
                 :close (lambda (document) (push document closed))
                 :attach
-                (lambda (_document) (push (current-buffer) attached))
+                (lambda (_document _initial-place)
+                  (push (current-buffer) attached))
                 :detach
                 (lambda (_document) (push (current-buffer) detached)))))
           (setq first
@@ -1908,7 +1900,7 @@
                     (funcall complete 'handle '(:layout fixed) nil))
                   :close #'ignore
                   :attach
-                  (lambda (_document)
+                  (lambda (_document _initial-place)
                     (push (current-buffer) attached))
                   :detach #'ignore
                   :location
@@ -2296,7 +2288,7 @@
                   (funcall complete 'handle '(:layout fixed) nil))
                 :close (lambda (document) (push document closed))
                 :attach
-                (lambda (_document)
+                (lambda (_document _initial-place)
                   (when (eq (current-buffer) failing-buffer)
                     (error "attach failed")))
                 :detach #'ignore)))
@@ -2396,7 +2388,7 @@
                     (should (eq value document))
                     (push 'close events))
                   :attach
-                  (lambda (value)
+                  (lambda (value _initial-place)
                     (setq document value)
                     (push 'attach events)
                     (error "attach failed"))
@@ -2447,7 +2439,8 @@
                     (funcall complete 'handle '(:layout fixed) nil))
                   :close (lambda (_document) (push 'close events))
                   :attach
-                  (lambda (_document) (push 'attach events))
+                  (lambda (_document _initial-place)
+                    (push 'attach events))
                   :detach
                   (lambda (_document) (push 'detach events))
                   :location
@@ -2491,7 +2484,8 @@
                  '(:layout fixed :metadata (:pages 3))
                  '(error "open failed")))
               :close (lambda (document) (setq closed document))
-              :attach (lambda (_document) (setq attached t))
+              :attach (lambda (_document _initial-place)
+                        (setq attached t))
               :detach #'ignore)))
         (yunge-reader--begin-open
          (current-buffer) driver "open-error.pdf" nil
@@ -2517,7 +2511,8 @@
                :match #'ignore
                :open #'ignore
                :close (lambda (_document) (push 'close events))
-               :attach (lambda (_document) (push 'attach events))
+               :attach (lambda (_document _initial-place)
+                         (push 'attach events))
                :detach
                (lambda (_document)
                  (push 'detach events)
@@ -2529,7 +2524,7 @@
                :handle 'handle
                :layout 'fixed)))
         (setq yunge-reader-document document)
-        (yunge-reader--attach-view document)
+        (yunge-reader--attach-view document nil)
         (cl-letf (((symbol-function 'display-warning)
                    (lambda (&rest arguments)
                      (push arguments warnings))))

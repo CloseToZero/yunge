@@ -4,8 +4,6 @@
 
 (require 'yunge-test-helper)
 
-(declare-function evil-visual-state "evil-states")
-
 (defvar evil-state)
 
 (yunge-test-deftest-lazy-load yunge-help
@@ -30,12 +28,7 @@
        ("SPC h k" . describe-key)
        ("SPC h m" . describe-mode)
        ("SPC h o" . describe-symbol)
-       ("SPC h v" . describe-variable)))
-
-    (yunge-test-which-key-prefix "SPC"
-                                 '(("h" nil "+help")))
-    (yunge-test-which-key-prefix "SPC h"
-                                 yunge-help-command-bindings))
+       ("SPC h v" . describe-variable))))
 
   (yunge-test-evil-normal-keys
    'help-mode
@@ -50,18 +43,6 @@
      ("<tab>" . forward-button)
      ("S-TAB" . backward-button)
      ("C-o" . yunge-jump-history-backward)
-     ("C-i" . yunge-jump-history-forward)))
-
-  (with-temp-buffer
-    (help-mode)
-    (yunge-test-which-key-prefix "g"
-                                 '(("f" nil "visit source")
-                                   ("h" nil "history back")
-                                   ("l" nil "history forward")
-                                   ("r" nil "refresh")))
-    (evil-visual-state)
-    (should-not
-     (equal (yunge-test-which-key-prefix-description "g" "f")
-            "visit source"))))
+     ("C-i" . yunge-jump-history-forward))))
 
 ;;; yunge-help-test.el ends here

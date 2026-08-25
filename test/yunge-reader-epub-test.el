@@ -153,7 +153,7 @@
          ((symbol-function 'yunge-reader-epub--close)
           (lambda (_document) (cl-incf closes)))
          ((symbol-function 'yunge-reader-epub--attach)
-          (lambda (_document) (cl-incf attaches)))
+          (lambda (_document _initial-place) (cl-incf attaches)))
          ((symbol-function 'yunge-reader-epub--detach)
           (lambda (_document) (cl-incf detaches))))
       (let ((buffer (generate-new-buffer "yunge-reader-epub-file-test")))
@@ -276,19 +276,18 @@
         (should
          (eq (yunge-reader-epub--scroll-bar-mode window) 'hidden))))))
 
-(ert-deftest yunge-reader-epub-opens-with-a-pending-manual-scale ()
+(ert-deftest yunge-reader-epub-opens-with-an-initial-manual-scale ()
   (let ((yunge-reader-epub-default-font-scale 1.25)
         (yunge-reader-default-appearances '((epub . follow-emacs)))
         (yunge-reader-saved-document-state nil)
         (document (yunge-reader-epub-test--document))
+        (place '(:zoom-mode manual :scale 1.8))
         attached-appearance-function
         attached-style)
     (with-temp-buffer
       (yunge-reader-mode)
       (setf (yunge-reader-document-driver document) 'epub)
-      (setq yunge-reader-document document
-            yunge-reader--pending-place
-            '(:zoom-mode manual :scale 1.8))
+      (setq yunge-reader-document document)
       (cl-letf
           (((symbol-function
              'yunge-reader-webview--attach-shared-publication)
@@ -298,7 +297,7 @@
                (setq attached-appearance-function
                      (plist-get options :appearance-function)
                      attached-style (plist-get options :style)))))
-        (yunge-reader-epub--attach document))
+        (yunge-reader-epub--attach document place))
       (should yunge-reader-epub-view-mode)
       (should (= yunge-reader-default-scale 1.25))
       (should (= yunge-reader-minimum-scale 0.5))
@@ -392,7 +391,7 @@
               (setq attached-layout layout
                     attached-style (plist-get options :style)
                     attached-zoom (plist-get options :zoom)))))
-        (yunge-reader-epub--attach document))
+        (yunge-reader-epub--attach document nil))
       (should yunge-reader-epub-view-mode)
       (should-not yunge-reader-epub-reflow-view-mode)
       (should (eq attached-layout 'fixed))
@@ -410,19 +409,18 @@
 (ert-deftest yunge-reader-epub-restores-fixed-manual-zoom ()
   (let ((document
          (yunge-reader-epub-test--document nil 'fixed))
+        (place '(:zoom-mode manual :scale 1.8))
         attached-zoom)
     (with-temp-buffer
       (yunge-reader-mode)
-      (setq yunge-reader-document document
-            yunge-reader--pending-place
-            '(:zoom-mode manual :scale 1.8))
+      (setq yunge-reader-document document)
       (cl-letf
           (((symbol-function
              'yunge-reader-webview--attach-shared-publication)
             (lambda (_publication _layout _root _renderer _session
                      &rest options)
               (setq attached-zoom (plist-get options :zoom)))))
-        (yunge-reader-epub--attach document))
+        (yunge-reader-epub--attach document place))
       (should (= attached-zoom 1.8))
       (should (eq yunge-reader-zoom-mode 'manual))
       (should (= yunge-reader-scale 1.8))
@@ -432,19 +430,18 @@
 (ert-deftest yunge-reader-epub-restores-fixed-fit-zoom ()
   (let ((document
          (yunge-reader-epub-test--document nil 'fixed))
+        (place '(:zoom-mode fit-width :scale 1.4))
         attached-zoom)
     (with-temp-buffer
       (yunge-reader-mode)
-      (setq yunge-reader-document document
-            yunge-reader--pending-place
-            '(:zoom-mode fit-width :scale 1.4))
+      (setq yunge-reader-document document)
       (cl-letf
           (((symbol-function
              'yunge-reader-webview--attach-shared-publication)
             (lambda (_publication _layout _root _renderer _session
                      &rest options)
               (setq attached-zoom (plist-get options :zoom)))))
-        (yunge-reader-epub--attach document))
+        (yunge-reader-epub--attach document place))
       (should (eq attached-zoom 'fit-width))
       (should (eq yunge-reader-zoom-mode 'fit-width))
       (should (= yunge-reader-scale 1.4))
@@ -462,13 +459,10 @@
     (yunge-reader-epub--update-header)
     (should (string-match-p "EPUB  35%  Font" header-line-format))))
 
-(ert-deftest yunge-reader-epub-rejects-a-nonmanual-pending-place ()
-  (with-temp-buffer
-    (yunge-reader-mode)
-    (setq yunge-reader--pending-place
-          '(:zoom-mode fit-width :scale 1.0))
-    (should-error
-     (yunge-reader-epub--initial-font-scale))))
+(ert-deftest yunge-reader-epub-rejects-a-nonmanual-initial-place ()
+  (should-error
+   (yunge-reader-epub--initial-font-scale
+    '(:zoom-mode fit-width :scale 1.0))))
 
 (ert-deftest yunge-reader-epub-maps-reader-zoom-to-font-scale ()
   (let ((yunge-reader-epub-default-font-scale 1.25)
@@ -693,7 +687,7 @@
             (lambda (_session publication complete)
               (setq closed-publication publication
                     close-complete complete))))
-        (yunge-reader-epub--attach document)
+        (yunge-reader-epub--attach document nil)
         (should yunge-reader-epub-view-mode)
         (should (= (yunge-reader-webview--view-publication
                     yunge-reader-webview--buffer-view)
@@ -825,18 +819,18 @@
 
 (ert-deftest yunge-reader-epub-navigation-cancels-a-delayed-search-jump ()
   (let ((view (yunge-reader-webview--make-view))
-        (yunge-reader-search-query "needle")
-        (yunge-reader--search-navigation-intent 'forward)
+        (detaches 0)
         navigated)
     (cl-letf
         (((symbol-function 'yunge-reader-webview--current-ready-view)
           (lambda () view))
          ((symbol-function 'yunge-reader-webview--navigate-view)
           (lambda (actual command complete &optional target)
-            (setq navigated (list actual command complete target)))))
+            (setq navigated (list actual command complete target))))
+         ((symbol-function 'yunge-reader--detach-search-navigation)
+          (lambda () (cl-incf detaches))))
       (yunge-reader-epub--navigate "next-screen"))
-    (should-not yunge-reader--search-navigation-intent)
-    (should yunge-reader--search-detached)
+    (should (= detaches 1))
     (should (eq (car navigated) view))
     (should (equal (cadr navigated) "next-screen"))))
 
@@ -1454,14 +1448,15 @@
         (with-current-buffer buffer
           (yunge-reader-mode)
           (yunge-reader-epub-view-mode 1)
-          (setq yunge-reader-webview--buffer-view view
-                yunge-reader-search-query "needle"
-                yunge-reader--search-navigation-intent 'forward)
-          (cl-letf (((symbol-function 'yunge-reader-record-place)
-                     #'ignore))
-            (yunge-reader-epub--location-changed view t))
-          (should-not yunge-reader--search-navigation-intent)
-          (should yunge-reader--search-detached))
+          (setq yunge-reader-webview--buffer-view view)
+          (let ((detaches 0))
+            (cl-letf (((symbol-function 'yunge-reader-record-place)
+                       #'ignore)
+                      ((symbol-function
+                        'yunge-reader--detach-search-navigation)
+                       (lambda () (cl-incf detaches))))
+              (yunge-reader-epub--location-changed view t))
+            (should (= detaches 1))))
       (kill-buffer buffer))))
 
 ;;; yunge-reader-epub-test.el ends here

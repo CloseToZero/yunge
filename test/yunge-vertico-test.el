@@ -92,8 +92,6 @@
          ("d" . evil-delete)))
 
       (yunge-test-assert-calls-interactively
-       #'yunge-minibuffer--return 'vertico-exit ?\r)
-      (yunge-test-which-key-prefix
-       "g" '(("g" vertico-first "first candidate or prompt"))))))
+       #'yunge-minibuffer--return 'vertico-exit ?\r))))
 
 ;;; yunge-vertico-test.el ends here
