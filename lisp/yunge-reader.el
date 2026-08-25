@@ -368,8 +368,14 @@ unscaled coordinate system of UNIT."
 (defvar-local yunge-reader--search-detached nil
   "Non-nil after manual reading movement detached search navigation.")
 
-(defvar-local yunge-reader--search-done nil
-  "Non-nil after the active search reaches the document end.")
+(defvar-local yunge-reader--search-segment-done nil
+  "Non-nil after the active search segment reaches its boundary.")
+
+(defvar-local yunge-reader--search-complete nil
+  "Non-nil when results cover one complete traversal of the document.")
+
+(defvar-local yunge-reader--search-cycle-seen nil
+  "Equal hash table of result endpoints seen before or during a wrap.")
 
 (defvar-local yunge-reader--search-pending nil
   "Non-nil while one search batch is outstanding.")
@@ -2510,6 +2516,32 @@ Render OUTLINE when non-nil; otherwise display STATUS."
              (or (yunge-reader-search-result-after result) ""))))
    100 nil nil t))
 
+(defun yunge-reader--search-result-key (result)
+  "Return the stable endpoint identity of search RESULT."
+  (list (yunge-reader-search-result-start result)
+        (yunge-reader-search-result-end result)))
+
+(defun yunge-reader--search-seen-table ()
+  "Return an endpoint table initialized from loaded search results."
+  (let ((table (make-hash-table :test #'equal)))
+    (dolist (result yunge-reader-search-results)
+      (puthash (yunge-reader--search-result-key result) t table))
+    table))
+
+(defun yunge-reader--split-wrapped-search-results (results)
+  "Split wrapped RESULTS at the first endpoint seen in this traversal.
+Return (UNSEEN . REPEATED), where UNSEEN is the prefix before that endpoint
+and REPEATED is non-nil when the complete search cycle has closed."
+  (let (unseen repeated)
+    (while (and results (not repeated))
+      (let* ((result (pop results))
+             (key (yunge-reader--search-result-key result)))
+        (if (gethash key yunge-reader--search-cycle-seen)
+            (setq repeated t)
+          (puthash key t yunge-reader--search-cycle-seen)
+          (push result unseen))))
+    (cons (nreverse unseen) repeated)))
+
 (defun yunge-reader--set-search-index (index)
   "Make loaded search result INDEX current and notify the view."
   (let ((result (nth index yunge-reader-search-results)))
@@ -2526,7 +2558,7 @@ Render OUTLINE when non-nil; otherwise display STATUS."
       (message
        "Match %d%s: %s"
        (1+ index)
-       (if yunge-reader--search-done
+       (if yunge-reader--search-complete
            (format "/%d" (length yunge-reader-search-results))
          "+")
        (yunge-reader--search-context result)))
@@ -2556,6 +2588,18 @@ Render OUTLINE when non-nil; otherwise display STATUS."
     (setq yunge-reader--search-navigation-intent nil))
   (yunge-reader--set-search-index index))
 
+(defun yunge-reader--finish-complete-search-navigation (steps)
+  "Move STEPS through the complete result cycle in the pending direction."
+  (let* ((total (length yunge-reader-search-results))
+         (delta
+          (if (eq yunge-reader--search-navigation-intent
+                  yunge-reader--search-direction)
+              1
+            -1))
+         (index
+          (mod (+ yunge-reader--search-index (* delta steps)) total)))
+    (yunge-reader--finish-search-navigation index steps)))
+
 (defun yunge-reader--finish-empty-search ()
   "Finish pending search navigation when no results exist."
   (setq yunge-reader--search-navigation-intent nil
@@ -2565,7 +2609,8 @@ Render OUTLINE when non-nil; otherwise display STATUS."
 (defun yunge-reader--search-navigation-ready-p ()
   "Return non-nil when the current intent needs no additional batch."
   (and yunge-reader--search-navigation-intent
-       (or yunge-reader--search-done
+       (or yunge-reader--search-complete
+           yunge-reader--search-segment-done
            (and (null yunge-reader--search-index)
                 yunge-reader-search-results)
            (and (natnump yunge-reader--search-index)
@@ -2584,24 +2629,30 @@ Render OUTLINE when non-nil; otherwise display STATUS."
        (error "Invalid Reader search direction: %S" direction)))))
 
 (defun yunge-reader--start-search-run
-    (direction origin &optional wrapped navigation-count)
+    (direction origin &optional wrapped navigation-count preserve-results)
   "Start a DIRECTION search at stable ORIGIN.
 When WRAPPED is non-nil, ORIGIN is the corresponding document boundary.
-NAVIGATION-COUNT retains pending moves across a wrapped search run."
+NAVIGATION-COUNT retains pending moves across a wrapped search run.
+When PRESERVE-RESULTS is non-nil, retain the loaded traversal prefix while
+starting its wrapped continuation."
   (unless (memq direction '(forward backward))
     (error "Invalid Reader search direction: %S" direction))
   (let ((obsolete yunge-reader--search-task))
     (cl-incf yunge-reader--search-generation)
-    (setq yunge-reader-search-results nil
-          yunge-reader-search-result nil
-          yunge-reader-search-highlight-visible t
-          yunge-reader--search-index nil
+    (unless preserve-results
+      (setq yunge-reader-search-results nil
+            yunge-reader-search-result nil
+            yunge-reader--search-index nil))
+    (setq yunge-reader-search-highlight-visible t
           yunge-reader--search-cursor nil
           yunge-reader--search-direction direction
           yunge-reader--search-origin origin
           yunge-reader--search-wrapped wrapped
           yunge-reader--search-detached nil
-          yunge-reader--search-done nil
+          yunge-reader--search-segment-done nil
+          yunge-reader--search-complete nil
+          yunge-reader--search-cycle-seen
+          (and preserve-results (yunge-reader--search-seen-table))
           yunge-reader--search-pending nil
           yunge-reader--search-task nil
           yunge-reader--search-navigation-intent direction
@@ -2609,7 +2660,8 @@ NAVIGATION-COUNT retains pending moves across a wrapped search run."
           (max 1 (or navigation-count 1)))
     (when (yunge-reader-task-active-p obsolete)
       (yunge-reader-task-cancel obsolete "The search run was replaced"))
-    (run-hooks 'yunge-reader-search-result-hook)
+    (unless preserve-results
+      (run-hooks 'yunge-reader-search-result-hook))
     (yunge-reader--drive-search-navigation)))
 
 (defun yunge-reader--wrap-search-run ()
@@ -2621,7 +2673,7 @@ NAVIGATION-COUNT retains pending moves across a wrapped search run."
          "Search wrapped to document end"
        "Search wrapped to document beginning"))
     (yunge-reader--start-search-run
-     direction nil t navigation-count)))
+     direction nil t navigation-count t)))
 
 (defun yunge-reader--drive-search-navigation ()
   "Fulfill pending search moves without queuing command events."
@@ -2629,6 +2681,10 @@ NAVIGATION-COUNT retains pending moves across a wrapped search run."
     (when yunge-reader--search-navigation-intent
       (let ((steps (yunge-reader--search-navigation-steps)))
         (cond
+         ((and yunge-reader--search-complete
+               (natnump yunge-reader--search-index)
+               yunge-reader-search-results)
+          (yunge-reader--finish-complete-search-navigation steps))
          ((and (natnump yunge-reader--search-index)
                (< (1+ yunge-reader--search-index)
                   (length yunge-reader-search-results)))
@@ -2649,12 +2705,10 @@ NAVIGATION-COUNT retains pending moves across a wrapped search run."
              (1- consumed) consumed)
             (when yunge-reader--search-navigation-intent
               (yunge-reader--drive-search-navigation))))
-         (yunge-reader--search-done
-          (if (or yunge-reader-search-results
-                  (and yunge-reader--search-origin
-                       (not yunge-reader--search-wrapped)))
-              (yunge-reader--wrap-search-run)
-            (yunge-reader--finish-empty-search)))
+         (yunge-reader--search-segment-done
+          (if yunge-reader--search-complete
+              (yunge-reader--finish-empty-search)
+            (yunge-reader--wrap-search-run)))
          (t
           (yunge-reader--request-search-batch)))))))
 
@@ -2689,14 +2743,36 @@ NAVIGATION-COUNT retains pending moves across a wrapped search run."
            "Reader driver returned an invalid search batch"
            :warning))
          (t
-          (let ((new-results
-                 (yunge-reader-search-batch-results value))
-                (cursor (yunge-reader-search-batch-cursor value))
-                (done (yunge-reader-search-batch-done value)))
+          (let* ((native-results
+                  (yunge-reader-search-batch-results value))
+                 (native-cursor (yunge-reader-search-batch-cursor value))
+                 (native-done (yunge-reader-search-batch-done value))
+                 (split
+                  (if yunge-reader--search-wrapped
+                      (progn
+                        (unless (hash-table-p
+                                 yunge-reader--search-cycle-seen)
+                          (setq yunge-reader--search-cycle-seen
+                                (yunge-reader--search-seen-table)))
+                        (yunge-reader--split-wrapped-search-results
+                         native-results))
+                    (cons native-results nil)))
+                 (new-results (car split))
+                 (repeated (cdr split))
+                 (done (or native-done repeated))
+                 (complete
+                  (or yunge-reader--search-complete
+                      (and done
+                           (or yunge-reader--search-wrapped
+                               (null yunge-reader--search-origin)))))
+                 (cursor (and (not repeated) native-cursor)))
             (setq yunge-reader-search-results
                   (append yunge-reader-search-results new-results)
                   yunge-reader--search-cursor cursor
-                  yunge-reader--search-done done)
+                  yunge-reader--search-segment-done done
+                  yunge-reader--search-complete complete
+                  yunge-reader--search-cycle-seen
+                  (and (not complete) yunge-reader--search-cycle-seen))
             (cond
              ((and (not done) (equal cursor old-cursor))
               (setq yunge-reader--search-navigation-intent nil
@@ -2767,7 +2843,8 @@ NAVIGATION-COUNT retains pending moves across a wrapped search run."
    (yunge-reader--search-detached
     (yunge-reader--start-search-run
      direction (yunge-reader--current-position)))
-   ((not (eq direction yunge-reader--search-direction))
+   ((and (not yunge-reader--search-complete)
+         (not (eq direction yunge-reader--search-direction)))
     (yunge-reader--start-search-run
      direction
      (or (yunge-reader--search-result-origin direction)
@@ -2849,7 +2926,9 @@ Case is ignored unless QUERY contains an uppercase character."
           yunge-reader--search-origin nil
           yunge-reader--search-wrapped nil
           yunge-reader--search-detached nil
-          yunge-reader--search-done nil
+          yunge-reader--search-segment-done nil
+          yunge-reader--search-complete nil
+          yunge-reader--search-cycle-seen nil
           yunge-reader--search-pending nil
           yunge-reader--search-task nil
           yunge-reader--search-navigation-intent nil

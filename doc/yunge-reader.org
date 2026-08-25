@@ -71,6 +71,11 @@ than queuing key events.  =C-g= and =ESC= cancel the delayed jump and hide its
 paint without ending the search.  Explicit reading movement instead detaches
 the old run.  Its one native batch may finish, but it cannot move the view; the
 next =n/N= starts in that direction from the new stable reading position.
+Reader retains discovered results across the first document-boundary wrap.
+When the wrapped traversal reaches an already-seen stable result, the complete
+cycle is cached and the status changes from =Match N+= to =Match N/TOTAL=.
+Later =n/N= navigates that complete result cycle in either direction without
+requesting more native batches; this includes the =Match 1/1= case.
 
 =M-x yunge-reader-new-view= creates an independent buffer at the current
 stable location and zoom while sharing the open document resource.  It refuses
