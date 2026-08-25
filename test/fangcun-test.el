@@ -473,14 +473,9 @@
           (lambda (_symbol value &optional _comment)
             (setq fangcun-yiyus value))))
       (fangcun-yiyu-remove 'personal))
-    (should-not fangcun--session-active-p)
-    (should-not fangcun--session-yiyus)
-    (fangcun--call-with-database
-     (lambda (database)
-       (should
-        (equal (fangcun--database-counts database)
-               '(:yiyus 0 :files 0 :nodes 0 :aliases 0 :tags 0
-                 :links 0)))))
+    (should-not (fangcun-node-list))
+    (should-not (fangcun-node-from-id "personal-file"))
+    (should-not (fangcun-backlink-list "personal-file"))
     (should (file-exists-p personal-file))))
 
 (ert-deftest fangcun-records-files-without-nodes ()
@@ -490,24 +485,7 @@
       (fangcun-test--write-file empty-file "")
       (should
        (equal (fangcun-db-sync)
-              '(:yiyus 2 :files 3 :nodes 4 :aliases 0 :tags 0 :links 1)))
-      (fangcun--call-with-database
-       (lambda (database)
-         (let ((rows
-                (sqlite-select
-                 database
-                 (concat
-                  "SELECT yiyu_id, file, mtime, size FROM files "
-                  "ORDER BY yiyu_id, file"))))
-           (should (= (length rows) 3))
-           (let ((row
-                  (seq-find
-                   (lambda (candidate)
-                     (equal (elt candidate 1) "empty.org"))
-                   rows)))
-             (should (equal (elt row 0) "personal"))
-             (should (numberp (elt row 2)))
-             (should (= (elt row 3) 0)))))))))
+              '(:yiyus 2 :files 3 :nodes 4 :aliases 0 :tags 0 :links 1))))))
 
 (ert-deftest fangcun-file-owns-nodes-aliases-tags-and-outgoing-links ()
   (fangcun-test-with-notes
@@ -531,28 +509,21 @@
     (should
      (equal (fangcun-db-sync)
             '(:yiyus 2 :files 2 :nodes 2 :aliases 1 :tags 2 :links 2)))
-    (fangcun--call-with-database
-     (lambda (database)
-       (sqlite-execute
-        database
-        (concat
-         "DELETE FROM files "
-         "WHERE yiyu_id = ? AND file = ?")
-        (vector "personal" "theorems.org"))
-       (should
-        (equal
-         (sqlite-select database "SELECT id FROM nodes")
-         '(("work-file"))))
-       (should-not (sqlite-select database "SELECT alias FROM aliases"))
-       (should
-        (equal (sqlite-select database "SELECT tag FROM tags")
-               '(("work"))))
-       (should
-        (equal
-         (sqlite-select
-          database
-          "SELECT source_id, target_id FROM links")
-         '(("work-file" "personal-file"))))))))
+    (delete-file personal-file)
+    (should-not (fangcun-node-from-id "personal-file"))
+    (should
+     (equal (mapcar #'fangcun-node-id (fangcun-node-list))
+            '("work-file")))
+    (should
+     (equal (fangcun-node-tags (fangcun-node-from-id "work-file"))
+            '("work")))
+    (should-not (fangcun-backlink-list "work-file"))
+    (let ((backlinks (fangcun-backlink-list "personal-file")))
+      (should (= (length backlinks) 1))
+      (should
+       (equal
+        (fangcun-node-id (fangcun-backlink-node (car backlinks)))
+        "work-file")))))
 
 (ert-deftest fangcun-indexes-and-replaces-node-aliases ()
   (fangcun-test-with-notes
@@ -1498,47 +1469,39 @@
       (should
        (equal (fangcun-db-sync)
               '(:yiyus 2 :files 4 :nodes 6 :aliases 0 :tags 0 :links 6)))
-      (fangcun--call-with-database
-       (lambda (database)
-         (let ((rows
-                (sqlite-select
-                 database
-                 (concat
-                  "SELECT source_id, target_id, position "
-                  "FROM links WHERE target_id = 'work-file' "
-                  "ORDER BY position"))))
-           (should
-            (equal (mapcar
-                    (lambda (row)
-                      (list (elt row 0) (elt row 1)))
-                    rows)
-                   '(("source-file" "work-file")
-                     ("source-file" "work-file")
-                     ("source-file" "work-file")
-                     ("parent" "work-file")
-                     ("parent" "work-file"))))
-           (should
-            (equal (mapcar (lambda (row) (elt row 2)) rows)
-                   (sort
-                    (mapcar (lambda (row) (elt row 2)) rows)
-                    #'<))))
-         (should
-          (equal
-           (mapcar
-            (lambda (row)
-              (list (elt row 0) (elt row 1)))
-            (sqlite-select
-             database
-             (concat
-              "SELECT source_id, target_id FROM links "
-              "WHERE target_id = 'source'")))
-           '(("theorem" "source"))))
-         (should-not
-          (sqlite-select
-           database
-           (concat
-            "SELECT target_id FROM links "
-            "WHERE target_id LIKE 'ignored-%'"))))))))
+      (let* ((backlinks (fangcun-backlink-list "work-file"))
+             (source
+              (seq-find
+               (lambda (backlink)
+                 (equal
+                  (fangcun-node-id (fangcun-backlink-node backlink))
+                  "source-file"))
+               backlinks))
+             (parent
+              (seq-find
+               (lambda (backlink)
+                 (equal
+                  (fangcun-node-id (fangcun-backlink-node backlink))
+                  "parent"))
+               backlinks))
+             (occurrences
+              (fangcun-backlink-occurrence-list "work-file")))
+        (should (= (length backlinks) 2))
+        (should (= (fangcun-backlink-count source) 3))
+        (should (= (fangcun-backlink-count parent) 2))
+        (should (= (length occurrences) 5)))
+      (let ((backlinks (fangcun-backlink-list "source")))
+        (should (= (length backlinks) 1))
+        (should
+         (equal
+          (fangcun-node-id (fangcun-backlink-node (car backlinks)))
+          "theorem")))
+      (dolist (id '("ignored-keyword"
+                    "ignored-property"
+                    "ignored-source"
+                    "ignored-comment"
+                    "ignored-line-comment"))
+        (should-not (fangcun-backlink-list id))))))
 
 (ert-deftest fangcun-finds-a-backlink-at-its-first-occurrence ()
   (fangcun-test-with-notes
