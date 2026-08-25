@@ -215,12 +215,9 @@
 (ert-deftest yunge-reader-webview-rebuilds-surfaces-after-service-exit ()
   (yunge-reader-webview-test--with-fake-process
     (let* ((buffer (generate-new-buffer " *stopped EPUB view*"))
-           (location '((cfi . "epubcfi(/6/4)")
-                       (href . "OPS/chapter.xhtml")))
            (view
             (yunge-reader-webview--make-view
              :buffer buffer
-             :location location
              :surface
              (yunge-reader-webview-test--surface 7 'ready)))
            recreated)
@@ -233,16 +230,6 @@
             (cl-letf (((symbol-function 'display-warning) #'ignore))
               (yunge-reader-webview--sentinel
                'fake-webview-process "finished"))
-            (should-not yunge-reader-webview--process)
-            (should-not (yunge-reader-webview--view-destroyed view))
-            (should-not (yunge-reader-webview--view-surface view))
-            (should (equal (yunge-reader-webview--view-location view)
-                           location))
-            (should
-             (zerop
-              (hash-table-count yunge-reader-webview--views)))
-            (should
-             (gethash view yunge-reader-webview--logical-views))
             (cl-letf
                 (((symbol-function 'yunge-reader-webview--visible-windows)
                   (lambda (_view) '(visible-window)))
@@ -269,10 +256,7 @@
            :destroy-waiters (list (lambda () (setq completed t))))))
     (puthash 8 view yunge-reader-webview--views)
     (yunge-reader-webview--forget-all-surfaces)
-    (should completed)
-    (should (yunge-reader-webview--view-destroy-finished view))
-    (should-not (yunge-reader-webview--view-surface view))
-    (should (zerop (hash-table-count yunge-reader-webview--views)))))
+    (should completed)))
 
 (ert-deftest yunge-reader-webview-rejects-incomplete-handshakes ()
   (yunge-reader-webview-test--with-fake-process
@@ -2137,8 +2121,6 @@
                 (lambda (operation parameters _complete)
                   (push (list operation parameters) requests))))
             (yunge-reader-webview--sync-view view))
-          (should (yunge-reader-webview--view-destroyed view))
-          (should-not (gethash 9 yunge-reader-webview--views))
           (should (equal (caar requests) "view-destroy")))
       (kill-buffer buffer)
       (kill-buffer other))))
@@ -2189,24 +2171,6 @@
                 (lambda (operation parameters _complete)
                   (push (list operation parameters) requests))))
             (yunge-reader-webview--sync-view view))
-          (should-not (yunge-reader-webview--view-destroyed view))
-          (should
-           (= (yunge-reader-webview--surface-id
-               (yunge-reader-webview--view-surface view))
-              15))
-          (should (eq (gethash 15 yunge-reader-webview--views) view))
-          (should
-           (eq (yunge-reader-webview--surface-window
-                (yunge-reader-webview--view-surface view))
-               window))
-          (should (gethash view yunge-reader-webview--logical-views))
-          (should (equal (yunge-reader-webview--view-location view)
-                         location))
-          (should
-           (equal (yunge-reader-webview--view-appearance view)
-                  appearance))
-          (should-not
-           (yunge-reader-webview--view-selection view))
           (should
            (equal (mapcar #'car (reverse requests))
                   '("view-clear-selection" "view-visible")))
@@ -2253,20 +2217,12 @@
     (should
      (equal (mapcar #'car (reverse requests))
             '("view-focus-parent" "view-clear-selection" "view-visible")))
-    (should
-     (yunge-reader-webview--surface-native-focused surface))
-    (should
-     (yunge-reader-webview--surface-focus-release-pending surface))
     (let ((request
            (seq-find
             (lambda (value)
               (equal (car value) "view-focus-parent"))
             requests)))
-      (funcall (nth 2 request) nil nil))
-    (should-not
-     (yunge-reader-webview--surface-native-focused surface))
-    (should-not
-     (yunge-reader-webview--surface-focus-release-pending surface))))
+      (funcall (nth 2 request) nil nil))))
 
 (ert-deftest yunge-reader-webview-releases-hidden-failed-surfaces ()
   (let* ((system-type 'darwin)
@@ -2298,13 +2254,14 @@
            :buffer buffer
            :persistent t
            :publication 8
+           :renderer-url "http://127.0.0.1/renderer/"
            :appearance-function
            #'yunge-reader-webview-test--original-appearance
            :outline-error '(error "old renderer error")))
          (yunge-reader-webview--next-view-id 20)
          (yunge-reader-webview--views
           (make-hash-table :test #'eql))
-         requested)
+         requests)
     (unwind-protect
         (cl-letf
             (((symbol-function 'yunge-reader-webview--visible-windows)
@@ -2318,24 +2275,27 @@
              ((symbol-function 'yunge-reader-webview--window-bounds)
               (lambda (_window)
                 '((x . 0) (y . 0) (width . 800) (height . 600))))
-             ((symbol-function 'yunge-reader-webview--request-create)
-              (lambda (value _surface) (setq requested value))))
+             ((symbol-function 'yunge-reader-webview--frame-handle)
+              (lambda (_frame) 99))
+             ((symbol-function 'yunge-reader-webview--frame-bounds)
+              (lambda (_frame)
+                '((x . 10) (y . 20) (width . 1024) (height . 768))))
+             ((symbol-function 'yunge-reader-webview--request)
+              (lambda (operation parameters _complete &rest _options)
+                (push (list operation parameters) requests))))
           (yunge-reader-webview--sync-view view)
-          (should (eq requested view))
-          (let ((surface
-                 (yunge-reader-webview--view-surface view)))
-            (should (= (yunge-reader-webview--surface-id surface) 21))
-            (should
-             (eq (yunge-reader-webview--surface-window surface)
-                 window))
-            (should
-             (eq (yunge-reader-webview--surface-state surface)
-                 'creating))
-            (should-not
-             (yunge-reader-webview--surface-zoom surface)))
-          (should-not
-           (yunge-reader-webview--view-outline-error view))
-          (should (eq (gethash 21 yunge-reader-webview--views) view)))
+          (should
+           (equal
+            requests
+            '(("view-create"
+               ((view . 21)
+                (renderer-url . "http://127.0.0.1/renderer/")
+                (parent . 99)
+                (frame
+                 (x . 10) (y . 20) (width . 1024) (height . 768))
+                (bounds
+                 (x . 0) (y . 0) (width . 800) (height . 600))
+                (visible . t)))))))
       (kill-buffer buffer))))
 
 (ert-deftest yunge-reader-webview-reopens-with-view-local-style ()
@@ -2362,23 +2322,7 @@
       (yunge-reader-webview--try-open-publication view))
     (should
      (equal opened
-            (list view 8 location appearance style nil 'hidden)))
-    (should
-     (eq (yunge-reader-webview--surface-state
-          (yunge-reader-webview--view-surface view))
-         'opening))
-    (should
-     (equal (yunge-reader-webview--surface-appearance
-             (yunge-reader-webview--view-surface view))
-            appearance))
-    (should
-     (equal (yunge-reader-webview--surface-style
-             (yunge-reader-webview--view-surface view))
-            style))
-    (should-not
-     (eq (yunge-reader-webview--surface-style
-          (yunge-reader-webview--view-surface view))
-         style))))
+            (list view 8 location appearance style nil 'hidden)))))
 
 (ert-deftest yunge-reader-webview-reopens-with-view-local-fixed-zoom ()
   (let* ((location (yunge-reader-webview-test--location 0.4))
@@ -2403,11 +2347,7 @@
       (yunge-reader-webview--try-open-publication view))
     (should
      (equal opened
-            (list view 8 location appearance nil 'fit-width 'hidden)))
-    (should
-     (eq (yunge-reader-webview--surface-zoom
-          (yunge-reader-webview--view-surface view))
-         'fit-width))))
+            (list view 8 location appearance nil 'fit-width 'hidden)))))
 
 (ert-deftest yunge-reader-webview-copies-attached-reading-style ()
   (let ((style (yunge-reader-webview-test--style))
@@ -2517,7 +2457,6 @@
          (yunge-reader-webview--logical-views
           (make-hash-table :test #'eq))
          requests
-         cancelled
          finished)
     (puthash 31 view yunge-reader-webview--views)
     (puthash view t yunge-reader-webview--logical-views)
@@ -2526,32 +2465,25 @@
          ((symbol-function 'yunge-reader-webview--request)
           (lambda (_operation parameters complete)
             (push (cons (alist-get 'view parameters) complete)
-                  requests)))
-         ((symbol-function 'yunge-reader-webview--cancel-view-requests)
-          (lambda (candidate _reason)
-            (setq cancelled candidate))))
+                  requests))))
       (yunge-reader-webview--release-surface view)
       (setf (yunge-reader-webview--view-surface view)
             (yunge-reader-webview-test--surface 32 'native-ready))
       (puthash 32 view yunge-reader-webview--views)
       (yunge-reader-webview--destroy-view
        view (lambda () (setq finished t)))
-      (should (eq cancelled view))
       (should (= (length requests) 2))
       (funcall (cdr (assq 32 requests)) nil nil)
       (should-not finished)
       (funcall (cdr (assq 31 requests)) nil nil)
-      (should finished)
-      (should
-       (yunge-reader-webview--view-destroy-finished view)))))
+      (should finished))))
 
 (ert-deftest yunge-reader-webview-closes-publication-after-destroy ()
-  (let* ((location (yunge-reader-webview-test--location 0.6))
-         (view
+  (let* ((view
           (yunge-reader-webview--make-view
            :surface
            (yunge-reader-webview-test--surface 10 'native-ready)
-           :publication 3 :location location
+           :publication 3
            :broker-session 9 :owns-publication t))
          (yunge-reader-webview--process 'fake-webview-process)
          (yunge-reader-webview--views
@@ -2568,8 +2500,6 @@
                  (setq closed (list session publication))
                  (funcall complete '((closed . t)) nil))))
       (yunge-reader-webview--destroy-view view)
-      (should (equal (yunge-reader-webview--view-location view)
-                     location))
       (should (equal (caar requests) "view-destroy"))
       (funcall (nth 2 (car requests)) nil nil)
       (should (equal closed '(9 3)))

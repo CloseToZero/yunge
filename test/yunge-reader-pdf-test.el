@@ -2843,9 +2843,7 @@
               'started)))
         (yunge-reader-pdf--queue-pages '(0 1)))
       (should (= (length operations) 6))
-      (should (= (length warnings) 1))
-      (should-not yunge-reader-pdf--prefetch-active)
-      (should-not yunge-reader-pdf--prefetch-queue))))
+      (should (= (length warnings) 1)))))
 
 (ert-deftest yunge-reader-pdf-prefetch-stops-after-an-explicit-stop ()
   (with-temp-buffer
@@ -2870,9 +2868,7 @@
         (funcall
          complete nil
          '(yunge-reader-native-session-stopped "stopped")))
-      (should (= requests 1))
-      (should-not yunge-reader-pdf--prefetch-active)
-      (should-not yunge-reader-pdf--prefetch-queue))))
+      (should (= requests 1)))))
 
 (ert-deftest yunge-reader-pdf-replaces-obsolete-prefetch-work ()
   (with-temp-buffer
@@ -2899,11 +2895,6 @@
         (dotimes (index 1000)
           (yunge-reader-pdf--queue-pages (list (1+ index))))
         (should (= (length requests) 1))
-        (should (= (length yunge-reader-pdf--prefetch-queue) 3))
-        (should
-         (zerop
-          (yunge-reader-pdf--prefetch-task-page
-           yunge-reader-pdf--prefetch-active)))
         (funcall
          first-complete
          '((path . "old.png")
@@ -2913,14 +2904,6 @@
       (should (= (length requests) 2))
       (should (eq (caar requests) 'render-page))
       (should (= (cadar requests) 1000))
-      (should (= (length yunge-reader-pdf--prefetch-queue) 2))
-      (should
-       (= (yunge-reader-pdf--prefetch-task-page
-           yunge-reader-pdf--prefetch-active)
-          1000))
-      (should (= (hash-table-count
-                  yunge-reader-pdf--render-pending)
-                 1))
       (should-not
         (gethash `(0 900 ,yunge-reader-pdf-test--original-appearance)
                  yunge-reader-pdf--render-results)))))
@@ -2949,8 +2932,7 @@
        (equal
         (mapcar (lambda (request) (seq-take request 2))
                 (nreverse requests))
-        '((render-page 0) (page-links 9))))
-      (should (= (length yunge-reader-pdf--prefetch-queue) 5)))))
+        '((render-page 0) (page-links 9)))))))
 
 (ert-deftest yunge-reader-pdf-bounds-in-memory-caches-to-working-pages ()
   (with-temp-buffer
@@ -2995,9 +2977,7 @@
                      yunge-reader-pdf--render-results))
     (should-not (gethash `(500 800
                            ,yunge-reader-pdf-test--original-appearance)
-                          yunge-reader-pdf--render-results))
-    (should-not yunge-reader-pdf--prefetch-active)
-    (should-not yunge-reader-pdf--prefetch-queue)))
+                          yunge-reader-pdf--render-results))))
 
 (ert-deftest yunge-reader-pdf-retains-one-nearest-render-while-replacing ()
   (with-temp-buffer

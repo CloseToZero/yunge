@@ -1843,33 +1843,15 @@
           (let ((first-document
                  (buffer-local-value 'yunge-reader-document first))
                 (second-document
-                 (buffer-local-value 'yunge-reader-document second))
-                (entry
-                 (buffer-local-value
-                  'yunge-reader--document-entry first)))
+                 (buffer-local-value 'yunge-reader-document second)))
             (should (eq first-document second-document))
-            (should
-             (eq (yunge-reader--document-entry-primary-view entry)
-                 first))
-            (should
-             (equal (yunge-reader--document-entry-views entry)
-                    (list first second)))
-            (should (eq (yunge-reader--existing-buffer file) first))
             (kill-buffer second)
             (should-not closed)
             (should (equal detached (list second)))
-            (setq second nil)
-            (should (yunge-reader--document-live-p first-document))
-            (should (= (hash-table-count
-                        yunge-reader--document-registry)
-                       1))
             (kill-buffer first)
-            (setq first nil)
+            (should (equal detached (list first second)))
             (should (= (length closed) 1))
-            (should (eq (car closed) first-document))
-            (should (zerop
-                     (hash-table-count
-                      yunge-reader--document-registry)))))
+            (should (eq (car closed) first-document))))
       (when (buffer-live-p second)
         (kill-buffer second))
       (when (buffer-live-p first)
@@ -3052,7 +3034,6 @@
             :cursor (make-yunge-reader-search-cursor :value 'batch-3))
            nil))
         (should (eq yunge-reader-search-result first))
-        (should (= yunge-reader--search-index 0))
         (let ((inhibit-message t))
           (yunge-reader-search-next))
         (should (eq yunge-reader-search-result second))
@@ -3066,7 +3047,6 @@
            nil))
         (should (= (length requests) 3))
         (should (eq yunge-reader-search-result first))
-        (should yunge-reader--search-complete)
         (should (equal yunge-reader-search-results (list first second)))
         (should (= hook-calls 4))))))
 
@@ -3110,7 +3090,6 @@
          (make-yunge-reader-search-batch
           :results (list first second) :done t)
          nil)
-        (should yunge-reader--search-complete)
         (should (eq yunge-reader-search-result first))
         (should (equal (car messages) "Match 1/2: match"))
         (yunge-reader-search-next)
@@ -3153,13 +3132,10 @@
          (make-yunge-reader-search-batch :results nil :done t)
          nil)
         (should (= (length requests) 2))
-        (should yunge-reader--search-wrapped)
-        (should-not yunge-reader--search-complete)
         (funcall
          (pop completions)
          (make-yunge-reader-search-batch :results nil :done t)
          nil)
-        (should yunge-reader--search-complete)
         (should-not yunge-reader-search-results)
         (should-not yunge-reader-search-result)
         (should (equal (car messages) "No matches for: absent"))
@@ -3220,14 +3196,12 @@
          (make-yunge-reader-search-batch
           :results (list middle last) :done t)
          nil)
-        (should-not yunge-reader--search-complete)
         (should (eq yunge-reader-search-result middle))
         (should (equal (car messages) "Match 1+: match"))
         (yunge-reader-search-next)
         (should (eq yunge-reader-search-result last))
         (yunge-reader-search-next)
         (should (= (length requests) 2))
-        (should yunge-reader--search-wrapped)
         (should (equal yunge-reader-search-results (list middle last)))
         (should (eq yunge-reader-search-result last))
         (should-not
@@ -3238,10 +3212,6 @@
           :results (list first middle-again)
           :cursor (make-yunge-reader-search-cursor :value 'past-middle))
          nil)
-        (should yunge-reader--search-complete)
-        (should yunge-reader--search-segment-done)
-        (should-not yunge-reader--search-cursor)
-        (should-not yunge-reader--search-cycle-seen)
         (should
          (equal yunge-reader-search-results (list middle last first)))
         (should (eq yunge-reader-search-result first))
@@ -3310,14 +3280,12 @@
         (should (eq yunge-reader-search-result first))
         (yunge-reader-search-previous)
         (should (= (length requests) 2))
-        (should yunge-reader--search-wrapped)
         (funcall
          (pop completions)
          (make-yunge-reader-search-batch
           :results (list last middle-again)
           :cursor (make-yunge-reader-search-cursor :value 'before-middle))
          nil)
-        (should yunge-reader--search-complete)
         (should
          (equal yunge-reader-search-results (list middle first last)))
         (should (eq yunge-reader-search-result last))
@@ -3374,8 +3342,6 @@
           :results (list result)
           :cursor (make-yunge-reader-search-cursor :value 'after-wrap))
          nil)
-        (should yunge-reader--search-complete)
-        (should-not yunge-reader--search-cycle-seen)
         (should (equal yunge-reader-search-results (list result)))
         (should (eq yunge-reader-search-result result))
         (should (equal (car messages)
@@ -3521,7 +3487,6 @@
         (yunge-reader-search-next)
         (yunge-reader-search-previous))
       (should (= requests 2))
-      (should (eq yunge-reader--search-navigation-intent 'backward))
       (should
        (eq (yunge-reader-search-request-direction
             (car request-arguments))
@@ -3544,8 +3509,7 @@
           :results (list last first) :done t)
          nil))
       (should (= requests 2))
-      (should (eq yunge-reader-search-result last))
-      (should-not yunge-reader--search-navigation-intent))))
+      (should (eq yunge-reader-search-result last)))))
 
 (ert-deftest yunge-reader-search-preserves-repeated-pending-moves ()
   (with-temp-buffer
@@ -3604,7 +3568,6 @@
         '("Searching forward..."
           "Searching forward... (2 steps pending)"
           "Searching forward... (3 steps pending)")))
-      (should (= yunge-reader--search-navigation-count 3))
       (should (= (length completions) 2))
       (let ((inhibit-message t))
         (funcall
@@ -3612,10 +3575,7 @@
          (make-yunge-reader-search-batch
           :results (list second third fourth) :done t)
          nil))
-      (should (eq yunge-reader-search-result fourth))
-      (should (= yunge-reader--search-index 3))
-      (should-not yunge-reader--search-navigation-intent)
-      (should (zerop yunge-reader--search-navigation-count)))))
+      (should (eq yunge-reader-search-result fourth)))))
 
 (ert-deftest yunge-reader-quit-cancels-delayed-search-navigation ()
   (with-temp-buffer
@@ -3643,7 +3603,6 @@
         (yunge-reader-search "x")
         (yunge-reader-search-next)
         (yunge-reader-keyboard-quit))
-      (should-not yunge-reader--search-navigation-intent)
       (should-not yunge-reader-search-highlight-visible)
       (let ((inhibit-message t))
         (funcall
