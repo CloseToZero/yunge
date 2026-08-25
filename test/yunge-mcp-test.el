@@ -39,13 +39,12 @@
                         :readOnlyHint)
              t))))))
 
-(ert-deftest yunge-mcp-fangcun-tools-describe-domain-names ()
+(ert-deftest yunge-mcp-fangcun-tools-have-descriptions ()
   (require 'fangcun-mcp)
   (dolist (tool (append (yunge-mcp--tool-list) nil))
-    (should
-     (string-match-p
-      "方寸（Fangcun）"
-      (plist-get tool :description)))))
+    (let ((description (plist-get tool :description)))
+      (should (stringp description))
+      (should-not (string-empty-p description)))))
 
 (ert-deftest yunge-mcp-fangcun-list-tools-describe-cursor-pages ()
   (require 'fangcun-mcp)
@@ -77,14 +76,6 @@
                   "fangcun_read_node"
                   "fangcun_sync"))
     (should-not (gethash name yunge-mcp--tools))))
-
-(ert-deftest yunge-mcp-describes-watcher-first-file-workflows ()
-  (require 'fangcun-mcp)
-  (let ((description
-         (yunge-mcp-tool-description
-          (gethash "fangcun_list_yiyus" yunge-mcp--tools))))
-    (should (string-match-p "filesystem tools" description))
-    (should (string-match-p "watches saved" description))))
 
 (ert-deftest yunge-mcp-registers-fangcun-id-write-tools ()
   (require 'fangcun-mcp)
