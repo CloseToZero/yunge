@@ -1438,17 +1438,29 @@
     (yunge-reader-webview-start)
     (yunge-reader-transport--mark-ready
      yunge-reader-webview--transport 'fake-webview-process)
-    (let (handled)
+    (let (handled result)
       (cl-letf (((symbol-function 'yunge-reader-webview--handle-event)
                  (lambda (process message)
                    (setq handled (list process message)))))
-        (yunge-reader-webview--handle-message
-         'fake-webview-process
-         '((kind . "event")
-           (event . "accelerator")
-           (view . 3)
-           (repeat . nil)
-           (key . "C-g"))))
+        (let ((task
+               (yunge-reader-webview--request
+                "view-info" nil
+                (lambda (value error-data)
+                  (should-not error-data)
+                  (setq result value)))))
+          (yunge-reader-webview--handle-message
+           'fake-webview-process
+           '((kind . "event")
+             (event . "accelerator")
+             (view . 3)
+             (repeat . nil)
+             (key . "C-g")))
+          (should-not result)
+          (yunge-reader-webview--handle-message
+           'fake-webview-process
+           `((id . ,(yunge-reader-task-id task))
+             (ok . t)
+             (result . ((available . t)))))))
       (should (equal handled
                      '(fake-webview-process
                        ((kind . "event")
@@ -1456,10 +1468,7 @@
                         (view . 3)
                         (repeat . nil)
                         (key . "C-g")))))
-      (should (zerop
-               (hash-table-count
-                (yunge-reader-transport--session-callbacks
-                 yunge-reader-webview--transport)))))))
+      (should (alist-get 'available result)))))
 
 (ert-deftest yunge-reader-webview-records-renderer-publication-events ()
   (let* ((buffer (generate-new-buffer " *webview EPUB event*"))

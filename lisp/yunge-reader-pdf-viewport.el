@@ -501,8 +501,6 @@ WINDOW identifies the presentation which triggered this update."
       (setq yunge-reader-pdf--pending-resize
             (list :document yunge-reader-document
                   :window window
-                  :width (window-body-width window t)
-                  :height (window-body-height window t)
                   :location location
                   :viewport-anchor viewport-anchor))
       (unless (timerp yunge-reader-pdf--resize-timer)

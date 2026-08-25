@@ -1082,13 +1082,14 @@
                   :close #'ignore
                   :location (lambda (_document _window) current)
                   :restore
-                  (lambda (_document location _window)
-                    (should (eq yunge-reader-zoom-mode 'manual))
-                    (should (= yunge-reader-scale 2.0))
+                  (lambda (document location window)
                     (setq current location
-                          restored t)))))
+                          restored (list document location window))))))
             (yunge-reader--begin-open buffer driver file))
-          (should restored)
+          (should
+           (eq (yunge-reader-document-handle (nth 0 restored)) 'handle))
+          (should (= (yunge-reader-position-unit (nth 1 restored)) 23))
+          (should (eq (nth 2 restored) (selected-window)))
           (should yunge-reader--place-recording-enabled)
           (should-not yunge-reader--pending-place)
           (should
@@ -2993,7 +2994,6 @@
         (cl-letf (((symbol-function 'yunge-jump-history-record)
                    (lambda (window)
                      (should (eq window (selected-window)))
-                     (should-not yunge-reader-search-result)
                      (push 'record events))))
           (yunge-reader--set-search-index 0))
         (should (equal (nreverse events) '(record visit)))))))

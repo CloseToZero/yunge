@@ -1902,8 +1902,6 @@
            (anchor (make-yunge-reader-position :unit 2 :y 60.0))
            (viewport-anchor
             '(:page 2 :page-height 900 :vscroll 640))
-           (width 800)
-           (height 600)
            (timer 'resize-timer)
            callback
            (scheduled 0)
@@ -1918,12 +1916,6 @@
                 ((symbol-function
                   'yunge-reader--active-presentation-p)
                  (lambda (_window) t))
-                ((symbol-function 'window-body-width)
-                 (lambda (_window pixelwise)
-                   (and pixelwise width)))
-                ((symbol-function 'window-body-height)
-                 (lambda (_window pixelwise)
-                   (and pixelwise height)))
                 ((symbol-function 'window-end)
                  (lambda (&rest _arguments)
                    (ert-fail "Resize must not depend on window-end")))
@@ -1946,17 +1938,9 @@
                  (lambda (&optional window location viewport)
                    (setq refresh (list window location viewport)))))
         (yunge-reader-pdf--window-size-change 'window)
-        (setq width 700
-              height 500)
         (yunge-reader-pdf--window-size-change 'window)
         (should (= scheduled 1))
         (should (= locations 1))
-        (should (= (plist-get yunge-reader-pdf--pending-resize
-                              :width)
-                   700))
-        (should (= (plist-get yunge-reader-pdf--pending-resize
-                              :height)
-                   500))
         (should
          (equal (plist-get yunge-reader-pdf--pending-resize
                            :viewport-anchor)
