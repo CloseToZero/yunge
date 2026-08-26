@@ -36,7 +36,7 @@
 (yunge-test-deftest-lazy-load yunge-ghostel
   (evil evil-ghostel ghostel project which-key))
 
-(ert-deftest yunge-ghostel-configures-after-package-ready ()
+(ert-deftest yunge-ghostel-configures-core-after-package-ready ()
   (yunge-test-run-package-config
    'yunge-ghostel 'ghostel
    :before-ready
@@ -47,11 +47,6 @@
         (error "Ghostel project key was bound before package readiness")))
    :after-ready
    '(progn
-      (unless (eq (keymap-lookup yunge-toggle-map "t") 'ghostel)
-        (error "Ghostel terminal key was not bound"))
-      (unless (eq (keymap-lookup project-prefix-map "t")
-                  'yunge-ghostel-project)
-        (error "Ghostel project key was not bound"))
       (unless (eq ghostel-module-auto-install 'download)
         (error "Ghostel module download was not configured"))
       (unless (equal ghostel-module-directory
@@ -63,9 +58,11 @@
       (when (featurep 'project)
         (error "Project was loaded by the Ghostel configuration"))
       (require 'project)
-      (unless (member '(yunge-ghostel-project "Ghostel")
-                      project-switch-commands)
-        (error "Ghostel project action was not added"))
+      (when (or (keymap-lookup yunge-toggle-map "t")
+                (keymap-lookup project-prefix-map "t")
+                (member '(yunge-ghostel-project "Ghostel")
+                        project-switch-commands))
+        (error "Ghostel was exposed before its Evil integration was ready"))
       (when (featurep 'ghostel)
         (error "Ghostel was loaded by its configuration")))))
 
@@ -90,7 +87,16 @@
         (error "Evil Ghostel hook was not installed"))
       (with-current-buffer yunge-ghostel-test-buffer
         (unless (bound-and-true-p evil-ghostel-mode)
-          (error "Existing Ghostel buffer missed Evil integration"))))))
+          (error "Existing Ghostel buffer missed Evil integration")))
+      (unless (eq (keymap-lookup yunge-toggle-map "t") 'ghostel)
+        (error "Ghostel terminal key was not bound"))
+      (unless (eq (keymap-lookup project-prefix-map "t")
+                  'yunge-ghostel-project)
+        (error "Ghostel project key was not bound"))
+      (require 'project)
+      (unless (member '(yunge-ghostel-project "Ghostel")
+                      project-switch-commands)
+        (error "Ghostel project action was not added")))))
 
 (ert-deftest yunge-ghostel-binds-entry-points ()
   (yunge-ghostel-test--load-config)
@@ -132,7 +138,9 @@
     (evil-normal-state)
     (yunge-test-evil-keys
      'normal
-     '(("u" . yunge-ghostel-undo)
+     '(("p" . evil-ghostel-paste-after)
+       ("P" . evil-ghostel-paste-before)
+       ("u" . yunge-ghostel-undo)
        ("C-r" . yunge-ghostel-redo)
        ("<down-mouse-1>" . ghostel-mouse-press-or-copy-mode)))
     (evil-visual-state)

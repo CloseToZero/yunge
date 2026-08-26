@@ -148,7 +148,17 @@ ARG follows the prefix conventions of `ghostel-project'."
         (yunge-var-subdirectory "ghostel")
         ghostel-readonly-fake-cursor nil)
   (when (eq system-type 'windows-nt)
-    (setq ghostel-shell (yunge-ghostel--windows-shell-spec)))
+    (setq ghostel-shell (yunge-ghostel--windows-shell-spec))))
+
+(elpaca evil-ghostel
+  (add-hook 'ghostel-mode-hook #'evil-ghostel-mode)
+  (with-eval-after-load 'evil-ghostel
+    (yunge-ghostel--setup-keys))
+  (yunge-ghostel--enable-evil-in-existing-buffers)
+  ;; Do not expose terminal entry points during the asynchronous interval in
+  ;; which Ghostel is ready but its Evil integration is not.  A terminal
+  ;; created in that interval would route `p' to ordinary `evil-paste-after',
+  ;; which tries to edit Ghostel's renderer-owned buffer directly.
   (yunge-key-define yunge-toggle-map yunge-ghostel-terminal-bindings)
   (yunge-key-define project-prefix-map yunge-ghostel-project-bindings)
   (with-eval-after-load 'project
@@ -159,12 +169,6 @@ ARG follows the prefix conventions of `ghostel-project'."
      yunge-toggle-map yunge-ghostel-terminal-bindings)
     (yunge-key-add-which-key-descriptions
      project-prefix-map yunge-ghostel-project-bindings)))
-
-(elpaca evil-ghostel
-  (add-hook 'ghostel-mode-hook #'evil-ghostel-mode)
-  (with-eval-after-load 'evil-ghostel
-    (yunge-ghostel--setup-keys))
-  (yunge-ghostel--enable-evil-in-existing-buffers))
 
 (provide 'yunge-ghostel)
 
