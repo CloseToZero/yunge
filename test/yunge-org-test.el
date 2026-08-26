@@ -25,7 +25,7 @@
   (require 'yunge-org))
 
 (yunge-test-deftest-lazy-load yunge-org
-  (org ob-core ol org-id shuying shuying-org which-key))
+  (org ob-core ol org-id shuying shuying-org which-key yunge-org-reveal))
 
 (ert-deftest yunge-org-registers-shuying-as-an-avy-projection-provider ()
   (yunge-org-test--load-config)
@@ -50,6 +50,15 @@
   (yunge-org-test--load-config)
   (should-not org-auto-align-tags)
   (should (zerop org-tags-column)))
+
+(ert-deftest yunge-org-configures-editable-markup-previews ()
+  (yunge-org-test--load-config)
+  (should org-hide-emphasis-markers)
+  (should-not org-pretty-entities)
+  (should-not org-pretty-entities-include-sub-superscripts)
+  (with-temp-buffer
+    (org-mode)
+    (should yunge-org-reveal-mode)))
 
 (ert-deftest yunge-org-configures-unicode-latex-documents ()
   (yunge-org-test--load-config)

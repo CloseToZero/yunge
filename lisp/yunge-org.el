@@ -58,6 +58,7 @@
 (defvar org-id-link-consider-parent-id)
 (defvar org-id-link-to-org-use-id)
 (defvar org-auto-align-tags)
+(defvar org-hide-emphasis-markers)
 (defvar org-latex-compiler)
 (defvar org-latex-packages-alist)
 (defvar org-link-angle-re)
@@ -65,6 +66,8 @@
 (defvar org-link-frame-setup)
 (defvar org-link-plain-re)
 (defvar org-mode-map)
+(defvar org-pretty-entities)
+(defvar org-pretty-entities-include-sub-superscripts)
 (defvar org-src-mode-map)
 (defvar org-tags-column)
 (defvar org-table-automatic-realign)
@@ -75,6 +78,7 @@
 (autoload 'shuying-org-mode "shuying-org" nil t)
 (autoload 'shuying-org-preview "shuying-org" nil t)
 (autoload 'shuying-org-preview-buffer "shuying-org" nil t)
+(autoload 'yunge-org-reveal-mode "yunge-org-reveal" nil t)
 
 (defun yunge-org--avy-shuying-projection (beginning end _window)
   "Project a Shuying preview containing BEGINNING through END for Avy."
@@ -93,10 +97,14 @@
             #'yunge-org--avy-shuying-projection))
 
 (add-hook 'org-mode-hook #'shuying-org-mode)
+(add-hook 'org-mode-hook #'yunge-org-reveal-mode)
 
 (setq org-id-link-consider-parent-id t
       org-id-link-to-org-use-id 'create-if-interactive
       org-auto-align-tags nil
+      org-hide-emphasis-markers t
+      org-pretty-entities nil
+      org-pretty-entities-include-sub-superscripts nil
       org-tags-column 0
       org-table-automatic-realign nil)
 
