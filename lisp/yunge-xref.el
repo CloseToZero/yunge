@@ -4,13 +4,17 @@
 
 (require 'yunge-key)
 (require 'yunge-edit)
+(require 'yunge-navigation)
 
 (declare-function evil-set-initial-state "evil-core" (mode state))
 (declare-function xref-edit-save-changes "xref" ())
+(declare-function xref-match-length "xref" (item))
+(declare-function xref-pulse-momentarily "xref" ())
 
 (defvar xref--transient-buffer-mode-map)
 (defvar xref--xref-buffer-mode-map)
 (defvar xref-edit-mode-map)
+(defvar xref-current-item)
 
 (defconst yunge-xref-command-bindings
   '(("r" xref-query-replace-in-results "query replace")))
@@ -42,6 +46,13 @@
   "Set up source saving for the current Xref edit session."
   (yunge-edit-setup-result-session #'xref-edit-save-changes))
 
+(defun yunge-xref--land ()
+  "Adaptively frame and reveal the current Xref destination."
+  (if-let* ((length (and xref-current-item
+                         (xref-match-length xref-current-item))))
+      (yunge-navigation-land nil (point) (+ (point) length))
+    (yunge-navigation-land)))
+
 (with-eval-after-load 'evil
   (with-eval-after-load 'xref
     (evil-set-initial-state 'xref--xref-buffer-mode 'normal)
@@ -53,6 +64,11 @@
                            yunge-xref-transient-normal-bindings)))
 
 (with-eval-after-load 'xref
+  (remove-hook 'xref-after-jump-hook #'recenter)
+  (remove-hook 'xref-after-jump-hook #'xref-pulse-momentarily)
+  (remove-hook 'xref-after-return-hook #'xref-pulse-momentarily)
+  (add-hook 'xref-after-jump-hook #'yunge-xref--land)
+  (add-hook 'xref-after-return-hook #'yunge-navigation-land)
   (add-hook 'xref-edit-mode-hook #'yunge-xref--setup-edit-session)
   (yunge-edit-configure-result-map
    xref-edit-mode-map #'xref-edit-save-changes))

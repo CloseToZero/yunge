@@ -4,13 +4,17 @@
 
 (require 'cl-lib)
 (require 'seq)
+(require 'yunge-navigation)
 
 (declare-function dired-noselect "dired")
+(declare-function evil-get-command-property "evil-common"
+                  (command property))
 
 (defvar evil--jumps-jump-command)
 
 (defconst yunge-jump-history--max-length 100)
 (defvar yunge-jump-history--moving nil)
+(defvar yunge-jump-history--evil-landing-origin nil)
 
 (cl-defstruct (yunge-jump-history--provider
                (:constructor yunge-jump-history--make-provider))
@@ -237,16 +241,19 @@ When BRANCH is non-nil, discard entries newer than the current one."
            (result (apply function arguments))
            (window (selected-window))
            (history (yunge-jump-history--history window))
-           (destination (yunge-jump-history--window-entry window)))
+           (destination (yunge-jump-history--window-entry window))
+           (moved
+            (and origin destination
+                 (not
+                  (yunge-jump-history--same-place-p
+                   origin destination)))))
       (when (and origin
                  (or (eq result :deferred) destination)
                  (not (yunge-jump-history--history-pending history))
-                 (or
-                  (eq result :deferred)
-                  (not
-                   (yunge-jump-history--same-place-p
-                    origin destination))))
+                 (or (eq result :deferred) moved))
         (yunge-jump-history--push history origin t))
+      (when moved
+        (yunge-navigation-land window))
       result)))
 
 (defun yunge-jump-history-track-command (command)
@@ -360,7 +367,8 @@ an error message."
           (moved)
           (when (eq (yunge-jump-history--history-pending history) token)
             (setf (yunge-jump-history--history-pending history) nil)
-            (unless moved
+            (if moved
+                (yunge-navigation-land window)
               (if synchronous
                   (setq immediate-error t)
                 (message "No %s jump" description)))))
@@ -445,10 +453,33 @@ an error message."
            :visit-function
            #'yunge-jump-history--visit-buffer-target)))))
 
+(defun yunge-jump-history--prepare-evil-landing ()
+  "Remember the origin of an Evil semantic jump command."
+  (yunge-navigation-reset-command)
+  (setq yunge-jump-history--evil-landing-origin
+        (when (evil-get-command-property this-command :jump)
+          (yunge-jump-history--window-entry (selected-window)))))
+
+(defun yunge-jump-history--finish-evil-landing ()
+  "Present the destination of the current Evil semantic jump command."
+  (when-let* ((origin yunge-jump-history--evil-landing-origin))
+    (setq yunge-jump-history--evil-landing-origin nil)
+    (let* ((window (selected-window))
+           (destination (yunge-jump-history--window-entry window)))
+      (when (and destination
+                 (not (yunge-jump-history--same-place-p
+                       origin destination))
+                 (not (yunge-navigation-landed-p window)))
+        (yunge-navigation-land window)))))
+
 (defun yunge-jump-history--setup ()
   "Replace Evil jump traversal with the window-local history."
   (advice-add 'evil-set-jump :before #'yunge-jump-history--record)
   (advice-add 'split-window :around #'yunge-jump-history--copy-after-split)
+  (add-hook 'pre-command-hook
+            #'yunge-jump-history--prepare-evil-landing -90)
+  (add-hook 'post-command-hook
+            #'yunge-jump-history--finish-evil-landing 90)
   (keymap-set (current-global-map)
               "<remap> <evil-jump-backward>"
               #'yunge-jump-history-backward)
