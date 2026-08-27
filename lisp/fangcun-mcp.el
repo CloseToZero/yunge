@@ -648,8 +648,10 @@ Refuse to save an already modified visiting buffer."
   "including their identifiers, display names, and absolute root paths. "
   "These are ordinary Org files: when a root is accessible, use the "
   "client's filesystem tools for normal reads, literal full-text search, "
-  "link editing, and general edits. Fangcun watches saved external "
-  "changes and updates its index automatically.")
+  "link editing, and edits to existing files. Always create a new note "
+  "file with fangcun_create_file_node rather than a filesystem tool; "
+  "otherwise it will lack the file-level ID required by Fangcun. Fangcun "
+  "watches saved external changes and updates its index automatically.")
  '(:type "object" :additionalProperties :false)
  #'fangcun-mcp--list-yiyus
  fangcun-mcp--read-only-annotations)
@@ -714,10 +716,12 @@ Refuse to save an already modified visiting buffer."
 (yunge-mcp-register-tool
  "fangcun_create_file_node"
  (concat
-  "Create and save a new 方寸（Fangcun） Org file with a file-level "
-  "note node in a configured 一隅（yiyu）. The file receives a unique "
-  "Org ID as part of the same operation and is indexed before return. "
-  "Add note content afterward with the client's filesystem tools.")
+  "Always use this tool to create a new 方寸（Fangcun） Org note file; "
+  "never create one directly with a filesystem tool, because that would "
+  "omit the required file-level ID. This tool creates and saves the file "
+  "with a file-level note node in a configured 一隅（yiyu）, assigns its "
+  "unique Org ID, and indexes it before return. Add note content afterward "
+  "with the client's filesystem tools.")
  '(:type "object"
    :properties
     (:yiyu
