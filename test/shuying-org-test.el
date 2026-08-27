@@ -135,6 +135,23 @@
               (shuying-org--fragments))
       '(nil nil t t t)))))
 
+(ert-deftest shuying-org-keeps-environment-line-ending-outside-preview ()
+  (with-temp-buffer
+    (org-mode)
+    (insert
+     "\\begin{align*}\n"
+     "x &= y\n"
+     "\\end{align*}\n\n"
+     "After.\n")
+    (let* ((fragment (car (shuying-org--fragments)))
+           (overlay (shuying-org--ensure-overlay fragment)))
+      (overlay-put overlay 'display 'image)
+      (goto-char (point-min))
+      (search-forward "\\end{align*}")
+      (should (shuying-org-preview-overlay-at (1- (point))))
+      (should-not
+       (shuying-org-preview-overlay-at (line-end-position))))))
+
 (ert-deftest shuying-org-leaves-whitespace-only-math-as-source ()
   (with-temp-buffer
     (org-mode)

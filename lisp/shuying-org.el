@@ -257,15 +257,26 @@ Nil means ELEMENT is not an automatically numbered environment."
     (element &optional equation-number)
   "Return a Shuying fragment described by Org ELEMENT.
 EQUATION-NUMBER is the next automatic number at the fragment's start."
-  (shuying-org--make-fragment
-   :beginning (org-element-begin element)
-   :end (- (org-element-end element)
-           (or (org-element-property :post-blank element) 0))
-   :value (substring-no-properties
-           (org-element-property :value element))
-   :block-math-p (shuying-org--block-math-p element)
-   :standalone-p (shuying-org--standalone-block-math-p element)
-   :equation-number equation-number))
+  (let* ((beginning (org-element-begin element))
+         (value (substring-no-properties
+                 (org-element-property :value element)))
+         ;; Org includes the closing line's newline in an environment's
+         ;; value.  Retain it for LaTeX, but leave it outside the display
+         ;; overlay so blank lines stay visible.
+         (end
+          (if (eq (org-element-type element) 'latex-environment)
+              (- (+ (org-element-property :post-affiliated element)
+                    (length value))
+                 (if (string-suffix-p "\n" value) 1 0))
+            (- (org-element-end element)
+               (or (org-element-property :post-blank element) 0)))))
+    (shuying-org--make-fragment
+     :beginning beginning
+     :end end
+     :value value
+     :block-math-p (shuying-org--block-math-p element)
+     :standalone-p (shuying-org--standalone-block-math-p element)
+     :equation-number equation-number)))
 
 (defun shuying-org--fragment-context-at-position (position)
   "Return the previewable Org LaTeX context at POSITION, or nil."
