@@ -54,12 +54,15 @@ When the helper is unavailable, synchronization falls back to Emacs."
   title
   outline-path
   aliases
-  tags)
+  tags
+  position
+  line)
 
 (cl-defstruct fangcun-link
   source-id
   target-id
-  position)
+  position
+  line)
 
 (cl-defstruct fangcun-file-state
   yiyu
@@ -73,7 +76,16 @@ When the helper is unavailable, synchronization falls back to Emacs."
   position
   count)
 
+(cl-defstruct fangcun-check-issue
+  severity
+  file
+  position
+  line
+  message)
+
 (defconst fangcun-backlinks-buffer-name "*Fangcun Backlinks*")
+
+(defconst fangcun-check-buffer-name "*Fangcun Check*")
 
 (defvar-local fangcun-backlinks-target-id nil
   "ID of the node shown in the current Fangcun backlinks buffer.")
@@ -144,6 +156,14 @@ When the helper is unavailable, synchronization falls back to Emacs."
 (define-derived-mode fangcun-backlinks-mode special-mode "Fangcun Backlinks"
   "Major mode for displaying backlinks to one Fangcun node."
   (setq-local revert-buffer-function #'fangcun-backlinks-refresh))
+
+(defvar-keymap fangcun-check-mode-map
+  :parent special-mode-map
+  "RET" #'fangcun-check-visit)
+
+(define-derived-mode fangcun-check-mode special-mode "Fangcun Check"
+  "Major mode for displaying Fangcun consistency checks."
+  (setq-local revert-buffer-function #'fangcun-check-refresh))
 
 (defun fangcun--configured-yiyus ()
   "Return normalized entries from `fangcun-yiyus'."
@@ -578,8 +598,10 @@ RELATIVE-FILE names BUFFER's file relative to YIYU's root."
                 :title file-title
                 :outline-path nil
                 :aliases (fangcun--aliases-at-point)
-                :tags (fangcun--effective-tags-at-point))
-               nodes)))
+                :tags (fangcun--effective-tags-at-point)
+                :position (point)
+                :line (line-number-at-pos))
+                nodes)))
           ;; Fangcun nodes are sparse among Org headings.  Search possible ID
           ;; properties directly, then let Org reject lookalikes outside a
           ;; property drawer.
@@ -605,12 +627,15 @@ RELATIVE-FILE names BUFFER's file relative to YIYU's root."
                        #'substring-no-properties
                        (org-get-outline-path t))
                       :aliases (fangcun--aliases-at-point)
-                      :tags (fangcun--effective-tags-at-point))
-                     nodes))))))
+                      :tags (fangcun--effective-tags-at-point)
+                      :position (point)
+                      :line (line-number-at-pos))
+                      nodes))))))
           (nreverse nodes))))))
 
-(defun fangcun--collect-links-from-buffer (buffer)
-  "Return ID links owned by Fangcun nodes in Org BUFFER."
+(defun fangcun--collect-links-from-buffer (buffer &optional include-unowned)
+  "Return ID links from Org BUFFER.
+Unless INCLUDE-UNOWNED is non-nil, omit links outside Fangcun nodes."
   (with-current-buffer buffer
     (save-excursion
       (save-restriction
@@ -627,36 +652,37 @@ RELATIVE-FILE names BUFFER's file relative to YIYU's root."
                          (equal
                           (org-element-property :type element)
                           "id"))
-                (when-let*
-                    ((source-id
-                      (fangcun--element-owner-id element)))
-                  (let* ((path
-                          (org-element-property :path element))
-                         (target-id
-                          ;; A search suffix selects a location inside the
-                          ;; target node; the backlink belongs to the node.
-                          (if (string-match "::.*\\'" path)
-                              (substring path 0 (match-beginning 0))
-                            path))
-                         (position
-                          (org-element-property :begin element)))
-                    (push
-                     (make-fangcun-link
-                      :source-id source-id
-                      :target-id target-id
-                      :position position)
-                     links))))))
+                (let ((source-id (fangcun--element-owner-id element)))
+                  (when (or source-id include-unowned)
+                    (let* ((path
+                            (org-element-property :path element))
+                           (target-id
+                            ;; A search suffix selects a location inside the
+                            ;; target node; the backlink belongs to the node.
+                            (if (string-match "::.*\\'" path)
+                                (substring path 0 (match-beginning 0))
+                              path))
+                           (position
+                            (org-element-property :begin element)))
+                      (push
+                       (make-fangcun-link
+                        :source-id source-id
+                        :target-id target-id
+                        :position position
+                        :line (line-number-at-pos position))
+                       links)))))))
           (nreverse links))))))
 
 (defun fangcun--collect-file-data-from-buffer
-    (buffer yiyu relative-file)
+    (buffer yiyu relative-file &optional include-unowned)
   "Return nodes and links parsed from Org BUFFER.
-RELATIVE-FILE names BUFFER's file relative to YIYU's root."
+RELATIVE-FILE names BUFFER's file relative to YIYU's root.
+When INCLUDE-UNOWNED is non-nil, retain links outside Fangcun nodes."
   (list :nodes
         (fangcun--collect-nodes-from-buffer
          buffer yiyu relative-file)
         :links
-        (fangcun--collect-links-from-buffer buffer)))
+        (fangcun--collect-links-from-buffer buffer include-unowned)))
 
 (defun fangcun--reusable-file-buffer (file)
   "Return FILE's visited Org buffer when it still matches the file on disk."
@@ -667,21 +693,22 @@ RELATIVE-FILE names BUFFER's file relative to YIYU's root."
                  (verify-visited-file-modtime buffer)))
       buffer)))
 
-(defun fangcun--parse-file (yiyu file)
-  "Return Fangcun nodes and links from FILE on disk, owned by YIYU."
+(defun fangcun--parse-file (yiyu file &optional include-unowned)
+  "Return Fangcun nodes and links from FILE on disk, owned by YIYU.
+When INCLUDE-UNOWNED is non-nil, retain links outside Fangcun nodes."
   (let* ((relative-file
           (file-relative-name file (fangcun-yiyu-root yiyu)))
          (buffer (fangcun--reusable-file-buffer file)))
     (if buffer
         (fangcun--collect-file-data-from-buffer
-         buffer yiyu relative-file)
+         buffer yiyu relative-file include-unowned)
       (with-temp-buffer
         (setq default-directory (file-name-directory file))
         (insert-file-contents file)
         (let ((org-inhibit-startup t))
           (delay-mode-hooks (org-mode)))
         (fangcun--collect-file-data-from-buffer
-         (current-buffer) yiyu relative-file)))))
+         (current-buffer) yiyu relative-file include-unowned)))))
 
 (defun fangcun--read-file-state (yiyu file)
   "Return the synchronization state of FILE owned by YIYU."
@@ -2465,7 +2492,196 @@ Each source file is read from disk at most once."
     (pop-to-buffer buffer)
     buffer))
 
-(dolist (command '(fangcun-node-find fangcun-backlink-visit))
+(defun fangcun--check-issue-for-node (node count)
+  "Return a duplicate-ID check issue for NODE among COUNT occurrences."
+  (make-fangcun-check-issue
+   :severity 'error
+   :file (fangcun--node-absolute-file node)
+   :position (fangcun-node-position node)
+   :line (fangcun-node-line node)
+   :message
+   (format "Duplicate Fangcun node ID %S (%d occurrences)"
+           (fangcun-node-id node) count)))
+
+(defun fangcun--check-issue-for-link (state link severity message)
+  "Return a check issue for LINK in STATE with SEVERITY and MESSAGE."
+  (make-fangcun-check-issue
+   :severity severity
+   :file (fangcun-file-state-absolute-file state)
+   :position (fangcun-link-position link)
+   :line (fangcun-link-line link)
+   :message message))
+
+(defun fangcun--check-id-resolves-externally-p (id cache)
+  "Return whether Org resolves ID outside the scanned nodes, caching in CACHE."
+  (let ((status (gethash id cache 'unchecked)))
+    (when (eq status 'unchecked)
+      (setq status
+            (if-let* ((file (ignore-errors (org-id-find-id-file id))))
+                (if (ignore-errors (org-id-find-id-in-file id file))
+                    'resolved
+                  'unresolved)
+              'unresolved))
+      (puthash id status cache))
+    (eq status 'resolved)))
+
+(defun fangcun--check-issue-before-p (left right)
+  "Return non-nil when check issue LEFT should appear before RIGHT."
+  (let ((left-file (fangcun-check-issue-file left))
+        (right-file (fangcun-check-issue-file right)))
+    (if (equal left-file right-file)
+        (< (fangcun-check-issue-position left)
+           (fangcun-check-issue-position right))
+      (string-lessp left-file right-file))))
+
+(defun fangcun--check-scan ()
+  "Scan configured yiyus and return Fangcun consistency results."
+  (let ((yiyus (fangcun--configured-yiyus)))
+    (unless yiyus
+      (user-error "Configure `fangcun-yiyus' before checking Fangcun"))
+    (let ((states (fangcun--scan-file-states yiyus))
+          (nodes-by-id (make-hash-table :test #'equal))
+          (external-ids (make-hash-table :test #'equal))
+          links
+          issues)
+      (dolist (state states)
+        (let ((data
+               (fangcun--parse-file
+                (fangcun-file-state-yiyu state)
+                (fangcun-file-state-absolute-file state)
+                t)))
+          (dolist (node (plist-get data :nodes))
+            (push node (gethash (fangcun-node-id node) nodes-by-id)))
+          (dolist (link (plist-get data :links))
+            (push (cons state link) links))))
+      (maphash
+       (lambda (_id nodes)
+         (when (cdr nodes)
+           (dolist (node nodes)
+             (push (fangcun--check-issue-for-node node (length nodes))
+                   issues))))
+       nodes-by-id)
+      (dolist (entry links)
+        (let* ((state (car entry))
+               (link (cdr entry))
+               (target-id (fangcun-link-target-id link)))
+          (unless (fangcun-link-source-id link)
+            (push
+             (fangcun--check-issue-for-link
+              state link 'warning
+              (format "ID link to %S has no owning Fangcun node" target-id))
+             issues))
+          (unless (or (gethash target-id nodes-by-id)
+                      (fangcun--check-id-resolves-externally-p
+                       target-id external-ids))
+            (push
+             (fangcun--check-issue-for-link
+              state link 'error
+              (format "Unresolved Org ID link target %S" target-id))
+             issues))))
+      (list :yiyus (length yiyus)
+            :files (length states)
+            :issues (sort issues #'fangcun--check-issue-before-p)))))
+
+(defun fangcun--check-issue-at-point ()
+  "Return the Fangcun check issue represented by the button at point."
+  (when-let* ((button (button-at (point))))
+    (button-get button 'fangcun-check-issue)))
+
+(defun fangcun-check-visit (issue)
+  "Visit the source location represented by Fangcun check ISSUE."
+  (interactive
+   (list
+    (or (fangcun--check-issue-at-point)
+        (user-error "No Fangcun check result at point"))))
+  (let ((file (fangcun-check-issue-file issue)))
+    (unless (file-exists-p file)
+      (user-error "Fangcun check source file no longer exists: %s" file))
+    (find-file file)
+    (widen)
+    (goto-char
+     (min (or (fangcun-check-issue-position issue) (point-min))
+          (point-max)))
+    (when (derived-mode-p 'org-mode)
+      (org-fold-show-context 'link-search))
+    issue))
+
+(defun fangcun--check-button-action (button)
+  "Visit the Fangcun check issue represented by BUTTON."
+  (fangcun-check-visit (button-get button 'fangcun-check-issue)))
+
+(define-button-type 'fangcun-check-button
+  'action #'fangcun--check-button-action
+  'face nil
+  'follow-link t
+  'mouse-face 'highlight
+  'help-echo "Visit this Fangcun check result")
+
+(defun fangcun--insert-check-issue (issue)
+  "Insert one Fangcun check ISSUE into the current buffer."
+  (let* ((severity (fangcun-check-issue-severity issue))
+         (label
+          (concat
+           (propertize (upcase (symbol-name severity))
+                       'face (if (eq severity 'error) 'error 'warning))
+           "  "
+           (abbreviate-file-name (fangcun-check-issue-file issue))
+           ":" (number-to-string (fangcun-check-issue-line issue))
+           "  " (fangcun-check-issue-message issue))))
+    (insert-text-button
+     label :type 'fangcun-check-button 'fangcun-check-issue issue)
+    (insert "\n")))
+
+(defun fangcun-check-refresh (&optional _ignore-auto _noconfirm)
+  "Rerun and display the current Fangcun consistency checks."
+  (interactive)
+  (unless (derived-mode-p 'fangcun-check-mode)
+    (user-error "This is not a Fangcun check buffer"))
+  (message "Checking Fangcun...")
+  (let* ((result (fangcun--check-scan))
+         (issues (plist-get result :issues))
+         (errors
+          (seq-count
+           (lambda (issue)
+             (eq (fangcun-check-issue-severity issue) 'error))
+           issues))
+         (warnings (- (length issues) errors))
+         (inhibit-read-only t))
+    (erase-buffer)
+    (insert (propertize "Fangcun Check" 'face 'bold) "\n\n")
+    (insert
+     (format "Checked %d files in %d yiyu roots.\n"
+             (plist-get result :files) (plist-get result :yiyus)))
+    (insert "RET visits an issue, gr checks again, q quits.\n")
+    (if issues
+        (progn
+          (insert (format "Found %d errors and %d warnings.\n\n"
+                          errors warnings))
+          (dolist (issue issues)
+            (fangcun--insert-check-issue issue)))
+      (insert "Fangcun found no problems.\n"))
+    (set-buffer-modified-p nil)
+    (goto-char (point-min))
+    (when-let* ((button (next-button (point))))
+      (goto-char (button-start button)))
+    (if issues
+        (message "Fangcun check found %d errors and %d warnings"
+                 errors warnings)
+      (message "Fangcun found no problems"))))
+
+;;;###autoload
+(defun fangcun-check ()
+  "Scan configured Fangcun files and display consistency problems."
+  (interactive)
+  (let ((buffer (get-buffer-create fangcun-check-buffer-name)))
+    (with-current-buffer buffer
+      (fangcun-check-mode)
+      (fangcun-check-refresh))
+    (pop-to-buffer buffer)
+    buffer))
+
+(dolist (command '(fangcun-node-find fangcun-backlink-visit
+                   fangcun-check-visit))
   (yunge-jump-history-track-command command))
 
 (provide 'fangcun)

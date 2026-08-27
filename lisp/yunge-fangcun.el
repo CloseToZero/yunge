@@ -10,6 +10,7 @@
 (declare-function org-region-active-p "org")
 
 (defvar fangcun-backlinks-mode-map)
+(defvar fangcun-check-mode-map)
 (defvar org-link-bracket-re)
 
 (defvar-keymap yunge-fangcun-backlink-map
@@ -21,6 +22,7 @@
 
 (defconst yunge-fangcun-note-bindings
   `(("b" ,yunge-fangcun-backlink-map "backlink")
+    ("C" fangcun-check "check notes")
     ("c" fangcun-heading-node-create "create heading node")
     ("f" fangcun-node-find "find node")
     ("i" fangcun-node-insert "insert node link")
@@ -31,6 +33,14 @@
   `(("RET" fangcun-backlink-visit "visit")
     ("C-j" forward-button "next backlink")
     ("C-k" backward-button "previous backlink")
+    ("q" quit-window "quit")
+    ("gr" revert-buffer "refresh")
+    ,@yunge-key-button-navigation-bindings))
+
+(defconst yunge-fangcun-check-normal-bindings
+  `(("RET" fangcun-check-visit "visit")
+    ("C-j" forward-button "next issue")
+    ("C-k" backward-button "previous issue")
     ("q" quit-window "quit")
     ("gr" revert-buffer "refresh")
     ,@yunge-key-button-navigation-bindings))
@@ -58,7 +68,10 @@ context."
   (with-eval-after-load 'fangcun
     (yunge-key-evil-define
      'normal fangcun-backlinks-mode-map
-     yunge-fangcun-backlinks-normal-bindings)))
+     yunge-fangcun-backlinks-normal-bindings)
+    (yunge-key-evil-define
+     'normal fangcun-check-mode-map
+     yunge-fangcun-check-normal-bindings)))
 
 (yunge-key-define yunge-note-map yunge-fangcun-note-bindings)
 

@@ -135,9 +135,17 @@ to the node at point.  Occurrences are grouped by their source node and show the
 source line as a preview.  =RET= visits the link, =gr= refreshes the buffer, and
 =q= closes its window.
 
+=M-x fangcun-check= scans the saved Org files below every configured yiyu and
+opens a read-only =*Fangcun Check*= buffer.  It reports duplicate node IDs,
+=id:= links that have no owning file or heading node, and link targets that
+neither Fangcun nor Org can resolve.  The check does not change notes or the
+database, and it does not require synchronization to succeed.  =RET= visits an
+issue, =gr= runs the checks again, and =q= closes the buffer.
+
 The note map provides the frequent Fangcun commands under the global leader:
 
 - =SPC n c= creates a node from the current heading.
+- =SPC n C= checks the configured note graph.
 - =SPC n f= finds a node.
 - =SPC n i= inserts a node link.
 - =SPC n n= creates a file node.

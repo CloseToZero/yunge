@@ -74,6 +74,7 @@
    'fundamental-mode
    '(("SPC n b f" . fangcun-backlink-find)
      ("SPC n b v" . fangcun-backlinks)
+     ("SPC n C" . fangcun-check)
      ("SPC n c" . fangcun-heading-node-create)
      ("SPC n f" . fangcun-node-find)
      ("SPC n i" . fangcun-node-insert)
@@ -89,6 +90,24 @@
   (yunge-test-evil-normal-keys
    'fangcun-backlinks-mode
    '(("RET" . fangcun-backlink-visit)
+     ("C-j" . forward-button)
+     ("C-k" . backward-button)
+     ("q" . quit-window)
+     ("gr" . revert-buffer)
+     ("g]" . forward-button)
+     ("g[" . backward-button)
+     ("<tab>" . forward-button)
+     ("S-TAB" . backward-button))))
+
+(ert-deftest yunge-fangcun-integrates-the-check-buffer-with-evil ()
+  (yunge-test-enable-evil)
+  (require 'yunge-fangcun)
+  (require 'fangcun)
+  (require 'which-key)
+
+  (yunge-test-evil-normal-keys
+   'fangcun-check-mode
+   '(("RET" . fangcun-check-visit)
      ("C-j" . forward-button)
      ("C-k" . backward-button)
      ("q" . quit-window)

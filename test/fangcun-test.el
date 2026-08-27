@@ -1503,6 +1503,44 @@
                     "ignored-line-comment"))
         (should-not (fangcun-backlink-list id))))))
 
+(ert-deftest fangcun-check-reports-note-graph-problems ()
+  (fangcun-test-with-notes
+    (let ((unowned-file
+           (expand-file-name "unowned.org" personal-root))
+          (buffer (get-buffer-create fangcun-check-buffer-name))
+          (org-id-locations (make-hash-table :test #'equal)))
+      (unwind-protect
+          (progn
+            (fangcun-test--write-file
+             personal-file
+             ":PROPERTIES:\n:ID: duplicate-node\n:END:\n")
+            (fangcun-test--write-file
+             work-file
+             ":PROPERTIES:\n:ID: duplicate-node\n:END:\n")
+            (fangcun-test--write-file
+             unowned-file
+             (concat
+              "#+title: Unowned links\n\n"
+              "* Section without an ID\n"
+              "[[id:missing-check-target][Missing target]]\n"))
+            (save-window-excursion
+              (fangcun-check)
+              (should (eq major-mode 'fangcun-check-mode))
+              (should
+               (= (how-many "Duplicate Fangcun node ID"
+                            (point-min) (point-max))
+                  2))
+              (should
+               (save-excursion
+                 (goto-char (point-min))
+                 (search-forward "has no owning Fangcun node" nil t)))
+              (should
+               (save-excursion
+                 (goto-char (point-min))
+                 (search-forward "Unresolved Org ID link target" nil t)))))
+        (when (buffer-live-p buffer)
+          (kill-buffer buffer))))))
+
 (ert-deftest fangcun-finds-a-backlink-at-its-first-occurrence ()
   (fangcun-test-with-notes
     (let ((source-file
