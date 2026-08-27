@@ -431,7 +431,10 @@ Return nil when POSITION has no preview or its source is currently visible."
                 'org-latex-overlay)
         (delete-overlay candidate)))
     (unless overlay
-      (setq overlay (make-overlay beginning end nil nil nil))
+      ;; Text inserted immediately before a fragment belongs to its prose,
+      ;; not to the source replaced by the preview.  This matters for line
+      ;; joins, which insert their separating space at the overlay boundary.
+      (setq overlay (make-overlay beginning end nil t nil))
       (overlay-put overlay 'shuying-org t)
       (overlay-put overlay 'modification-hooks
                    '(shuying-org--modified)))
@@ -658,9 +661,10 @@ When AUTOMATIC is non-nil, silently retain unavailable dependency errors."
               (progn
                 (overlay-put overlay 'shuying-org-dirty nil)
                 (overlay-put overlay 'shuying-org-error nil)
-                (unless (or (overlay-get overlay
-                                         'shuying-org-empty-artifact)
-                            (shuying-org--source-visible-p overlay))
+                (if (or (overlay-get overlay
+                                     'shuying-org-empty-artifact)
+                        (shuying-org--source-visible-p overlay))
+                    (shuying-org--hide-overlay overlay)
                   (shuying-org--show-overlay overlay)))
             (push
              (shuying-org--render-request

@@ -646,6 +646,40 @@
                 (should (overlay-get overlay 'display))))))
       (delete-directory root t))))
 
+(ert-deftest shuying-org-keeps-joined-space-outside-preview ()
+  (let* ((root (make-temp-file "shuying-org-" t))
+         (shuying-cache-directory root)
+         (shuying-backends nil)
+         (shuying--pending-jobs (make-hash-table :test #'equal))
+         (shuying-org-test--render-count 0))
+    (unwind-protect
+        (progn
+          (shuying-register-backend
+           'shuying-latex
+           #'shuying-org-test--render-now)
+          (cl-letf (((symbol-function 'create-image)
+                     (lambda (file &rest _properties)
+                       (list 'image file))))
+            (with-temp-buffer
+              (org-mode)
+              (insert "有一个根\n\\( a \\)，继续。\n")
+              (goto-char (point-min))
+              (shuying-org-mode 1)
+              (shuying-org-preview-buffer)
+              ;; This is the edit made by Evil's `J' operator.
+              (join-line 1)
+              (shuying-org--post-command)
+              (let ((formula-start
+                     (save-excursion
+                       (goto-char (point-min))
+                       (search-forward "\\( a \\)")
+                       (- (point) (length "\\( a \\)")))))
+                (should-not
+                 (shuying-org-preview-overlay-at (1- formula-start)))
+                (should
+                 (shuying-org-preview-overlay-at formula-start))))))
+      (delete-directory root t))))
+
 (ert-deftest shuying-org-restores-a-preview-after-undo-outside-it ()
   (let* ((root (make-temp-file "shuying-org-" t))
          (shuying-cache-directory root)
