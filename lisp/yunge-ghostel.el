@@ -6,17 +6,23 @@
 (require 'yunge-key)
 (require 'yunge-state)
 
-(declare-function evil-ghostel-mode "evil-ghostel" (&optional arg))
-(declare-function evil-ghostel--prompt-active-p "evil-ghostel" ())
-(declare-function evil-ghostel-redo "evil-ghostel" (count))
-(declare-function evil-ghostel-undo "evil-ghostel" (count))
+(declare-function evil-redo "evil-commands" (&optional count))
+(declare-function evil-undo "evil-commands" (&optional count))
 (declare-function ghostel--send-encoded
                   "ghostel" (key-name mods &optional utf8))
 (declare-function ghostel--send-event "ghostel" ())
 (declare-function ghostel-alt-screen-p "ghostel" ())
 (declare-function ghostel-project "ghostel" (&optional arg))
+(declare-function yunge-ghostel-evil--ensure-prompt-input
+                  "yunge-ghostel-evil" ())
+(declare-function yunge-ghostel-evil--line-mode-p
+                  "yunge-ghostel-evil" ())
+(declare-function yunge-ghostel-evil--prompt-session-p
+                  "yunge-ghostel-evil" ())
+(declare-function yunge-ghostel-evil-mode
+                  "yunge-ghostel-evil" (&optional arg))
 
-(defvar evil-ghostel-mode-map)
+(defvar ghostel--input-mode)
 (defvar ghostel-mode-hook)
 (defvar ghostel-module-auto-install)
 (defvar ghostel-module-directory)
@@ -26,6 +32,7 @@
 (defvar ghostel-shell)
 (defvar project-prefix-map)
 (defvar project-switch-commands)
+(defvar yunge-ghostel-evil-mode-map)
 (defvar yunge-toggle-map)
 
 (defconst yunge-ghostel-powershell-command
@@ -86,20 +93,29 @@ prompt without changing the user's PowerShell profile.")
 (defun yunge-ghostel-undo (count)
   "Undo shell input COUNT times using the current line editor."
   (interactive "p")
-  (if (and (yunge-ghostel--powershell-p)
-           (evil-ghostel--prompt-active-p))
-      (dotimes (_ (or count 1))
-        (ghostel--send-encoded "z" "ctrl"))
-    (evil-ghostel-undo count)))
+  (cond
+   ((yunge-ghostel-evil--prompt-session-p)
+    (yunge-ghostel-evil--ensure-prompt-input)
+    (dotimes (_ (or count 1))
+      (ghostel--send-encoded
+       (if (yunge-ghostel--powershell-p) "z" "_") "ctrl")))
+   ((yunge-ghostel-evil--line-mode-p)
+    (evil-undo count))
+   (t (user-error "Ghostel renderer buffers cannot be undone directly"))))
 
 (defun yunge-ghostel-redo (count)
   "Redo shell input COUNT times using the current line editor."
   (interactive "p")
-  (if (and (yunge-ghostel--powershell-p)
-           (evil-ghostel--prompt-active-p))
-      (dotimes (_ (or count 1))
-        (ghostel--send-encoded "y" "ctrl"))
-    (evil-ghostel-redo count)))
+  (cond
+   ((yunge-ghostel-evil--prompt-session-p)
+    (yunge-ghostel-evil--ensure-prompt-input)
+    (if (yunge-ghostel--powershell-p)
+        (dotimes (_ (or count 1))
+          (ghostel--send-encoded "y" "ctrl"))
+      (message "Redo is not supported by the terminal line editor")))
+   ((yunge-ghostel-evil--line-mode-p)
+    (evil-redo count))
+   (t (user-error "Ghostel renderer buffers cannot be redone directly"))))
 
 (defun yunge-ghostel-next-input ()
   "Request the next shell input in Ghostel."
@@ -125,22 +141,29 @@ ARG follows the prefix conventions of `ghostel-project'."
       buffer)))
 
 (defun yunge-ghostel--setup-keys ()
-  "Set up shell history and Evil mouse bindings for Ghostel."
+  "Set up shell history and Evil bindings for Ghostel."
   (yunge-key-define ghostel-semi-char-mode-map
                     yunge-ghostel-history-bindings)
   (yunge-key-evil-define '(normal visual operator motion)
-                         evil-ghostel-mode-map
+                         yunge-ghostel-evil-mode-map
                          yunge-ghostel-mouse-bindings)
   (yunge-key-evil-define '(normal visual)
-                         evil-ghostel-mode-map
+                         yunge-ghostel-evil-mode-map
                          yunge-ghostel-evil-bindings))
 
 (defun yunge-ghostel--enable-evil-in-existing-buffers ()
-  "Enable Evil Ghostel integration in existing terminal buffers."
+  "Enable Evil integration in existing Ghostel buffers."
   (dolist (buffer (buffer-list))
     (with-current-buffer buffer
       (when (eq major-mode 'ghostel-mode)
-        (evil-ghostel-mode 1)))))
+        (yunge-ghostel-evil-mode 1)))))
+
+(defun yunge-ghostel--setup-evil ()
+  "Load and activate Evil integration for Ghostel."
+  (require 'yunge-ghostel-evil)
+  (add-hook 'ghostel-mode-hook #'yunge-ghostel-evil-mode)
+  (yunge-ghostel--setup-keys)
+  (yunge-ghostel--enable-evil-in-existing-buffers))
 
 (elpaca ghostel
   (setq ghostel-module-auto-install 'download
@@ -148,17 +171,10 @@ ARG follows the prefix conventions of `ghostel-project'."
         (yunge-var-subdirectory "ghostel")
         ghostel-readonly-fake-cursor nil)
   (when (eq system-type 'windows-nt)
-    (setq ghostel-shell (yunge-ghostel--windows-shell-spec))))
-
-(elpaca evil-ghostel
-  (add-hook 'ghostel-mode-hook #'evil-ghostel-mode)
-  (with-eval-after-load 'evil-ghostel
-    (yunge-ghostel--setup-keys))
-  (yunge-ghostel--enable-evil-in-existing-buffers)
-  ;; Do not expose terminal entry points during the asynchronous interval in
-  ;; which Ghostel is ready but its Evil integration is not.  A terminal
-  ;; created in that interval would route `p' to ordinary `evil-paste-after',
-  ;; which tries to edit Ghostel's renderer-owned buffer directly.
+    (setq ghostel-shell (yunge-ghostel--windows-shell-spec)))
+  (with-eval-after-load 'evil
+    (with-eval-after-load 'ghostel
+      (yunge-ghostel--setup-evil)))
   (yunge-key-define yunge-toggle-map yunge-ghostel-terminal-bindings)
   (yunge-key-define project-prefix-map yunge-ghostel-project-bindings)
   (with-eval-after-load 'project

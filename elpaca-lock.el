@@ -133,15 +133,6 @@
    :fetcher github
    :files (:defaults)
    :ref "6a3e1ddd04ac504a016590940d0af2a3361b9efd"))
- (evil-ghostel
-  :source "elpaca-menu-lock-file"
-  :recipe
-  (:package "evil-ghostel"
-   :repo "dakra/ghostel"
-   :fetcher github
-   :files ("extensions/evil-ghostel/evil-ghostel.el")
-   :source "MELPA"
-   :ref "ccc371ba61213412954e785f5b472d84dbbf0d51"))
  (expreg
   :source "elpaca-menu-lock-file"
   :recipe
