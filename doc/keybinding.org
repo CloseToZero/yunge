@@ -367,10 +367,15 @@ In fixed-layout readers, ~J/K~ move to the next or previous page, ~gg/G~ move
 to the first or last page, and ~gp~ prompts for a page.  ~C-d/C-u~ scroll by
 half a screen in pixels; they must not interpret one rendered page as one
 text line.  For the same reason, ~j/k~ scroll by one screen-line height in
-pixels.  Page Down and Page Up retain screen-scrolling behavior.  These page
-keys stay separate from search repeat keys.  Search-result changes and
-~gg/G/gp~ are semantic jumps, so ~C-o/C-i~ can revisit them.  Paging and
-ordinary scrolling do not add jump entries.
+pixels.  ~h/l~ and the Left/Right keys pan a page which is wider than its
+window.  ~zH/zL~ pan horizontally by half a window, while ~z0/z$~ move to
+the left or right page edge.  Page Down and Page Up retain screen-scrolling
+behavior.  All of these movements use the fixed-layout viewport, so an
+image taller than the window pans inside the page before the continuous
+roll crosses a page boundary.  These page keys stay separate from search
+repeat keys.
+Search-result changes and ~gg/G/gp~ are semantic jumps, so ~C-o/C-i~ can
+revisit them.  Paging and ordinary scrolling do not add jump entries.
 
 PDF mouse-wheel input likewise scrolls by bounded device pixels rather than
 rendered buffer lines.  Reader does not apply Emacs's progressive text-line

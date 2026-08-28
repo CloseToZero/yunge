@@ -4,7 +4,6 @@
 
 (require 'cl-lib)
 (require 'mwheel)
-(require 'pixel-scroll)
 (require 'seq)
 (require 'yunge-reader)
 
@@ -376,24 +375,170 @@ gap below a page separately from the portion which scales with the page."
     (when (natnump page)
       (setq yunge-reader-pdf-page page))))
 
+(defun yunge-reader-pdf--window-page (window)
+  "Return the PDF page at the top of WINDOW."
+  (or (and (window-live-p window)
+           (eq (window-buffer window) (current-buffer))
+           (yunge-reader-pdf--page-at-position
+            (window-start window)))
+      yunge-reader-pdf-page))
+
+(defun yunge-reader-pdf--maximum-window-hscroll (window)
+  "Return WINDOW's maximum useful horizontal scroll in columns."
+  (let ((page (yunge-reader-pdf--window-page window)))
+    (if (not (and (natnump page)
+                  (yunge-reader-pdf--page-info page)))
+        0
+      (let* ((page-width
+              (yunge-reader-pdf--page-width page window))
+             (body-width (window-body-width window t))
+             (column-width
+              (max 1 (frame-char-width (window-frame window)))))
+        (ceiling
+         (/ (float (max 0 (- page-width body-width)))
+            column-width))))))
+
 (defun yunge-reader-pdf--clamp-window-hscroll (window)
   "Restrict WINDOW's horizontal scroll to the current PDF page width."
   (when (and (window-live-p window)
-             (eq (window-buffer window) (current-buffer))
-             (natnump yunge-reader-pdf-page)
-             (yunge-reader-pdf--page-info yunge-reader-pdf-page))
-    (let* ((page-width
-            (yunge-reader-pdf--page-width
-             yunge-reader-pdf-page window))
-           (body-width (window-body-width window t))
-           (column-width
-            (max 1 (frame-char-width (window-frame window))))
-           (maximum
-            (floor
-             (/ (float (max 0 (- page-width body-width)))
-                column-width))))
+             (eq (window-buffer window) (current-buffer)))
+    (let ((maximum
+           (yunge-reader-pdf--maximum-window-hscroll window)))
       (when (> (window-hscroll window) maximum)
         (set-window-hscroll window maximum)))))
+
+(defun yunge-reader-pdf--page-pixel-height (page window)
+  "Return PAGE's painted pixel height in WINDOW."
+  (let* ((page-info (yunge-reader-pdf--page-info page))
+         (width
+          (or (yunge-reader-pdf--display-width page)
+              (yunge-reader-pdf--page-width page window))))
+    (cdr (yunge-reader-pdf--pixel-size page-info width))))
+
+(defun yunge-reader-pdf--page-scroll-span (page window)
+  "Return PAGE's vertical span in the continuous roll for WINDOW."
+  (+ (yunge-reader-pdf--page-pixel-height page window)
+     (if (< page (1- (yunge-reader-pdf--page-count)))
+         yunge-reader-pdf-page-gap
+       0)))
+
+(defun yunge-reader-pdf--page-vscroll-limit (page window)
+  "Return the greatest valid top offset for PAGE in WINDOW."
+  (if (< page (1- (yunge-reader-pdf--page-count)))
+      (yunge-reader-pdf--page-scroll-span page window)
+    (max 0
+         (- (yunge-reader-pdf--page-pixel-height page window)
+            (window-body-height window t)))))
+
+(defun yunge-reader-pdf--vertical-pan-target (window pixels)
+  "Return the PAGE and offset reached by panning WINDOW by PIXELS.
+Positive PIXELS moves forward through the continuous PDF roll."
+  (let* ((last-page (1- (yunge-reader-pdf--page-count)))
+         (page
+          (max 0
+               (min last-page
+                    (or (yunge-reader-pdf--window-page window) 0))))
+         (offset
+          (max 0
+               (min (yunge-reader-pdf--page-vscroll-limit page window)
+                    (or (window-vscroll window t) 0))))
+         (remaining (abs pixels)))
+    (if (> pixels 0)
+        (while (> remaining 0)
+          (let* ((limit
+                  (yunge-reader-pdf--page-vscroll-limit page window))
+                 (available (max 0 (- limit offset))))
+            (cond
+             ((< remaining available)
+              (setq offset (+ offset remaining)
+                    remaining 0))
+             ((< page last-page)
+              (setq remaining (- remaining available)
+                    page (1+ page)
+                    offset 0))
+             (t
+              (setq offset limit
+                    remaining 0)))))
+      (while (> remaining 0)
+        (cond
+         ((<= remaining offset)
+          (setq offset (- offset remaining)
+                remaining 0))
+         ((> page 0)
+          (setq remaining (- remaining offset)
+                page (1- page)
+                offset
+                (yunge-reader-pdf--page-scroll-span page window)))
+         (t
+          (setq offset 0
+                remaining 0)))))
+    (cons page offset)))
+
+(defun yunge-reader-pdf--set-window-page-offset
+    (window page offset)
+  "Place WINDOW at PAGE and vertical pixel OFFSET."
+  (when-let* ((position (yunge-reader-pdf--page-position page)))
+    (let ((cursor-position
+           (if (and (< page (1- (yunge-reader-pdf--page-count)))
+                    (>= offset
+                        (yunge-reader-pdf--page-pixel-height
+                         page window)))
+               (yunge-reader-pdf--page-position (1+ page))
+             position)))
+      (setq yunge-reader-pdf--pending-location nil
+            yunge-reader-pdf-page page)
+      (set-window-start window position t)
+      (set-window-vscroll window offset t t)
+      (if (eq window (selected-window))
+          (goto-char cursor-position)
+        (set-window-point window cursor-position)))))
+
+(defun yunge-reader-pdf--pan-vertical (pixels &optional window)
+  "Pan WINDOW vertically by signed PIXELS through the PDF roll."
+  (setq window (or window (selected-window)))
+  (when (and (window-live-p window)
+             (eq (window-buffer window) (current-buffer))
+             (> (yunge-reader-pdf--page-count) 0))
+    (yunge-reader--detach-search-navigation)
+    (pcase-let ((`(,page . ,offset)
+                 (yunge-reader-pdf--vertical-pan-target
+                  window pixels)))
+      (let ((yunge-reader-pdf--programmatic-scroll t))
+        (yunge-reader-pdf--set-window-page-offset
+         window page offset)
+        (yunge-reader-pdf--update-visible-pages window)))))
+
+(defun yunge-reader-pdf--set-horizontal-position
+    (position &optional window)
+  "Set WINDOW's horizontal PDF POSITION.
+POSITION is a column number, `left', or `right'."
+  (setq window (or window (selected-window)))
+  (when (and (window-live-p window)
+             (eq (window-buffer window) (current-buffer)))
+    (yunge-reader--detach-search-navigation)
+    (yunge-reader-pdf--sync-current-page window)
+    (let* ((maximum
+            (yunge-reader-pdf--maximum-window-hscroll window))
+           (target
+            (pcase position
+              ('left 0)
+              ('right maximum)
+              ((pred integerp)
+               (max 0 (min maximum position)))
+              (_
+               (error "Invalid horizontal PDF position: %S"
+                      position)))))
+      (let ((yunge-reader-pdf--programmatic-scroll t))
+        (set-window-hscroll window target)
+        (yunge-reader-pdf--update-visible-pages window)))))
+
+(defun yunge-reader-pdf--pan-horizontal (columns &optional window)
+  "Pan WINDOW horizontally by signed COLUMNS within its top PDF page."
+  (setq window (or window (selected-window)))
+  (when (and (window-live-p window)
+             (eq (window-buffer window) (current-buffer)))
+    (yunge-reader-pdf--set-horizontal-position
+     (+ (window-hscroll window) columns) window)))
 
 (defun yunge-reader-pdf--update-visible-pages (&optional window)
   "Virtualize the PDF roll around the active presentation.
@@ -561,16 +706,11 @@ WINDOW identifies the presentation which triggered this update."
 
 (defun yunge-reader-pdf--scroll-half-window (direction count)
   "Scroll in DIRECTION by half a window COUNT times."
-  (yunge-reader--detach-search-navigation)
-  (let ((function
-         (if (eq direction 'up)
-             #'pixel-scroll-precision-scroll-up-page
-           #'pixel-scroll-precision-scroll-down-page)))
-    (dotimes (_ (abs count))
-      (funcall
-       function
-       (max 1 (/ (window-text-height nil t) 2))))
-    (yunge-reader-pdf--update-visible-pages (selected-window))))
+  (let ((pixels
+         (* (abs count)
+            (max 1 (/ (window-text-height nil t) 2)))))
+    (yunge-reader-pdf--pan-vertical
+     (if (eq direction 'up) (- pixels) pixels))))
 
 (defun yunge-reader-pdf-scroll-up (&optional count)
   "Scroll backward by half a PDF window COUNT times."
@@ -588,16 +728,81 @@ WINDOW identifies the presentation which triggered this update."
 
 (defun yunge-reader-pdf--scroll-line (direction count)
   "Scroll in DIRECTION by one screen line COUNT times."
-  (yunge-reader--detach-search-navigation)
-  (let ((function
-         (if (eq direction 'up)
-             #'pixel-scroll-precision-scroll-up-page
-           #'pixel-scroll-precision-scroll-down-page))
-        (pixels
-         (max 1 (frame-char-height (window-frame)))))
-    (dotimes (_ (abs count))
-      (funcall function pixels))
-    (yunge-reader-pdf--update-visible-pages (selected-window))))
+  (let ((pixels
+         (* (abs count)
+            (max 1 (frame-char-height (window-frame))))))
+    (yunge-reader-pdf--pan-vertical
+     (if (eq direction 'up) (- pixels) pixels))))
+
+(defun yunge-reader-pdf--scroll-screen (direction count)
+  "Scroll in DIRECTION by a full PDF window COUNT times."
+  (let ((pixels
+         (* (abs count)
+            (max 1 (window-text-height nil t)))))
+    (yunge-reader-pdf--pan-vertical
+     (if (eq direction 'up) (- pixels) pixels))))
+
+(defun yunge-reader-pdf-scroll-page-up (&optional count)
+  "Scroll backward by one PDF window COUNT times."
+  (interactive "p")
+  (setq count (or count 1))
+  (yunge-reader-pdf--scroll-screen
+   (if (< count 0) 'down 'up) count))
+
+(defun yunge-reader-pdf-scroll-page-down (&optional count)
+  "Scroll forward by one PDF window COUNT times."
+  (interactive "p")
+  (setq count (or count 1))
+  (yunge-reader-pdf--scroll-screen
+   (if (< count 0) 'up 'down) count))
+
+(defun yunge-reader-pdf-scroll-left (&optional count)
+  "Pan left by COUNT character columns within the current PDF page."
+  (interactive "p")
+  (yunge-reader-pdf--pan-horizontal (- (or count 1))))
+
+(defun yunge-reader-pdf-scroll-right (&optional count)
+  "Pan right by COUNT character columns within the current PDF page."
+  (interactive "p")
+  (yunge-reader-pdf--pan-horizontal (or count 1)))
+
+(defun yunge-reader-pdf--scroll-half-width (direction count)
+  "Pan in DIRECTION by half a PDF window COUNT times."
+  (let* ((window (selected-window))
+         (column-width
+          (max 1 (frame-char-width (window-frame window))))
+         (columns
+          (* (abs count)
+             (max 1
+                  (/ (window-body-width window t)
+                     (* 2 column-width))))))
+    (yunge-reader-pdf--pan-horizontal
+     (if (eq direction 'left) (- columns) columns)
+     window)))
+
+(defun yunge-reader-pdf-scroll-half-width-left (&optional count)
+  "Pan left by half a PDF window COUNT times."
+  (interactive "p")
+  (setq count (or count 1))
+  (yunge-reader-pdf--scroll-half-width
+   (if (< count 0) 'right 'left) count))
+
+(defun yunge-reader-pdf-scroll-half-width-right (&optional count)
+  "Pan right by half a PDF window COUNT times."
+  (interactive "p")
+  (setq count (or count 1))
+  (yunge-reader-pdf--scroll-half-width
+   (if (< count 0) 'left 'right) count))
+
+(defun yunge-reader-pdf-scroll-left-edge ()
+  "Pan to the left edge of the current PDF page."
+  (interactive)
+  (yunge-reader-pdf--set-horizontal-position 'left))
+
+(defun yunge-reader-pdf-scroll-right-edge ()
+  "Pan to the right edge of the current PDF page."
+  (interactive)
+  (yunge-reader-pdf--set-horizontal-position 'right))
 
 (defun yunge-reader-pdf--wheel-pixel-delta (event window)
   "Return the bounded signed pixel delta for wheel EVENT in WINDOW."
@@ -632,14 +837,8 @@ WINDOW identifies the presentation which triggered this update."
           (let ((delta
                  (yunge-reader-pdf--wheel-pixel-delta event window)))
             (unless (zerop delta)
-              (yunge-reader--detach-search-navigation)
-              (condition-case nil
-                  (if (< delta 0)
-                      (pixel-scroll-precision-scroll-down-page (- delta))
-                    (pixel-scroll-precision-scroll-up-page delta))
-                (beginning-of-buffer nil)
-                (end-of-buffer nil))
-              (yunge-reader-pdf--update-visible-pages window))))))))
+              (yunge-reader-pdf--pan-vertical
+               (- delta) window))))))))
 
 (put 'yunge-reader-pdf-scroll-wheel 'scroll-command t)
 

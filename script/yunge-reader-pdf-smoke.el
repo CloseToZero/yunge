@@ -50,10 +50,14 @@
 (declare-function yunge-reader-pdf--display-width "yunge-reader-pdf")
 (declare-function yunge-reader-pdf--location "yunge-reader-pdf")
 (declare-function yunge-reader-pdf--page-count "yunge-reader-pdf")
+(declare-function yunge-reader-pdf--page-pixel-height
+                  "yunge-reader-pdf")
 (declare-function yunge-reader-pdf--page-position "yunge-reader-pdf")
 (declare-function yunge-reader-pdf--render-appearance "yunge-reader-pdf")
 (declare-function yunge-reader-pdf--render-key "yunge-reader-pdf")
 (declare-function yunge-reader-pdf--restore-location "yunge-reader-pdf")
+(declare-function yunge-reader-pdf--set-window-page-offset
+                  "yunge-reader-pdf")
 
 (defun yunge-reader-native-program ()
   "Use the release helper built by this isolated smoke."
@@ -78,6 +82,10 @@
 (defvar yunge-reader-pdf-smoke--fit-page nil)
 (defvar yunge-reader-pdf-smoke--manual-location nil)
 (defvar yunge-reader-pdf-smoke--original-render-path nil)
+(defvar yunge-reader-pdf-smoke--panned-vscroll nil)
+(defvar yunge-reader-pdf-smoke--right-edge-column nil)
+(defvar yunge-reader-pdf-smoke--half-hscroll nil)
+(defvar yunge-reader-pdf-smoke--gap-offset nil)
 (defvar yunge-reader-pdf-smoke--exit-status 0)
 
 (defun yunge-reader-pdf-smoke--warning
@@ -175,6 +183,41 @@
   (and (buffer-live-p yunge-reader-pdf-smoke--buffer)
        (get-buffer-window yunge-reader-pdf-smoke--buffer t)))
 
+(defun yunge-reader-pdf-smoke--top-page ()
+  "Return the PDF page at the top of the fixture window."
+  (when-let* ((window (yunge-reader-pdf-smoke--window)))
+    (get-text-property
+     (window-start window) 'yunge-reader-pdf-page)))
+
+(defun yunge-reader-pdf-smoke--hscroll ()
+  "Return the fixture window's horizontal scroll."
+  (when-let* ((window (yunge-reader-pdf-smoke--window)))
+    (window-hscroll window)))
+
+(defun yunge-reader-pdf-smoke--vscroll ()
+  "Return the fixture window's pixel vertical scroll."
+  (when-let* ((window (yunge-reader-pdf-smoke--window)))
+    (window-vscroll window t)))
+
+(defun yunge-reader-pdf-smoke--right-edge ()
+  "Return the independently computed rightmost useful column."
+  (when-let* ((window (yunge-reader-pdf-smoke--window))
+              (page (yunge-reader-pdf-smoke--top-page))
+              (width (yunge-reader-pdf--display-width page)))
+    (let ((body-width (window-body-width window t))
+          (column-width
+           (max 1 (frame-char-width (window-frame window)))))
+      (ceiling
+       (/ (float (max 0 (- width body-width))) column-width)))))
+
+(defun yunge-reader-pdf-smoke--gap-stable-p ()
+  "Return whether the fixture remains at the stored inter-page gap."
+  (and (eql (yunge-reader-pdf-smoke--top-page) 0)
+       (eql (yunge-reader-pdf-smoke--vscroll)
+            yunge-reader-pdf-smoke--gap-offset)
+       (eql yunge-reader-pdf-page 0)
+       (eql (get-text-property (point) 'yunge-reader-pdf-page) 1)))
+
 (defun yunge-reader-pdf-smoke--width ()
   "Return the displayed width of fixture page one, or nil."
   (and (vectorp yunge-reader-pdf--page-positions)
@@ -256,14 +299,17 @@
    (list
     :name name
     :frame (cons (frame-pixel-width) (frame-pixel-height))
-     :body
+    :body
     (when-let* ((window (yunge-reader-pdf-smoke--window)))
       (cons (window-body-width window t)
             (window-body-height window t)))
-     :zoom yunge-reader-zoom-mode
-     :scale yunge-reader-effective-scale
+    :zoom yunge-reader-zoom-mode
+    :scale yunge-reader-effective-scale
     :manual-scale yunge-reader-scale
     :width (yunge-reader-pdf-smoke--width)
+    :page (yunge-reader-pdf-smoke--top-page)
+    :hscroll (yunge-reader-pdf-smoke--hscroll)
+    :vscroll (yunge-reader-pdf-smoke--vscroll)
     :appearance (yunge-reader-effective-appearance)
     :render (yunge-reader-pdf-smoke--render-path)
     :location (yunge-reader-pdf-smoke--location))
@@ -287,6 +333,9 @@
                  (yunge-reader-pdf--page-count))
      :window (and window t)
      :width (yunge-reader-pdf-smoke--width)
+     :page (yunge-reader-pdf-smoke--top-page)
+     :hscroll (yunge-reader-pdf-smoke--hscroll)
+     :vscroll (yunge-reader-pdf-smoke--vscroll)
      :image (and display (imagep display))
      :exact (yunge-reader-pdf-smoke--exact-image-p)
      :prefix
@@ -540,6 +589,161 @@
                  (progn
                    (yunge-reader-pdf-smoke--observation
                     'original-restored)
+                   (yunge-reader--set-manual-scale 2.0)
+                   (setq yunge-reader-pdf-smoke--phase
+                         'panning-ready
+                         yunge-reader-pdf-smoke--not-before
+                         (+ (float-time) 0.5))
+                   (yunge-reader-pdf-smoke--continue))
+               (yunge-reader-pdf-smoke--continue)))
+            ('panning-ready
+             (if (and (eq yunge-reader-zoom-mode 'manual)
+                      (= yunge-reader-scale 2.0)
+                      (< (abs (- yunge-reader-effective-scale 2.0))
+                         0.01)
+                      (yunge-reader-pdf-smoke--settled-p))
+                 (progn
+                   (yunge-reader-pdf-first-page)
+                   (yunge-reader-pdf-scroll-left-edge)
+                   (yunge-reader-pdf-scroll-down-line)
+                   (yunge-reader-pdf-scroll-half-width-right)
+                   (setq yunge-reader-pdf-smoke--phase 'panned
+                         yunge-reader-pdf-smoke--not-before
+                         (+ (float-time) 0.2))
+                   (yunge-reader-pdf-smoke--continue))
+               (yunge-reader-pdf-smoke--continue)))
+            ('panned
+             (if (and (yunge-reader-pdf-smoke--settled-p)
+                      (eql (yunge-reader-pdf-smoke--top-page) 0)
+                      (> (or (yunge-reader-pdf-smoke--hscroll) 0) 0)
+                      (> (or (yunge-reader-pdf-smoke--vscroll) 0) 0))
+                 (progn
+                   (setq yunge-reader-pdf-smoke--panned-vscroll
+                         (yunge-reader-pdf-smoke--vscroll)
+                         yunge-reader-pdf-smoke--right-edge-column
+                         (yunge-reader-pdf-smoke--right-edge))
+                   (unless
+                       (> yunge-reader-pdf-smoke--right-edge-column
+                          (yunge-reader-pdf-smoke--hscroll))
+                     (error "Oversized PDF has no horizontal pan range"))
+                   (yunge-reader-pdf-smoke--observation 'panned)
+                   (yunge-reader-pdf-scroll-right-edge)
+                   (setq yunge-reader-pdf-smoke--phase 'right-edge
+                         yunge-reader-pdf-smoke--not-before
+                         (+ (float-time) 0.2))
+                   (yunge-reader-pdf-smoke--continue))
+               (yunge-reader-pdf-smoke--continue)))
+            ('right-edge
+             (if (and
+                  (eql (yunge-reader-pdf-smoke--top-page) 0)
+                  (eql (yunge-reader-pdf-smoke--hscroll)
+                       yunge-reader-pdf-smoke--right-edge-column)
+                  (eql (yunge-reader-pdf-smoke--vscroll)
+                       yunge-reader-pdf-smoke--panned-vscroll))
+                 (progn
+                   (yunge-reader-pdf-smoke--observation 'right-edge)
+                   (yunge-reader-pdf-scroll-right)
+                   (redisplay t)
+                   (setq yunge-reader-pdf-smoke--phase
+                         'right-edge-clamped
+                         yunge-reader-pdf-smoke--not-before
+                         (+ (float-time) 0.2))
+                   (yunge-reader-pdf-smoke--continue))
+               (yunge-reader-pdf-smoke--continue)))
+            ('right-edge-clamped
+             (if (eql (yunge-reader-pdf-smoke--hscroll)
+                      yunge-reader-pdf-smoke--right-edge-column)
+                 (progn
+                   (yunge-reader-pdf-scroll-left-edge)
+                   (setq yunge-reader-pdf-smoke--phase 'left-edge
+                         yunge-reader-pdf-smoke--not-before
+                         (+ (float-time) 0.2))
+                   (yunge-reader-pdf-smoke--continue))
+               (yunge-reader-pdf-smoke--continue)))
+            ('left-edge
+             (if (zerop (or (yunge-reader-pdf-smoke--hscroll) -1))
+                 (progn
+                   (yunge-reader-pdf-smoke--observation 'left-edge)
+                   (yunge-reader-pdf-scroll-left)
+                   (redisplay t)
+                   (setq yunge-reader-pdf-smoke--phase
+                         'left-edge-clamped
+                         yunge-reader-pdf-smoke--not-before
+                         (+ (float-time) 0.2))
+                   (yunge-reader-pdf-smoke--continue))
+               (yunge-reader-pdf-smoke--continue)))
+            ('left-edge-clamped
+             (if (zerop (or (yunge-reader-pdf-smoke--hscroll) -1))
+                 (progn
+                   (yunge-reader-pdf-scroll-half-width-right)
+                   (setq yunge-reader-pdf-smoke--phase 'half-width
+                         yunge-reader-pdf-smoke--not-before
+                         (+ (float-time) 0.2))
+                   (yunge-reader-pdf-smoke--continue))
+               (yunge-reader-pdf-smoke--continue)))
+            ('half-width
+             (let ((hscroll (yunge-reader-pdf-smoke--hscroll)))
+               (if (and (numberp hscroll)
+                        (> hscroll 0)
+                        (< hscroll
+                           yunge-reader-pdf-smoke--right-edge-column)
+                        (eql (yunge-reader-pdf-smoke--vscroll)
+                             yunge-reader-pdf-smoke--panned-vscroll))
+                   (let* ((window (yunge-reader-pdf-smoke--window))
+                          (page-height
+                           (yunge-reader-pdf--page-pixel-height
+                            0 window))
+                          (line-height
+                           (max 1
+                                (frame-char-height
+                                 (window-frame window))))
+                          (gap-center
+                           (max 1 (/ yunge-reader-pdf-page-gap 2)))
+                          (count (1+ (/ gap-center line-height)))
+                          (target (+ page-height gap-center))
+                          (start (- target (* count line-height))))
+                     (unless (and (>= start 0) (< start page-height))
+                       (error "Could not prepare a one-command page gap"))
+                     (setq yunge-reader-pdf-smoke--half-hscroll hscroll
+                           yunge-reader-pdf-smoke--gap-offset target)
+                     (yunge-reader-pdf-smoke--observation 'half-width)
+                     (yunge-reader-pdf--set-window-page-offset
+                      window 0 start)
+                     (yunge-reader-pdf-scroll-down-line count)
+                     (setq yunge-reader-pdf-smoke--phase 'page-gap
+                           yunge-reader-pdf-smoke--not-before
+                           (+ (float-time) 0.2))
+                     (yunge-reader-pdf-smoke--continue))
+                 (yunge-reader-pdf-smoke--continue))))
+            ('page-gap
+             (if (and (yunge-reader-pdf-smoke--gap-stable-p)
+                      (eql (yunge-reader-pdf-smoke--hscroll)
+                           yunge-reader-pdf-smoke--half-hscroll))
+                 (progn
+                   (yunge-reader-pdf-smoke--observation 'page-gap)
+                   (redisplay t)
+                   (setq yunge-reader-pdf-smoke--phase
+                         'page-gap-stable
+                         yunge-reader-pdf-smoke--not-before
+                         (+ (float-time) 0.2))
+                   (yunge-reader-pdf-smoke--continue))
+               (yunge-reader-pdf-smoke--continue)))
+            ('page-gap-stable
+             (if (yunge-reader-pdf-smoke--gap-stable-p)
+                 (progn
+                   (yunge-reader-pdf-smoke--observation
+                    'page-gap-stable)
+                   (yunge-reader-pdf-scroll-down)
+                   (setq yunge-reader-pdf-smoke--phase 'next-page
+                         yunge-reader-pdf-smoke--not-before
+                         (+ (float-time) 0.2))
+                   (yunge-reader-pdf-smoke--continue))
+               (yunge-reader-pdf-smoke--continue)))
+            ('next-page
+             (if (and (eql (yunge-reader-pdf-smoke--top-page) 1)
+                      (eql yunge-reader-pdf-page 1))
+                 (progn
+                   (yunge-reader-pdf-smoke--observation 'next-page)
                    (yunge-reader-pdf-smoke--finish))
                (yunge-reader-pdf-smoke--continue)))))))
     (error
@@ -560,7 +764,7 @@
                "graphical-fixture.pdf"
                (yunge-reader-graphical-smoke-context-temporary-root
                 yunge-reader-pdf-smoke--context))
-              yunge-reader-pdf-smoke--deadline (+ (float-time) 45))
+              yunge-reader-pdf-smoke--deadline (+ (float-time) 60))
         (yunge-reader-pdf-smoke--write-fixture
          yunge-reader-pdf-smoke--file)
         (advice-add 'display-warning :around

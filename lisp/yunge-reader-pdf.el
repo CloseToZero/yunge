@@ -28,8 +28,14 @@
     ("gg" yunge-reader-pdf-first-page "first page")
     ("gp" yunge-reader-pdf-goto-page "go to page")
     ("gr" yunge-reader-refresh "refresh")
+    ("h" yunge-reader-pdf-scroll-left "pan left")
     ("j" yunge-reader-pdf-scroll-down-line "scroll down one line")
-    ("k" yunge-reader-pdf-scroll-up-line "scroll up one line"))
+    ("k" yunge-reader-pdf-scroll-up-line "scroll up one line")
+    ("l" yunge-reader-pdf-scroll-right "pan right")
+    ("z$" yunge-reader-pdf-scroll-right-edge "right edge")
+    ("z0" yunge-reader-pdf-scroll-left-edge "left edge")
+    ("zH" yunge-reader-pdf-scroll-half-width-left "pan half left")
+    ("zL" yunge-reader-pdf-scroll-half-width-right "pan half right"))
   "Normal-state bindings for the PDF view adapter.")
 
 (defvar-keymap yunge-reader-pdf-view-mode-map
@@ -39,13 +45,21 @@
   "G" #'yunge-reader-pdf-last-page
   "J" #'yunge-reader-pdf-next-page
   "K" #'yunge-reader-pdf-previous-page
-  "<next>" #'scroll-up-command
-  "<prior>" #'scroll-down-command
+  "<left>" #'yunge-reader-pdf-scroll-left
+  "<next>" #'yunge-reader-pdf-scroll-page-down
+  "<prior>" #'yunge-reader-pdf-scroll-page-up
+  "<right>" #'yunge-reader-pdf-scroll-right
   "g g" #'yunge-reader-pdf-first-page
   "g p" #'yunge-reader-pdf-goto-page
   "g r" #'yunge-reader-refresh
+  "h" #'yunge-reader-pdf-scroll-left
   "j" #'yunge-reader-pdf-scroll-down-line
   "k" #'yunge-reader-pdf-scroll-up-line
+  "l" #'yunge-reader-pdf-scroll-right
+  "z $" #'yunge-reader-pdf-scroll-right-edge
+  "z 0" #'yunge-reader-pdf-scroll-left-edge
+  "z H" #'yunge-reader-pdf-scroll-half-width-left
+  "z L" #'yunge-reader-pdf-scroll-half-width-right
   "<mouse-4>" #'yunge-reader-pdf-scroll-wheel
   "<mouse-5>" #'yunge-reader-pdf-scroll-wheel
   "<wheel-down>" #'yunge-reader-pdf-scroll-wheel

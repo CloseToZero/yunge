@@ -18,7 +18,8 @@ The current PDF adapter provides:
 - open, close, page count, labels, and complete page geometry;
 - a centered, continuous, virtualized page roll with bounded image residency;
 - replaceable, one-at-a-time background prefetch for the active working set;
-- next, previous, direct page, screen, mouse wheel, and ordinary scrolling;
+- next, previous, direct page, two-dimensional viewport, mouse wheel, and
+  ordinary scrolling;
 - fit-width, fit-page, and bounded manual zoom;
 - canonical bounds and rotated glyph quadrilaterals for local hit testing;
 - cross-page drag, polygonal SVG highlights, and bounded exact text copying;
@@ -43,9 +44,13 @@ refresh, =+/-= to zoom, === to reset zoom, and =W/P= to fit width or page.  PDF
 views use =J/K= for the next or previous page, =gg/G= for the first or last
 page, =gp= for a page prompt, =RET= for a visible link prompt, and Page Down
 or Page Up for screen scrolling.  =C-d/C-u= scroll by half a screen in
-pixels, while =j/k= scroll by one screen line.  =ma= sets document mark =a=,
-and ='a= visits it.  Marks accept lowercase letters =a-z=; uppercase letters
-are intentionally unbound.  Mouse-1 clears an existing
+pixels, while =j/k= scroll by one screen line.  =h/l= and Left/Right pan an
+oversized page horizontally; =zH/zL= pan by half a window, and =z0/z$=
+move to its horizontal edges.  Vertical movement pans inside a page taller
+than its window and crosses page boundaries without leaving the continuous
+roll.  =ma= sets document mark =a=, and ='a= visits it.  Marks accept
+lowercase letters =a-z=; uppercase letters are intentionally unbound.
+Mouse-1 clears an existing
 text selection, dragging highlights text immediately, and Ctrl-Mouse-1
 follows a link when hit.  Pointer motion outside a page image does not extend
 the selection until it returns to a page.  Reader handles the initial mouse-down
