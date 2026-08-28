@@ -83,6 +83,12 @@
         (setq-local yunge-reader-pdf--pending-viewport-anchor nil)
         (setq-local yunge-reader-pdf--resize-timer nil)
         (setq-local yunge-reader-pdf--pending-resize nil)
+        ;; A PDF page occupies one display glyph.  After an outline jump
+        ;; selects that glyph, Emacs's automatic hscroll can move the window
+        ;; to expose the (hidden) cursor and leave a page narrower than the
+        ;; viewport clipped.  PDF destinations and viewport updates manage
+        ;; hscroll explicitly, so automatic hscroll must not override them.
+        (setq-local auto-hscroll-mode nil)
         (setq-local mwheel-coalesce-scroll-events nil)
         (add-hook 'yunge-reader-refresh-hook
                   #'yunge-reader-pdf--refresh nil t)
@@ -118,6 +124,7 @@
     (remove-hook 'kill-buffer-hook
                  #'yunge-reader-pdf--cancel-resize t)
     (kill-local-variable 'line-spacing)
+    (kill-local-variable 'auto-hscroll-mode)
     (kill-local-variable 'mwheel-coalesce-scroll-events)
     (setq yunge-reader-pdf--page-infos nil
           yunge-reader-pdf--page-positions nil

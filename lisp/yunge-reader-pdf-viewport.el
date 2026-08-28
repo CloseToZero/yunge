@@ -376,6 +376,25 @@ gap below a page separately from the portion which scales with the page."
     (when (natnump page)
       (setq yunge-reader-pdf-page page))))
 
+(defun yunge-reader-pdf--clamp-window-hscroll (window)
+  "Restrict WINDOW's horizontal scroll to the current PDF page width."
+  (when (and (window-live-p window)
+             (eq (window-buffer window) (current-buffer))
+             (natnump yunge-reader-pdf-page)
+             (yunge-reader-pdf--page-info yunge-reader-pdf-page))
+    (let* ((page-width
+            (yunge-reader-pdf--page-width
+             yunge-reader-pdf-page window))
+           (body-width (window-body-width window t))
+           (column-width
+            (max 1 (frame-char-width (window-frame window))))
+           (maximum
+            (floor
+             (/ (float (max 0 (- page-width body-width)))
+                column-width))))
+      (when (> (window-hscroll window) maximum)
+        (set-window-hscroll window maximum)))))
+
 (defun yunge-reader-pdf--update-visible-pages (&optional window)
   "Virtualize the PDF roll around the active presentation.
 WINDOW identifies the presentation which triggered this update."
@@ -389,6 +408,7 @@ WINDOW identifies the presentation which triggered this update."
                        (yunge-reader--place-window source-window))))
       (unless (yunge-reader-pdf--apply-pending-location window)
         (yunge-reader-pdf--sync-current-page window))
+      (yunge-reader-pdf--clamp-window-hscroll window)
       (yunge-reader-pdf--target-width
        (yunge-reader-pdf--page-info yunge-reader-pdf-page)
        window)

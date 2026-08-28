@@ -241,6 +241,16 @@
       (should-not (local-variable-p 'mwheel-coalesce-scroll-events))
       (should mwheel-coalesce-scroll-events))))
 
+(ert-deftest yunge-reader-pdf-disables-automatic-horizontal-scrolling ()
+  (let ((auto-hscroll-mode t))
+    (with-temp-buffer
+      (yunge-reader-pdf-view-mode 1)
+      (should (local-variable-p 'auto-hscroll-mode))
+      (should-not auto-hscroll-mode)
+      (yunge-reader-pdf-view-mode -1)
+      (should-not (local-variable-p 'auto-hscroll-mode))
+      (should auto-hscroll-mode))))
+
 (ert-deftest yunge-reader-pdf-bounds-wheel-pixel-deltas ()
   (let ((window (selected-window))
         (yunge-reader-pdf-wheel-fallback-lines 3))
@@ -2005,6 +2015,37 @@
         (yunge-reader-pdf--finish-resize buffer)
         (should (eq updated 'window))))))
 
+(ert-deftest yunge-reader-pdf-clamps-hscroll-after-a-window-expands ()
+  (with-temp-buffer
+    (insert (make-string 2000 ?x))
+    (setq yunge-reader-pdf-page 4)
+    (let ((buffer (current-buffer)))
+      (save-window-excursion
+        (switch-to-buffer buffer)
+        (set-window-hscroll nil 41)
+        (cl-letf (((symbol-function 'yunge-reader-pdf--page-info)
+                 (lambda (_page) '((width . 469.0) (height . 666.0))))
+                ((symbol-function 'yunge-reader-pdf--page-width)
+                 (lambda (_page _window) 16)))
+          (yunge-reader-pdf--clamp-window-hscroll (selected-window))
+          (should (zerop (window-hscroll))))))))
+
+(ert-deftest yunge-reader-pdf-retains-valid-hscroll-in-a-narrow-window ()
+  (with-temp-buffer
+    (insert (make-string 2000 ?x))
+    (setq yunge-reader-pdf-page 4)
+    (let ((buffer (current-buffer)))
+      (save-window-excursion
+        (switch-to-buffer buffer)
+        (set-window-hscroll nil 7)
+        (cl-letf (((symbol-function 'yunge-reader-pdf--page-info)
+                 (lambda (_page) '((width . 469.0) (height . 666.0))))
+                ((symbol-function 'yunge-reader-pdf--page-width)
+                 (lambda (_page window)
+                   (+ (window-body-width window t) 1000))))
+          (yunge-reader-pdf--clamp-window-hscroll (selected-window))
+          (should (= (window-hscroll) 7)))))))
+
 (ert-deftest yunge-reader-pdf-ignores-an-inactive-window-resize ()
   (with-temp-buffer
     (yunge-reader-mode)
@@ -2034,7 +2075,7 @@
           yunge-reader-pdf--page-infos
           [((width . 100.0) (height . 200.0))]
           yunge-reader-pdf--page-positions [1])
-    (let (painted recorded synchronized)
+    (let (clamped painted recorded synchronized)
       (cl-letf (((symbol-function 'yunge-reader--presentation-window)
                  (lambda () 'active))
                 ((symbol-function
@@ -2042,6 +2083,9 @@
                  (lambda (_window) nil))
                 ((symbol-function 'yunge-reader-pdf--sync-current-page)
                  (lambda (window) (setq synchronized window)))
+                ((symbol-function
+                  'yunge-reader-pdf--clamp-window-hscroll)
+                 (lambda (window) (setq clamped window)))
                 ((symbol-function 'yunge-reader-pdf--target-width)
                  (lambda (_page-info window)
                    (should (eq window 'active))))
@@ -2057,6 +2101,7 @@
                  (lambda (window) (setq recorded window))))
         (yunge-reader-pdf--update-visible-pages 'inactive)
         (should (eq synchronized 'active))
+        (should (eq clamped 'active))
         (should (eq painted 'active))
         (should (eq recorded 'inactive))))))
 
