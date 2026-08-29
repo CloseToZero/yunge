@@ -19,8 +19,13 @@
          (unwind-protect
              (progn
                (require 'yunge-history)
-               (unless (and (= history-length 1000)
+               (unless (and (= yunge-history-max-items 1000)
+                            (= history-length 1000)
                             history-delete-duplicates
+                            (= kill-ring-max 1000)
+                            (= search-ring-max 1000)
+                            (= regexp-search-ring-max 1000)
+                            (= kmacro-ring-max 1000)
                             savehist-mode
                             (= savehist-autosave-interval (* 5 60))
                             recentf-mode
@@ -54,5 +59,50 @@
     (add-to-history 'yunge-history-test--entries "B")
     (add-to-history 'yunge-history-test--entries "A")
     (should (equal yunge-history-test--entries '("A" "B")))))
+
+(ert-deftest yunge-history-round-trips-explicit-histories ()
+  (let* ((root (make-temp-file "yunge-history-round-trip-" t))
+         (user-directory (file-name-as-directory root))
+         (var-directory
+          (file-name-as-directory (expand-file-name "var/" root)))
+         (histories
+          '((kill-ring "kill")
+            (command-history (find-file "example"))
+            (search-ring "literal")
+            (regexp-search-ring "regexp")
+            (kmacro-ring "macro")
+            (evil-ex-history "write")
+            (evil-eval-history "(+ 1 2)")
+            (evil-ex-search-history "search")
+            (evil-search-forward-history "forward")
+            (evil-search-backward-history "backward"))))
+    (unwind-protect
+        (progn
+          ;; The first Emacs records history and relies on normal shutdown
+          ;; to persist it.
+          (yunge-test-run-emacs
+           "--eval"
+           (prin1-to-string
+            `(progn
+               (defvar yunge-var-directory)
+               (let ((user-emacs-directory ,user-directory)
+                     (yunge-var-directory ,var-directory))
+                 (require 'yunge-history)
+                 (dolist (entry ',histories)
+                   (set (car entry) (copy-tree (cdr entry))))))))
+          ;; A separate Emacs must restore the same values during startup.
+          (yunge-test-run-emacs
+           "--eval"
+           (prin1-to-string
+            `(progn
+               (defvar yunge-var-directory)
+               (let ((user-emacs-directory ,user-directory)
+                     (yunge-var-directory ,var-directory))
+                 (require 'yunge-history)
+                 (dolist (entry ',histories)
+                   (unless (equal (symbol-value (car entry)) (cdr entry))
+                     (error "%S history did not survive an Emacs restart"
+                            (car entry)))))))))
+      (delete-directory root t))))
 
 ;;; yunge-history-test.el ends here
