@@ -55,7 +55,7 @@ Each entry is a plist containing :root, :modes, and optionally
 
 (defconst yunge-eglot--typescript-modes
   '(js-mode js-ts-mode tsx-ts-mode typescript-ts-mode typescript-mode)
-  "Major modes managed together by typescript-language-server.")
+  "Major modes managed together by the TypeScript language server.")
 
 (defconst yunge-eglot--build-directory-regexp
   "\\(?:\\`\\|[-_]\\)build\\(?:\\'\\|[-_]\\)"
@@ -293,6 +293,27 @@ Offer PREFERRED first when it still names a compilation database."
                  (directory-file-name
                   (file-name-directory database)))))))))
 
+(defun yunge-eglot--typescript-major-version (project)
+  "Return PROJECT's TypeScript compiler major version, or nil."
+  (let ((default-directory (project-root project)))
+    (condition-case nil
+        (with-temp-buffer
+          (when (eq (process-file "pnpm" nil t nil
+                                  "exec" "tsc" "--version")
+                    0)
+            (goto-char (point-min))
+            (when (re-search-forward
+                   "\\bVersion[[:space:]]+\\([0-9]+\\)\\(?:\\.\\|\\b\\)"
+                   nil t)
+              (string-to-number (match-string 1)))))
+      (file-error nil))))
+
+(defun yunge-eglot--typescript-contact (_interactive project)
+  "Return the TypeScript language server command for PROJECT."
+  (if (>= (or (yunge-eglot--typescript-major-version project) 0) 7)
+      '("pnpm" "exec" "tsc" "--lsp" "--stdio")
+    '("pnpm" "exec" "typescript-language-server" "--stdio")))
+
 (defun yunge-eglot--current-project-and-modes ()
   "Return the current project root and Eglot language group."
   (let* ((project (project-current t))
@@ -396,12 +417,13 @@ Offer PREFERRED first when it still names a compilation database."
          #'yunge-eglot--clangd-contact))
   (add-to-list
    'eglot-server-programs
-   '(((js-mode :language-id "javascript")
+   (cons
+    '((js-mode :language-id "javascript")
       (js-ts-mode :language-id "javascript")
       (tsx-ts-mode :language-id "typescriptreact")
       (typescript-ts-mode :language-id "typescript")
       (typescript-mode :language-id "typescript"))
-     . ("pnpm" "exec" "typescript-language-server" "--stdio")))
+    #'yunge-eglot--typescript-contact))
   (with-eval-after-load 'evil
     (evil-set-initial-state 'eglot-hierarchy-mode 'normal)
     (yunge-key-evil-define-minor-mode

@@ -162,16 +162,48 @@
     (cons yunge-eglot--clangd-modes #'yunge-eglot--clangd-contact)
     eglot-server-programs)))
 
-(ert-deftest yunge-eglot-runs-the-project-typescript-server-through-pnpm ()
+(ert-deftest yunge-eglot-uses-the-native-lsp-for-typescript-7 ()
+  (cl-letf (((symbol-function 'project-root)
+             (lambda (_project) "c:/test-project/"))
+            ((symbol-function 'process-file)
+             (lambda (&rest _arguments)
+               (insert "Version 7.0.2\n")
+               0)))
+    (should
+     (equal (yunge-eglot--typescript-contact nil 'test-project)
+            '("pnpm" "exec" "tsc" "--lsp" "--stdio")))))
+
+(ert-deftest yunge-eglot-keeps-the-language-server-for-typescript-6 ()
+  (cl-letf (((symbol-function 'project-root)
+             (lambda (_project) "c:/test-project/"))
+            ((symbol-function 'process-file)
+             (lambda (&rest _arguments)
+               (insert "Version 6.0.2\n")
+               0)))
+    (should
+     (equal (yunge-eglot--typescript-contact nil 'test-project)
+            '("pnpm" "exec" "typescript-language-server" "--stdio")))))
+
+(ert-deftest yunge-eglot-falls-back-when-typescript-is-unavailable ()
+  (cl-letf (((symbol-function 'project-root)
+             (lambda (_project) "c:/test-project/"))
+            ((symbol-function 'process-file)
+             (lambda (&rest _arguments) 1)))
+    (should
+     (equal (yunge-eglot--typescript-contact nil 'test-project)
+            '("pnpm" "exec" "typescript-language-server" "--stdio")))))
+
+(ert-deftest yunge-eglot-registers-its-typescript-contact ()
   (require 'eglot)
   (should
    (member
-    '(((js-mode :language-id "javascript")
+    (cons
+     '((js-mode :language-id "javascript")
        (js-ts-mode :language-id "javascript")
        (tsx-ts-mode :language-id "typescriptreact")
        (typescript-ts-mode :language-id "typescript")
        (typescript-mode :language-id "typescript"))
-      . ("pnpm" "exec" "typescript-language-server" "--stdio"))
+     #'yunge-eglot--typescript-contact)
     eglot-server-programs)))
 
 (ert-deftest yunge-eglot-keeps-local-clangd-off-remote-projects ()
