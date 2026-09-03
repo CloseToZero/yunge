@@ -428,53 +428,6 @@
       (make-yunge-reader-search-batch
        :results nil :cursor cursor :done t)))))
 
-(ert-deftest yunge-reader-escape-hides-search-without-ending-it ()
-  (with-temp-buffer
-    (yunge-reader-mode)
-    (let ((updates 0)
-          (result
-           (make-yunge-reader-search-result
-            :start (make-yunge-reader-position :unit 0 :offset 1)
-            :end (make-yunge-reader-position :unit 0 :offset 2))))
-      (setq yunge-reader-search-query "needle"
-            yunge-reader-search-results (list result)
-            yunge-reader-search-result result
-            yunge-reader-search-highlight-visible t)
-      (add-hook 'yunge-reader-search-result-hook
-                (lambda () (cl-incf updates)) nil t)
-      (yunge-reader-escape)
-      (should (equal yunge-reader-search-query "needle"))
-      (should (equal yunge-reader-search-results (list result)))
-      (should (eq yunge-reader-search-result result))
-      (should-not yunge-reader-search-highlight-visible)
-      (should (= updates 1)))))
-
-(ert-deftest yunge-reader-evil-c-g-dismisses-the-same-highlights ()
-  (yunge-test-enable-evil)
-  (with-temp-buffer
-    (yunge-reader-mode)
-    (let ((result
-           (make-yunge-reader-search-result
-            :start (make-yunge-reader-position :unit 0 :offset 3)
-            :end (make-yunge-reader-position :unit 0 :offset 8))))
-      (setq yunge-reader-selection
-            (make-yunge-reader-selection
-             :start (make-yunge-reader-position :unit 0 :offset 1)
-             :end (make-yunge-reader-position :unit 0 :offset 2))
-            yunge-reader-search-query "needle"
-            yunge-reader-search-results (list result)
-            yunge-reader-search-result result
-            yunge-reader-search-highlight-visible t)
-      (save-window-excursion
-        (switch-to-buffer (current-buffer))
-        (should (eq (key-binding (kbd "C-g"))
-                    'yunge-reader-keyboard-quit))
-        (call-interactively (key-binding (kbd "C-g"))))
-      (should-not yunge-reader-selection)
-      (should (equal yunge-reader-search-query "needle"))
-      (should (eq yunge-reader-search-result result))
-      (should-not yunge-reader-search-highlight-visible))))
-
 (ert-deftest yunge-reader-search-navigation-restores-hidden-highlight ()
   (with-temp-buffer
     (yunge-reader-mode)

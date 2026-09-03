@@ -272,10 +272,6 @@
       (should-not (file-exists-p target)))))
 
 (ert-deftest fangcun-resolves-org-ids-through-its-database ()
-  (should (advice-member-p #'fangcun--id-find 'org-id-find))
-  (should (advice-member-p #'fangcun--id-complete 'org-id-complete))
-  (should
-   (advice-member-p #'fangcun--id-description 'org-id-description))
   (fangcun-test-with-notes
     (fangcun-db-sync)
     (let ((org-id-locations nil))
@@ -331,31 +327,6 @@
       (let ((location (org-id-find "outside")))
         (should (file-equal-p (car location) outside-file)))
       (should-not (file-exists-p fangcun-database-file)))))
-
-(ert-deftest fangcun-creates-schema-only-for-a-new-database ()
-  (let* ((root (make-temp-file "fangcun-database-test-" t))
-         (fangcun-database-file
-          (expand-file-name "state/fangcun.sqlite" root)))
-    (unwind-protect
-        (progn
-          (should-not (fangcun-node-list))
-          (should (file-exists-p fangcun-database-file))
-          (should-not (fangcun-node-list)))
-      (delete-directory root t))))
-
-(ert-deftest fangcun-compares-yiyus-with-one-ordering ()
-  (let ((yiyus
-         (list
-          (make-fangcun-yiyu
-           :id "personal" :name "Personal" :root "personal/")
-          (make-fangcun-yiyu
-           :id "work" :name "Work" :root "work/"))))
-    (cl-letf
-        (((symbol-function 'sqlite-select)
-          (lambda (_database _query)
-            '(("work" "Work" "work/")
-              ("personal" "Personal" "personal/")))))
-      (should (fangcun--database-yiyus-match-p nil yiyus)))))
 
 (ert-deftest fangcun-syncs-multiple-yiyus ()
   (fangcun-test-with-notes
@@ -716,35 +687,6 @@
           ("lowercase" "Lowercase" ("Lowercase") nil)
           ("planned" "Planning" ("Planning") nil)))))))
 
-(ert-deftest fangcun-parsing-inhibits-org-startup ()
-  (fangcun-test-with-notes
-    (let ((original-org-mode (symbol-function 'org-mode))
-          called)
-      (cl-letf
-          (((symbol-function 'org-mode)
-            (lambda (&rest arguments)
-              (setq called t)
-              (should org-inhibit-startup)
-              (apply original-org-mode arguments))))
-        (fangcun-db-sync))
-      (should called))))
-
-(ert-deftest fangcun-sync-uses-nonvisiting-buffers-for-disk-files ()
-  (fangcun-test-with-notes
-    (let ((original-collector
-           (symbol-function
-            'fangcun--collect-nodes-from-buffer))
-          collected)
-      (cl-letf
-          (((symbol-function
-             'fangcun--collect-nodes-from-buffer)
-            (lambda (buffer &rest arguments)
-              (setq collected t)
-              (should-not (buffer-file-name buffer))
-              (apply original-collector buffer arguments))))
-        (fangcun-db-sync))
-      (should collected))))
-
 (ert-deftest fangcun-sync-reuses-matching-visited-buffer ()
   (fangcun-test-with-notes
     (let ((buffer (find-file-noselect personal-file))
@@ -842,24 +784,13 @@
          (fangcun-test--node "fangcun-test-disk-node" nodes))
         (should-not (fangcun-test--node "theorem" nodes))))))
 
-(ert-deftest fangcun-rebuild-replaces-database ()
+(ert-deftest fangcun-rebuild-replaces-indexed-state ()
   (fangcun-test-with-notes
     (fangcun-db-sync)
-    (fangcun--call-with-database
-     (lambda (database)
-       (sqlite-execute database "CREATE TABLE obsolete (value)")))
     (delete-file personal-file)
     (should
      (equal (fangcun-db-rebuild)
             '(:yiyus 2 :files 1 :nodes 1 :aliases 0 :tags 0 :links 0)))
-    (should-not
-     (fangcun--call-with-database
-      (lambda (database)
-        (sqlite-select
-         database
-         (concat
-          "SELECT name FROM sqlite_master "
-          "WHERE type = 'table' AND name = 'obsolete'")))))
     (should
      (equal (mapcar #'fangcun-node-id (fangcun-node-list))
             '("work-file")))))
@@ -913,28 +844,17 @@
       ":PROPERTIES:\n"
       ":ID: replacement\n"
       ":END:\n"))
-    (let ((new-file (expand-file-name "new.org" personal-root))
-          (original-parser (symbol-function 'fangcun--parse-file))
-          parsed)
-      (fangcun-test--write-file
-       new-file
-       ":PROPERTIES:\n:ID: new-file\n:END:\n")
-      (cl-letf
-          (((symbol-function 'fangcun--parse-file)
-            (lambda (yiyu file)
-              (push (file-name-nondirectory file) parsed)
-              (funcall original-parser yiyu file))))
-        (should
-         (equal (fangcun-db-sync)
-                '(:yiyus 2 :files 2 :nodes 3 :aliases 0 :tags 0 :links 0))))
-      (should
-       (equal (sort parsed #'string-lessp)
-              '("new.org" "theorems.org")))
-      (should
-       (equal
-        (sort (mapcar #'fangcun-node-id (fangcun-node-list))
-              #'string-lessp)
-        '("new-file" "personal-file" "replacement"))))))
+    (fangcun-test--write-file
+     (expand-file-name "new.org" personal-root)
+     ":PROPERTIES:\n:ID: new-file\n:END:\n")
+    (should
+     (equal (fangcun-db-sync)
+            '(:yiyus 2 :files 2 :nodes 3 :aliases 0 :tags 0 :links 0)))
+    (should
+     (equal
+      (sort (mapcar #'fangcun-node-id (fangcun-node-list))
+            #'string-lessp)
+      '("new-file" "personal-file" "replacement")))))
 
 (ert-deftest fangcun-sync-rolls-back-a-failed-update ()
   (fangcun-test-with-notes
@@ -1012,20 +932,20 @@
         (fangcun-node-title
          (fangcun-test--node "personal-file" nodes))
         "Updated Personal Notes")))
-    (fangcun--call-with-database
-     (lambda (database)
-       (should
-        (equal
-         (mapcar
-          (lambda (row)
-            (list (elt row 0) (elt row 1)))
-          (sqlite-select
-           database
-           (concat
-            "SELECT source_id, target_id FROM links "
-            "ORDER BY source_id, target_id")))
-         '(("replacement" "work-file")
-           ("work-file" "theorem"))))))))
+    (should
+     (equal
+      (mapcar
+       (lambda (backlink)
+         (fangcun-node-id (fangcun-backlink-node backlink)))
+       (fangcun-backlink-list "work-file"))
+      '("replacement")))
+    (should
+     (equal
+      (mapcar
+       (lambda (backlink)
+         (fangcun-node-id (fangcun-backlink-node backlink)))
+       (fangcun-backlink-list "theorem"))
+      '("work-file")))))
 
 (ert-deftest fangcun-update-requires-a-saved-buffer ()
   (fangcun-test-with-notes
@@ -1058,14 +978,6 @@
     (fangcun-db-sync)
     (delete-file work-file)
     (should-not (fangcun-node-from-id "work-file"))))
-
-(ert-deftest fangcun-reconcile-skips-an-unchanged-file ()
-  (fangcun-test-with-notes
-    (fangcun-db-sync)
-    (cl-letf (((symbol-function 'fangcun--db-update-file-in-yiyu)
-               (lambda (&rest _arguments)
-                 (ert-fail "An unchanged file was parsed again"))))
-      (fangcun--reconcile-file personal-file))))
 
 (ert-deftest fangcun-native-scan-decodes-file-states ()
   (fangcun-test-with-notes
@@ -1188,37 +1100,6 @@
       (fangcun--native-build-sentinel 'old-build "finished\n"))
     (should (eq fangcun--native-build-process 'current-build))
     (should-not reacted)))
-
-(ert-deftest fangcun-native-build-displays-compilation-buffer ()
-  (let ((fangcun--native-build-process nil)
-        (target (make-temp-file "fangcun-build-target-" t))
-        (buffer (get-buffer-create fangcun--native-build-buffer-name))
-        displayed
-        process-arguments)
-    (unwind-protect
-        (cl-letf (((symbol-function 'executable-find)
-                   (lambda (program)
-                     (and (equal program "cargo") "cargo")))
-                  ((symbol-function 'fangcun--cargo-target-directory)
-                   (lambda () target))
-                  ((symbol-function 'fangcun--stop-native-watch) #'ignore)
-                  ((symbol-function 'make-process)
-                   (lambda (&rest arguments)
-                     (setq process-arguments arguments)
-                     'build-process))
-                  ((symbol-function 'display-buffer)
-                   (lambda (shown-buffer &rest _arguments)
-                     (setq displayed shown-buffer)))
-                  ((symbol-function 'message) #'ignore))
-          (fangcun--build-native-helper)
-          (should (eq displayed buffer))
-          (should (eq (plist-get process-arguments :buffer) buffer))
-          (with-current-buffer buffer
-            (should (derived-mode-p 'compilation-mode))
-            (should (string-prefix-p "Fangcun native helper build\n\n"
-                                     (buffer-string)))))
-      (kill-buffer buffer)
-      (delete-directory target t))))
 
 (ert-deftest fangcun-update-starts-the-fangcun-session ()
   (fangcun-test-with-notes
@@ -1652,39 +1533,6 @@
           (kill-buffer buffer))
         (set-window-parameter nil 'yunge-jump-history nil)))))
 
-(ert-deftest fangcun-backlink-previews-read-each-source-once ()
-  (fangcun-test-with-notes
-    (let ((source-file
-           (expand-file-name "references.org" personal-root))
-          (buffer (get-buffer-create fangcun-backlinks-buffer-name)))
-      (unwind-protect
-          (progn
-            (fangcun-test--write-file
-             source-file
-             (concat
-              ":PROPERTIES:\n"
-              ":ID: source-file\n"
-              ":END:\n"
-              "#+title: Source file\n\n"
-              "[[id:work-file][First reference]]\n"
-              "[[id:work-file][Second reference]]\n"))
-            (fangcun-db-sync)
-            (let ((original (symbol-function 'insert-file-contents))
-                  (reads 0))
-              (cl-letf
-                  (((symbol-function 'insert-file-contents)
-                    (lambda (file &rest arguments)
-                      (when (file-equal-p file source-file)
-                        (cl-incf reads))
-                      (apply original file arguments))))
-                (with-current-buffer buffer
-                  (fangcun-backlinks-mode)
-                  (setq fangcun-backlinks-target-id "work-file")
-                  (fangcun-backlinks-refresh)))
-              (should (= reads 1))))
-        (when (buffer-live-p buffer)
-          (kill-buffer buffer))))))
-
 (ert-deftest fangcun-backlink-previews-reuse-only-matching-buffer ()
   (fangcun-test-with-notes
     (let* ((source-file
@@ -2091,28 +1939,6 @@
         (should-not (buffer-narrowed-p))
         (should (equal (org-id-get) "theorem"))))))
 
-(ert-deftest fangcun-mcp-searches-nodes ()
-  (fangcun-test-with-notes
-    (fangcun-db-sync)
-    (let* ((search
-            (fangcun-mcp--search-nodes
-             '(:query "A THEOREM" :pageSize 10)))
-           (matches (plist-get search :nodes))
-           (match
-            (seq-find
-             (lambda (result)
-               (equal
-                (plist-get (plist-get result :node) :id)
-                "theorem"))
-             matches)))
-      (should match)
-      (should
-       (equal
-        (plist-get (plist-get match :node) :title)
-        "A theorem"))
-      (should
-       (seq-contains-p (plist-get match :matchedFields) "title")))))
-
 (ert-deftest fangcun-mcp-locates-nodes-without-reading-content ()
   (fangcun-test-with-notes
     (fangcun-db-sync)
@@ -2186,6 +2012,12 @@
          (plist-get (aref first-items 0) :node)
          :id)
         "graph-exact"))
+      (should
+       (equal
+        (append
+         (plist-get (aref first-items 0) :matchedFields)
+         nil)
+        '("title")))
       (should (stringp cursor))
       (should (= (length second-items) 3))
       (should

@@ -65,20 +65,12 @@
    (equal shuying-work-directory
           (yunge-var-subdirectory "shuying/work"))))
 
-(ert-deftest shuying-render-spec-hash-covers-rendering-inputs ()
-  (let* ((first (shuying-test--spec))
-         (second (copy-shuying-render-spec first)))
-    (should (equal (shuying-render-spec-hash first)
-                   (shuying-render-spec-hash second)))
-    (setf (shuying-render-spec-scale second) 2.0)
-    (should-not (equal (shuying-render-spec-hash first)
-                       (shuying-render-spec-hash second)))))
-
-(ert-deftest shuying-reuses-a-cached-artifact ()
+(ert-deftest shuying-reuses-only-matching-cached-artifacts ()
   (let* ((root (make-temp-file "shuying-cache-" t))
          (shuying-cache-directory root)
          (shuying-backends nil)
          (shuying--pending-jobs (make-hash-table :test #'equal))
+         (specification (shuying-test--spec))
          (calls 0)
          cleared
          artifacts)
@@ -95,31 +87,32 @@
                (setf (shuying-backend-request-metadata request)
                      '(:height 1.2 :depth 0.2))
                (funcall complete request nil))))
-          (let ((specification (shuying-test--spec)))
-            (cl-letf (((symbol-function 'clear-image-cache)
-                       (lambda (file &optional _animation-filter)
-                         (push file cleared))))
+          (cl-letf (((symbol-function 'clear-image-cache)
+                     (lambda (file &optional _animation-filter)
+                       (push file cleared))))
+            (dotimes (_ 2)
               (shuying-render
                specification
                (lambda (artifact error-data)
                  (should-not error-data)
-                 (push artifact artifacts)))
+                 (push artifact artifacts))))
+            (let ((scaled (copy-shuying-render-spec specification)))
+              (setf (shuying-render-spec-scale scaled) 2.0)
               (shuying-render
-               specification
+               scaled
                (lambda (artifact error-data)
                  (should-not error-data)
                  (push artifact artifacts)))))
-          (should (= calls 1))
-          (should (= (length artifacts) 2))
-          (should (equal (car artifacts) (cadr artifacts)))
-          (should
-           (equal cleared
-                  (list (shuying-artifact-path (car artifacts)))))
-          (should
-           (file-exists-p (shuying-artifact-path (car artifacts))))
-          (should
-           (equal (shuying-artifact-metadata (car artifacts))
-                  '(:height 1.2 :depth 0.2))))
+          (should (= calls 2))
+          (should (= (length artifacts) 3))
+          (should (equal (nth 1 artifacts) (nth 2 artifacts)))
+          (should-not (equal (car artifacts) (cadr artifacts)))
+          (should (= (length cleared) 2))
+          (dolist (artifact artifacts)
+            (should (file-exists-p (shuying-artifact-path artifact)))
+            (should
+             (equal (shuying-artifact-metadata artifact)
+                    '(:height 1.2 :depth 0.2)))))
       (delete-directory root t))))
 
 (ert-deftest shuying-coalesces-pending-render-requests ()

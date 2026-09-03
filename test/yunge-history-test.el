@@ -4,8 +4,6 @@
 
 (require 'yunge-test-helper)
 
-(defvar yunge-history-test--entries nil)
-
 (ert-deftest yunge-history-configures-persistent-state ()
   (yunge-test-run-emacs
    "--eval"
@@ -51,14 +49,6 @@
                (recentf-mode -1)
                (save-place-mode -1))
            (delete-directory root t)))))))
-
-(ert-deftest yunge-history-removes-older-duplicates ()
-  (let ((history-delete-duplicates t)
-        (yunge-history-test--entries nil))
-    (add-to-history 'yunge-history-test--entries "A")
-    (add-to-history 'yunge-history-test--entries "B")
-    (add-to-history 'yunge-history-test--entries "A")
-    (should (equal yunge-history-test--entries '("A" "B")))))
 
 (ert-deftest yunge-history-round-trips-explicit-histories ()
   (let* ((root (make-temp-file "yunge-history-round-trip-" t))

@@ -4,29 +4,21 @@
 
 (require 'yunge-test-helper)
 
-(declare-function evil-get-auxiliary-keymap "evil-core")
 (declare-function evil-normal-state "evil-states")
-(declare-function slime-connection-list-mode "slime")
 (declare-function slime-inspector-mode "slime")
-(declare-function slime-macroexpansion-minor-mode "slime")
-(declare-function slime-mode "slime")
 (declare-function slime-popup-buffer-mode "slime")
 (declare-function slime-repl-mode "slime-repl")
 (declare-function slime-setup "slime")
 (declare-function slime-thread-control-mode "slime")
-(declare-function slime-trace-dialog--detail-mode "slime-trace-dialog")
 (declare-function slime-trace-dialog-mode "slime-trace-dialog")
-(declare-function slime-xref-mode "slime")
 (declare-function sldb-mode "slime")
 (declare-function yunge-slime--default-implementation "yunge-slime")
 
-(defvar lisp-mode-map)
 (defvar slime-completion-at-point-functions)
 (defvar slime-default-lisp)
 (defvar slime-lisp-implementations)
 (defvar slime-repl-history-file)
 (defvar slime-repl-history-size)
-(defvar slime-repl-map-mode)
 
 (yunge-test-deftest-lazy-load yunge-slime
   (slime slime-fancy slime-repl))
@@ -110,317 +102,69 @@
      (run-hook-with-args-until-success
       'completion-at-point-functions))))
 
-(ert-deftest yunge-slime-binds-source-commands ()
-  (yunge-test-enable-evil)
-  (require 'slime-autoloads)
-  (yunge-test-load-package-config 'yunge-slime)
-  (require 'slime)
-  (require 'which-key)
-  (should
-   (eq (lookup-key
-        (evil-get-auxiliary-keymap lisp-mode-map 'normal)
-        [localleader])
-       yunge-slime-command-map))
-  ;; Starting SLIME must remain available in a Common Lisp buffer before
-  ;; `slime-mode' has been enabled or a Lisp process has been started.
-  (let ((lisp-mode-hook nil))
-    (with-temp-buffer
-      (lisp-mode)
-      (should-not (bound-and-true-p slime-mode))
-      (yunge-test-evil-keys
-       'normal
-       '(("SPC m b" . yunge-slime-scratch)
-         ("SPC m s" . slime)
-         ("SPC m r" . yunge-slime-repl)
-         ("SPC m h a" . slime-apropos)
-         ("SPC m h f" . slime-describe-function)
-         ("SPC m h h" . slime-documentation-lookup)
-         ("SPC m h s" . slime-describe-symbol)
-         ("SPC m m a" . slime-macroexpand-all)
-         ("SPC m m o" . slime-macroexpand-1)
-         ("SPC m q c" . slime-list-connections)
-         ("SPC m q q" . slime-quit-lisp)
-         ("SPC m q r" . slime-restart-inferior-lisp)
-         ("SPC m q t" . slime-list-threads)
-         ("SPC m t d" . slime-trace-dialog)
-         ("SPC m t t" . slime-trace-dialog-toggle-trace)
-         ("SPC m t T" . slime-trace-dialog-toggle-complex-trace)
-         ("SPC m e b" . slime-eval-buffer)
-         ("SPC m e d" . slime-eval-defun)
-         ("SPC m e e" . slime-eval-last-expression)
-         ("SPC m e r" . slime-eval-region)
-         ("SPC m c d" . slime-compile-defun)
-         ("SPC m c f" . slime-compile-and-load-file)
-         ("SPC m c r" . slime-compile-region)
-         ("gd" . slime-edit-definition)
-         ("K" . slime-describe-symbol))))))
-
-(ert-deftest yunge-slime-integrates-repl-with-evil ()
+(ert-deftest yunge-slime-keeps-representative-evil-bindings ()
   (yunge-test-enable-evil)
   (require 'slime-autoloads)
   (yunge-test-load-package-config 'yunge-slime)
   (require 'slime)
   (require 'slime-repl)
   (require 'which-key)
+
+  ;; Sample each configured surface instead of snapshotting every upstream
+  ;; SLIME keymap and every declarative binding.
+  (let ((lisp-mode-hook nil))
+    (yunge-test-evil-normal-keys
+     'lisp-mode
+     '(("SPC m s" . slime)
+       ("SPC m r" . yunge-slime-repl)
+       ("gd" . slime-edit-definition))))
+
   (with-temp-buffer
     (slime-repl-mode)
-    (should slime-repl-map-mode)
     (yunge-test-evil-keys
      'insert
-     '(("M-p" . slime-repl-previous-input)
-       ("M-n" . slime-repl-next-input)
-       ("RET" . slime-repl-return)
-       ("<return>" . slime-repl-return)
-       ("C-j" . slime-repl-next-prompt)
-       ("C-k" . slime-repl-previous-prompt)))
+     '(("RET" . slime-repl-return)
+       ("M-p" . slime-repl-previous-input)))
     (evil-normal-state)
     (yunge-test-evil-keys
      'normal
-     '(("M-p" . slime-repl-previous-input)
-       ("M-n" . slime-repl-next-input)
-       ("RET" . slime-repl-return)
-       ("<return>" . slime-repl-return)
-       ("C-j" . slime-repl-next-prompt)
-       ("C-k" . slime-repl-previous-prompt)
-       ("gd" . slime-edit-definition)
-       ("K" . slime-describe-symbol)
-       ("SPC m b" . yunge-slime-scratch)
-       ("SPC m c b" . slime-repl-clear-buffer)
-       ("SPC m c o" . slime-repl-clear-output)
-       ("SPC m h s" . slime-describe-symbol)
-       ("SPC m i" . slime-repl-inspect)
-       ("SPC m m o" . slime-macroexpand-1)
-       ("SPC m p" . slime-repl-set-package)
-       ("SPC m q c" . slime-list-connections)
-       ("SPC m q q" . slime-quit-lisp)
-       ("SPC m q r" . slime-restart-inferior-lisp)
-       ("SPC m q t" . slime-list-threads)
-       ("SPC m t d" . slime-trace-dialog)
-       ("SPC m t t" . slime-trace-dialog-toggle-trace)
-       ("SPC m t T" . slime-trace-dialog-toggle-complex-trace)))))
+     '(("gd" . slime-edit-definition)
+       ("SPC m c b" . slime-repl-clear-buffer))))
 
-(ert-deftest yunge-slime-integrates-browsing-views-with-evil ()
-  (yunge-test-enable-evil)
-  (require 'slime-autoloads)
-  (yunge-test-load-package-config 'yunge-slime)
-  (require 'slime)
-  (require 'which-key)
-
-  (yunge-test-evil-normal-keys
-   'slime-apropos-mode
-   '(("RET" . push-button)
-     ("q" . quit-window)
-     ("C-j" . slime-apropos-next-symbol)
-     ("C-k" . slime-apropos-previous-symbol)
-     ("g]" . forward-button)
-     ("g[" . backward-button)
-     ("<tab>" . forward-button)
-     ("S-TAB" . backward-button)))
-
-  (yunge-test-evil-normal-keys
-   'slime-inspector-mode
-   '(("RET" . slime-inspector-operate-on-point)
-     ("q" . slime-inspector-quit)
-     ("C-j" . slime-inspector-next-inspectable-object)
-     ("C-k" . slime-inspector-previous-inspectable-object)
-     ("gh" . slime-inspector-pop)
-     ("gl" . slime-inspector-next)
-     ("gf" . slime-inspector-show-source)
-     ("gr" . slime-inspector-reinspect)
-     ("K" . slime-inspector-describe)
-     ("SPC m e" . slime-inspector-eval)
-     ("SPC m f" . slime-inspector-fetch-all)
-     ("SPC m h" . slime-inspector-history)
-     ("SPC m p" . slime-inspector-pprint)
-     ("SPC m v" . slime-inspector-toggle-verbose)))
-
-  (let ((lisp-mode-hook nil))
-    (yunge-test-evil-normal-keys
-     'slime-xref-mode
-     '(("RET" . slime-goto-xref)
-       ("q" . quit-window)
-       ("C-j" . slime-xref-next-line)
-       ("C-k" . slime-xref-prev-line)
-       ("gf" . slime-show-xref)
-       ("SPC m c" . slime-recompile-xref)
-       ("SPC m C" . slime-recompile-all-xrefs)))))
-
-(ert-deftest yunge-slime-integrates-debugger-with-evil ()
-  (yunge-test-enable-evil)
-  (require 'slime-autoloads)
-  (yunge-test-load-package-config 'yunge-slime)
-  (require 'slime)
+  ;; Mode-specific cleanup must win over the generic popup bindings.
+  (with-temp-buffer
+    (slime-inspector-mode)
+    (slime-popup-buffer-mode 1)
+    (yunge-test-evil-keys
+     'normal
+     '(("RET" . slime-inspector-operate-on-point)
+       ("q" . slime-inspector-quit)
+       ("K" . slime-inspector-describe))))
 
   (cl-letf (((symbol-function 'slime-connection) #'ignore))
     (yunge-test-evil-normal-keys
      'sldb-mode
      '(("RET" . sldb-default-action)
        ("q" . sldb-quit)
-       ("a" . sldb-abort)
-       ("c" . sldb-continue)
-       ("s" . sldb-step)
-       ("n" . sldb-next)
-       ("o" . sldb-out)
-       ("b" . sldb-break-on-return)
-       ("C-j" . sldb-down)
-       ("C-k" . sldb-up)
-       ("M-j" . sldb-details-down)
-       ("M-k" . sldb-details-up)
-       ("gg" . sldb-beginning-of-backtrace)
-       ("G" . sldb-end-of-backtrace)
-       ("]]" . sldb-cycle)
-       ("gf" . sldb-show-source)
-       ("za" . sldb-toggle-details)
-       ("<tab>" . sldb-toggle-details)
-       ("e" . sldb-eval-in-frame)
-       ("E" . sldb-pprint-eval-in-frame)
-       ("i" . sldb-inspect-in-frame)
-       ("D" . sldb-disassemble)
-       ("r" . sldb-restart-frame)
-       ("R" . sldb-return-from-frame)
-       ("I" . sldb-invoke-restart-by-name)
-       ("0" . sldb-invoke-restart-0)
-       ("9" . sldb-invoke-restart-9)
-       ("C-o" . yunge-jump-history-backward)
-       ("C-i" . yunge-jump-history-forward)))))
-
-(ert-deftest yunge-slime-integrates-popup-buffers-with-evil ()
-  (yunge-test-enable-evil)
-  (require 'slime-autoloads)
-  (yunge-test-load-package-config 'yunge-slime)
-  (require 'slime)
-
-  (with-temp-buffer
-    (fundamental-mode)
-    (slime-popup-buffer-mode 1)
-    (yunge-test-evil-keys
-     'normal
-     '(("q" . quit-window)
-       ("gd" . slime-edit-definition)
-       ("K" . slime-describe-symbol))))
-
-  ;; The Inspector must retain its cleanup and object actions when SLIME also
-  ;; enables the generic popup minor mode.
-  (with-temp-buffer
-    (slime-inspector-mode)
-    (slime-popup-buffer-mode 1)
-    (yunge-test-evil-keys
-     'normal
-     '(("q" . slime-inspector-quit)
-       ("K" . slime-inspector-describe)
-       ("gd" . slime-edit-definition)))))
-
-(ert-deftest yunge-slime-integrates-macroexpansion-with-evil ()
-  (yunge-test-enable-evil)
-  (require 'slime-autoloads)
-  (yunge-test-load-package-config 'yunge-slime)
-  (require 'slime)
-
-  (with-temp-buffer
-    (lisp-mode)
-    (slime-mode 1)
-    (slime-macroexpansion-minor-mode 1)
-    (slime-popup-buffer-mode 1)
-    (evil-normal-state)
-    (yunge-test-evil-keys
-     'normal
-     '(("gr" . slime-macroexpand-again)
-       ("u" . slime-macroexpand-undo)
-       ("q" . quit-window)
-       ("SPC m m a" . slime-macroexpand-all-inplace)
-       ("SPC m m o" . slime-macroexpand-1-inplace)))))
-
-(ert-deftest yunge-slime-integrates-trace-dialog-with-evil ()
-  (yunge-test-enable-evil)
-  (require 'slime-autoloads)
-  (yunge-test-load-package-config 'yunge-slime)
-  (require 'slime)
-  (slime-setup)
-  (require 'which-key)
-
-  (yunge-test-evil-normal-keys
-   'slime-trace-dialog-mode
-   '(("RET" . push-button)
-     ("q" . quit-window)
-     ("C-j" . slime-trace-dialog-next-button)
-     ("C-k" . slime-trace-dialog-prev-button)
-     ("gr" . slime-trace-dialog-fetch-status)
-     ("f" . slime-trace-dialog-fetch-traces)
-     ("F" . yunge-slime-trace-dialog-fetch-all)
-     ("x" . slime-trace-dialog-clear-fetched-traces)
-     ("y r" . slime-trace-dialog-copy-down-to-repl)
-     ("g]" . forward-button)
-     ("g[" . backward-button)
-     ("<tab>" . forward-button)
-     ("S-TAB" . backward-button)
-     ("SPC m a" . slime-trace-dialog-autofollow-mode)
-     ("SPC m d" . slime-trace-dialog-hide-details-mode)))
-
-  (yunge-test-evil-normal-keys
-   'slime-trace-dialog--detail-mode
-   '(("RET" . push-button)
-     ("q" . quit-window)
-     ("C-j" . slime-trace-dialog-next-button)
-     ("C-k" . slime-trace-dialog-prev-button)
-     ("y r" . slime-trace-dialog-copy-down-to-repl)
-     ("g]" . forward-button)
-     ("g[" . backward-button)
-     ("<tab>" . forward-button)
-     ("S-TAB" . backward-button)))
-
-  (with-temp-buffer
-    (slime-trace-dialog--detail-mode)
-    (slime-popup-buffer-mode 1)
-    (evil-normal-state)
-    (yunge-test-evil-keys
-     'normal
-     '(("q" . quit-window)
-       ("C-j" . slime-trace-dialog-next-button)
-       ("C-k" . slime-trace-dialog-prev-button)
-       ("y r" . slime-trace-dialog-copy-down-to-repl))))
-
-  (let (recurse)
-    (cl-letf (((symbol-function 'slime-trace-dialog-fetch-traces)
-               (lambda (&optional all)
-                 (setq recurse all))))
-      (call-interactively #'yunge-slime-trace-dialog-fetch-all))
-    (should recurse)))
-
-(ert-deftest yunge-slime-integrates-runtime-views-with-evil ()
-  (yunge-test-enable-evil)
-  (require 'slime-autoloads)
-  (yunge-test-load-package-config 'yunge-slime)
-  (require 'slime)
+       ("gf" . sldb-show-source))))
 
   (yunge-test-evil-normal-keys
    'slime-thread-control-mode
-   '(("RET" . slime-thread-debug)
-     ("C-j" . next-line)
-     ("C-k" . previous-line)
-     ("gr" . slime-update-threads-buffer)
-     ("q" . slime-quit-threads-buffer)
-     ("a" . slime-thread-attach)
+   '(("q" . slime-quit-threads-buffer)
      ("x" . yunge-slime-thread-kill)))
-  (yunge-test-evil-visual-keys
-   'slime-thread-control-mode
-   '(("x" . yunge-slime-thread-kill)))
 
-  (yunge-test-evil-normal-keys
-   'slime-connection-list-mode
-   '(("RET" . slime-connection-list-make-default)
-     ("C-j" . next-line)
-     ("C-k" . previous-line)
-     ("gr" . slime-update-connection-list)
-     ("q" . quit-window)
-     ("r" . slime-restart-connection-at-point)
-     ("x" . slime-quit-connection-at-point)))
-
-  ;; The popup map must not reduce thread view cleanup to `quit-window'.
-  (with-temp-buffer
-    (slime-thread-control-mode)
-    (slime-popup-buffer-mode 1)
-    (yunge-test-evil-keys
-     'normal '(("q" . slime-quit-threads-buffer)))))
+  (slime-setup)
+  (let (fetch-all)
+    (cl-letf (((symbol-function 'slime-trace-dialog-fetch-traces)
+               (lambda (&optional all) (setq fetch-all all))))
+      (with-temp-buffer
+        (slime-trace-dialog-mode)
+        (yunge-test-evil-keys
+         'normal
+         '(("F" . yunge-slime-trace-dialog-fetch-all)
+           ("q" . quit-window)))
+        (call-interactively (key-binding (kbd "F")))))
+    (should fetch-all)))
 
 (ert-deftest yunge-slime-thread-kill-respects-visual-line-selection ()
   (yunge-test-enable-evil)

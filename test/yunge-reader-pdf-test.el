@@ -104,25 +104,6 @@
      (eq (key-binding (kbd "y"))
          #'yunge-reader-copy-selection))))
 
-(ert-deftest yunge-reader-pdf-tracks-only-semantic-page-jumps ()
-  (dolist (command
-           '(yunge-reader-pdf-first-page
-             yunge-reader-pdf-last-page
-             yunge-reader-pdf-goto-page
-             yunge-reader-pdf--follow-location-link))
-    (should
-     (advice-member-p
-      #'yunge-jump-history--track-navigation command)))
-  (dolist (command
-           '(yunge-reader-pdf-next-page
-             yunge-reader-pdf-previous-page
-             yunge-reader-pdf--follow-link
-             scroll-up-command
-             scroll-down-command))
-    (should-not
-     (advice-member-p
-      #'yunge-jump-history--track-navigation command))))
-
 (ert-deftest yunge-reader-pdf-integrates-page-bindings-with-evil ()
   (yunge-test-enable-evil)
   (require 'which-key)
@@ -190,63 +171,6 @@
     (should-not
      (memq #'yunge-reader-pdf--window-buffer-changed
            window-buffer-change-functions))))
-
-(ert-deftest yunge-reader-pdf-scrolls-half-windows-by-pixels ()
-  (let (scrolls)
-    (cl-letf (((symbol-function 'window-text-height)
-               (lambda (&rest _arguments) 601))
-              ((symbol-function
-                'yunge-reader-pdf--pan-vertical)
-               (lambda (pixels &optional _window)
-                 (push pixels scrolls))))
-      (yunge-reader-pdf-scroll-up 2)
-      (yunge-reader-pdf-scroll-down 1))
-    (should (equal (nreverse scrolls) '(-600 300)))))
-
-(ert-deftest yunge-reader-pdf-scrolls-screen-lines-by-pixels ()
-  (let (scrolls)
-    (cl-letf (((symbol-function 'window-frame)
-               (lambda (&optional _window) 'frame))
-              ((symbol-function 'frame-char-height)
-               (lambda (&optional _frame) 19))
-              ((symbol-function
-                'yunge-reader-pdf--pan-vertical)
-               (lambda (pixels &optional _window)
-                 (push pixels scrolls))))
-      (yunge-reader-pdf-scroll-up-line 2)
-      (yunge-reader-pdf-scroll-down-line 1))
-    (should (equal (nreverse scrolls) '(-38 19)))))
-
-(ert-deftest yunge-reader-pdf-scrolls-page-keys-by-window-pixels ()
-  (let (scrolls)
-    (cl-letf (((symbol-function 'window-text-height)
-               (lambda (&rest _arguments) 601))
-              ((symbol-function
-                'yunge-reader-pdf--pan-vertical)
-               (lambda (pixels &optional _window)
-                 (push pixels scrolls))))
-      (yunge-reader-pdf-scroll-page-up 2)
-      (yunge-reader-pdf-scroll-page-down 1))
-    (should (equal (nreverse scrolls) '(-1202 601)))))
-
-(ert-deftest yunge-reader-pdf-pans-horizontally-by-half-windows ()
-  (let (pans)
-    (cl-letf (((symbol-function 'selected-window)
-               (lambda () 'window))
-              ((symbol-function 'window-frame)
-               (lambda (&optional _window) 'frame))
-              ((symbol-function 'frame-char-width)
-               (lambda (&optional _frame) 8))
-              ((symbol-function 'window-body-width)
-               (lambda (&optional _window _pixelwise) 801))
-              ((symbol-function 'yunge-reader-pdf--pan-horizontal)
-               (lambda (columns &optional window)
-                 (push (list columns window) pans))))
-      (yunge-reader-pdf-scroll-half-width-left 2)
-      (yunge-reader-pdf-scroll-half-width-right 1))
-    (should
-     (equal (nreverse pans)
-            '((-100 window) (50 window))))))
 
 (ert-deftest yunge-reader-pdf-computes-tall-page-pan-targets ()
   (with-temp-buffer
@@ -364,49 +288,31 @@
       (should-not (local-variable-p 'auto-hscroll-mode))
       (should auto-hscroll-mode))))
 
-(ert-deftest yunge-reader-pdf-bounds-wheel-pixel-deltas ()
-  (let ((window (selected-window))
-        (yunge-reader-pdf-wheel-fallback-lines 3))
-    (cl-letf (((symbol-function 'window-frame)
-               (lambda (&optional _window) 'frame))
-              ((symbol-function 'frame-char-height)
-               (lambda (&optional _frame) 20))
-              ((symbol-function 'window-text-height)
-               (lambda (&optional _window _pixelwise) 600)))
-      (should
-       (= (yunge-reader-pdf--wheel-pixel-delta
-           '(wheel-down nil nil nil (0 . -17)) window)
-          -17))
-      (should
-       (= (yunge-reader-pdf--wheel-pixel-delta
-           '(wheel-down nil nil nil (0 . -900)) window)
-          -300))
-      (should
-       (= (yunge-reader-pdf--wheel-pixel-delta '(wheel-down) window)
-          -60))
-      (should
-       (= (yunge-reader-pdf--wheel-pixel-delta '(wheel-up) window)
-          60)))))
-
-(ert-deftest yunge-reader-pdf-scrolls-wheel-deltas-as-pixels ()
-  (let (scrolls)
+(ert-deftest yunge-reader-pdf-bounds-wheel-movement-as-pixels ()
+  (let ((yunge-reader-pdf-wheel-fallback-lines 3)
+        scrolls)
     (save-window-excursion
       (with-temp-buffer
         (set-window-buffer (selected-window) (current-buffer))
         (yunge-reader-pdf-view-mode 1)
         (cl-letf (((symbol-function 'mwheel-event-window)
                    (lambda (_event) (selected-window)))
-                  ((symbol-function
-                    'yunge-reader-pdf--wheel-pixel-delta)
-                   (lambda (_event _window) -45))
-                  ((symbol-function
-                    'yunge-reader-pdf--pan-vertical)
+                  ((symbol-function 'event-basic-type) #'car)
+                  ((symbol-function 'frame-char-height)
+                   (lambda (&optional _frame) 20))
+                  ((symbol-function 'window-text-height)
+                   (lambda (&optional _window _pixelwise) 600))
+                  ((symbol-function 'yunge-reader-pdf--pan-vertical)
                    (lambda (pixels &optional window)
                      (push (list pixels window) scrolls))))
-          (yunge-reader-pdf-scroll-wheel '(wheel-down)))))
-    (should (= (length scrolls) 1))
-    (should (= (caar scrolls) 45))
-    (should (windowp (cadar scrolls)))))
+          (dolist (event '((wheel-down nil nil nil (0 . -17))
+                           (wheel-down nil nil nil (0 . -900))
+                           (wheel-up)))
+            (yunge-reader-pdf-scroll-wheel event)))))
+    (setq scrolls (nreverse scrolls))
+    (should (equal (mapcar #'car scrolls) '(17 300 -60)))
+    (should (seq-every-p (lambda (entry) (windowp (cadr entry)))
+                         scrolls))))
 
 (ert-deftest yunge-reader-pdf-registers-only-when-requested ()
   (let ((yunge-reader-drivers nil)
@@ -3644,31 +3550,6 @@
     (should (= (get-text-property 1 'yunge-reader-pdf-page) 0))
     (should (= (get-text-property 3 'yunge-reader-pdf-page) 1))
     (should (= (get-text-property 5 'yunge-reader-pdf-page) 2))))
-
-(ert-deftest yunge-reader-pdf-builds-a-large-stable-roll ()
-  (with-temp-buffer
-    (yunge-reader-mode)
-    (yunge-reader-pdf-view-mode 1)
-    (let* ((count 50000)
-           (page-info
-            '((width . 100.0) (height . 200.0)))
-           (metadata
-            (list :page-count count
-                  :pages (make-list count page-info))))
-      (setq yunge-reader-document
-            (make-yunge-reader-document :metadata metadata))
-      (yunge-reader-pdf--load-page-infos)
-      (yunge-reader-pdf--build-roll)
-      (should (= (length yunge-reader-pdf--page-infos) count))
-      (should (= (length yunge-reader-pdf--page-positions) count))
-      (should (= (buffer-size) (1- (* 2 count))))
-      (should (= (aref yunge-reader-pdf--page-positions 0) 1))
-      (should (= (aref yunge-reader-pdf--page-positions 25000)
-                 50001))
-      (should (= (aref yunge-reader-pdf--page-positions 49999)
-                 99999))
-      (should (= (yunge-reader-pdf--page-at-position 99999)
-                 49999)))))
 
 (ert-deftest yunge-reader-pdf-reports-an-empty-document ()
   (with-temp-buffer

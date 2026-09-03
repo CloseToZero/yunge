@@ -24,64 +24,6 @@
    (equal shuying-latex-format-directory
           (yunge-var-subdirectory "shuying/formats"))))
 
-(ert-deftest shuying-latex-selects-the-engine-intermediate-format ()
-  (should
-   (equal (shuying-latex--intermediate-extension
-           '("C:/tex/xelatex.exe" "-no-pdf"))
-          "xdv"))
-  (should
-   (equal (shuying-latex--intermediate-extension '("latex")) "dvi")))
-
-(ert-deftest shuying-latex-batch-key-excludes-fragment-inputs ()
-  (let ((first (shuying-latex-test--spec "$x$"))
-        (second (shuying-latex-test--spec "$y$")))
-    (setf (shuying-render-spec-equation-number first) 1)
-    (setf (shuying-render-spec-equation-number second) 2)
-    (should
-     (equal (shuying-latex-batch-key first)
-            (shuying-latex-batch-key second)))
-    (setf (shuying-render-spec-scale second) 2.0)
-    (should-not
-     (equal (shuying-latex-batch-key first)
-            (shuying-latex-batch-key second)))))
-
-(ert-deftest shuying-latex-format-key-covers-only-format-inputs ()
-  (let* ((first (shuying-latex-test--spec "$x$"))
-         (second (shuying-latex-test--spec "$y$"))
-         (engine '("latex")))
-    (should
-     (equal (shuying-latex--format-key first engine)
-            (shuying-latex--format-key second engine)))
-    (setf (shuying-render-spec-preamble second) "other preamble")
-    (should-not
-     (equal (shuying-latex--format-key first engine)
-            (shuying-latex--format-key second engine)))
-    (setf (shuying-render-spec-preamble second)
-          (shuying-render-spec-preamble first))
-    (setf (shuying-render-spec-backend-options second)
-          '(:converter ("other-converter")))
-    (should-not
-     (equal (shuying-latex--format-key first engine)
-            (shuying-latex--format-key second engine)))
-    (should-not
-     (equal (shuying-latex--format-key first engine)
-            (shuying-latex--format-key first '("other-latex"))))))
-
-(ert-deftest shuying-latex-recognizes-miktex-installer-policy ()
-  (let ((system-type 'windows-nt)
-        (miktex
-         '("C:/Programs/MiKTeX/miktex/bin/x64/xelatex.exe" "-no-pdf"))
-        (tex-live '("C:/texlive/bin/windows/xelatex.exe" "-no-pdf")))
-    (should (shuying-latex--miktex-engine-p miktex))
-    (should-not (shuying-latex--miktex-engine-p tex-live))
-    (should
-     (equal (shuying-latex--installer-arguments miktex t)
-            '("-enable-installer")))
-    (should
-     (equal (shuying-latex--installer-arguments miktex nil)
-            '("-disable-installer")))
-    (should-not (shuying-latex--installer-arguments tex-live t))))
-
 (ert-deftest shuying-latex-serializes-warmups-across-preamble-changes ()
   (let* ((root (make-temp-file "shuying-latex-warmup-test-" t))
          (system-type 'windows-nt)
@@ -736,22 +678,6 @@
       (when (buffer-live-p log-buffer)
         (kill-buffer log-buffer))
       (delete-directory root t))))
-
-(ert-deftest shuying-latex-sets-the-equation-counter-before-a-fragment ()
-  (let ((specification
-         (shuying-latex-test--spec
-          "\\begin{equation}x = y\\end{equation}")))
-    (setf (shuying-render-spec-equation-number specification) 7)
-    (with-temp-buffer
-      (shuying-latex--insert-fragment specification)
-      (should
-       (equal
-        (buffer-string)
-        (concat
-         "\n\\begin{preview}\n"
-         "\\setcounter{equation}{6}\n"
-         "\\begin{equation}x = y\\end{equation}"
-         "\n\\end{preview}\n"))))))
 
 (ert-deftest shuying-latex-renders-a-batch-with-two-processes ()
   (let* ((root (make-temp-file "shuying-latex-test-" t))

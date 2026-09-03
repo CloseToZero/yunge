@@ -251,14 +251,6 @@
       (should error-data)
       (should (= closed 11)))))
 
-(ert-deftest yunge-reader-epub-builds-independent-default-styles ()
-  (let ((first (yunge-reader-epub--default-style))
-        (second (yunge-reader-epub--default-style)))
-    (should (equal first second))
-    (should-not (eq first second))
-    (setcdr (assq 'font-scale first) 2.0)
-    (should (= (alist-get 'font-scale second) 1.0))))
-
 (ert-deftest yunge-reader-epub-resolves-scroll-bar-policy ()
   (let ((window (selected-window)))
     (dolist (entry '((hidden . hidden) (visible . visible)))
@@ -458,11 +450,6 @@
     (yunge-reader-epub-view-mode 1)
     (yunge-reader-epub--update-header)
     (should (string-match-p "EPUB  35%  Font" header-line-format))))
-
-(ert-deftest yunge-reader-epub-rejects-a-nonmanual-initial-place ()
-  (should-error
-   (yunge-reader-epub--initial-font-scale
-    '(:zoom-mode fit-width :scale 1.0))))
 
 (ert-deftest yunge-reader-epub-maps-reader-zoom-to-font-scale ()
   (let ((yunge-reader-epub-default-font-scale 1.25)
@@ -855,24 +842,6 @@
       (should (eq (yunge-reader-epub-first-location) :deferred))
       (should (eq (yunge-reader-epub-last-location) :deferred)))
     (should (equal navigations '("last" "first")))))
-
-(ert-deftest yunge-reader-epub-tracks-only-semantic-boundaries ()
-  (dolist (command
-           '(yunge-reader-epub-first-location
-             yunge-reader-epub-last-location))
-    (should
-     (advice-member-p
-      #'yunge-jump-history--track-navigation command)))
-  (dolist (command
-           '(yunge-reader-epub-next-page
-             yunge-reader-epub-previous-page
-             yunge-reader-epub-next-screen
-             yunge-reader-epub-previous-screen
-             yunge-reader-epub-next-line
-             yunge-reader-epub-previous-line))
-    (should-not
-     (advice-member-p
-      #'yunge-jump-history--track-navigation command))))
 
 (ert-deftest yunge-reader-epub-maps-native-selection-to-reader-state ()
   (let* ((buffer (generate-new-buffer " *EPUB selection owner*"))

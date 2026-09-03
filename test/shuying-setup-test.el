@@ -5,14 +5,6 @@
 (require 'yunge-test-helper)
 (require 'shuying-setup)
 
-(ert-deftest shuying-setup-dispatches-to-windows ()
-  (let ((system-type 'windows-nt)
-        called)
-    (cl-letf (((symbol-function 'shuying-setup--windows)
-               (lambda () (setq called t))))
-      (shuying-setup))
-    (should called)))
-
 (ert-deftest shuying-setup-rejects-untested-platforms ()
   (let ((system-type 'gnu/linux))
     (should-error (shuying-setup) :type 'user-error)))

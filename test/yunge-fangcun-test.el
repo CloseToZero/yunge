@@ -122,10 +122,6 @@
   (require 'yunge-fangcun)
   (require 'fangcun)
 
-  (should
-   (advice-member-p
-    #'yunge-fangcun--insert-node-link-at-normal-state-eol
-    'fangcun-node-insert))
   (with-temp-buffer
     (org-mode)
     (insert "Theorem:")

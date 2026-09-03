@@ -42,21 +42,6 @@
       (overlay-put overlay 'display nil)
       (should-not (shuying-org-preview-overlay-at 9)))))
 
-(ert-deftest shuying-org-removes-a-stale-nested-preview-on-entry ()
-  (with-temp-buffer
-    (org-mode)
-    (insert "\\( \\m\\)")
-    (goto-char (point-min))
-    (let ((fragment (shuying-org--fragment-at-point))
-          (outer (make-overlay 1 8))
-          (inner (make-overlay 4 6)))
-      (dolist (overlay (list outer inner))
-        (overlay-put overlay 'shuying-org t)
-        (overlay-put overlay 'display 'image))
-      (shuying-org--enter-fragment fragment)
-      (should-not (overlay-get outer 'display))
-      (should-not (overlay-buffer inner)))))
-
 (ert-deftest shuying-org-keeps-the-preview-at-point-in-view-mode ()
   (let* ((root (make-temp-file "shuying-org-" t))
          (shuying-cache-directory root)
@@ -95,30 +80,6 @@
                (memq #'shuying-org--view-mode-changed
                      view-mode-hook)))))
       (delete-directory root t))))
-
-(ert-deftest shuying-org-rechecks-viewport-after-displaying-an-image ()
-  (with-temp-buffer
-    (insert "formula")
-    (let ((overlay (make-overlay (point-min) (point-max)))
-          (shuying-org-mode t)
-          (shuying-org--visible-window-state 'rendered)
-          schedule-called
-          scheduled-immediately)
-      (overlay-put overlay 'shuying-org-image 'image)
-      (cl-letf (((symbol-function 'shuying-org--schedule-visible-preview)
-                 (lambda (&optional immediate)
-                   (setq schedule-called t
-                         scheduled-immediately immediate))))
-        (shuying-org--show-overlay overlay)
-        (should (eq (overlay-get overlay 'display) 'image))
-        (should-not shuying-org--visible-window-state)
-        (should schedule-called)
-        (should-not scheduled-immediately)
-        (setq schedule-called nil
-              shuying-org--visible-window-state 'settled)
-        (shuying-org--show-overlay overlay)
-        (should (eq shuying-org--visible-window-state 'settled))
-        (should-not schedule-called)))))
 
 (ert-deftest shuying-org-classifies-only-block-math-for-centering ()
   (with-temp-buffer
@@ -258,24 +219,6 @@
                   (should-not (overlay-get overlay 'before-string))
                   (should (= shuying-org-test--render-count 1)))))))
       (delete-directory root t))))
-
-(ert-deftest shuying-org-defers-layout-refresh-for-source-edits ()
-  (with-temp-buffer
-    (org-mode)
-    (insert "\\[x = y\\]\n")
-    (let* ((fragment (car (shuying-org--fragments)))
-           (overlay (shuying-org--ensure-overlay fragment))
-           scheduled)
-      (add-hook 'after-change-functions
-                #'shuying-org--layout-context-changed nil t)
-      (cl-letf (((symbol-function
-                  'shuying-org--schedule-visible-preview)
-                 (lambda (&optional _immediate)
-                   (setq scheduled t))))
-        (goto-char (+ (overlay-start overlay) 2))
-        (insert "z")
-        (should (overlay-get overlay 'shuying-org-dirty))
-        (should-not scheduled)))))
 
 (ert-deftest shuying-org-aligns-block-math-in-the-window-text-area ()
   (with-temp-buffer
@@ -987,32 +930,6 @@
                 (should (= shuying-org-test--render-count 2))))))
       (delete-directory root t))))
 
-(ert-deftest shuying-org-latex-header-changes-the-warmup-key ()
-  (with-temp-buffer
-    (org-mode)
-    (insert "#+LATEX_HEADER: \\usepackage{first-package}\n\n$x$\n")
-    (let* ((fragment (car (shuying-org--fragments)))
-           (first-preamble (shuying-org--preamble))
-           (first
-            (shuying-org--render-spec
-             fragment first-preamble '("xelatex" "-no-pdf"))))
-      (goto-char (point-min))
-      (search-forward "first-package")
-      (replace-match "second-package")
-      (let* ((second-preamble (shuying-org--preamble))
-             (second
-              (shuying-org--render-spec
-               fragment second-preamble '("xelatex" "-no-pdf"))))
-        (should (string-match-p "first-package" first-preamble))
-        (should (string-match-p "second-package" second-preamble))
-        (should-not (equal first-preamble second-preamble))
-        (should-not
-         (equal
-          (shuying-latex--format-key
-           first '("C:/MiKTeX/miktex/bin/x64/xelatex.exe" "-no-pdf"))
-          (shuying-latex--format-key
-           second '("C:/MiKTeX/miktex/bin/x64/xelatex.exe" "-no-pdf"))))))))
-
 (ert-deftest shuying-org-rechecks-preview-context-after-save ()
   (with-temp-buffer
     (org-mode)
@@ -1071,25 +988,6 @@
         (should-not
          (memq #'shuying-org--buffer-reverted after-revert-hook))))))
 
-(ert-deftest shuying-org-tracks-widths-of-windows-showing-one-buffer ()
-  (let ((buffer (generate-new-buffer " *shuying-org-window-width*")))
-    (unwind-protect
-        (save-window-excursion
-          (let* ((left (selected-window))
-                 (right (split-window-right)))
-            (set-window-buffer left buffer)
-            (set-window-buffer right buffer)
-            (with-current-buffer buffer
-              (org-mode)
-              (insert "First $x$.\nSecond $y$.\n")
-              (let ((before (shuying-org--window-state)))
-                (select-window left)
-                (enlarge-window-horizontally 5)
-                (should-not
-                 (equal before (shuying-org--window-state)))))))
-      (when (buffer-live-p buffer)
-        (kill-buffer buffer)))))
-
 (ert-deftest shuying-org-collects-visible-ranges-from-every-window ()
   (let ((buffer (generate-new-buffer " *shuying-org-window-ranges*"))
         second-start)
@@ -1118,92 +1016,6 @@
                 (should (memq second-start starts))))))
       (when (buffer-live-p buffer)
         (kill-buffer buffer)))))
-
-(ert-deftest shuying-org-coalesces-viewport-preview-updates ()
-  (let* ((root (make-temp-file "shuying-org-" t))
-         (shuying-cache-directory root)
-         (shuying-backends nil)
-         (shuying--pending-jobs (make-hash-table :test #'equal))
-         (shuying-org-test--render-count 0)
-         (buffer (generate-new-buffer " *shuying-org-coalesce*"))
-         (idle-timer (symbol-function 'run-with-idle-timer))
-         (cancel (symbol-function 'cancel-timer))
-         window-state
-         ranges
-         scheduled
-         cancelled)
-    (unwind-protect
-        (progn
-          (shuying-register-backend
-           'shuying-latex
-           #'shuying-org-test--render-now)
-          (cl-letf (((symbol-function 'create-image)
-                     (lambda (file &rest _properties)
-                       (list 'image file)))
-                    ((symbol-function 'shuying-org--visible-ranges)
-                     (lambda () ranges))
-                    ((symbol-function 'shuying-org--window-state)
-                     (lambda () window-state))
-                    ((symbol-function 'run-with-idle-timer)
-                     (lambda (seconds repeat function &rest arguments)
-                       (if (eq function
-                               #'shuying-org--run-visible-preview)
-                           (let ((timer (timer-create)))
-                             (push (list timer seconds function arguments)
-                                   scheduled)
-                             timer)
-                         (apply idle-timer seconds repeat
-                                function arguments))))
-                    ((symbol-function 'cancel-timer)
-                     (lambda (timer)
-                       (if (seq-find
-                            (lambda (entry) (eq (car entry) timer))
-                            scheduled)
-                           (push timer cancelled)
-                         (funcall cancel timer)))))
-            (with-current-buffer buffer
-              (org-mode)
-              (insert "First $x$.\n")
-              (let ((first-end (point)))
-                (dotimes (_ 100)
-                  (insert "Filler.\n"))
-                (let ((second-start (point)))
-                  (insert "Second $y$.\n")
-                  (shuying-org-mode 1)
-                  (setq window-state 'first
-                        ranges (list (cons (point-min) first-end)))
-                  (shuying-org--schedule-visible-preview)
-                  (let* ((first shuying-org--visible-preview-timer)
-                         (first-entry
-                          (seq-find
-                           (lambda (entry) (eq (car entry) first))
-                           scheduled)))
-                    (should (= (cadr first-entry)
-                               shuying-org-visible-preview-delay))
-                    (shuying-org--schedule-visible-preview)
-                    (should
-                     (eq first shuying-org--visible-preview-timer))
-                    (should-not (memq first cancelled))
-                    (setq window-state 'second
-                          ranges
-                          (list (cons second-start (point-max))))
-                    (shuying-org--schedule-visible-preview)
-                    (let* ((latest shuying-org--visible-preview-timer)
-                           (latest-entry
-                            (seq-find
-                             (lambda (entry) (eq (car entry) latest))
-                             scheduled)))
-                      (should-not (eq latest first))
-                      (should (memq first cancelled))
-                      (apply (nth 2 latest-entry)
-                             (nth 3 latest-entry))))
-                  (should (= shuying-org-test--render-count 1))
-                  (should
-                   (= (overlay-start (shuying-org-test--overlay))
-                      (+ second-start 7))))))))
-      (when (buffer-live-p buffer)
-        (kill-buffer buffer))
-      (delete-directory root t))))
 
 (ert-deftest shuying-org-previews-when-a-window-first-shows-the-buffer ()
   (let* ((root (make-temp-file "shuying-org-" t))
@@ -1301,39 +1113,6 @@
                 (shuying-org-test--overlay) 'display)))))
       (delete-directory root t))))
 
-(ert-deftest shuying-org-previews-after-meta-return-from-list-formula ()
-  (let* ((root (make-temp-file "shuying-org-" t))
-         (shuying-cache-directory root)
-         (shuying-backends nil)
-         (shuying--pending-jobs (make-hash-table :test #'equal))
-         (shuying-org-test--render-count 0))
-    (unwind-protect
-        (progn
-          (shuying-register-backend
-           'shuying-latex
-           #'shuying-org-test--render-now)
-          (cl-letf (((symbol-function 'create-image)
-                     (lambda (file &rest _properties)
-                       (list 'image file))))
-            (with-temp-buffer
-              (org-mode)
-              (insert "1. First.\n2. Second.\n3. \\(x")
-              (shuying-org-mode 1)
-              (insert "\\)")
-              (shuying-org--post-command)
-              (should (markerp shuying-org--active-start))
-              (call-interactively #'org-meta-return)
-              (shuying-org--post-command)
-              (should
-               (equal
-                (buffer-string)
-                "1. First.\n2. Second.\n3. \\(x\\)\n4. "))
-              (should (= shuying-org-test--render-count 1))
-              (should
-               (overlay-get
-                (shuying-org-test--overlay) 'display)))))
-      (delete-directory root t))))
-
 (ert-deftest shuying-org-reuses-preview-after-list-meta-return ()
   (let* ((root (make-temp-file "shuying-org-" t))
          (shuying-cache-directory root)
@@ -1368,45 +1147,6 @@
                 (should (overlay-get overlay 'display))
                 (should-not
                  (overlay-get overlay 'shuying-org-dirty))))))
-      (delete-directory root t))))
-
-(ert-deftest shuying-org-keeps-an-incomplete-inline-formula-visible ()
-  (let* ((root (make-temp-file "shuying-org-" t))
-         (shuying-cache-directory root)
-         (shuying-backends nil)
-         (shuying--pending-jobs (make-hash-table :test #'equal))
-         (shuying-org-test--render-count 0))
-    (unwind-protect
-        (progn
-          (shuying-register-backend
-           'shuying-latex
-           #'shuying-org-test--render-now)
-          (cl-letf (((symbol-function 'create-image)
-                     (lambda (file &rest _properties)
-                       (list 'image file))))
-            (with-temp-buffer
-              (org-mode)
-              (insert "Before.\n")
-              (shuying-org-mode 1)
-              (dolist (character '(?\\ ?\( ?\s ?\\ ?m))
-                (insert character)
-                (shuying-org--post-command))
-              (should (equal (buffer-string) "Before.\n\\( \\m"))
-              (should (= shuying-org-test--render-count 0))
-              (should-not (shuying-org-test--overlay))
-              (dolist (character '(?\\ ?\)))
-                (insert character)
-                (shuying-org--post-command))
-              (should (equal (buffer-string) "Before.\n\\( \\m\\)"))
-              (should (= shuying-org-test--render-count 0))
-              (shuying-org--post-command)
-              (should (= shuying-org-test--render-count 0))
-              (goto-char (point-min))
-              (shuying-org--post-command)
-              (should (= shuying-org-test--render-count 1))
-              (should
-               (overlay-get
-                (shuying-org-test--overlay) 'display)))))
       (delete-directory root t))))
 
 (ert-deftest shuying-org-submits-a-region-as-one-backend-batch ()

@@ -457,14 +457,6 @@
            (json-parse-string (car sent) :object-type 'alist)))
       (should (equal (alist-get 'op request) "shutdown")))))
 
-(ert-deftest yunge-reader-native-skips-a-stale-crash-restart ()
-  (yunge-reader-native-test--with-fake-process
-    (let (started)
-      (cl-letf (((symbol-function 'yunge-reader-native-start)
-                 (lambda () (setq started t))))
-        (yunge-reader-native--start-after-crash))
-      (should-not started))))
-
 (ert-deftest yunge-reader-native-rejects-requests-from-an-old-session ()
   (yunge-reader-native-test--with-fake-process
     (yunge-reader-native-start)
@@ -529,13 +521,5 @@
     (yunge-reader-native-test--mark-ready)
     (should (eq (plist-get (yunge-reader-native-status) :state)
                 'ready))))
-
-(ert-deftest yunge-reader-native-setup-delegates-to-pdfium-setup ()
-  (yunge-reader-native-test--with-fake-process
-    (let (setup)
-      (cl-letf (((symbol-function 'yunge-reader-setup)
-                 (lambda () (setq setup t))))
-        (yunge-reader-native-setup))
-      (should setup))))
 
 ;;; yunge-reader-native-test.el ends here

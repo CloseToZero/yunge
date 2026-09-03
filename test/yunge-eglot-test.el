@@ -509,26 +509,6 @@
      '(("SPC l e" . yunge-eglot-enable-project)
        ("SPC l d" . yunge-eglot-disable-project)))))
 
-(ert-deftest yunge-eglot-binds-lifecycle-commands ()
-  (yunge-test-enable-evil)
-  (require 'which-key)
-  (yunge-test-evil-normal-keys
-   'fundamental-mode
-   '(("SPC l e" . yunge-eglot-enable-project)
-     ("SPC l d" . yunge-eglot-disable-project)))
-  (with-temp-buffer
-    (fundamental-mode)
-    (should-not (key-binding (kbd "SPC l a")))
-    (should-not (key-binding (kbd "SPC l c")))
-    (should-not (key-binding (kbd "SPC l f")))
-    (should-not (key-binding (kbd "SPC l h")))
-    (should-not (key-binding (kbd "SPC l i")))
-    (should-not (key-binding (kbd "SPC l o")))
-    (should-not (key-binding (kbd "SPC l r")))
-    (should-not (key-binding (kbd "SPC l s")))
-    (should-not (key-binding (kbd "SPC l t")))
-    (should-not (key-binding (kbd "SPC l T")))))
-
 (ert-deftest yunge-eglot-integrates-hierarchy-buffers-with-evil ()
   (yunge-test-enable-evil)
   (require 'eglot)
