@@ -12,6 +12,11 @@
 
 (defvar smartparens-mode)
 
+(defconst yunge-pair-test--chinese-pairs
+  '(("（" . "）") ("“" . "”") ("‘" . "’") ("【" . "】")
+    ("《" . "》") ("〈" . "〉") ("「" . "」") ("『" . "』"))
+  "Chinese punctuation whose editing behavior must be supported.")
+
 (yunge-test-deftest-lazy-load yunge-pair
   (evil org smartparens smartparens-config smartparens-org))
 
@@ -22,27 +27,29 @@
   (require 'smartparens-autoloads)
   (yunge-test-load-package-config 'yunge-pair))
 
-(defmacro yunge-pair-test--with-org-buffer (&rest body)
-  "Evaluate BODY in a displayed Org buffer in Evil Insert state."
-  (declare (indent 0) (debug t))
+(defmacro yunge-pair-test--with-buffer (mode &rest body)
+  "Evaluate BODY in a displayed MODE buffer in Evil Insert state."
+  (declare (indent 1) (debug t))
   `(with-temp-buffer
      (save-window-excursion
        (switch-to-buffer (current-buffer))
-       (org-mode)
+       (funcall ,mode)
        (evil-insert-state)
        ,@body)))
 
+(defmacro yunge-pair-test--with-org-buffer (&rest body)
+  "Evaluate BODY in a displayed Org buffer in Evil Insert state."
+  (declare (indent 0) (debug t))
+  `(yunge-pair-test--with-buffer 'org-mode ,@body))
+
 (ert-deftest yunge-pair-enables-supported-modes ()
   (yunge-pair-test--load-config)
-  (with-temp-buffer
-    (org-mode)
-    (should smartparens-mode))
-  (with-temp-buffer
-    (emacs-lisp-mode)
-    (should smartparens-mode))
-  (with-temp-buffer
-    (text-mode)
-    (should-not smartparens-mode)))
+  (dolist (case '((org-mode . "()") (text-mode . "()")
+                  (emacs-lisp-mode . "()") (fundamental-mode . "(")))
+    (yunge-pair-test--with-buffer (car case)
+      (execute-kbd-macro "(")
+      (should (equal (buffer-string) (cdr case)))
+      (should (= (point) 2)))))
 
 (ert-deftest yunge-pair-inserts-latex-delimiters-in-org ()
   (yunge-pair-test--load-config)
@@ -143,20 +150,32 @@
       "#+begin_definition\n**\n#+end_definition"))
     (should (= (point) (1- (line-end-position))))))
 
-(ert-deftest yunge-pair-inserts-chinese-punctuation-in-org ()
+(ert-deftest yunge-pair-inserts-chinese-punctuation-in-supported-modes ()
   (yunge-pair-test--load-config)
-  (dolist (pair yunge-pair--org-chinese-pairs)
+  (dolist (mode '(org-mode text-mode emacs-lisp-mode))
+    (dolist (pair yunge-pair-test--chinese-pairs)
+      (yunge-pair-test--with-buffer mode
+        (let ((open (car pair))
+              (close (cdr pair)))
+          (execute-kbd-macro (vconcat open))
+          (should (equal (buffer-string) (concat open close)))
+          (should (= (point) (1- (point-max))))
+          (execute-kbd-macro (kbd "DEL"))
+          (should (equal (buffer-string) ""))
+          (execute-kbd-macro (vconcat "中文" open "文" close))
+          (should (equal (buffer-string)
+                         (concat "中文" open "文" close)))
+          (should (= (point) (point-max))))))))
+
+(ert-deftest yunge-pair-chinese-closing-key-skips-inner-whitespace ()
+  (yunge-pair-test--load-config)
+  (dolist (pair yunge-pair-test--chinese-pairs)
     (yunge-pair-test--with-org-buffer
-      (let ((open (car pair))
-            (close (cdr pair)))
-        (execute-kbd-macro (vconcat open))
-        (should (equal (buffer-string) (concat open close)))
-        (should (= (point) (1- (point-max))))
-        (execute-kbd-macro (kbd "DEL"))
-        (should (equal (buffer-string) ""))
-        (execute-kbd-macro (vconcat open))
-        (execute-kbd-macro (vconcat "文" close))
-        (should (equal (buffer-string) (concat open "文" close)))
+      (let ((text (concat (car pair) "文 \t" (cdr pair))))
+        (insert text)
+        (goto-char (+ (point-min) 2))
+        (execute-kbd-macro (vconcat (cdr pair)))
+        (should (equal (buffer-string) text))
         (should (= (point) (point-max)))))))
 
 (ert-deftest yunge-pair-space-abandons-org-markup-pair ()

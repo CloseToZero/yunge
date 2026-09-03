@@ -18,6 +18,7 @@
 (declare-function sp-get-enclosing-sexp "smartparens" (&optional arg))
 (declare-function sp-local-pair
                   "smartparens" (modes open close &rest properties))
+(declare-function sp-pair "smartparens" (open close &rest properties))
 
 (defvar evil-replace-state-entry-hook)
 (defvar evil-replace-state-exit-hook)
@@ -32,19 +33,12 @@
 (defvar-local yunge-pair--disabled-for-replace nil
   "Non-nil when Replace state temporarily disabled Smartparens.")
 
-(defconst yunge-pair-insert-bindings
-  '((")" yunge-pair-close "close pair")
-    ("]" yunge-pair-close "close pair")
-    ("}" yunge-pair-close "close pair")
-    ("SPC" yunge-pair-space "insert space")
-    ("DEL" yunge-pair-backward-delete "delete backward")))
-
 (defconst yunge-pair--org-block-types
   '(center-block comment-block dynamic-block example-block export-block
     quote-block special-block src-block verse-block)
   "Org block types whose contents cannot start a heading.")
 
-(defconst yunge-pair--org-chinese-pairs
+(defconst yunge-pair--chinese-pairs
   '(("“" . "”")
     ("‘" . "’")
     ("（" . "）")
@@ -53,7 +47,18 @@
     ("〈" . "〉")
     ("「" . "」")
     ("『" . "』"))
-  "Chinese punctuation pairs used in Org prose.")
+  "Chinese punctuation pairs used wherever Smartparens is enabled.")
+
+(defconst yunge-pair-insert-bindings
+  (append
+   '((")" yunge-pair-close "close pair")
+     ("]" yunge-pair-close "close pair")
+     ("}" yunge-pair-close "close pair")
+     ("SPC" yunge-pair-space "insert space")
+     ("DEL" yunge-pair-backward-delete "delete backward"))
+   (mapcar (lambda (pair)
+             (list (cdr pair) 'yunge-pair-close "close pair"))
+           yunge-pair--chinese-pairs)))
 
 (defconst yunge-pair--org-spaced-latex-pairs
   '(("\\(" . "\\)")
@@ -202,7 +207,7 @@ than one character, such as `\\)' and `\\]'."
   "Enable Smartparens in supported buffers opened before readiness."
   (dolist (buffer (buffer-list))
     (with-current-buffer buffer
-      (when (derived-mode-p 'prog-mode 'org-mode)
+      (when (derived-mode-p 'prog-mode 'text-mode)
         (yunge-pair--enable)))))
 
 (defun yunge-pair--setup-org-pairs ()
@@ -233,7 +238,7 @@ than one character, such as `\\)' and `\\]'."
      :unless '(sp-point-after-word-p
                yunge-pair--org-literal-context-p)
      :post-handlers '(("[d1]" "SPC"))))
-  (dolist (pair yunge-pair--org-chinese-pairs)
+  (dolist (pair yunge-pair--chinese-pairs)
     (sp-local-pair
      'org-mode (car pair) (cdr pair)
      :unless '(yunge-pair--org-literal-context-p))))
@@ -245,9 +250,11 @@ than one character, such as `\\)' and `\\]'."
         sp-highlight-wrap-overlay nil
         sp-highlight-wrap-tag-overlay nil
         sp-show-pair-from-inside t)
+  (dolist (pair yunge-pair--chinese-pairs)
+    (sp-pair (car pair) (cdr pair)))
   (yunge-pair--setup-org-pairs)
   (add-hook 'prog-mode-hook #'yunge-pair--enable)
-  (add-hook 'org-mode-hook #'yunge-pair--enable)
+  (add-hook 'text-mode-hook #'yunge-pair--enable)
   (yunge-pair--setup-existing-buffers)
   (with-eval-after-load 'evil
     (yunge-pair--setup-evil)))
