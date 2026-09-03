@@ -76,9 +76,11 @@
 (defconst yunge-tab-bindings
   '(("TAB" tab-switch "switch tab")
     ("<tab>" tab-switch nil)
+    ("l" yunge-workspace-restore "restore workspace")
     ("n" yunge-tab-new "new tab")
     ("q" tab-close "close tab")
     ("r" tab-rename "rename tab")
+    ("s" yunge-workspace-save "save workspace")
     ("u" tab-undo "restore tab")))
 
 (defconst yunge-tab-leader-bindings

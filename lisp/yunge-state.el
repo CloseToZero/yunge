@@ -29,6 +29,10 @@
   "Return NAME in OWNER's directory below `yunge-var-directory'."
   (expand-file-name name (yunge-var-subdirectory owner)))
 
+(defvar yunge-workspace-directory
+  (yunge-var-subdirectory "workspace")
+  "Directory containing persistent editing workspaces.")
+
 (let* ((auto-save-directory
         (yunge-var-subdirectory "auto-save"))
        (tramp-auto-save-directory-path
@@ -46,7 +50,8 @@
                  (yunge-var-subdirectory "project")
                  (yunge-var-subdirectory "recentf")
                  (yunge-var-subdirectory "save-place")
-                 (yunge-var-subdirectory "savehist")))
+                 (yunge-var-subdirectory "savehist")
+                 yunge-workspace-directory))
     (make-directory directory t))
 
   ;; Keep state produced by common editing features out of source trees.

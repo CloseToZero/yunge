@@ -63,9 +63,11 @@
      '(("C-i" . yunge-jump-history-forward)
        ("SPC TAB TAB" . tab-switch)
        ("SPC <tab> <tab>" . tab-switch)
+       ("SPC TAB l" . yunge-workspace-restore)
        ("SPC TAB n" . yunge-tab-new)
        ("SPC TAB q" . tab-close)
        ("SPC TAB r" . tab-rename)
+       ("SPC TAB s" . yunge-workspace-save)
        ("SPC TAB u" . tab-undo)))))
 
 ;;; yunge-tab-test.el ends here

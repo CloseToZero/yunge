@@ -229,6 +229,15 @@ Use ~SPC w u~ and ~SPC w r~ to undo and redo window-layout changes in the
 current tab.  Each tab keeps its own layout history.  This is distinct from
 ~SPC TAB u~, which restores a closed tab.
 
+~SPC TAB s~ saves the current file buffers, tabs, tab names, and window layouts
+as a named workspace; ~SPC TAB l~ chooses a saved workspace to restore.  Emacs
+starts clean rather than restoring one implicitly.  The optional
+~yunge-workspace-auto-save-mode~, enabled by default, updates the workspace
+named ~default~ every five minutes and before a normal exit (including
+~SPC q r~), so an unnamed layout is still recoverable.  Non-file and remote
+buffers are excluded; a layout region
+showing one of them may therefore collapse during restoration.
+
 Do not make the ordinary window bindings repeat automatically.  After
 ~SPC w h~ selects a window, for example, the next ~j~ belongs to the selected
 buffer.  Only the explicit control map changes that interpretation.

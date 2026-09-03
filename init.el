@@ -32,6 +32,7 @@
 (require 'yunge-tab)
 (require 'yunge-bookmark)
 (require 'yunge-window)
+(require 'yunge-workspace)
 (require 'yunge-which-key)
 (require 'yunge-vertico)
 (require 'yunge-orderless)
