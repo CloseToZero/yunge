@@ -581,6 +581,38 @@
               (split-string (buffer-string) "\n" t))
       '("drop" "drop" "pick")))))
 
+(ert-deftest yunge-magit-ret-records-a-return-location ()
+  (yunge-test-enable-evil)
+  (require 'magit-autoloads)
+  (yunge-test-load-package-config 'yunge-magit)
+  (require 'magit)
+  (dolist (command '(magit-diff-visit-file magit-show-commit))
+    (should (evil-get-command-property command :jump))
+    (with-temp-buffer
+      (magit-status-mode)
+      (let ((map (make-sparse-keymap))
+            (inhibit-read-only t))
+        (define-key map [remap magit-visit-thing] command)
+        (setq magit-root-section nil)
+        (magit-insert-section (status)
+          (insert (propertize "origin\ndestination\n" 'keymap map))))
+      (evil-normal-state)
+      (save-window-excursion
+        (switch-to-buffer (current-buffer))
+        (set-window-parameter nil 'yunge-jump-history nil)
+        (goto-char (point-min))
+        ;; Keep the visit in this buffer to ensure the return point comes
+        ;; from :jump, rather than Evil's automatic buffer-crossing hook.
+        (cl-letf (((symbol-function command)
+                   (lambda () (interactive) (goto-char 8))))
+          (yunge-test-key "RET" command)
+          (execute-kbd-macro (kbd "RET"))
+          (should (= (point) 8))
+          (execute-kbd-macro (kbd "C-o"))
+          (should (= (point) 1))
+          (execute-kbd-macro (kbd "C-i"))
+          (should (= (point) 8)))))))
+
 (ert-deftest yunge-magit-resolves-point-local-keys ()
   (yunge-test-enable-evil)
   (require 'magit-autoloads)

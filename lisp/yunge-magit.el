@@ -277,6 +277,24 @@
     (add-hook 'git-commit-setup-hook
               #'yunge-magit--enter-insert-state-for-blank-commit-message))
   (with-eval-after-load 'evil
+    ;; RET is remapped by section keymaps.  Evil sees the resolved command,
+    ;; so marking only the `magit-visit-thing' placeholder is insufficient.
+    (dolist (command '(magit-diff-visit-file
+                       magit-diff-visit-worktree-file
+                       magit-show-commit
+                       magit-visit-ref
+                       magit-diff-unstaged
+                       magit-diff-staged
+                       magit-diff-dwim
+                       magit-stash-list
+                       magit-stash-show
+                       magit-worktree-status
+                       magit-list-submodules
+                       magit-submodule-visit
+                       magit-process-buffer
+                       magit-repolist-status
+                       git-rebase-show-commit))
+      (evil-add-command-properties command :jump t))
     (with-eval-after-load 'magit-blame
       (yunge-key-evil-define-minor-mode
        'normal 'magit-blame-read-only-mode
