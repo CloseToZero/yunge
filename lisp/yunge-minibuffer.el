@@ -8,6 +8,9 @@
 (defvar evil-echo-state)
 (defvar evil-want-minibuffer)
 
+(setq enable-recursive-minibuffers t)
+(minibuffer-depth-indicate-mode 1)
+
 ;; Evil reads this before it installs its minibuffer setup hook.
 (setq evil-want-minibuffer t)
 
