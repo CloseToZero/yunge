@@ -78,6 +78,55 @@
         (kill-buffer buffer))
       (delete-directory directory t))))
 
+(ert-deftest yunge-media-compresses-chinese-paths ()
+  (require 'yunge-media)
+  (require 'yunge-encoding)
+  (skip-unless (executable-find "ffmpeg"))
+  (let* ((directory (make-temp-file "yunge-media-" t))
+         (source (expand-file-name "source.mp4" directory))
+         (input (expand-file-name "中文目录/测试 视频.mp4" directory))
+         (output (expand-file-name "中文目录/测试 视频-compressed.mp4"
+                                   directory))
+         (yunge-media-log-buffer-name " *yunge-media-chinese-test*")
+         (yunge-media--program (executable-find "ffmpeg"))
+         (yunge-media--queue (list (cons input output)))
+         (yunge-media--process nil)
+         (yunge-media--current-job nil)
+         (yunge-media--dired-buffer nil)
+         (yunge-media--total 1)
+         (yunge-media--index 0)
+         (yunge-media--succeeded 0)
+         (yunge-media--failed 0)
+         (yunge-media--skipped 0)
+         (yunge-media--cancelled nil))
+    (unwind-protect
+        (progn
+          (let ((coding-system-for-write
+                 yunge-encoding-process-input-coding-system))
+            (should (zerop (call-process
+                            yunge-media--program nil nil nil
+                            "-v" "error" "-f" "lavfi" "-i"
+                            "color=size=16x16:rate=1" "-t" "1"
+                            "-c:v" "libx264" source))))
+          (make-directory (file-name-directory input) t)
+          (copy-file source input)
+          (yunge-media--start-next)
+          (let ((deadline (+ (float-time) 30)))
+            (while (and yunge-media--process (< (float-time) deadline))
+              (accept-process-output nil 0.1)))
+          (should-not yunge-media--process)
+          (should (= yunge-media--succeeded 1))
+          (should (= yunge-media--failed 0))
+          (should (file-exists-p input))
+          (should (file-exists-p output))
+          (should (> (file-attribute-size (file-attributes output)) 0)))
+      (when (process-live-p yunge-media--process)
+        (setq yunge-media--cancelled t)
+        (delete-process yunge-media--process))
+      (when-let* ((buffer (get-buffer yunge-media-log-buffer-name)))
+        (kill-buffer buffer))
+      (delete-directory directory t))))
+
 (ert-deftest yunge-media-runs-one-ffmpeg-process-at-a-time ()
   (require 'yunge-media)
   (let ((yunge-media-log-buffer-name " *yunge-media-test*")

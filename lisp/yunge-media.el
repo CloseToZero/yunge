@@ -2,6 +2,8 @@
 ;; SPDX-FileCopyrightText: 2026 Chen Zhexuan
 ;; SPDX-License-Identifier: MIT
 
+(require 'yunge-encoding)
+
 (declare-function dired-get-marked-files "dired"
                   (&optional localp arg filter distinguish-one-marked error))
 
@@ -159,6 +161,10 @@
              :command
              (yunge-media--compression-command
               yunge-media--program input output)
+             ;; Windows Emacs passes argv through the ANSI code page;
+             ;; FFmpeg's diagnostic output is UTF-8 independently of argv.
+             :coding (cons 'utf-8
+                           yunge-encoding-process-input-coding-system)
              :connection-type 'pipe
              :noquery t
              :sentinel #'yunge-media--sentinel)))))
