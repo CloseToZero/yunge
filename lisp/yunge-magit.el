@@ -102,6 +102,7 @@
     ("p" magit-push "push")
     ("r" magit-rebase "rebase")
     ("R" magit-revert "revert")
+    ("t" magit-tag "tag")
     ("X" magit-reset "reset")
     ("Z" magit-stash "stash")))
 
