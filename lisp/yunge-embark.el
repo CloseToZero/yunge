@@ -11,11 +11,54 @@
 (defvar embark-function-map)
 (defvar embark-general-map)
 (defvar embark-tab-map)
+(defvar embark-target-finders)
+(defvar embark-keymap-alist)
 (defvar ffap-string-at-point-region)
 (defvar thing-at-point-file-name-chars)
 
 (defconst yunge-embark-global-bindings
   '(("M-a" embark-act "act on target")))
+
+(defconst yunge-embark--git-ssh-regexp
+  "git\\\\?@[[:alnum:].-]+:[[:alnum:]_~./-]+"
+  "SCP-style Git address, optionally with an escaped at sign.")
+
+(defun yunge-embark-git-ssh-to-https (address)
+  "Convert Git SSH ADDRESS to HTTPS and copy it to the kill ring."
+  (interactive "sGit SSH address: ")
+  (unless (string-match
+           (concat "\\`" yunge-embark--git-ssh-regexp "\\'") address)
+    (user-error "Not a Git SSH address: %s" address))
+  (let ((url (concat "https://"
+                     (string-replace ":" "/"
+                                     (substring address
+                                                (1+ (string-search "@" address)))))))
+    (kill-new url)
+    (message "Copied: %s" url)))
+
+(defun yunge-embark-target-git-ssh-at-point ()
+  "Find a Git SSH address on the current line at point."
+  (save-excursion
+    (let ((position (point))
+          (end (line-end-position))
+          target)
+      (goto-char (line-beginning-position))
+      (while (and (not target)
+                  (re-search-forward yunge-embark--git-ssh-regexp end t))
+        (when (<= (match-beginning 0) position (match-end 0))
+          (setq target `(git-ssh ,(match-string-no-properties 0)
+                                ,(match-beginning 0) . ,(match-end 0)))))
+      target)))
+
+(defvar-keymap yunge-embark-git-ssh-map
+  :doc "Actions for Git SSH addresses."
+  "h" #'yunge-embark-git-ssh-to-https)
+
+(defun yunge-embark--setup-git-ssh-target ()
+  "Register Git SSH addresses and their actions with Embark."
+  (set-keymap-parent yunge-embark-git-ssh-map embark-general-map)
+  (add-to-list 'embark-target-finders #'yunge-embark-target-git-ssh-at-point)
+  (add-to-list 'embark-keymap-alist '(git-ssh . yunge-embark-git-ssh-map)))
 
 ;; Embark renders action maps and their command docstrings itself.
 (defconst yunge-embark-debug-bindings
@@ -125,6 +168,7 @@
 (elpaca embark
   (yunge-embark--setup-keys)
   (with-eval-after-load 'embark
+    (yunge-embark--setup-git-ssh-target)
     (yunge-embark--setup-file-target)
     (yunge-embark--setup-action-keys))
   (with-eval-after-load 'which-key

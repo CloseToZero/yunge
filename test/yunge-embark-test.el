@@ -58,8 +58,10 @@
          (defmacro elpaca (_order &rest body)
            (cons 'progn body))
          (require 'yunge-embark)
-         (unless (and (equal embark-target-finders targets)
-                      (equal embark-keymap-alist actions)
+         (unless (and (equal (remq 'yunge-embark-target-git-ssh-at-point
+                                  embark-target-finders) targets)
+                      (equal (assq-delete-all 'git-ssh
+                                              (copy-tree embark-keymap-alist)) actions)
                       (equal embark-indicators indicators)
                       (equal embark-help-key help-key))
            (error "Unexpected Embark configuration changes")))))))
@@ -115,6 +117,30 @@
   (yunge-test-keymap-keys
    embark-url-map
    '(("d" . embark-download-url))))
+
+(ert-deftest yunge-embark-converts-git-ssh-addresses ()
+  (yunge-test-load-package-config 'yunge-embark)
+  (require 'embark)
+  (dolist (address '("git@git.meitu.com:conan/conan-meitu-index.git"
+                     "git\\@git.meitu.com:conan/conan-meitu-index.git"))
+    (with-temp-buffer
+      (insert "Clone `" address "` here")
+      (search-backward "conan-meitu")
+      (let ((target (yunge-embark-target-git-ssh-at-point))
+            (kill-ring nil))
+        (should (eq (car target) 'git-ssh))
+        (should (equal (cadr target) address))
+        (should (equal (buffer-substring-no-properties
+                        (caddr target) (cdddr target)) address))
+        (yunge-embark-git-ssh-to-https (cadr target))
+        (should (equal (car kill-ring)
+                       "https://git.meitu.com/conan/conan-meitu-index.git")))
+      (goto-char (point-min))
+      (should-not (yunge-embark-target-git-ssh-at-point))))
+  (should-error (yunge-embark-git-ssh-to-https "https://example.com/repo.git")
+                :type 'user-error)
+  (should (eq (lookup-key yunge-embark-git-ssh-map (kbd "h"))
+              'yunge-embark-git-ssh-to-https)))
 
 (ert-deftest yunge-embark-targets-windows-paths ()
   (skip-unless (eq system-type 'windows-nt))
