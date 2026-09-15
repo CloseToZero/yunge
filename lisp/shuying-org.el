@@ -656,7 +656,10 @@ When AUTOMATIC is non-nil, silently retain unavailable dependency errors."
                 (shuying-org--render-spec fragment preamble engine))
                (specification-hash
                 (shuying-render-spec-hash specification))
-               (overlay (shuying-org--fragment-overlay fragment)))
+               (overlay (shuying-org--fragment-overlay fragment))
+               (artifact
+                (and overlay
+                     (overlay-get overlay 'shuying-org-artifact))))
           ;; Layout context can change around an otherwise unchanged formula.
           ;; Refresh it even when the rendered artifact remains reusable.
           (when overlay
@@ -665,6 +668,8 @@ When AUTOMATIC is non-nil, silently retain unavailable dependency errors."
                    (or (overlay-get overlay 'shuying-org-image)
                        (overlay-get overlay
                                     'shuying-org-empty-artifact))
+                   (stringp artifact)
+                   (file-exists-p artifact)
                    (equal
                     (overlay-get
                      overlay 'shuying-org-specification-hash)
