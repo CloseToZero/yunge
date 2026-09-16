@@ -491,6 +491,7 @@ Keep point unchanged when FUNCTION is editing a region or existing link."
 (advice-add 'org-mark-ring-push :around
             #'yunge-org--silence-mark-ring-push)
 (yunge-jump-history-track-command 'org-open-at-point)
+(yunge-jump-history-track-command 'org-open-at-mouse)
 
 (defun yunge-org-open-fold ()
   "Show the current entry and its direct child headings."

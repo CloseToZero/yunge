@@ -235,12 +235,22 @@ When BRANCH is non-nil, discard entries newer than the current one."
   "Record a successful location change made by FUNCTION with ARGUMENTS."
   (if yunge-jump-history--moving
       (apply function arguments)
-    (let* ((origin (yunge-jump-history--window-entry (selected-window)))
+    (let* ((source-window (selected-window))
+           (source-origin
+            (yunge-jump-history--window-entry source-window))
+           (window-origins
+            (mapcar
+             (lambda (window)
+               (cons window (yunge-jump-history--window-entry window)))
+             (window-list nil 'no-minibuffer)))
            ;; Ignore transient locations visited by completion previews.
            (yunge-jump-history--moving t)
            (result (apply function arguments))
            (window (selected-window))
            (history (yunge-jump-history--history window))
+           (window-origin (assq window window-origins))
+           (origin
+            (if window-origin (cdr window-origin) source-origin))
            (destination (yunge-jump-history--window-entry window))
            (moved
             (and origin destination

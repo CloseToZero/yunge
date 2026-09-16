@@ -132,6 +132,8 @@
   (yunge-test-enable-evil)
   (yunge-jump-history-test--reset)
   (let ((origin (yunge-jump-history-test--buffer " *yunge-jump-origin*"))
+        (previous
+         (yunge-jump-history-test--buffer " *yunge-jump-previous*"))
         (destination
          (yunge-jump-history-test--buffer " *yunge-jump-destination*")))
     (unwind-protect
@@ -140,24 +142,26 @@
           (switch-to-buffer origin)
           (goto-char 4)
           (let ((destination-window (split-window-right)))
-            (set-window-buffer destination-window destination)
+            (set-window-buffer destination-window previous)
             (set-window-point destination-window 8)
             (yunge-jump-history-track-command
              'yunge-jump-history-test--navigate)
 
             (yunge-jump-history-test--navigate
              (lambda ()
-               (select-window destination-window)))
+               (select-window destination-window)
+               (switch-to-buffer destination)
+               (goto-char 6)))
 
             (yunge-jump-history-backward)
             (should (eq (selected-window) destination-window))
-            (should (eq (current-buffer) origin))
-            (should (= (point) 4))
+            (should (eq (current-buffer) previous))
+            (should (= (point) 8))
 
             (yunge-jump-history-forward)
             (should (eq (current-buffer) destination))
-            (should (= (point) 8))))
-      (yunge-jump-history-test--kill origin destination)
+            (should (= (point) 6))))
+      (yunge-jump-history-test--kill origin previous destination)
       (yunge-jump-history-test--reset))))
 
 (ert-deftest yunge-jump-history-crosses-a-live-non-file-buffer ()
