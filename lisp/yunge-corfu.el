@@ -5,6 +5,7 @@
 (require 'yunge-key)
 
 (declare-function global-corfu-mode "corfu")
+(declare-function pcomplete-from-help "pcomplete")
 
 (defvar completion-in-region-mode)
 (defvar corfu-auto)
@@ -15,10 +16,32 @@
 (defvar corfu-mode)
 (defvar corfu-preview-current)
 (defvar text-mode-ispell-word-completion)
+(defvar vc-git-program)
 
 ;; Ispell launches an external dictionary search for prose completion, which
 ;; is too costly to run automatically while typing.
 (setq text-mode-ispell-word-completion nil)
+
+(defun yunge-corfu--pcomplete-git-short-help (arguments)
+  "Use non-interactive Git help when completing subcommand options.
+Git for Windows opens a browser for `git help SUBCOMMAND', while
+`git SUBCOMMAND -h' prints the option summary that `pcomplete-from-help'
+expects.  Filter only that exact command shape and preserve all parser
+keyword arguments."
+  (let ((command (car arguments)))
+    (if (and (listp command)
+             (= (length command) 3)
+             (equal (car command) vc-git-program)
+             (equal (cadr command) "help")
+             (stringp (caddr command))
+             (not (string-prefix-p "-" (caddr command))))
+        (cons (list (car command) (caddr command) "-h")
+              (cdr arguments))
+      arguments)))
+
+(with-eval-after-load 'pcmpl-git
+  (advice-add 'pcomplete-from-help :filter-args
+              #'yunge-corfu--pcomplete-git-short-help))
 
 (defconst yunge-corfu-popup-bindings
   '(("C-j" corfu-next "next candidate")

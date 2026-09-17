@@ -43,6 +43,33 @@
                  (null corfu-preview-current))
       (error "Corfu configuration was not applied"))))
 
+(ert-deftest yunge-corfu-keeps-pcomplete-git-help-non-interactive ()
+  (yunge-test-run-emacs
+   "--eval" "(defmacro elpaca (&rest _body) nil)"
+   "-l" "yunge-corfu"
+   "--eval"
+   (prin1-to-string
+    '(progn
+       (require 'pcmpl-git)
+       (let ((vc-git-program "yunge-test-git")
+             invoked)
+         (cl-letf (((symbol-function 'call-process)
+                    (lambda (&rest arguments)
+                      (setq invoked arguments)
+                      (insert "    --amend  amend previous commit\n")
+                      0)))
+           (unless
+               (member
+                "--amend"
+                (pcomplete-from-help
+                 '("yunge-test-git" "help" "commit")))
+             (error "Git option completion was not produced")))
+         (unless
+             (equal invoked
+                    '("yunge-test-git" nil t nil "commit" "-h"))
+           (error "Git completion invoked interactive help: %S"
+                  invoked)))))))
+
 (ert-deftest yunge-corfu-owns-popup-keys ()
   (yunge-test-enable-evil)
   (require 'corfu-autoloads)
