@@ -92,6 +92,9 @@ Each entry is a plist containing :root, :modes, and optionally
     ("r" (menu-item "rename" eglot-rename
                     :filter yunge-eglot--managed-command-binding)
      "rename")
+    ("R" (menu-item "reconnect" eglot-reconnect
+                    :filter yunge-eglot--managed-command-binding)
+     "reconnect")
     ("s" (menu-item "workspace symbols" xref-find-apropos
                     :filter yunge-eglot--managed-command-binding)
      "workspace symbols")
