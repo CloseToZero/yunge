@@ -9,11 +9,9 @@ use std::sync::{Arc, Mutex};
 use webview2_com::Microsoft::Web::WebView2::Win32::*;
 use webview2_com::{
     AddScriptToExecuteOnDocumentCreatedCompletedHandler,
-    CreateCoreWebView2ControllerCompletedHandler,
-    CreateCoreWebView2EnvironmentCompletedHandler,
-    ExecuteScriptCompletedHandler, NavigationStartingEventHandler,
-    NewWindowRequestedEventHandler, PermissionRequestedEventHandler,
-    WebMessageReceivedEventHandler, take_pwstr,
+    CreateCoreWebView2ControllerCompletedHandler, CreateCoreWebView2EnvironmentCompletedHandler,
+    ExecuteScriptCompletedHandler, NavigationStartingEventHandler, NewWindowRequestedEventHandler,
+    PermissionRequestedEventHandler, WebMessageReceivedEventHandler, take_pwstr,
 };
 use windows::Win32::Foundation::{
     E_POINTER, E_UNEXPECTED, HINSTANCE, HWND, LPARAM, LRESULT, RECT, WPARAM,
@@ -23,12 +21,10 @@ use windows::Win32::System::Com::{COINIT_APARTMENTTHREADED, CoInitializeEx};
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::Input::KeyboardAndMouse::SetFocus;
 use windows::Win32::UI::WindowsAndMessaging::{
-    CS_HREDRAW, CS_VREDRAW, CreateWindowExW, DefWindowProcW, DestroyWindow,
-    GW_CHILD, GetWindow, HCURSOR, HICON, HWND_TOP, RegisterClassExW, SW_HIDE,
-    SW_SHOWNA, SWP_ASYNCWINDOWPOS, SWP_NOACTIVATE, SWP_NOMOVE,
-    SWP_NOOWNERZORDER, SWP_NOSIZE, SWP_NOZORDER, SetWindowPos, ShowWindow,
-    WINDOW_EX_STYLE, WM_SETFOCUS, WNDCLASSEXW, WS_CHILD, WS_CLIPCHILDREN,
-    WS_VISIBLE,
+    CS_HREDRAW, CS_VREDRAW, CreateWindowExW, DefWindowProcW, DestroyWindow, GW_CHILD, GetWindow,
+    HCURSOR, HICON, HWND_TOP, RegisterClassExW, SW_HIDE, SW_SHOWNA, SWP_ASYNCWINDOWPOS,
+    SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOOWNERZORDER, SWP_NOSIZE, SWP_NOZORDER, SetWindowPos,
+    ShowWindow, WINDOW_EX_STYLE, WM_SETFOCUS, WNDCLASSEXW, WS_CHILD, WS_CLIPCHILDREN, WS_VISIBLE,
 };
 use windows::core::{HSTRING, Interface, PCWSTR, PWSTR, w};
 
@@ -91,8 +87,7 @@ impl NativeWebView {
         let hwnd = create_container(parent, bounds, visible)?;
         let result = (|| {
             let controller = create_controller(hwnd, &environment.0)?;
-            let webview =
-                unsafe { controller.CoreWebView2().map_err(create_error)? };
+            let webview = unsafe { controller.CoreWebView2().map_err(create_error)? };
             configure(&webview)?;
             add_document_script(&webview, IPC_SCRIPT)?;
 
@@ -167,10 +162,7 @@ impl NativeWebView {
 
     pub(super) fn set_visible(&self, visible: bool) -> Result<(), String> {
         unsafe {
-            let _ = ShowWindow(
-                self.hwnd,
-                if visible { SW_SHOWNA } else { SW_HIDE },
-            );
+            let _ = ShowWindow(self.hwnd, if visible { SW_SHOWNA } else { SW_HIDE });
             self.controller
                 .SetIsVisible(visible)
                 .map_err(|error| error.to_string())?;
@@ -210,11 +202,7 @@ impl NativeWebView {
         self.evaluate(source, Some(Box::new(callback)))
     }
 
-    fn evaluate(
-        &self,
-        source: &str,
-        callback: Option<ScriptCallback>,
-    ) -> Result<(), String> {
+    fn evaluate(&self, source: &str, callback: Option<ScriptCallback>) -> Result<(), String> {
         let mut pending = self
             .pending
             .lock()
@@ -261,13 +249,11 @@ fn create_environment() -> Result<ICoreWebView2Environment, ServiceError> {
             None,
             &CreateCoreWebView2EnvironmentCompletedHandler::create(Box::new(
                 move |status, environment| {
-                    let result: webview2_com::Result<ICoreWebView2Environment> =
-                        (|| {
-                            status?;
-                            environment.ok_or_else(|| {
-                                windows::core::Error::from(E_POINTER).into()
-                            })
-                        })();
+                    let result: webview2_com::Result<ICoreWebView2Environment> = (|| {
+                        status?;
+                        environment.ok_or_else(|| windows::core::Error::from(E_POINTER).into())
+                    })(
+                    );
                     sender
                         .send(result)
                         .map_err(|_| windows::core::Error::from(E_UNEXPECTED))
@@ -286,20 +272,17 @@ fn create_controller(
     environment: &ICoreWebView2Environment,
 ) -> Result<ICoreWebView2Controller, ServiceError> {
     let (sender, receiver) = mpsc::channel();
-    let handler = CreateCoreWebView2ControllerCompletedHandler::create(
-        Box::new(move |status, controller| {
-            let result: webview2_com::Result<ICoreWebView2Controller> =
-                (|| {
-                    status?;
-                    controller.ok_or_else(|| {
-                        windows::core::Error::from(E_POINTER).into()
-                    })
-                })();
+    let handler = CreateCoreWebView2ControllerCompletedHandler::create(Box::new(
+        move |status, controller| {
+            let result: webview2_com::Result<ICoreWebView2Controller> = (|| {
+                status?;
+                controller.ok_or_else(|| windows::core::Error::from(E_POINTER).into())
+            })();
             sender
                 .send(result)
                 .map_err(|_| windows::core::Error::from(E_UNEXPECTED))
-        }),
-    );
+        },
+    ));
     unsafe {
         environment
             .CreateCoreWebView2Controller(hwnd, &handler)
@@ -335,19 +318,13 @@ fn configure(webview: &ICoreWebView2) -> Result<(), ServiceError> {
     Ok(())
 }
 
-fn add_document_script(
-    webview: &ICoreWebView2,
-    source: &str,
-) -> Result<(), ServiceError> {
+fn add_document_script(webview: &ICoreWebView2, source: &str) -> Result<(), ServiceError> {
     let webview = webview.clone();
     let source = source.to_owned();
     AddScriptToExecuteOnDocumentCreatedCompletedHandler::wait_for_async_operation(
         Box::new(move |handler| unsafe {
             webview
-                .AddScriptToExecuteOnDocumentCreated(
-                    &HSTRING::from(source),
-                    &handler,
-                )
+                .AddScriptToExecuteOnDocumentCreated(&HSTRING::from(source), &handler)
                 .map_err(Into::into)
         }),
         Box::new(|error, _| error),
@@ -367,19 +344,14 @@ fn install_handlers(
         let navigation_renderer = renderer.clone();
         webview
             .add_NavigationStarting(
-                &NavigationStartingEventHandler::create(Box::new(
-                    move |_webview, args| {
-                        let Some(args) = args else {
-                            return Ok(());
-                        };
-                        let mut uri = PWSTR::null();
-                        args.Uri(&mut uri)?;
-                        args.SetCancel(
-                            !navigation_renderer
-                                .navigation_allowed(&take_pwstr(uri)),
-                        )
-                    },
-                )),
+                &NavigationStartingEventHandler::create(Box::new(move |_webview, args| {
+                    let Some(args) = args else {
+                        return Ok(());
+                    };
+                    let mut uri = PWSTR::null();
+                    args.Uri(&mut uri)?;
+                    args.SetCancel(!navigation_renderer.navigation_allowed(&take_pwstr(uri)))
+                })),
                 &mut tokens.navigation_starting,
             )
             .map_err(create_error)?;
@@ -389,71 +361,61 @@ fn install_handlers(
         let message_renderer = renderer;
         webview
             .add_WebMessageReceived(
-                &WebMessageReceivedEventHandler::create(Box::new(
-                    move |webview, args| {
-                        let Some(webview) = webview else {
-                            return Ok(());
-                        };
-                        let Some(args) = args else {
-                            return Ok(());
-                        };
-                        let mut source = PWSTR::null();
-                        let mut body = PWSTR::null();
-                        args.Source(&mut source)?;
-                        args.TryGetWebMessageAsString(&mut body)?;
-                        if let Ok(request) = HttpRequest::builder()
-                            .uri(take_pwstr(source))
-                            .body(take_pwstr(body))
-                        {
-                            if shell_ready_for(&message_renderer, &request) {
-                                message_loaded.store(true, Ordering::Release);
-                                let scripts = message_pending
-                                    .lock()
-                                    .ok()
-                                    .and_then(|mut pending| pending.take())
-                                    .unwrap_or_default();
-                                for script in scripts {
-                                    let _ = execute_script(
-                                        &webview,
-                                        &script.source,
-                                        script.callback,
-                                    );
-                                }
-                            } else {
-                                on_ipc(request);
+                &WebMessageReceivedEventHandler::create(Box::new(move |webview, args| {
+                    let Some(webview) = webview else {
+                        return Ok(());
+                    };
+                    let Some(args) = args else {
+                        return Ok(());
+                    };
+                    let mut source = PWSTR::null();
+                    let mut body = PWSTR::null();
+                    args.Source(&mut source)?;
+                    args.TryGetWebMessageAsString(&mut body)?;
+                    if let Ok(request) = HttpRequest::builder()
+                        .uri(take_pwstr(source))
+                        .body(take_pwstr(body))
+                    {
+                        if shell_ready_for(&message_renderer, &request) {
+                            message_loaded.store(true, Ordering::Release);
+                            let scripts = message_pending
+                                .lock()
+                                .ok()
+                                .and_then(|mut pending| pending.take())
+                                .unwrap_or_default();
+                            for script in scripts {
+                                let _ = execute_script(&webview, &script.source, script.callback);
                             }
+                        } else {
+                            on_ipc(request);
                         }
-                        Ok(())
-                    },
-                )),
+                    }
+                    Ok(())
+                })),
                 &mut tokens.web_message,
             )
             .map_err(create_error)?;
 
         webview
             .add_NewWindowRequested(
-                &NewWindowRequestedEventHandler::create(Box::new(
-                    move |_webview, args| {
-                        if let Some(args) = args {
-                            args.SetHandled(true)?;
-                        }
-                        Ok(())
-                    },
-                )),
+                &NewWindowRequestedEventHandler::create(Box::new(move |_webview, args| {
+                    if let Some(args) = args {
+                        args.SetHandled(true)?;
+                    }
+                    Ok(())
+                })),
                 &mut tokens.new_window,
             )
             .map_err(create_error)?;
 
         webview
             .add_PermissionRequested(
-                &PermissionRequestedEventHandler::create(Box::new(
-                    move |_webview, args| {
-                        if let Some(args) = args {
-                            args.SetState(COREWEBVIEW2_PERMISSION_STATE_DENY)?;
-                        }
-                        Ok(())
-                    },
-                )),
+                &PermissionRequestedEventHandler::create(Box::new(move |_webview, args| {
+                    if let Some(args) = args {
+                        args.SetState(COREWEBVIEW2_PERMISSION_STATE_DENY)?;
+                    }
+                    Ok(())
+                })),
                 &mut tokens.permission,
             )
             .map_err(create_error)?;
@@ -471,28 +433,22 @@ fn execute_script(
         webview
             .ExecuteScript(
                 &HSTRING::from(source),
-                &ExecuteScriptCompletedHandler::create(Box::new(
-                    move |_status, result| {
-                        if let Some(callback) = callback
-                            .lock()
-                            .ok()
-                            .and_then(|mut callback| callback.take())
-                        {
-                            callback(result);
-                        }
-                        Ok(())
-                    },
-                )),
+                &ExecuteScriptCompletedHandler::create(Box::new(move |_status, result| {
+                    if let Some(callback) = callback
+                        .lock()
+                        .ok()
+                        .and_then(|mut callback| callback.take())
+                    {
+                        callback(result);
+                    }
+                    Ok(())
+                })),
             )
             .map_err(|error| error.to_string())
     }
 }
 
-fn create_container(
-    parent: HWND,
-    bounds: Bounds,
-    visible: bool,
-) -> Result<HWND, ServiceError> {
+fn create_container(parent: HWND, bounds: Bounds, visible: bool) -> Result<HWND, ServiceError> {
     unsafe extern "system" fn window_proc(
         hwnd: HWND,
         message: u32,
@@ -510,8 +466,7 @@ fn create_container(
     }
 
     let class_name = w!("YUNGE_READER_WEBVIEW");
-    let instance =
-        unsafe { GetModuleHandleW(PCWSTR::null()) }.map_err(create_error)?;
+    let instance = unsafe { GetModuleHandleW(PCWSTR::null()) }.map_err(create_error)?;
     let class = WNDCLASSEXW {
         cbSize: std::mem::size_of::<WNDCLASSEXW>() as u32,
         style: CS_HREDRAW | CS_VREDRAW,
@@ -555,11 +510,7 @@ fn create_container(
             0,
             0,
             0,
-            SWP_ASYNCWINDOWPOS
-                | SWP_NOACTIVATE
-                | SWP_NOMOVE
-                | SWP_NOOWNERZORDER
-                | SWP_NOSIZE,
+            SWP_ASYNCWINDOWPOS | SWP_NOACTIVATE | SWP_NOMOVE | SWP_NOOWNERZORDER | SWP_NOSIZE,
         )
         .map_err(create_error)?;
         Ok(hwnd)
@@ -573,11 +524,8 @@ fn create_error(error: impl ToString) -> ServiceError {
 pub(super) fn webview_version() -> Result<String, String> {
     let mut version = PWSTR::null();
     unsafe {
-        GetAvailableCoreWebView2BrowserVersionString(
-            PCWSTR::null(),
-            &mut version,
-        )
-        .map_err(|error| error.to_string())?;
+        GetAvailableCoreWebView2BrowserVersionString(PCWSTR::null(), &mut version)
+            .map_err(|error| error.to_string())?;
     }
     Ok(take_pwstr(version))
 }

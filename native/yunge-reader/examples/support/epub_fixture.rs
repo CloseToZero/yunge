@@ -57,13 +57,9 @@ pub fn build_epub(entries: Vec<EpubEntry>) -> Result<Vec<u8>, Box<dyn Error>> {
     Ok(archive.finish()?.into_inner())
 }
 
-pub fn write_epub(
-    path: &Path,
-    entries: Vec<EpubEntry>,
-) -> Result<(), Box<dyn Error>> {
+pub fn write_epub(path: &Path, entries: Vec<EpubEntry>) -> Result<(), Box<dyn Error>> {
     let bytes = build_epub(entries)?;
-    let mut output =
-        OpenOptions::new().write(true).create_new(true).open(path)?;
+    let mut output = OpenOptions::new().write(true).create_new(true).open(path)?;
     output.write_all(&bytes)?;
     output.flush()?;
     Ok(())

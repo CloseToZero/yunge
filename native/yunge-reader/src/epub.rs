@@ -12,8 +12,7 @@ use std::path::Path;
 use zip::{CompressionMethod, ZipArchive};
 
 const CONTAINER_PATH: &str = "META-INF/container.xml";
-const CONTAINER_NAMESPACE: &str =
-    "urn:oasis:names:tc:opendocument:xmlns:container";
+const CONTAINER_NAMESPACE: &str = "urn:oasis:names:tc:opendocument:xmlns:container";
 const DC_NAMESPACE: &str = "http://purl.org/dc/elements/1.1/";
 const EPUB_MIMETYPE: &[u8] = b"application/epub+zip";
 const OPF_MEDIA_TYPE: &str = "application/oebps-package+xml";
@@ -137,12 +136,7 @@ impl Publication {
             ));
         }
 
-        let container = read_entry(
-            &mut archive,
-            &entries,
-            CONTAINER_PATH,
-            MAX_CONTAINER_BYTES,
-        )?;
+        let container = read_entry(&mut archive, &entries, CONTAINER_PATH, MAX_CONTAINER_BYTES)?;
         let package_path = parse_container(&container)?;
         if !entries.contains_key(&package_path) {
             return Err(EpubError::new(
@@ -150,12 +144,7 @@ impl Publication {
                 format!("package document does not exist: {package_path}"),
             ));
         }
-        let package = read_entry(
-            &mut archive,
-            &entries,
-            &package_path,
-            MAX_PACKAGE_BYTES,
-        )?;
+        let package = read_entry(&mut archive, &entries, &package_path, MAX_PACKAGE_BYTES)?;
         let (metadata, resources) = parse_package(&package_path, &package)?;
 
         Ok(Self {
@@ -185,32 +174,24 @@ impl Publication {
             .iter()
             .filter(|(_, media_type)| browser_media_type_allowed(media_type))
             .filter_map(|(path, media_type)| {
-                self.entries.get(path).map(|entry| {
-                    PublicationResourceMetadata {
+                self.entries
+                    .get(path)
+                    .map(|entry| PublicationResourceMetadata {
                         path: path.clone(),
                         media_type: media_type.clone(),
                         size: entry.size,
-                    }
-                })
+                    })
             })
             .collect();
         resources.sort_unstable_by(|left, right| left.path.cmp(&right.path));
         resources
     }
 
-    pub fn read_resource(
-        &mut self,
-        path: &str,
-    ) -> Result<PublicationResource, EpubError> {
+    pub fn read_resource(&mut self, path: &str) -> Result<PublicationResource, EpubError> {
         let path = normalize_archive_path(path, false)
             .map_err(|message| EpubError::new("invalid-epub-path", message))?;
         let media_type = self.resource_media_type(&path)?;
-        let bytes = read_entry(
-            &mut self.archive,
-            &self.entries,
-            &path,
-            MAX_RESOURCE_BYTES,
-        )?;
+        let bytes = read_entry(&mut self.archive, &self.entries, &path, MAX_RESOURCE_BYTES)?;
         Ok(PublicationResource { bytes, media_type })
     }
 
@@ -334,10 +315,7 @@ fn validate_archive(
     Ok((entries, expanded_size))
 }
 
-fn record_archive_name(
-    names: &mut HashSet<String>,
-    name: &str,
-) -> Result<(), EpubError> {
+fn record_archive_name(names: &mut HashSet<String>, name: &str) -> Result<(), EpubError> {
     if !names.insert(name.to_owned()) {
         return Err(EpubError::new(
             "invalid-epub",
@@ -347,19 +325,14 @@ fn record_archive_name(
     Ok(())
 }
 
-fn validate_entry_sizes(
-    name: &str,
-    size: u64,
-    compressed_size: u64,
-) -> Result<(), EpubError> {
+fn validate_entry_sizes(name: &str, size: u64, compressed_size: u64) -> Result<(), EpubError> {
     if size > MAX_ENTRY_BYTES {
         return Err(limit_error(format!(
             "ZIP entry exceeds {MAX_ENTRY_BYTES} bytes: {name}"
         )));
     }
     if size > 0
-        && (compressed_size == 0
-            || size > compressed_size.saturating_mul(MAX_COMPRESSION_RATIO))
+        && (compressed_size == 0 || size > compressed_size.saturating_mul(MAX_COMPRESSION_RATIO))
     {
         return Err(limit_error(format!(
             concat!("ZIP entry compression ratio exceeds ", "{}: {}"),
@@ -369,10 +342,7 @@ fn validate_entry_sizes(
     Ok(())
 }
 
-fn normalize_archive_path(
-    name: &str,
-    directory: bool,
-) -> Result<String, String> {
+fn normalize_archive_path(name: &str, directory: bool) -> Result<String, String> {
     if name.is_empty() {
         return Err("ZIP entry path is empty".into());
     }
@@ -382,17 +352,14 @@ fn normalize_archive_path(
         ));
     }
     if name.contains(['\\', '\0']) {
-        return Err(format!(
-            "ZIP entry path has a forbidden character: {name}"
-        ));
+        return Err(format!("ZIP entry path has a forbidden character: {name}"));
     }
     if name.starts_with('/') {
         return Err(format!("absolute ZIP entry path is not allowed: {name}"));
     }
     let path = if directory {
-        name.strip_suffix('/').ok_or_else(|| {
-            format!("ZIP directory entry lacks a trailing slash: {name}")
-        })?
+        name.strip_suffix('/')
+            .ok_or_else(|| format!("ZIP directory entry lacks a trailing slash: {name}"))?
     } else {
         if name.ends_with('/') {
             return Err(format!("ZIP file entry ends with a slash: {name}"));
@@ -411,12 +378,8 @@ fn normalize_archive_path(
                 "ZIP file name exceeds {MAX_FILE_NAME_BYTES} bytes: {component}"
             ));
         }
-        if component.ends_with('.')
-            || component.contains(['"', '*', ':', '<', '>', '?'])
-        {
-            return Err(format!(
-                "ZIP file name has a forbidden character: {name}"
-            ));
+        if component.ends_with('.') || component.contains(['"', '*', ':', '<', '>', '?']) {
+            return Err(format!("ZIP file name has a forbidden character: {name}"));
         }
     }
     Ok(path.to_owned())
@@ -462,9 +425,7 @@ fn resolve_archive_reference(
             "" => {
                 return Err(EpubError::new(
                     "invalid-epub",
-                    format!(
-                        "manifest item href has an empty component: {path}"
-                    ),
+                    format!("manifest item href has an empty component: {path}"),
                 ));
             }
             "." => {}
@@ -472,9 +433,7 @@ fn resolve_archive_reference(
                 if components.pop().is_none() {
                     return Err(EpubError::new(
                         "invalid-epub",
-                        format!(
-                            "manifest item href escapes the archive: {path}"
-                        ),
+                        format!("manifest item href escapes the archive: {path}"),
                     ));
                 }
             }
@@ -493,9 +452,7 @@ fn uri_scheme(value: &str) -> Option<&str> {
     (!scheme.is_empty()
         && scheme.bytes().enumerate().all(|(index, byte)| {
             byte.is_ascii_alphabetic()
-                || (index > 0
-                    && (byte.is_ascii_digit()
-                        || matches!(byte, b'+' | b'-' | b'.')))
+                || (index > 0 && (byte.is_ascii_digit() || matches!(byte, b'+' | b'-' | b'.')))
         }))
     .then_some(scheme)
 }
@@ -519,8 +476,7 @@ fn reject_encoded_separator(value: &str) -> Result<(), EpubError> {
         }
         let first = bytes[index + 1].to_ascii_lowercase();
         let second = bytes[index + 2].to_ascii_lowercase();
-        if matches!((first, second), (b'2', b'f') | (b'5', b'c') | (b'0', b'0'))
-        {
+        if matches!((first, second), (b'2', b'f') | (b'5', b'c') | (b'0', b'0')) {
             return Err(EpubError::new(
                 "invalid-epub",
                 format!("manifest item href encodes a separator: {value}"),
@@ -647,9 +603,8 @@ fn read_entry<R: Read + Seek>(
 }
 
 fn parse_container(bytes: &[u8]) -> Result<String, EpubError> {
-    let text = std::str::from_utf8(bytes).map_err(|_| {
-        EpubError::new("invalid-epub", "container.xml is not UTF-8")
-    })?;
+    let text = std::str::from_utf8(bytes)
+        .map_err(|_| EpubError::new("invalid-epub", "container.xml is not UTF-8"))?;
     let document = parse_xml(text, "container.xml")?;
     let root = document.root_element();
     if root.tag_name().name() != "container"
@@ -674,10 +629,7 @@ fn parse_container(bytes: &[u8]) -> Result<String, EpubError> {
                 && node.tag_name().namespace() == Some(CONTAINER_NAMESPACE)
         })
         .ok_or_else(|| {
-            EpubError::new(
-                "invalid-epub",
-                "container.xml has no EPUB package rootfile",
-            )
+            EpubError::new("invalid-epub", "container.xml has no EPUB package rootfile")
         })?;
     if rootfile.attribute("media-type") != Some(OPF_MEDIA_TYPE) {
         return Err(EpubError::new(
@@ -685,14 +637,10 @@ fn parse_container(bytes: &[u8]) -> Result<String, EpubError> {
             "first container.xml rootfile has an invalid media-type",
         ));
     }
-    let path = rootfile.attribute("full-path").ok_or_else(|| {
-        EpubError::new(
-            "invalid-epub",
-            "container.xml rootfile has no full-path",
-        )
-    })?;
-    normalize_archive_path(path, false)
-        .map_err(|message| EpubError::new("invalid-epub", message))
+    let path = rootfile
+        .attribute("full-path")
+        .ok_or_else(|| EpubError::new("invalid-epub", "container.xml rootfile has no full-path"))?;
+    normalize_archive_path(path, false).map_err(|message| EpubError::new("invalid-epub", message))
 }
 
 fn parse_package(
@@ -707,9 +655,7 @@ fn parse_package(
     })?;
     let document = parse_xml(text, package_path)?;
     let root = document.root_element();
-    if root.tag_name().name() != "package"
-        || root.tag_name().namespace() != Some(OPF_NAMESPACE)
-    {
+    if root.tag_name().name() != "package" || root.tag_name().namespace() != Some(OPF_NAMESPACE) {
         return Err(EpubError::new(
             "invalid-epub",
             format!("package document has an invalid root: {package_path}"),
@@ -770,8 +716,7 @@ fn parse_layout(
     package_path: &str,
 ) -> Result<PublicationLayout, EpubError> {
     let mut declarations = metadata.children().filter(|node| {
-        is_opf_element(*node, "meta")
-            && node.attribute("property") == Some("rendition:layout")
+        is_opf_element(*node, "meta") && node.attribute("property") == Some("rendition:layout")
     });
     let Some(declaration) = declarations.next() else {
         return Ok(PublicationLayout::Reflowable);
@@ -835,8 +780,7 @@ fn parse_manifest(
         let Some(path) = resolve_archive_reference(package_path, href)? else {
             continue;
         };
-        if let Some(previous) =
-            resources.insert(path.clone(), media_type.into())
+        if let Some(previous) = resources.insert(path.clone(), media_type.into())
             && previous != media_type
         {
             return Err(EpubError::new(
@@ -869,12 +813,8 @@ fn parse_xml<'a>(text: &'a str, name: &str) -> Result<Document<'a>, EpubError> {
         nodes_limit: MAX_XML_NODES,
         entity_resolver: None,
     };
-    Document::parse_with_options(text, options).map_err(|error| {
-        EpubError::new(
-            "invalid-epub",
-            format!("could not parse {name}: {error}"),
-        )
-    })
+    Document::parse_with_options(text, options)
+        .map_err(|error| EpubError::new("invalid-epub", format!("could not parse {name}: {error}")))
 }
 
 fn is_dc_element(node: Node<'_, '_>, name: &str) -> bool {
@@ -967,10 +907,7 @@ mod tests {
         ]
     }
 
-    fn write_archive(
-        name: &str,
-        entries: &[(String, Vec<u8>)],
-    ) -> TemporaryFile {
+    fn write_archive(name: &str, entries: &[(String, Vec<u8>)]) -> TemporaryFile {
         let id = TEMPORARY_ID.fetch_add(1, Ordering::Relaxed);
         let path = std::env::temp_dir().join(format!(
             "yunge-reader-epub-{}-{id}-{name}.epub",
@@ -984,8 +921,7 @@ mod tests {
             } else {
                 CompressionMethod::Deflated
             };
-            let options =
-                SimpleFileOptions::default().compression_method(method);
+            let options = SimpleFileOptions::default().compression_method(method);
             archive.start_file(entry_name, options).unwrap();
             archive.write_all(bytes).unwrap();
         }
@@ -1011,10 +947,7 @@ mod tests {
         assert_eq!(publication.entry_count(), 4);
         assert!(publication.expanded_size() > 0);
         assert_eq!(publication.metadata().package_path, "OPS/package.opf");
-        assert_eq!(
-            publication.metadata().layout,
-            PublicationLayout::Reflowable
-        );
+        assert_eq!(publication.metadata().layout, PublicationLayout::Reflowable);
         assert_eq!(publication.metadata().title.as_deref(), Some("Test Book"));
         assert_eq!(publication.metadata().language.as_deref(), Some("en"));
         assert_eq!(
@@ -1064,8 +997,7 @@ mod tests {
                      </metadata>"
                 ),
             );
-            let error = parse_package("OPS/package.opf", package.as_bytes())
-                .unwrap_err();
+            let error = parse_package("OPS/package.opf", package.as_bytes()).unwrap_err();
             assert_eq!(error.code(), "invalid-epub");
             assert!(error.message().contains("rendition:layout"));
         }
@@ -1117,8 +1049,7 @@ mod tests {
     fn rejects_duplicate_archive_paths() {
         let mut names = HashSet::new();
         record_archive_name(&mut names, "OPS/chapter.xhtml").unwrap();
-        let error =
-            record_archive_name(&mut names, "OPS/chapter.xhtml").unwrap_err();
+        let error = record_archive_name(&mut names, "OPS/chapter.xhtml").unwrap_err();
 
         assert_eq!(error.code(), "invalid-epub");
         assert!(error.message().contains("duplicate"));
@@ -1168,21 +1099,16 @@ mod tests {
     #[test]
     fn resolves_manifest_hrefs_without_leaving_the_archive() {
         assert_eq!(
-            resolve_archive_reference(
-                "OPS/package.opf",
-                "./Text/a%20b.xhtml#section"
-            )
-            .unwrap()
-            .as_deref(),
+            resolve_archive_reference("OPS/package.opf", "./Text/a%20b.xhtml#section")
+                .unwrap()
+                .as_deref(),
             Some("OPS/Text/a b.xhtml")
         );
         assert_eq!(
-            resolve_archive_reference("OPS/package.opf", "https://host/book")
-                .unwrap(),
+            resolve_archive_reference("OPS/package.opf", "https://host/book").unwrap(),
             None
         );
-        for href in ["../../book", "/book", "a%2fbook", "a%5Cbook", "a%zzbook"]
-        {
+        for href in ["../../book", "/book", "a%2fbook", "a%5Cbook", "a%zzbook"] {
             assert!(
                 resolve_archive_reference("OPS/package.opf", href).is_err(),
                 "accepted {href:?}"
@@ -1243,8 +1169,7 @@ mod tests {
         let resource = publication.read_resource("OPS/toc.ncx").unwrap();
         assert_eq!(resource.media_type(), "application/x-dtbncx+xml");
         assert!(publication.resource_catalog().iter().any(|resource| {
-            resource.path == "OPS/toc.ncx"
-                && resource.media_type == "application/x-dtbncx+xml"
+            resource.path == "OPS/toc.ncx" && resource.media_type == "application/x-dtbncx+xml"
         }));
     }
 
@@ -1325,8 +1250,7 @@ mod tests {
                     .wrapping_mul(3_202_034_522_624_059_733)
                     .wrapping_add(1);
                 let index = state as usize % bytes.len();
-                bytes[index] =
-                    alphabet[(state >> 32) as usize % alphabet.len()];
+                bytes[index] = alphabet[(state >> 32) as usize % alphabet.len()];
             }
             let text = std::str::from_utf8(&bytes).unwrap();
             let _ = parse_xml(text, "generated.opf");

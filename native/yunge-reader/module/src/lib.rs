@@ -37,10 +37,8 @@ fn start(env: &Env, pipe_process: Value<'_>) -> Result<bool> {
             if slot.is_some() {
                 return Ok(false);
             }
-            *slot = Some(
-                EmbeddedService::start(writer)
-                    .map_err(|error| failure(error.to_string()))?,
-            );
+            *slot =
+                Some(EmbeddedService::start(writer).map_err(|error| failure(error.to_string()))?);
             Ok(true)
         })
     }

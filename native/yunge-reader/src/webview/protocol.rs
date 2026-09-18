@@ -8,8 +8,8 @@ use super::ViewEvent;
 
 pub(super) const PROTOCOL_VERSION: u32 = 2;
 pub(super) const ACCELERATORS: [&str; 20] = [
-    "'", "+", "-", "=", "<escape>", "<next>", "<prior>", "C-d", "C-g", "C-u",
-    "G", "J", "K", "M-m", "SPC", "g", "j", "k", "m", "y",
+    "'", "+", "-", "=", "<escape>", "<next>", "<prior>", "C-d", "C-g", "C-u", "G", "J", "K", "M-m",
+    "SPC", "g", "j", "k", "m", "y",
 ];
 pub(super) const RENDERER_ACCELERATORS: [&str; 20] = ACCELERATORS;
 
@@ -151,11 +151,7 @@ impl Response {
         }
     }
 
-    pub(super) fn failure(
-        id: Option<u64>,
-        code: &'static str,
-        message: impl Into<String>,
-    ) -> Self {
+    pub(super) fn failure(id: Option<u64>, code: &'static str, message: impl Into<String>) -> Self {
         Self {
             id,
             revision: None,
@@ -210,8 +206,9 @@ pub(super) fn response(
 ) -> Response {
     match result {
         Ok(value) => Response::success(id, value).with_revision(revision),
-        Err(error) => Response::failure(Some(id), error.code, error.message)
-            .with_revision(revision),
+        Err(error) => {
+            Response::failure(Some(id), error.code, error.message).with_revision(revision)
+        }
     }
 }
 
@@ -219,10 +216,7 @@ pub(super) fn response(
 mod tests {
     use serde_json::json;
 
-    use super::{
-        ACCELERATORS, Operation, RENDERER_ACCELERATORS, Request,
-        control_accelerator,
-    };
+    use super::{ACCELERATORS, Operation, RENDERER_ACCELERATORS, Request, control_accelerator};
 
     #[test]
     fn renderer_accelerators_are_in_the_public_contract() {
@@ -243,10 +237,8 @@ mod tests {
 
     #[test]
     fn requests_decode_and_classify_operations() {
-        let request = Request::decode(
-            r#"{"id":7,"op":"view-search","params":{"view":3}}"#,
-        )
-        .unwrap();
+        let request =
+            Request::decode(r#"{"id":7,"op":"view-search","params":{"view":3}}"#).unwrap();
         assert_eq!(request.id, 7);
         assert_eq!(request.params, json!({ "view": 3 }));
         assert_eq!(request.operation().unwrap(), Operation::ViewSearch);
@@ -255,31 +247,22 @@ mod tests {
         assert!(request.params.is_null());
         assert_eq!(request.operation().unwrap(), Operation::ViewInfo);
 
-        let request =
-            Request::decode(r#"{"id":9,"op":"view-zoom","params":{"view":3}}"#)
-                .unwrap();
+        let request = Request::decode(r#"{"id":9,"op":"view-zoom","params":{"view":3}}"#).unwrap();
         assert_eq!(request.operation().unwrap(), Operation::ViewZoom);
 
-        let request = Request::decode(
-            r#"{"id":10,"op":"view-set-selection","params":{"view":3}}"#,
-        )
-        .unwrap();
+        let request =
+            Request::decode(r#"{"id":10,"op":"view-set-selection","params":{"view":3}}"#).unwrap();
         assert_eq!(request.operation().unwrap(), Operation::ViewSetSelection);
 
-        let request = Request::decode(
-            r#"{"id":11,"op":"view-appearance","params":{"view":3}}"#,
-        )
-        .unwrap();
+        let request =
+            Request::decode(r#"{"id":11,"op":"view-appearance","params":{"view":3}}"#).unwrap();
         assert_eq!(request.operation().unwrap(), Operation::ViewAppearance);
     }
 
     #[test]
     fn requests_reject_unknown_fields_and_operations() {
         assert!(
-            Request::decode(
-                r#"{"id":7,"op":"view-info","params":null,"extra":true}"#,
-            )
-            .is_err()
+            Request::decode(r#"{"id":7,"op":"view-info","params":null,"extra":true}"#,).is_err()
         );
         let request = Request::decode(r#"{"id":7,"op":"unknown"}"#).unwrap();
         let error = request.operation().unwrap_err();
@@ -289,10 +272,8 @@ mod tests {
 
     #[test]
     fn generated_protocol_mutations_decode_or_fail_without_panicking() {
-        const ALPHABET: &[u8] =
-            br#"{}[],:\"0129abcdefghijklmnopqrstuvwxyz-_ truefalsenull"#;
-        let template =
-            br#"{\"id\":7,\"op\":\"view-search\",\"params\":{\"view\":3}}"#;
+        const ALPHABET: &[u8] = br#"{}[],:\"0129abcdefghijklmnopqrstuvwxyz-_ truefalsenull"#;
+        let template = br#"{\"id\":7,\"op\":\"view-search\",\"params\":{\"view\":3}}"#;
         let mut state = 0xbb67_ae85_84ca_a73b_u64;
         for case in 0..10_000 {
             let mut input = template.to_vec();
@@ -302,8 +283,7 @@ mod tests {
                     .wrapping_mul(2_862_933_555_777_941_757)
                     .wrapping_add(3_037_000_493);
                 let index = state as usize % input.len();
-                input[index] =
-                    ALPHABET[(state >> 32) as usize % ALPHABET.len()];
+                input[index] = ALPHABET[(state >> 32) as usize % ALPHABET.len()];
             }
             if case % 5 == 0 {
                 input.truncate(state as usize % input.len());

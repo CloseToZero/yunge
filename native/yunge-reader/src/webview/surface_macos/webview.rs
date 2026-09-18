@@ -6,19 +6,16 @@ use block2::{DynBlock, RcBlock};
 use http::Request as HttpRequest;
 use objc2::rc::Retained;
 use objc2::runtime::{AnyObject, NSObject, ProtocolObject};
-use objc2::{
-    AnyThread, DeclaredClass, MainThreadMarker, MainThreadOnly, define_class,
-    msg_send,
-};
+use objc2::{AnyThread, DeclaredClass, MainThreadMarker, MainThreadOnly, define_class, msg_send};
 use objc2_app_kit::{NSAutoresizingMaskOptions, NSView};
 use objc2_foundation::{
-    NSError, NSJSONSerialization, NSJSONWritingOptions, NSObjectProtocol,
-    NSString, NSURL, NSURLRequest, NSUTF8StringEncoding,
+    NSError, NSJSONSerialization, NSJSONWritingOptions, NSObjectProtocol, NSString, NSURL,
+    NSURLRequest, NSUTF8StringEncoding,
 };
 use objc2_web_kit::{
-    WKNavigationAction, WKNavigationActionPolicy, WKNavigationDelegate,
-    WKScriptMessage, WKScriptMessageHandler, WKUserContentController,
-    WKUserScript, WKUserScriptInjectionTime, WKWebView, WKWebViewConfiguration,
+    WKNavigationAction, WKNavigationActionPolicy, WKNavigationDelegate, WKScriptMessage,
+    WKScriptMessageHandler, WKUserContentController, WKUserScript, WKUserScriptInjectionTime,
+    WKWebView, WKWebViewConfiguration,
 };
 use std::cell::RefCell;
 use std::panic::{AssertUnwindSafe, catch_unwind};
@@ -65,11 +62,7 @@ define_class!(
 
     unsafe impl WKScriptMessageHandler for MessageHandler {
         #[unsafe(method(userContentController:didReceiveScriptMessage:))]
-        fn did_receive(
-            &self,
-            _controller: &WKUserContentController,
-            message: &WKScriptMessage,
-        ) {
+        fn did_receive(&self, _controller: &WKUserContentController, message: &WKScriptMessage) {
             let body = unsafe { message.body() };
             let Ok(body) = body.downcast::<NSString>() else {
                 return;
@@ -123,10 +116,10 @@ impl MessageHandler {
         let object: Retained<Self> = unsafe { msg_send![super(object), init] };
         let protocol = ProtocolObject::from_ref(&*object);
         unsafe {
-            object.ivars().controller.addScriptMessageHandler_name(
-                protocol,
-                &NSString::from_str(IPC_HANDLER),
-            );
+            object
+                .ivars()
+                .controller
+                .addScriptMessageHandler_name(protocol, &NSString::from_str(IPC_HANDLER));
         }
         object
     }
@@ -156,9 +149,7 @@ define_class!(
             let allowed = request
                 .URL()
                 .and_then(|url| url.absoluteString())
-                .is_some_and(|url| {
-                    self.ivars().renderer.navigation_allowed(&url.to_string())
-                });
+                .is_some_and(|url| self.ivars().renderer.navigation_allowed(&url.to_string()));
             decision.call((if allowed {
                 WKNavigationActionPolicy::Allow
             } else {
@@ -201,24 +192,22 @@ impl NativeWebView {
             )
         })?;
         let renderer_url =
-            NSURL::URLWithString(&NSString::from_str(renderer.url()))
-                .ok_or_else(|| {
-                    ServiceError::new(
-                        "invalid-renderer-url",
-                        "WKWebView rejected the EPUB renderer URL",
-                    )
-                })?;
+            NSURL::URLWithString(&NSString::from_str(renderer.url())).ok_or_else(|| {
+                ServiceError::new(
+                    "invalid-renderer-url",
+                    "WKWebView rejected the EPUB renderer URL",
+                )
+            })?;
         let created = catch_unwind(AssertUnwindSafe(|| unsafe {
             let configuration = WKWebViewConfiguration::new(mtm);
             let manager = configuration.userContentController();
 
-            let user_script =
-                WKUserScript::initWithSource_injectionTime_forMainFrameOnly(
-                    WKUserScript::alloc(mtm),
-                    &NSString::from_str(IPC_SCRIPT),
-                    WKUserScriptInjectionTime::AtDocumentStart,
-                    true,
-                );
+            let user_script = WKUserScript::initWithSource_injectionTime_forMainFrameOnly(
+                WKUserScript::alloc(mtm),
+                &NSString::from_str(IPC_SCRIPT),
+                WKUserScriptInjectionTime::AtDocumentStart,
+                true,
+            );
             manager.addUserScript(&user_script);
             let loaded = Arc::new(AtomicBool::new(false));
             let pending = Rc::new(RefCell::new(Some(Vec::new())));
@@ -230,8 +219,7 @@ impl NativeWebView {
                 renderer.clone(),
                 mtm,
             );
-            let navigation_delegate =
-                NavigationDelegate::new(renderer.clone(), mtm);
+            let navigation_delegate = NavigationDelegate::new(renderer.clone(), mtm);
             let webview = WKWebView::initWithFrame_configuration(
                 WKWebView::alloc(mtm),
                 host.bounds(),
@@ -241,9 +229,7 @@ impl NativeWebView {
                 NSAutoresizingMaskOptions::ViewWidthSizable
                     | NSAutoresizingMaskOptions::ViewHeightSizable,
             );
-            webview.setNavigationDelegate(Some(ProtocolObject::from_ref(
-                &*navigation_delegate,
-            )));
+            webview.setNavigationDelegate(Some(ProtocolObject::from_ref(&*navigation_delegate)));
             host.addSubview(&webview);
 
             let request = NSURLRequest::requestWithURL(&renderer_url);
@@ -270,9 +256,9 @@ impl NativeWebView {
     }
 
     pub(super) fn focus(&self) -> bool {
-        self.webview.window().is_some_and(|window| {
-            window.makeFirstResponder(Some(&self.webview))
-        })
+        self.webview
+            .window()
+            .is_some_and(|window| window.makeFirstResponder(Some(&self.webview)))
     }
 
     pub(super) fn loaded(&self) -> bool {
@@ -291,11 +277,7 @@ impl NativeWebView {
         self.evaluate(source, Some(Box::new(callback)))
     }
 
-    fn evaluate(
-        &self,
-        source: &str,
-        callback: Option<ScriptCallback>,
-    ) -> Result<(), String> {
+    fn evaluate(&self, source: &str, callback: Option<ScriptCallback>) -> Result<(), String> {
         if let Some(pending) = self.pending.borrow_mut().as_mut() {
             pending.push(PendingScript {
                 source: source.to_owned(),
@@ -311,39 +293,29 @@ impl NativeWebView {
 impl Drop for NativeWebView {
     fn drop(&mut self) {
         unsafe {
-            self.manager.removeScriptMessageHandlerForName(
-                &NSString::from_str(IPC_HANDLER),
-            );
+            self.manager
+                .removeScriptMessageHandlerForName(&NSString::from_str(IPC_HANDLER));
             self.webview.setNavigationDelegate(None);
         }
         self.webview.removeFromSuperview();
     }
 }
 
-fn evaluate_now(
-    webview: &WKWebView,
-    source: &str,
-    callback: Option<ScriptCallback>,
-) {
+fn evaluate_now(webview: &WKWebView, source: &str, callback: Option<ScriptCallback>) {
     unsafe {
         if let Some(callback) = callback {
             let callback = Rc::new(RefCell::new(Some(callback)));
-            let completion = RcBlock::new(
-                move |value: *mut AnyObject, _error: *mut NSError| {
-                    if let Some(callback) = callback.borrow_mut().take() {
-                        callback(json_string(value));
-                    }
-                },
-            );
+            let completion = RcBlock::new(move |value: *mut AnyObject, _error: *mut NSError| {
+                if let Some(callback) = callback.borrow_mut().take() {
+                    callback(json_string(value));
+                }
+            });
             webview.evaluateJavaScript_completionHandler(
                 &NSString::from_str(source),
                 Some(&completion),
             );
         } else {
-            webview.evaluateJavaScript_completionHandler(
-                &NSString::from_str(source),
-                None,
-            );
+            webview.evaluateJavaScript_completionHandler(&NSString::from_str(source), None);
         }
     }
 }
@@ -359,28 +331,20 @@ fn json_string(value: *mut AnyObject) -> String {
         ) else {
             return String::new();
         };
-        NSString::initWithData_encoding(
-            NSString::alloc(),
-            &data,
-            NSUTF8StringEncoding,
-        )
-        .map(|value| value.to_string())
-        .unwrap_or_default()
+        NSString::initWithData_encoding(NSString::alloc(), &data, NSUTF8StringEncoding)
+            .map(|value| value.to_string())
+            .unwrap_or_default()
     }
 }
 
 pub(super) fn webview_version() -> Result<String, String> {
     use objc2_foundation::{NSBundle, NSDictionary};
 
-    let bundle =
-        NSBundle::bundleWithIdentifier(&NSString::from_str("com.apple.WebKit"))
-            .ok_or_else(|| {
-                "WebKit framework bundle is unavailable".to_owned()
-            })?;
-    let info: Retained<NSDictionary<NSString, AnyObject>> =
-        bundle.infoDictionary().ok_or_else(|| {
-            "WebKit bundle has no information dictionary".to_owned()
-        })?;
+    let bundle = NSBundle::bundleWithIdentifier(&NSString::from_str("com.apple.WebKit"))
+        .ok_or_else(|| "WebKit framework bundle is unavailable".to_owned())?;
+    let info: Retained<NSDictionary<NSString, AnyObject>> = bundle
+        .infoDictionary()
+        .ok_or_else(|| "WebKit bundle has no information dictionary".to_owned())?;
     let key = NSString::from_str("CFBundleVersion");
     let value = info
         .objectForKey(&key)

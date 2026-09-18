@@ -342,16 +342,8 @@ mod tests {
                 .unwrap()
                 .read_to_string(&mut page)
                 .unwrap();
-            assert!(page.contains(&format!(
-                "writing-mode: {}",
-                variant.writing_mode()
-            )));
-            assert!(
-                page.contains(&format!(
-                    "dir=\"{}\"",
-                    variant.content_direction()
-                ))
-            );
+            assert!(page.contains(&format!("writing-mode: {}", variant.writing_mode())));
+            assert!(page.contains(&format!("dir=\"{}\"", variant.content_direction())));
             assert!(page.contains(variant.sample()));
         }
     }

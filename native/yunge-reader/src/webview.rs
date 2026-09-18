@@ -22,19 +22,16 @@ mod surface;
 #[cfg(test)]
 use protocol::RENDERER_ACCELERATORS;
 use protocol::{
-    ACCELERATORS, CAPABILITIES, Control, Operation, Outgoing, PROTOCOL_VERSION,
-    Request, Response, ServiceError, response,
+    ACCELERATORS, CAPABILITIES, Control, Operation, Outgoing, PROTOCOL_VERSION, Request, Response,
+    ServiceError, response,
 };
 use renderer::{
-    RendererOrigin, RendererSearchCallback,
-    appearance_script as publication_appearance_script,
+    RendererOrigin, RendererSearchCallback, appearance_script as publication_appearance_script,
     clear_selection_script as publication_clear_selection_script,
     current_selection_response as renderer_current_selection_response,
     current_selection_script as publication_current_selection_script,
-    event_for as renderer_event_for,
-    navigation_script as publication_navigation_script,
-    open_script as publication_open_script,
-    scroll_bars_script as publication_scroll_bars_script,
+    event_for as renderer_event_for, navigation_script as publication_navigation_script,
+    open_script as publication_open_script, scroll_bars_script as publication_scroll_bars_script,
     search_callback_for as renderer_search_callback_for,
     search_response as renderer_search_response,
     search_result_script as publication_search_result_script,
@@ -42,18 +39,15 @@ use renderer::{
     selection_text_response as renderer_selection_text_response,
     selection_text_script as publication_selection_text_script,
     set_selection_script as publication_set_selection_script,
-    style_script as publication_style_script,
-    zoom_script as publication_zoom_script,
+    style_script as publication_style_script, zoom_script as publication_zoom_script,
 };
 #[cfg(test)]
 use renderer::{
-    app_navigation_allowed, app_renderer_source_allowed,
-    event as renderer_event, search_callback as renderer_search_callback,
-    shell_ready as renderer_shell_ready,
+    app_navigation_allowed, app_renderer_source_allowed, event as renderer_event,
+    search_callback as renderer_search_callback, shell_ready as renderer_shell_ready,
 };
 use surface::{
-    Bounds, NativeSurface, ParentWindow, SurfaceCallbacks, SurfaceEvent,
-    SurfaceRuntime,
+    Bounds, NativeSurface, ParentWindow, SurfaceCallbacks, SurfaceEvent, SurfaceRuntime,
 };
 
 const MAX_EPUB_LOCATOR_TEXT_BYTES: usize = 3_072;
@@ -119,10 +113,7 @@ enum ViewEventPayload {
     FocusLost,
     Location {
         location: EpubLocator,
-        #[serde(
-            rename = "outline-index",
-            skip_serializing_if = "Option::is_none"
-        )]
+        #[serde(rename = "outline-index", skip_serializing_if = "Option::is_none")]
         outline_index: Option<u32>,
         user: bool,
     },
@@ -135,10 +126,7 @@ enum ViewEventPayload {
     PublicationReady {
         location: EpubLocator,
         outline: EpubOutline,
-        #[serde(
-            rename = "outline-index",
-            skip_serializing_if = "Option::is_none"
-        )]
+        #[serde(rename = "outline-index", skip_serializing_if = "Option::is_none")]
         outline_index: Option<u32>,
     },
     ScrollBarsError {
@@ -300,9 +288,9 @@ impl<'de> Deserialize<'de> for EpubColor {
         let value = String::deserialize(deserializer)?;
         let valid = value.len() == 7
             && value.starts_with('#')
-            && value.as_bytes()[1..].iter().all(|byte| {
-                byte.is_ascii_digit() || (b'a'..=b'f').contains(byte)
-            });
+            && value.as_bytes()[1..]
+                .iter()
+                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(byte));
         if valid {
             Ok(Self(value))
         } else {
@@ -337,17 +325,14 @@ impl<'de> Deserialize<'de> for EpubAppearance {
         D: Deserializer<'de>,
     {
         let value = Value::deserialize(deserializer)?;
-        let mut fields = value.as_object().cloned().ok_or_else(|| {
-            serde::de::Error::custom("EPUB appearance must be an object")
-        })?;
+        let mut fields = value
+            .as_object()
+            .cloned()
+            .ok_or_else(|| serde::de::Error::custom("EPUB appearance must be an object"))?;
         let mode = fields
             .remove("mode")
             .and_then(|value| value.as_str().map(str::to_owned))
-            .ok_or_else(|| {
-                serde::de::Error::custom(
-                    "EPUB appearance mode must be a string",
-                )
-            })?;
+            .ok_or_else(|| serde::de::Error::custom("EPUB appearance mode must be a string"))?;
         match mode.as_str() {
             "original" if fields.is_empty() => Ok(Self::Original),
             "follow-emacs" if fields.len() == 6 => {
@@ -356,15 +341,12 @@ impl<'de> Deserialize<'de> for EpubAppearance {
                         .remove(key)
                         .ok_or_else(|| format!("missing EPUB color {key}"))
                         .and_then(|value| {
-                            serde_json::from_value(value)
-                                .map_err(|error| error.to_string())
+                            serde_json::from_value(value).map_err(|error| error.to_string())
                         })
                 };
                 let appearance = Self::FollowEmacs {
-                    foreground: color("foreground")
-                        .map_err(serde::de::Error::custom)?,
-                    background: color("background")
-                        .map_err(serde::de::Error::custom)?,
+                    foreground: color("foreground").map_err(serde::de::Error::custom)?,
+                    background: color("background").map_err(serde::de::Error::custom)?,
                     link: color("link").map_err(serde::de::Error::custom)?,
                     selection_foreground: color("selection-foreground")
                         .map_err(serde::de::Error::custom)?,
@@ -376,9 +358,7 @@ impl<'de> Deserialize<'de> for EpubAppearance {
                 if fields.is_empty() {
                     Ok(appearance)
                 } else {
-                    Err(serde::de::Error::custom(
-                        "unknown EPUB appearance color",
-                    ))
+                    Err(serde::de::Error::custom("unknown EPUB appearance color"))
                 }
             }
             _ => Err(serde::de::Error::custom(
@@ -555,9 +535,10 @@ impl EpubLocator {
                 "EPUB locator href is not a canonical relative path",
             ));
         }
-        if self.fraction.is_some_and(|value| {
-            !value.is_finite() || !(0.0..=1.0).contains(&value)
-        }) {
+        if self
+            .fraction
+            .is_some_and(|value| !value.is_finite() || !(0.0..=1.0).contains(&value))
+        {
             return Err(ServiceError::new(
                 "invalid-epub-location",
                 "EPUB locator fraction must be between zero and one",
@@ -567,8 +548,7 @@ impl EpubLocator {
             (None, None) => {}
             (Some(x), Some(y))
                 if [x, y].into_iter().all(|value| {
-                    value.is_finite()
-                        && (0.0..=MAX_EPUB_VIEWPORT_COORDINATE).contains(&value)
+                    value.is_finite() && (0.0..=MAX_EPUB_VIEWPORT_COORDINATE).contains(&value)
                 }) => {}
             _ => {
                 return Err(ServiceError::new(
@@ -595,13 +575,10 @@ impl Default for EpubStyle {
 impl EpubStyle {
     fn validate(self) -> Result<Self, ServiceError> {
         if !self.font_scale.is_finite()
-            || !(MIN_EPUB_FONT_SCALE..=MAX_EPUB_FONT_SCALE)
-                .contains(&self.font_scale)
+            || !(MIN_EPUB_FONT_SCALE..=MAX_EPUB_FONT_SCALE).contains(&self.font_scale)
             || !self.line_height.is_finite()
-            || !(MIN_EPUB_LINE_HEIGHT..=MAX_EPUB_LINE_HEIGHT)
-                .contains(&self.line_height)
-            || !(MIN_EPUB_CONTENT_WIDTH..=MAX_EPUB_CONTENT_WIDTH)
-                .contains(&self.content_width)
+            || !(MIN_EPUB_LINE_HEIGHT..=MAX_EPUB_LINE_HEIGHT).contains(&self.line_height)
+            || !(MIN_EPUB_CONTENT_WIDTH..=MAX_EPUB_CONTENT_WIDTH).contains(&self.content_width)
             || !self.side_padding.is_finite()
             || !(0.0..=MAX_EPUB_SIDE_PADDING).contains(&self.side_padding)
         {
@@ -624,8 +601,7 @@ impl EpubZoom {
     fn validate(self) -> Result<Self, ServiceError> {
         if let Self::Scale(scale) = self
             && (!scale.is_finite()
-                || !(MIN_EPUB_FIXED_SCALE..=MAX_EPUB_FIXED_SCALE)
-                    .contains(&scale))
+                || !(MIN_EPUB_FIXED_SCALE..=MAX_EPUB_FIXED_SCALE).contains(&scale))
         {
             return Err(ServiceError::new(
                 "invalid-epub-zoom",
@@ -708,9 +684,7 @@ impl EpubOutline {
         for item in &self.items {
             text_bytes = text_bytes
                 .checked_add(item.title.len())
-                .and_then(|value| {
-                    value.checked_add(item.href.as_ref().map_or(0, String::len))
-                })
+                .and_then(|value| value.checked_add(item.href.as_ref().map_or(0, String::len)))
                 .ok_or_else(|| {
                     ServiceError::new(
                         "invalid-epub-outline",
@@ -774,9 +748,7 @@ impl EpubSelection {
 impl ViewSelectionTextParams {
     fn validate(mut self) -> Result<Self, ServiceError> {
         self.selection = self.selection.validate()?;
-        if !(1..=MAX_EPUB_SELECTION_CHARACTER_LIMIT)
-            .contains(&self.character_limit)
-        {
+        if !(1..=MAX_EPUB_SELECTION_CHARACTER_LIMIT).contains(&self.character_limit) {
             return Err(ServiceError::new(
                 "invalid-selection-limit",
                 format!(
@@ -852,8 +824,7 @@ impl ViewSearchParams {
                 ),
             ));
         }
-        self.cursor =
-            self.cursor.map(EpubSearchCursor::validate).transpose()?;
+        self.cursor = self.cursor.map(EpubSearchCursor::validate).transpose()?;
         self.origin = self.origin.map(EpubLocator::validate).transpose()?;
         if self.cursor.is_some() && self.origin.is_some() {
             return Err(ServiceError::new(
@@ -916,10 +887,7 @@ fn valid_epub_href(value: &str, allow_fragment: bool) -> bool {
 }
 
 impl Service {
-    fn new(
-        outgoing_sender: Sender<Outgoing>,
-        incoming_sender: Sender<Incoming>,
-    ) -> Self {
+    fn new(outgoing_sender: Sender<Outgoing>, incoming_sender: Sender<Incoming>) -> Self {
         Self {
             views: HashMap::new(),
             surfaces: SurfaceRuntime::new(),
@@ -930,13 +898,10 @@ impl Service {
         }
     }
 
-    fn parse<T: for<'de> Deserialize<'de>>(
-        value: Value,
-    ) -> Result<T, ServiceError> {
+    fn parse<T: for<'de> Deserialize<'de>>(value: Value) -> Result<T, ServiceError> {
         let value = if value.is_null() { json!({}) } else { value };
-        serde_json::from_value(value).map_err(|error| {
-            ServiceError::new("invalid-params", error.to_string())
-        })
+        serde_json::from_value(value)
+            .map_err(|error| ServiceError::new("invalid-params", error.to_string()))
     }
 
     fn info(&self, params: Value) -> Result<Value, ServiceError> {
@@ -973,11 +938,9 @@ impl Service {
             renderer.clone(),
             SurfaceCallbacks::new(
                 move |request| {
-                    if let Some(callback) = renderer_search_callback_for(
-                        view_id,
-                        &callback_origin,
-                        &request,
-                    ) {
+                    if let Some(callback) =
+                        renderer_search_callback_for(view_id, &callback_origin, &request)
+                    {
                         if renderer_callbacks
                             .send(Incoming::RendererSearch(callback))
                             .is_ok()
@@ -991,8 +954,7 @@ impl Service {
                     }
                 },
                 move |event| {
-                    let _ = surface_events
-                        .send(Outgoing::Event(surface_view_event(event)));
+                    let _ = surface_events.send(Outgoing::Event(surface_view_event(event)));
                 },
             ),
         )?;
@@ -1042,18 +1004,13 @@ impl Service {
         Ok(json!({ "view": params.view, "focused": false }))
     }
 
-    fn clear_selection(
-        &mut self,
-        params: Value,
-    ) -> Result<Value, ServiceError> {
+    fn clear_selection(&mut self, params: Value) -> Result<Value, ServiceError> {
         let params: ViewParams = Self::parse(params)?;
         let script = publication_clear_selection_script(params.view);
         self.view(params.view)?
             .surface
             .evaluate_script(&script)
-            .map_err(|error| {
-                ServiceError::new("view-update-failed", error.to_string())
-            })?;
+            .map_err(|error| ServiceError::new("view-update-failed", error.to_string()))?;
         Ok(json!({ "view": params.view, "selection": false }))
     }
 
@@ -1068,9 +1025,9 @@ impl Service {
             ));
         }
         let script = publication_set_selection_script(params.view, &selection);
-        view.surface.evaluate_script(&script).map_err(|error| {
-            ServiceError::new("view-update-failed", error.to_string())
-        })?;
+        view.surface
+            .evaluate_script(&script)
+            .map_err(|error| ServiceError::new("view-update-failed", error.to_string()))?;
         Ok(json!({ "view": params.view, "selection": true }))
     }
 
@@ -1080,8 +1037,7 @@ impl Service {
         revision: Option<Value>,
         params: Value,
     ) -> Result<(), ServiceError> {
-        let params =
-            Self::parse::<ViewSelectionTextParams>(params)?.validate()?;
+        let params = Self::parse::<ViewSelectionTextParams>(params)?.validate()?;
         let view = self.view(params.view)?;
         if view.publication.is_none() {
             return Err(ServiceError::new(
@@ -1095,18 +1051,12 @@ impl Service {
         let sender = self.outgoing_sender.clone();
         view.surface
             .evaluate_script_with_callback(&script, move |value| {
-                let response = renderer_selection_text_response(
-                    id,
-                    offset,
-                    character_limit,
-                    &value,
-                )
-                .with_revision(revision);
+                let response =
+                    renderer_selection_text_response(id, offset, character_limit, &value)
+                        .with_revision(revision);
                 let _ = sender.send(Outgoing::Response(response));
             })
-            .map_err(|error| {
-                ServiceError::new("selection-text-failed", error.to_string())
-            })?;
+            .map_err(|error| ServiceError::new("selection-text-failed", error.to_string()))?;
         Ok(())
     }
 
@@ -1128,13 +1078,11 @@ impl Service {
         let sender = self.outgoing_sender.clone();
         view.surface
             .evaluate_script_with_callback(&script, move |value| {
-                let response = renderer_current_selection_response(id, &value)
-                    .with_revision(revision);
+                let response =
+                    renderer_current_selection_response(id, &value).with_revision(revision);
                 let _ = sender.send(Outgoing::Response(response));
             })
-            .map_err(|error| {
-                ServiceError::new("current-selection-failed", error.to_string())
-            })?;
+            .map_err(|error| ServiceError::new("current-selection-failed", error.to_string()))?;
         Ok(())
     }
 
@@ -1162,18 +1110,14 @@ impl Service {
         let script = publication_search_script(id, &params);
         self.pending_searches
             .insert(id, PendingSearch { params, revision });
-        if let Err(error) = self.view(view_id)?.surface.evaluate_script(&script)
-        {
+        if let Err(error) = self.view(view_id)?.surface.evaluate_script(&script) {
             self.pending_searches.remove(&id);
             return Err(ServiceError::new("search-failed", error.to_string()));
         }
         Ok(())
     }
 
-    fn set_search_result(
-        &mut self,
-        params: Value,
-    ) -> Result<Value, ServiceError> {
+    fn set_search_result(&mut self, params: Value) -> Result<Value, ServiceError> {
         let params: ViewSearchResultParams = Self::parse(params)?;
         let selection = if params.selection.is_null() {
             None
@@ -1187,24 +1131,18 @@ impl Service {
                 format!("view {} has no attached publication", params.view),
             ));
         }
-        let script = publication_search_result_script(
-            params.view,
-            selection.as_ref(),
-            params.reveal,
-        );
-        view.surface.evaluate_script(&script).map_err(|error| {
-            ServiceError::new("view-update-failed", error.to_string())
-        })?;
+        let script =
+            publication_search_result_script(params.view, selection.as_ref(), params.reveal);
+        view.surface
+            .evaluate_script(&script)
+            .map_err(|error| ServiceError::new("view-update-failed", error.to_string()))?;
         Ok(json!({
             "view": params.view,
             "selection": selection.is_some(),
         }))
     }
 
-    fn complete_search(
-        &mut self,
-        callback: RendererSearchCallback,
-    ) -> Option<Response> {
+    fn complete_search(&mut self, callback: RendererSearchCallback) -> Option<Response> {
         let pending = self.pending_searches.get(&callback.request)?;
         if pending.params.view != callback.view {
             return None;
@@ -1217,13 +1155,9 @@ impl Service {
         )
     }
 
-    fn open_view_publication(
-        &mut self,
-        params: Value,
-    ) -> Result<Value, ServiceError> {
+    fn open_view_publication(&mut self, params: Value) -> Result<Value, ServiceError> {
         let params: ViewPublicationParams = Self::parse(params)?;
-        let location =
-            params.location.map(EpubLocator::validate).transpose()?;
+        let location = params.location.map(EpubLocator::validate).transpose()?;
         let style = params.style.map(EpubStyle::validate).transpose()?;
         let zoom = params.zoom.map(EpubZoom::validate).transpose()?;
         self.view(params.view)?;
@@ -1247,12 +1181,7 @@ impl Service {
         self.view(params.view)?
             .surface
             .evaluate_script(&script)
-            .map_err(|error| {
-                ServiceError::new(
-                    "publication-render-failed",
-                    error.to_string(),
-                )
-            })?;
+            .map_err(|error| ServiceError::new("publication-render-failed", error.to_string()))?;
         let view = self.view_mut(params.view)?;
         view.publication = Some(params.publication);
         view.layout = Some(params.layout);
@@ -1263,10 +1192,7 @@ impl Service {
         }))
     }
 
-    fn set_view_appearance(
-        &mut self,
-        params: Value,
-    ) -> Result<Value, ServiceError> {
+    fn set_view_appearance(&mut self, params: Value) -> Result<Value, ServiceError> {
         let params: ViewAppearanceParams = Self::parse(params)?;
         let view = self.view(params.view)?;
         if view.publication.is_none() {
@@ -1275,11 +1201,10 @@ impl Service {
                 format!("view {} has no attached publication", params.view),
             ));
         }
-        let script =
-            publication_appearance_script(params.view, &params.appearance);
-        view.surface.evaluate_script(&script).map_err(|error| {
-            ServiceError::new("view-update-failed", error.to_string())
-        })?;
+        let script = publication_appearance_script(params.view, &params.appearance);
+        view.surface
+            .evaluate_script(&script)
+            .map_err(|error| ServiceError::new("view-update-failed", error.to_string()))?;
         Ok(json!({
             "view": params.view,
             "appearance": params.appearance,
@@ -1315,14 +1240,10 @@ impl Service {
                 format!("view {} has no attached publication", params.view),
             ));
         }
-        let script = publication_navigation_script(
-            params.view,
-            params.command,
-            location.as_ref(),
-        );
-        view.surface.evaluate_script(&script).map_err(|error| {
-            ServiceError::new("view-update-failed", error.to_string())
-        })?;
+        let script = publication_navigation_script(params.view, params.command, location.as_ref());
+        view.surface
+            .evaluate_script(&script)
+            .map_err(|error| ServiceError::new("view-update-failed", error.to_string()))?;
         Ok(json!({
             "view": params.view,
             "command": params.command,
@@ -1347,9 +1268,9 @@ impl Service {
             ));
         }
         let script = publication_style_script(params.view, &style);
-        view.surface.evaluate_script(&script).map_err(|error| {
-            ServiceError::new("view-update-failed", error.to_string())
-        })?;
+        view.surface
+            .evaluate_script(&script)
+            .map_err(|error| ServiceError::new("view-update-failed", error.to_string()))?;
         Ok(json!({
             "view": params.view,
             "style": style,
@@ -1373,19 +1294,16 @@ impl Service {
             ));
         }
         let script = publication_zoom_script(params.view, &zoom);
-        view.surface.evaluate_script(&script).map_err(|error| {
-            ServiceError::new("view-update-failed", error.to_string())
-        })?;
+        view.surface
+            .evaluate_script(&script)
+            .map_err(|error| ServiceError::new("view-update-failed", error.to_string()))?;
         Ok(json!({
             "view": params.view,
             "zoom": zoom,
         }))
     }
 
-    fn set_view_scroll_bars(
-        &mut self,
-        params: Value,
-    ) -> Result<Value, ServiceError> {
+    fn set_view_scroll_bars(&mut self, params: Value) -> Result<Value, ServiceError> {
         let params: ViewScrollBarsParams = Self::parse(params)?;
         let view = self.view(params.view)?;
         if view.publication.is_none() {
@@ -1394,11 +1312,10 @@ impl Service {
                 format!("view {} has no attached publication", params.view),
             ));
         }
-        let script =
-            publication_scroll_bars_script(params.view, params.visible);
-        view.surface.evaluate_script(&script).map_err(|error| {
-            ServiceError::new("view-update-failed", error.to_string())
-        })?;
+        let script = publication_scroll_bars_script(params.view, params.visible);
+        view.surface
+            .evaluate_script(&script)
+            .map_err(|error| ServiceError::new("view-update-failed", error.to_string()))?;
         Ok(json!({
             "view": params.view,
             "visible": params.visible,
@@ -1413,9 +1330,7 @@ impl Service {
         let pending = self
             .pending_searches
             .iter()
-            .filter_map(|(id, search)| {
-                (search.params.view == params.view).then_some(*id)
-            })
+            .filter_map(|(id, search)| (search.params.view == params.view).then_some(*id))
             .collect::<Vec<_>>();
         for id in pending {
             if let Some(pending) = self.pending_searches.remove(&id) {
@@ -1458,12 +1373,8 @@ impl Service {
             Err(error) => {
                 return (
                     Some(
-                        Response::failure(
-                            Some(request.id),
-                            error.code,
-                            error.message,
-                        )
-                        .with_revision(request.revision),
+                        Response::failure(Some(request.id), error.code, error.message)
+                            .with_revision(request.revision),
                     ),
                     Control::Continue,
                 );
@@ -1486,25 +1397,17 @@ impl Service {
         }
         if matches!(
             operation,
-            Operation::ViewSearch
-                | Operation::ViewCurrentSelection
-                | Operation::ViewSelectionText
+            Operation::ViewSearch | Operation::ViewCurrentSelection | Operation::ViewSelectionText
         ) {
             let revision = request.revision;
             let result = match operation {
-                Operation::ViewSearch => {
-                    self.search(request.id, revision.clone(), request.params)
+                Operation::ViewSearch => self.search(request.id, revision.clone(), request.params),
+                Operation::ViewCurrentSelection => {
+                    self.current_selection(request.id, revision.clone(), request.params)
                 }
-                Operation::ViewCurrentSelection => self.current_selection(
-                    request.id,
-                    revision.clone(),
-                    request.params,
-                ),
-                Operation::ViewSelectionText => self.selection_text(
-                    request.id,
-                    revision.clone(),
-                    request.params,
-                ),
+                Operation::ViewSelectionText => {
+                    self.selection_text(request.id, revision.clone(), request.params)
+                }
                 _ => unreachable!("matched asynchronous operation"),
             };
             let response = result.err().map(|error| {
@@ -1517,25 +1420,15 @@ impl Service {
             Operation::ViewInfo => self.info(request.params),
             Operation::ViewCreate => self.create_view(request.params),
             Operation::ViewBounds => self.set_bounds(request.params),
-            Operation::ViewAppearance => {
-                self.set_view_appearance(request.params)
-            }
-            Operation::ViewClearSelection => {
-                self.clear_selection(request.params)
-            }
+            Operation::ViewAppearance => self.set_view_appearance(request.params),
+            Operation::ViewClearSelection => self.clear_selection(request.params),
             Operation::ViewNavigate => self.navigate_view(request.params),
-            Operation::ViewSearchResult => {
-                self.set_search_result(request.params)
-            }
+            Operation::ViewSearchResult => self.set_search_result(request.params),
             Operation::ViewSetSelection => self.set_selection(request.params),
-            Operation::ViewOpenPublication => {
-                self.open_view_publication(request.params)
-            }
+            Operation::ViewOpenPublication => self.open_view_publication(request.params),
             Operation::ViewStyle => self.set_view_style(request.params),
             Operation::ViewZoom => self.set_view_zoom(request.params),
-            Operation::ViewScrollBars => {
-                self.set_view_scroll_bars(request.params)
-            }
+            Operation::ViewScrollBars => self.set_view_scroll_bars(request.params),
             Operation::ViewVisible => self.set_visible(request.params),
             Operation::ViewFocus => self.focus(request.params),
             Operation::ViewFocusParent => self.focus_parent(request.params),
@@ -1572,12 +1465,8 @@ fn surface_view_event(surface: SurfaceEvent) -> ViewEvent {
                 repeat,
             },
         ),
-        SurfaceEvent::FocusGained { view } => {
-            ViewEvent::new(view, ViewEventPayload::FocusGained)
-        }
-        SurfaceEvent::FocusLost { view } => {
-            ViewEvent::new(view, ViewEventPayload::FocusLost)
-        }
+        SurfaceEvent::FocusGained { view } => ViewEvent::new(view, ViewEventPayload::FocusGained),
+        SurfaceEvent::FocusLost { view } => ViewEvent::new(view, ViewEventPayload::FocusLost),
     }
 }
 
@@ -1626,20 +1515,14 @@ fn ready_message(version: &Result<String, String>) -> Value {
     ready
 }
 
-fn write_message(
-    mut output: impl Write,
-    message: &impl Serialize,
-) -> Result<(), Error> {
+fn write_message(mut output: impl Write, message: &impl Serialize) -> Result<(), Error> {
     serde_json::to_writer(&mut output, message)?;
     output.write_all(b"\n")?;
     output.flush()?;
     Ok(())
 }
 
-fn write_outgoing_message(
-    mut output: impl Write,
-    message: &Outgoing,
-) -> Result<(), Error> {
+fn write_outgoing_message(mut output: impl Write, message: &Outgoing) -> Result<(), Error> {
     if matches!(message, Outgoing::Wake) {
         output.write_all(b"\n")?;
         output.flush()?;
@@ -1655,9 +1538,7 @@ pub struct EmbeddedService {
 }
 
 impl EmbeddedService {
-    pub fn start(
-        mut output: impl Write + Send + 'static,
-    ) -> Result<Self, Error> {
+    pub fn start(mut output: impl Write + Send + 'static) -> Result<Self, Error> {
         let (incoming_sender, incoming_receiver) = mpsc::channel();
         let (outgoing_sender, outgoing_receiver) = mpsc::channel();
         let service = Service::new(outgoing_sender.clone(), incoming_sender);
@@ -1699,9 +1580,7 @@ impl EmbeddedService {
     pub fn pump(&mut self) -> Result<(), Error> {
         while let Ok(incoming) = self.incoming_receiver.try_recv() {
             let response = match incoming {
-                Incoming::RendererSearch(callback) => {
-                    self.service.complete_search(callback)
-                }
+                Incoming::RendererSearch(callback) => self.service.complete_search(callback),
             };
             if let Some(response) = response {
                 self.outgoing_sender.send(Outgoing::Response(response))?;
@@ -1754,10 +1633,7 @@ mod tests {
     }
 
     fn renderer_event_value(view: u64, request: &HttpRequest<String>) -> Value {
-        serde_json::to_value(
-            renderer_event(view, request).expect("valid renderer event"),
-        )
-        .unwrap()
+        serde_json::to_value(renderer_event(view, request).expect("valid renderer event")).unwrap()
     }
 
     fn assert_renderer_error_event(
@@ -1914,9 +1790,7 @@ mod tests {
 
         let selection_clear = HttpRequest::builder()
             .uri(APP_URL)
-            .body(
-                r#"{"protocol":2,"event":"selection","selection":null}"#.into(),
-            )
+            .body(r#"{"protocol":2,"event":"selection","selection":null}"#.into())
             .unwrap();
         assert_eq!(
             renderer_event_value(7, &selection_clear),
@@ -1946,12 +1820,7 @@ mod tests {
                     .into(),
             )
             .unwrap();
-        assert_renderer_error_event(
-            8,
-            &navigation_error,
-            "navigation-error",
-            "bad target",
-        );
+        assert_renderer_error_event(8, &navigation_error, "navigation-error", "bad target");
 
         let appearance_error = HttpRequest::builder()
             .uri(APP_URL)
@@ -1961,12 +1830,7 @@ mod tests {
                     .into(),
             )
             .unwrap();
-        assert_renderer_error_event(
-            8,
-            &appearance_error,
-            "appearance-error",
-            "bad appearance",
-        );
+        assert_renderer_error_event(8, &appearance_error, "appearance-error", "bad appearance");
 
         let style_error = HttpRequest::builder()
             .uri(APP_URL)
@@ -1976,18 +1840,11 @@ mod tests {
                     .into(),
             )
             .unwrap();
-        assert_renderer_error_event(
-            8,
-            &style_error,
-            "style-error",
-            "bad style",
-        );
+        assert_renderer_error_event(8, &style_error, "style-error", "bad style");
 
         let zoom_changed = HttpRequest::builder()
             .uri(APP_URL)
-            .body(
-                r#"{"protocol":2,"event":"zoom-changed","scale":1.25}"#.into(),
-            )
+            .body(r#"{"protocol":2,"event":"zoom-changed","scale":1.25}"#.into())
             .unwrap();
         assert_eq!(
             renderer_event_value(8, &zoom_changed),
@@ -2032,8 +1889,7 @@ mod tests {
                 "repeat": false,
             })
             .to_string();
-            let accelerator =
-                HttpRequest::builder().uri(APP_URL).body(payload).unwrap();
+            let accelerator = HttpRequest::builder().uri(APP_URL).body(payload).unwrap();
             assert_eq!(
                 renderer_event_value(8, &accelerator),
                 json!({
@@ -2098,9 +1954,7 @@ mod tests {
                 .unwrap(),
             HttpRequest::builder()
                 .uri(APP_URL)
-                .body(
-                    r#"{"protocol":2,"event":"accelerator","key":"j"}"#.into(),
-                )
+                .body(r#"{"protocol":2,"event":"accelerator","key":"j"}"#.into())
                 .unwrap(),
             HttpRequest::builder()
                 .uri(APP_URL)
@@ -2193,9 +2047,7 @@ mod tests {
                 .unwrap(),
             HttpRequest::builder()
                 .uri(APP_URL)
-                .body(
-                    r#"{"protocol":2,"event":"zoom-changed","scale":0}"#.into(),
-                )
+                .body(r#"{"protocol":2,"event":"zoom-changed","scale":0}"#.into())
                 .unwrap(),
             HttpRequest::builder()
                 .uri(APP_URL)
@@ -2754,8 +2606,7 @@ mod tests {
             },
         })
         .to_string();
-        let unavailable =
-            renderer_search_response(13, &params, &unavailable_value);
+        let unavailable = renderer_search_response(13, &params, &unavailable_value);
         assert_eq!(unavailable.error.unwrap().code, "search-unavailable");
     }
 
@@ -2795,8 +2646,7 @@ mod tests {
     #[test]
     fn outgoing_messages_preserve_the_public_ndjson_shapes() {
         let response = serde_json::to_value(Outgoing::Response(
-            Response::success(3, json!({ "scheduled": true }))
-                .with_revision(Some(json!(11))),
+            Response::success(3, json!({ "scheduled": true })).with_revision(Some(json!(11))),
         ))
         .unwrap();
         assert_eq!(response["id"], 3);
@@ -2895,14 +2745,11 @@ mod tests {
             );
         }
 
-        let (style, zoom) =
-            view_layout_options(PublicationLayout::Reflowable, None, None)
-                .unwrap();
+        let (style, zoom) = view_layout_options(PublicationLayout::Reflowable, None, None).unwrap();
         assert_eq!(style, Some(EpubStyle::default()));
         assert_eq!(zoom, None);
         let (style, zoom) =
-            view_layout_options(PublicationLayout::PrePaginated, None, None)
-                .unwrap();
+            view_layout_options(PublicationLayout::PrePaginated, None, None).unwrap();
         assert_eq!(style, None);
         assert_eq!(zoom, Some(EpubZoom::default()));
         assert_eq!(
@@ -3010,10 +2857,7 @@ mod tests {
                 ..default
             },
         ] {
-            assert_eq!(
-                invalid.validate().unwrap_err().code,
-                "invalid-epub-style"
-            );
+            assert_eq!(invalid.validate().unwrap_err().code, "invalid-epub-style");
         }
 
         assert!(
@@ -3059,10 +2903,7 @@ mod tests {
                 x: None,
                 y: None,
             };
-            assert_eq!(
-                invalid.validate().unwrap_err().code,
-                "invalid-epub-target"
-            );
+            assert_eq!(invalid.validate().unwrap_err().code, "invalid-epub-target");
         }
     }
 
@@ -3116,10 +2957,7 @@ mod tests {
             }],
             truncated: false,
         };
-        assert_eq!(
-            invalid.validate().unwrap_err().code,
-            "invalid-epub-outline"
-        );
+        assert_eq!(invalid.validate().unwrap_err().code, "invalid-epub-outline");
 
         let oversized = EpubOutline {
             items: (0..385)

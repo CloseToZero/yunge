@@ -46,10 +46,7 @@ fn ready_message() -> Message {
     Message::Ready { build_id: BUILD_ID }
 }
 
-fn write_message(
-    mut output: impl Write,
-    message: &Message,
-) -> Result<(), Error> {
+fn write_message(mut output: impl Write, message: &Message) -> Result<(), Error> {
     // One flushed object per line lets Emacs consume a long-lived watch
     // process without waiting for a full output buffer.
     serde_json::to_writer(&mut output, message)?;
@@ -58,9 +55,7 @@ fn write_message(
     Ok(())
 }
 
-fn roots(
-    arguments: impl Iterator<Item = String>,
-) -> Result<Vec<(String, PathBuf)>, Error> {
+fn roots(arguments: impl Iterator<Item = String>) -> Result<Vec<(String, PathBuf)>, Error> {
     let arguments: Vec<_> = arguments.collect();
     if arguments.is_empty() || arguments.len() % 2 != 0 {
         return Err("expected one or more YIYU ROOT pairs".into());
@@ -72,23 +67,18 @@ fn roots(
 }
 
 fn sorted_entries(directory: &Path) -> Result<Vec<fs::DirEntry>, Error> {
-    let mut entries =
-        fs::read_dir(directory)?.collect::<Result<Vec<_>, _>>()?;
+    let mut entries = fs::read_dir(directory)?.collect::<Result<Vec<_>, _>>()?;
     entries.sort_by_key(|entry| entry.file_name());
     Ok(entries)
 }
 
 fn protocol_path(path: &Path) -> Result<String, Error> {
-    path.to_str().map(str::to_owned).ok_or_else(|| {
-        format!("filesystem path is not valid UTF-8: {}", path.display()).into()
-    })
+    path.to_str()
+        .map(str::to_owned)
+        .ok_or_else(|| format!("filesystem path is not valid UTF-8: {}", path.display()).into())
 }
 
-fn scan_directory(
-    yiyu: &str,
-    directory: &Path,
-    states: &mut Vec<Message>,
-) -> Result<(), Error> {
+fn scan_directory(yiyu: &str, directory: &Path, states: &mut Vec<Message>) -> Result<(), Error> {
     for entry in sorted_entries(directory)? {
         let path = entry.path();
         let file_type = entry.file_type()?;
@@ -230,8 +220,7 @@ mod tests {
 
     #[test]
     fn scan_finds_org_files_below_the_root() {
-        let root = env::temp_dir()
-            .join(format!("fangcun-watch-test-{}", std::process::id()));
+        let root = env::temp_dir().join(format!("fangcun-watch-test-{}", std::process::id()));
         let _ = fs::remove_dir_all(&root);
         let nested = root.join("nested");
         fs::create_dir_all(&nested).unwrap();
@@ -323,8 +312,8 @@ mod tests {
 
     #[test]
     fn watcher_reports_org_files_below_the_root() {
-        let root = env::temp_dir()
-            .join(format!("fangcun-watch-notify-test-{}", std::process::id()));
+        let root =
+            env::temp_dir().join(format!("fangcun-watch-notify-test-{}", std::process::id()));
         let _ = fs::remove_dir_all(&root);
         let nested = root.join("nested");
         fs::create_dir_all(&nested).unwrap();
@@ -342,8 +331,7 @@ mod tests {
             let timeout = deadline.saturating_duration_since(Instant::now());
             let event = receiver.recv_timeout(timeout).unwrap().unwrap();
             if event.paths.iter().any(|path| {
-                fs::canonicalize(path)
-                    .is_ok_and(|candidate| candidate == canonical_note)
+                fs::canonicalize(path).is_ok_and(|candidate| candidate == canonical_note)
             }) {
                 reported = true;
                 break;
@@ -376,8 +364,7 @@ mod tests {
     fn unrepresentable_paths_are_never_reported_lossily() {
         let path = non_utf8_org_path();
         assert!(protocol_path(&path).is_err());
-        let event =
-            Event::new(EventKind::Modify(ModifyKind::Any)).add_path(path);
+        let event = Event::new(EventKind::Modify(ModifyKind::Any)).add_path(path);
         assert!(matches!(event_message(event), Some(Message::Rescan)));
     }
 }

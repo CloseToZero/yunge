@@ -169,9 +169,9 @@ impl<'de> Deserialize<'de> for ThemeColor {
         let value = String::deserialize(deserializer)?;
         let valid = value.len() == 7
             && value.starts_with('#')
-            && value.as_bytes()[1..].iter().all(|byte| {
-                byte.is_ascii_digit() || (b'a'..=b'f').contains(byte)
-            });
+            && value.as_bytes()[1..]
+                .iter()
+                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(byte));
         if !valid {
             return Err(serde::de::Error::custom(
                 "PDF colors must be lowercase #rrggbb values",
@@ -202,15 +202,14 @@ impl<'de> Deserialize<'de> for PdfAppearance {
         D: serde::Deserializer<'de>,
     {
         let value = Value::deserialize(deserializer)?;
-        let mut fields = value.as_object().cloned().ok_or_else(|| {
-            serde::de::Error::custom("PDF appearance must be an object")
-        })?;
+        let mut fields = value
+            .as_object()
+            .cloned()
+            .ok_or_else(|| serde::de::Error::custom("PDF appearance must be an object"))?;
         let mode = fields
             .remove("mode")
             .and_then(|value| value.as_str().map(str::to_owned))
-            .ok_or_else(|| {
-                serde::de::Error::custom("PDF appearance mode must be a string")
-            })?;
+            .ok_or_else(|| serde::de::Error::custom("PDF appearance mode must be a string"))?;
         match mode.as_str() {
             "original" if fields.is_empty() => Ok(Self::Original),
             "follow-emacs" if fields.len() == 2 => {
@@ -219,22 +218,17 @@ impl<'de> Deserialize<'de> for PdfAppearance {
                         .remove(key)
                         .ok_or_else(|| format!("missing PDF color {key}"))
                         .and_then(|value| {
-                            serde_json::from_value(value)
-                                .map_err(|error| error.to_string())
+                            serde_json::from_value(value).map_err(|error| error.to_string())
                         })
                 };
                 let appearance = Self::FollowEmacs {
-                    foreground: color("foreground")
-                        .map_err(serde::de::Error::custom)?,
-                    background: color("background")
-                        .map_err(serde::de::Error::custom)?,
+                    foreground: color("foreground").map_err(serde::de::Error::custom)?,
+                    background: color("background").map_err(serde::de::Error::custom)?,
                 };
                 if fields.is_empty() {
                     Ok(appearance)
                 } else {
-                    Err(serde::de::Error::custom(
-                        "unknown PDF appearance color",
-                    ))
+                    Err(serde::de::Error::custom("unknown PDF appearance color"))
                 }
             }
             _ => Err(serde::de::Error::custom(
@@ -260,9 +254,7 @@ struct CacheEntry {
     modified: Option<SystemTime>,
 }
 
-#[derive(
-    Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize,
-)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
 #[serde(deny_unknown_fields)]
 struct SelectionPosition {
     page: u32,
@@ -417,8 +409,7 @@ fn finite_point(value: Option<PdfPoints>) -> Option<f32> {
 
 fn outline_title(value: Option<String>) -> String {
     let trimmed = value.as_deref().unwrap_or("").trim();
-    let title: String =
-        trimmed.chars().take(OUTLINE_MAX_TITLE_CHARACTERS).collect();
+    let title: String = trimmed.chars().take(OUTLINE_MAX_TITLE_CHARACTERS).collect();
     if title.is_empty() {
         "(untitled)".to_owned()
     } else {
@@ -436,9 +427,7 @@ fn outline_destination_view(
             zoom.filter(|value| value.is_finite() && *value > 0.0),
             "xyz",
         ),
-        PdfDestinationViewSettings::FitPageToWindow => {
-            (None, None, None, "fit")
-        }
+        PdfDestinationViewSettings::FitPageToWindow => (None, None, None, "fit"),
         PdfDestinationViewSettings::FitPageHorizontallyToWindow(y) => {
             (None, finite_point(y), None, "fit-horizontal")
         }
@@ -451,9 +440,7 @@ fn outline_destination_view(
             None,
             "fit-rectangle",
         ),
-        PdfDestinationViewSettings::FitBoundsToWindow => {
-            (None, None, None, "fit-bounds")
-        }
+        PdfDestinationViewSettings::FitBoundsToWindow => (None, None, None, "fit-bounds"),
         PdfDestinationViewSettings::FitBoundsHorizontallyToWindow(y) => {
             (None, finite_point(y), None, "fit-bounds-horizontal")
         }
@@ -495,9 +482,9 @@ fn page_link_label(value: String) -> Option<String> {
 fn page_link_uri(value: String) -> Option<String> {
     if value.is_empty()
         || value.len() > PAGE_LINK_MAX_URI_BYTES
-        || value.chars().any(|character| {
-            character.is_control() || character.is_whitespace()
-        })
+        || value
+            .chars()
+            .any(|character| character.is_control() || character.is_whitespace())
     {
         return None;
     }
@@ -505,8 +492,7 @@ fn page_link_uri(value: String) -> Option<String> {
     let mut characters = scheme.chars();
     if !characters.next()?.is_ascii_alphabetic()
         || !characters.all(|character| {
-            character.is_ascii_alphanumeric()
-                || matches!(character, '+' | '-' | '.')
+            character.is_ascii_alphanumeric() || matches!(character, '+' | '-' | '.')
         })
     {
         return None;
@@ -517,9 +503,7 @@ fn page_link_uri(value: String) -> Option<String> {
 fn pdf_open_error_code(error: &PdfiumError) -> &'static str {
     if matches!(
         error,
-        PdfiumError::PdfiumLibraryInternalError(
-            PdfiumInternalError::PasswordError
-        )
+        PdfiumError::PdfiumLibraryInternalError(PdfiumInternalError::PasswordError)
     ) {
         "pdf-password-error"
     } else {
@@ -527,19 +511,14 @@ fn pdf_open_error_code(error: &PdfiumError) -> &'static str {
     }
 }
 
-fn page_link_action(
-    link: &PdfLink<'_>,
-    pages: &[PageGeometry],
-) -> Option<PageLinkAction> {
+fn page_link_action(link: &PdfLink<'_>, pages: &[PageGeometry]) -> Option<PageLinkAction> {
     match link.action() {
         Some(action) => {
             if let Some(local) = action.as_local_destination_action() {
                 local
                     .destination()
                     .ok()
-                    .and_then(|destination| {
-                        outline_destination(destination, pages)
-                    })
+                    .and_then(|destination| outline_destination(destination, pages))
                     .map(|destination| PageLinkAction::Location { destination })
             } else if let Some(uri) = action.as_uri_action() {
                 uri.uri()
@@ -573,10 +552,7 @@ fn default_selection_page_limit() -> u32 {
     8
 }
 
-fn compile_search_pattern(
-    query: &str,
-    case_sensitive: bool,
-) -> Result<Regex, ServiceError> {
+fn compile_search_pattern(query: &str, case_sensitive: bool) -> Result<Regex, ServiceError> {
     if query.is_empty() {
         return Err(ServiceError::new(
             "invalid-search-query",
@@ -637,25 +613,21 @@ fn search_page_text(
 ) -> Vec<SearchMatch> {
     let mut matches = Vec::new();
     for found in pattern.find_iter(text) {
-        let Some((first, last)) =
-            search_character_range(characters, found.start(), found.end())
+        let Some((first, last)) = search_character_range(characters, found.start(), found.end())
         else {
             continue;
         };
         let start_offset = characters[first].index;
         let outside = match (direction, boundary) {
             (SearchDirection::Forward, Some(minimum)) => start_offset < minimum,
-            (SearchDirection::Backward, Some(maximum)) => {
-                start_offset >= maximum
-            }
+            (SearchDirection::Backward, Some(maximum)) => start_offset >= maximum,
             _ => false,
         };
         if outside {
             continue;
         }
         let before_start = first.saturating_sub(SEARCH_CONTEXT_CHARACTERS);
-        let after_end =
-            characters.len().min(last + 1 + SEARCH_CONTEXT_CHARACTERS);
+        let after_end = characters.len().min(last + 1 + SEARCH_CONTEXT_CHARACTERS);
         let start = SelectionPosition {
             page,
             offset: characters[first].index,
@@ -664,9 +636,10 @@ fn search_page_text(
             page,
             offset: characters[last].index,
         };
-        if matches.last().is_some_and(|previous: &SearchMatch| {
-            previous.start == start && previous.end == end
-        }) {
+        if matches
+            .last()
+            .is_some_and(|previous: &SearchMatch| previous.start == start && previous.end == end)
+        {
             continue;
         }
         matches.push(SearchMatch {
@@ -726,8 +699,7 @@ impl TextBounds {
             right: self.right.min(other.right),
             top: self.top.min(other.top),
         };
-        (intersection.width() > 0.0 && intersection.height() > 0.0)
-            .then_some(intersection)
+        (intersection.width() > 0.0 && intersection.height() > 0.0).then_some(intersection)
     }
 }
 
@@ -821,8 +793,9 @@ impl PageGeometry {
             PdfPageRenderRotation::None | PdfPageRenderRotation::Degrees180 => {
                 (raw_width, raw_height)
             }
-            PdfPageRenderRotation::Degrees90
-            | PdfPageRenderRotation::Degrees270 => (raw_height, raw_width),
+            PdfPageRenderRotation::Degrees90 | PdfPageRenderRotation::Degrees270 => {
+                (raw_height, raw_width)
+            }
         };
         Self::close_dimension(self.width, expected_width)
             && Self::close_dimension(self.height, expected_height)
@@ -929,10 +902,7 @@ impl PageGeometry {
         quad.map(|point| self.normalize_point(point))
     }
 
-    fn normalize_link_bounds(
-        self,
-        bounds: PageLinkBounds,
-    ) -> Option<PageLinkBounds> {
+    fn normalize_link_bounds(self, bounds: PageLinkBounds) -> Option<PageLinkBounds> {
         self.normalize_bounds(TextBounds {
             left: bounds.left,
             bottom: bounds.bottom,
@@ -963,10 +933,7 @@ fn character_font_height(character: &PdfPageTextChar<'_>) -> f32 {
         .unwrap_or(font_size.value.abs())
 }
 
-fn regular_dimensions(
-    bounds: TextBounds,
-    matrix: PdfMatrix,
-) -> Option<(f32, f32)> {
+fn regular_dimensions(bounds: TextBounds, matrix: PdfMatrix) -> Option<(f32, f32)> {
     let a = matrix.a().abs();
     let b = matrix.b().abs();
     let c = matrix.c().abs();
@@ -978,10 +945,7 @@ fn regular_dimensions(
     }
     let width = (bounds.width() * d - c * bounds.height()) / determinant;
     let height = (a * bounds.height() - b * bounds.width()) / determinant;
-    (width.is_finite()
-        && height.is_finite()
-        && width > f32::EPSILON
-        && height > f32::EPSILON)
+    (width.is_finite() && height.is_finite() && width > f32::EPSILON && height > f32::EPSILON)
         .then_some((width, height))
 }
 
@@ -1095,16 +1059,12 @@ fn valid_cache_key(value: &str) -> bool {
 
 fn themed_channel(foreground: u8, background: u8, luminance: u16) -> u8 {
     let ink = 255 - luminance;
-    let value = u32::from(foreground) * u32::from(ink)
-        + u32::from(background) * u32::from(luminance)
-        + 127;
+    let value =
+        u32::from(foreground) * u32::from(ink) + u32::from(background) * u32::from(luminance) + 127;
     (value / 255) as u8
 }
 
-fn apply_pdf_appearance(
-    image: DynamicImage,
-    appearance: PdfAppearance,
-) -> DynamicImage {
+fn apply_pdf_appearance(image: DynamicImage, appearance: PdfAppearance) -> DynamicImage {
     let PdfAppearance::FollowEmacs {
         foreground,
         background,
@@ -1115,17 +1075,10 @@ fn apply_pdf_appearance(
     let mut pixels = image.to_rgba8();
     for pixel in pixels.pixels_mut() {
         let [red, green, blue, alpha] = pixel.0;
-        let luminance = (54 * u16::from(red)
-            + 183 * u16::from(green)
-            + 19 * u16::from(blue)
-            + 128)
-            / 256;
+        let luminance =
+            (54 * u16::from(red) + 183 * u16::from(green) + 19 * u16::from(blue) + 128) / 256;
         for (channel, value) in pixel.0[..3].iter_mut().enumerate() {
-            *value = themed_channel(
-                foreground.0[channel],
-                background.0[channel],
-                luminance,
-            );
+            *value = themed_channel(foreground.0[channel], background.0[channel], luminance);
         }
         pixel.0[3] = alpha;
     }
@@ -1147,11 +1100,7 @@ impl Response {
         }
     }
 
-    fn failure(
-        id: Option<u64>,
-        code: &'static str,
-        message: impl Into<String>,
-    ) -> Self {
+    fn failure(id: Option<u64>, code: &'static str, message: impl Into<String>) -> Self {
         Self {
             id,
             revision: None,
@@ -1189,10 +1138,8 @@ impl Service {
     fn new() -> Self {
         Self {
             pdfium: None,
-            pdfium_library: env::var_os("YUNGE_READER_PDFIUM")
-                .map(PathBuf::from),
-            cache_directory: env::var_os("YUNGE_READER_CACHE")
-                .map(PathBuf::from),
+            pdfium_library: env::var_os("YUNGE_READER_PDFIUM").map(PathBuf::from),
+            cache_directory: env::var_os("YUNGE_READER_CACHE").map(PathBuf::from),
             documents: HashMap::new(),
             next_document: 1,
             epub_broker: None,
@@ -1204,10 +1151,7 @@ impl Service {
             self.epub_broker = Some(EpubBroker::start()?);
         }
         self.epub_broker.as_mut().ok_or_else(|| {
-            ServiceError::new(
-                "epub-broker-unavailable",
-                "EPUB broker did not start",
-            )
+            ServiceError::new("epub-broker-unavailable", "EPUB broker did not start")
         })
     }
 
@@ -1244,10 +1188,7 @@ impl Service {
             return Ok(pdfium);
         }
         let library = self.pdfium_library.as_ref().ok_or_else(|| {
-            ServiceError::new(
-                "pdfium-unavailable",
-                "YUNGE_READER_PDFIUM is not set",
-            )
+            ServiceError::new("pdfium-unavailable", "YUNGE_READER_PDFIUM is not set")
         })?;
         if !library.is_absolute() || !library.is_file() {
             return Err(ServiceError::new(
@@ -1270,22 +1211,15 @@ impl Service {
 
     fn parse<T: DeserializeOwned>(params: Value) -> Result<T, ServiceError> {
         let params = if params.is_null() { json!({}) } else { params };
-        serde_json::from_value(params).map_err(|error| {
-            ServiceError::new("invalid-params", error.to_string())
-        })
+        serde_json::from_value(params)
+            .map_err(|error| ServiceError::new("invalid-params", error.to_string()))
     }
 
-    fn document(
-        &self,
-        document: u64,
-    ) -> Result<&PdfDocument<'static>, ServiceError> {
+    fn document(&self, document: u64) -> Result<&PdfDocument<'static>, ServiceError> {
         Ok(&self.open_document(document)?.value)
     }
 
-    fn open_document(
-        &self,
-        document: u64,
-    ) -> Result<&OpenDocument, ServiceError> {
+    fn open_document(&self, document: u64) -> Result<&OpenDocument, ServiceError> {
         self.documents.get(&document).ok_or_else(|| {
             ServiceError::new(
                 "unknown-document",
@@ -1294,11 +1228,7 @@ impl Service {
         })
     }
 
-    fn page_geometry(
-        &self,
-        document: u64,
-        page: u32,
-    ) -> Result<PageGeometry, ServiceError> {
+    fn page_geometry(&self, document: u64, page: u32) -> Result<PageGeometry, ServiceError> {
         self.open_document(document)?
             .pages
             .get(page as usize)
@@ -1311,14 +1241,10 @@ impl Service {
             })
     }
 
-    fn page_index(
-        document: &PdfDocument<'_>,
-        page: u32,
-    ) -> Result<i32, ServiceError> {
+    fn page_index(document: &PdfDocument<'_>, page: u32) -> Result<i32, ServiceError> {
         let page_count = document.pages().len();
-        let index = i32::try_from(page).map_err(|_| {
-            ServiceError::new("invalid-page", "page index is too large")
-        })?;
+        let index = i32::try_from(page)
+            .map_err(|_| ServiceError::new("invalid-page", "page index is too large"))?;
         if index < 0 || index >= page_count {
             return Err(ServiceError::new(
                 "invalid-page",
@@ -1345,10 +1271,7 @@ impl Service {
         if !path.is_absolute() || !path.is_file() {
             return Err(ServiceError::new(
                 "pdf-open-failed",
-                format!(
-                    "PDF is not an absolute readable file: {}",
-                    path.display()
-                ),
+                format!("PDF is not an absolute readable file: {}", path.display()),
             ));
         }
         let pdfium = self.pdfium()?;
@@ -1373,9 +1296,7 @@ impl Service {
             let geometry = PageGeometry::from_page(&page).ok_or_else(|| {
                 ServiceError::new(
                     "pdf-open-failed",
-                    format!(
-                        "could not resolve visible geometry for page {index}"
-                    ),
+                    format!("could not resolve visible geometry for page {index}"),
                 )
             })?;
             let label = page
@@ -1391,13 +1312,9 @@ impl Service {
             page_geometries.push(geometry);
         }
         let handle = self.next_document;
-        self.next_document =
-            self.next_document.checked_add(1).ok_or_else(|| {
-                ServiceError::new(
-                    "pdf-open-failed",
-                    "document handle space exhausted",
-                )
-            })?;
+        self.next_document = self.next_document.checked_add(1).ok_or_else(|| {
+            ServiceError::new("pdf-open-failed", "document handle space exhausted")
+        })?;
         self.documents.insert(
             handle,
             OpenDocument {
@@ -1453,19 +1370,17 @@ impl Service {
             items.push(OutlineItem {
                 title: outline_title(bookmark.title()),
                 depth,
-                destination: bookmark.destination().and_then(|destination| {
-                    outline_destination(destination, &open_document.pages)
-                }),
+                destination: bookmark
+                    .destination()
+                    .and_then(|destination| outline_destination(destination, &open_document.pages)),
             });
         }
-        serde_json::to_value(OutlineResult { items, truncated }).map_err(
-            |error| {
-                ServiceError::new(
-                    "outline-failed",
-                    format!("could not encode document outline: {error}"),
-                )
-            },
-        )
+        serde_json::to_value(OutlineResult { items, truncated }).map_err(|error| {
+            ServiceError::new(
+                "outline-failed",
+                format!("could not encode document outline: {error}"),
+            )
+        })
     }
 
     fn page_info(&self, params: Value) -> Result<Value, ServiceError> {
@@ -1511,13 +1426,10 @@ impl Service {
                 truncated = true;
                 break;
             }
-            let Some(raw_bounds) =
-                link.rect().ok().and_then(PageLinkBounds::from_pdfium)
-            else {
+            let Some(raw_bounds) = link.rect().ok().and_then(PageLinkBounds::from_pdfium) else {
                 continue;
             };
-            let Some(bounds) = geometry.normalize_link_bounds(raw_bounds)
-            else {
+            let Some(bounds) = geometry.normalize_link_bounds(raw_bounds) else {
                 continue;
             };
             let Some(action) = page_link_action(&link, pages) else {
@@ -1580,14 +1492,11 @@ impl Service {
             let quad = raw_bounds
                 .and_then(|bounds| {
                     character.matrix().ok().and_then(|matrix| {
-                        character_quad(bounds, matrix, || {
-                            character_font_height(&character)
-                        })
+                        character_quad(bounds, matrix, || character_font_height(&character))
                     })
                 })
                 .map(|quad| geometry.normalize_quad(quad));
-            let bounds =
-                raw_bounds.and_then(|bounds| geometry.normalize_bounds(bounds));
+            let bounds = raw_bounds.and_then(|bounds| geometry.normalize_bounds(bounds));
             characters.push(json!({
                 "index": character.index(),
                 "text": value,
@@ -1624,13 +1533,10 @@ impl Service {
         if !(1..=SEARCH_MAX_PAGES).contains(&params.page_limit) {
             return Err(ServiceError::new(
                 "invalid-search-limit",
-                format!(
-                    "search page limit must be between 1 and {SEARCH_MAX_PAGES}"
-                ),
+                format!("search page limit must be between 1 and {SEARCH_MAX_PAGES}"),
             ));
         }
-        let pattern =
-            compile_search_pattern(&params.query, params.case_sensitive)?;
+        let pattern = compile_search_pattern(&params.query, params.case_sensitive)?;
         let document = self.document(params.document)?;
         let page_count = document.pages().len() as u32;
         if page_count == 0 {
@@ -1655,9 +1561,7 @@ impl Service {
             ));
         }
         let mut boundary = initial.and_then(|position| position.offset);
-        if params.cursor.is_none()
-            && params.direction == SearchDirection::Forward
-        {
+        if params.cursor.is_none() && params.direction == SearchDirection::Forward {
             boundary = boundary.map(|offset| offset.saturating_add(1));
         }
         let mut matches = Vec::new();
@@ -1682,10 +1586,7 @@ impl Service {
                 return Err(ServiceError::new(
                     "invalid-search-cursor",
                     format!(
-                        concat!(
-                            "search offset {} exceeds {} characters ",
-                            "on page {}"
-                        ),
+                        concat!("search offset {} exceeds {} characters ", "on page {}"),
                         boundary.expect("checked search boundary"),
                         chars.len(),
                         page_number
@@ -1790,10 +1691,7 @@ impl Service {
             return Err(ServiceError::new(
                 "invalid-selection-limit",
                 format!(
-                    concat!(
-                        "selection character limit must be between 1 and ",
-                        "{}"
-                    ),
+                    concat!("selection character limit must be between 1 and ", "{}"),
                     SELECTION_MAX_CHARACTERS
                 ),
             ));
@@ -1802,10 +1700,7 @@ impl Service {
             return Err(ServiceError::new(
                 "invalid-selection-limit",
                 format!(
-                    concat!(
-                        "selection page limit must be between 1 and ",
-                        "{}"
-                    ),
+                    concat!("selection page limit must be between 1 and ", "{}"),
                     SELECTION_MAX_PAGES
                 ),
             ));
@@ -1825,9 +1720,7 @@ impl Service {
         let mut pages_read = 0;
         let mut characters_read = 0;
         let mut done = false;
-        while pages_read < params.page_limit
-            && characters_read < params.character_limit
-        {
+        while pages_read < params.page_limit && characters_read < params.character_limit {
             let index = Self::page_index(document, page_number)?;
             let page = document.pages().get(index).map_err(|error| {
                 ServiceError::new(
@@ -1842,8 +1735,7 @@ impl Service {
                 )
             })?;
             let chars = page_text.chars();
-            let range =
-                page_selection_range(chars.len(), page_number, start, end)?;
+            let range = page_selection_range(chars.len(), page_number, start, end)?;
             if let Some(range) = range {
                 let first = *range.start();
                 let last = *range.end();
@@ -1865,15 +1757,11 @@ impl Service {
                     text.push('\n');
                 }
                 let mut char_index = minimum_offset as usize;
-                while char_index <= last
-                    && characters_read < params.character_limit
-                {
+                while char_index <= last && characters_read < params.character_limit {
                     let character = chars.get(char_index).map_err(|error| {
                         ServiceError::new(
                             "invalid-selection",
-                            format!(
-                                "could not read selected character: {error}"
-                            ),
+                            format!("could not read selected character: {error}"),
                         )
                     })?;
                     if let Some(value) = character.unicode_string() {
@@ -1898,9 +1786,7 @@ impl Service {
                 if page_number == cursor.page && minimum_offset != 0 {
                     return Err(ServiceError::new(
                         "invalid-selection-cursor",
-                        format!(
-                            "selection cursor exceeds empty page {page_number}"
-                        ),
+                        format!("selection cursor exceeds empty page {page_number}"),
                     ));
                 }
                 if page_number > start.page {
@@ -1942,10 +1828,7 @@ impl Service {
             ));
         }
         let cache = self.cache_directory.as_ref().ok_or_else(|| {
-            ServiceError::new(
-                "cache-unavailable",
-                "YUNGE_READER_CACHE is not set",
-            )
+            ServiceError::new("cache-unavailable", "YUNGE_READER_CACHE is not set")
         })?;
         if !cache.is_absolute() {
             return Err(ServiceError::new(
@@ -1997,8 +1880,7 @@ impl Service {
                     continue;
                 }
             };
-            let Some(name) = entry.file_name().to_str().map(str::to_owned)
-            else {
+            let Some(name) = entry.file_name().to_str().map(str::to_owned) else {
                 continue;
             };
             if !valid_cache_file_name(&name) {
@@ -2046,8 +1928,7 @@ impl Service {
                 match fs::remove_file(entry.path) {
                     Ok(()) => {
                         after_bytes = after_bytes.saturating_sub(entry.size);
-                        removed_bytes =
-                            removed_bytes.saturating_add(entry.size);
+                        removed_bytes = removed_bytes.saturating_add(entry.size);
                         removed_files += 1;
                     }
                     Err(_) => failed_files += 1,
@@ -2088,10 +1969,7 @@ impl Service {
             )
         })?;
         let cache = self.cache_directory.as_ref().ok_or_else(|| {
-            ServiceError::new(
-                "cache-unavailable",
-                "YUNGE_READER_CACHE is not set",
-            )
+            ServiceError::new("cache-unavailable", "YUNGE_READER_CACHE is not set")
         })?;
         if !cache.is_absolute() {
             return Err(ServiceError::new(
@@ -2107,13 +1985,12 @@ impl Service {
         })?;
         let output = cache.join(format!("{}.png", params.cache_key));
         if output.is_file() {
-            let (width, height) =
-                image::image_dimensions(&output).map_err(|error| {
-                    ServiceError::new(
-                        "render-failed",
-                        format!("could not inspect cached page: {error}"),
-                    )
-                })?;
+            let (width, height) = image::image_dimensions(&output).map_err(|error| {
+                ServiceError::new(
+                    "render-failed",
+                    format!("could not inspect cached page: {error}"),
+                )
+            })?;
             let _ = File::options()
                 .write(true)
                 .open(&output)
@@ -2132,8 +2009,7 @@ impl Service {
             })?;
         let image = apply_pdf_appearance(image, params.appearance);
         let (width, height) = image.dimensions();
-        let temporary =
-            output.with_extension(format!("{}.tmp", std::process::id()));
+        let temporary = output.with_extension(format!("{}.tmp", std::process::id()));
         image
             .save_with_format(&temporary, image::ImageFormat::Png)
             .map_err(|error| {
@@ -2162,12 +2038,7 @@ impl Service {
                     "capabilities": CAPABILITIES,
                 })
             });
-            return response(
-                request.id,
-                request.revision,
-                result,
-                Control::Continue,
-            );
+            return response(request.id, request.revision, result, Control::Continue);
         }
         if request.op == "shutdown" {
             let result = Self::parse::<EmptyParams>(request.params).map(|_| {
@@ -2272,19 +2143,13 @@ fn response(
             control,
         ),
         Err(error) => (
-            Response::failure(Some(id), error.code, error.message)
-                .with_revision(revision),
+            Response::failure(Some(id), error.code, error.message).with_revision(revision),
             Control::Continue,
         ),
     }
 }
 
-fn render_result(
-    path: impl AsRef<Path>,
-    width: u32,
-    height: u32,
-    cached: bool,
-) -> Value {
+fn render_result(path: impl AsRef<Path>, width: u32, height: u32, cached: bool) -> Value {
     json!({
         "path": path.as_ref(),
         "pixel-width": width,
@@ -2293,10 +2158,7 @@ fn render_result(
     })
 }
 
-fn write_message(
-    mut output: impl Write,
-    message: &impl Serialize,
-) -> Result<(), Error> {
+fn write_message(mut output: impl Write, message: &impl Serialize) -> Result<(), Error> {
     serde_json::to_writer(&mut output, message)?;
     output.write_all(b"\n")?;
     output.flush()?;
@@ -2418,9 +2280,7 @@ mod tests {
                 "foreground": "#112233",
             }),
         ] {
-            assert!(
-                serde_json::from_value::<PdfAppearance>(appearance).is_err()
-            );
+            assert!(serde_json::from_value::<PdfAppearance>(appearance).is_err());
         }
     }
 
@@ -2472,8 +2332,7 @@ mod tests {
 
     #[test]
     fn ping_does_not_load_pdfium() {
-        let output =
-            messages(r#"{"id":7,"op":"ping","revision":19,"params":{}}"#);
+        let output = messages(r#"{"id":7,"op":"ping","revision":19,"params":{}}"#);
         assert_eq!(output.len(), 2);
         assert_eq!(output[1]["id"], 7);
         assert_eq!(output[1]["revision"], 19);
@@ -2588,8 +2447,7 @@ mod tests {
     fn outline_titles_are_nonempty_and_bounded() {
         assert_eq!(outline_title(None), "(untitled)");
         assert_eq!(outline_title(Some("   ".to_owned())), "(untitled)");
-        let value =
-            format!("  {}  ", "章".repeat(OUTLINE_MAX_TITLE_CHARACTERS + 2));
+        let value = format!("  {}  ", "章".repeat(OUTLINE_MAX_TITLE_CHARACTERS + 2));
         let title = outline_title(Some(value));
         assert_eq!(title.chars().count(), OUTLINE_MAX_TITLE_CHARACTERS);
         assert!(title.chars().all(|character| character == '章'));
@@ -2597,21 +2455,18 @@ mod tests {
 
     #[test]
     fn outline_views_preserve_coordinates_and_zoom_hints() {
-        let (x, y, zoom, view) = outline_destination_view(
-            PdfDestinationViewSettings::SpecificCoordinatesAndZoom(
+        let (x, y, zoom, view) =
+            outline_destination_view(PdfDestinationViewSettings::SpecificCoordinatesAndZoom(
                 Some(PdfPoints::new(12.0)),
                 Some(PdfPoints::new(34.0)),
                 Some(1.5),
-            ),
-        );
+            ));
         assert_eq!(
             (x, y, zoom, view),
             (Some(12.0), Some(34.0), Some(1.5), "xyz")
         );
         let (x, y, zoom, view) = outline_destination_view(
-            PdfDestinationViewSettings::FitPageHorizontallyToWindow(Some(
-                PdfPoints::new(500.0),
-            )),
+            PdfDestinationViewSettings::FitPageHorizontallyToWindow(Some(PdfPoints::new(500.0))),
         );
         assert_eq!(
             (x, y, zoom, view),
@@ -2643,20 +2498,13 @@ mod tests {
         assert_eq!(page_link_uri("https://example.com/a b".to_owned()), None);
         assert_eq!(page_link_uri("1https://example.com".to_owned()), None);
         assert_eq!(page_link_uri("javascript:\nalert(1)".to_owned()), None);
-        assert_eq!(
-            page_link_uri("x".repeat(PAGE_LINK_MAX_URI_BYTES + 1)),
-            None
-        );
+        assert_eq!(page_link_uri("x".repeat(PAGE_LINK_MAX_URI_BYTES + 1)), None);
     }
 
     #[test]
     fn pdf_password_errors_have_a_stable_protocol_code() {
-        let password = PdfiumError::PdfiumLibraryInternalError(
-            PdfiumInternalError::PasswordError,
-        );
-        let format = PdfiumError::PdfiumLibraryInternalError(
-            PdfiumInternalError::FormatError,
-        );
+        let password = PdfiumError::PdfiumLibraryInternalError(PdfiumInternalError::PasswordError);
+        let format = PdfiumError::PdfiumLibraryInternalError(PdfiumInternalError::FormatError);
         assert_eq!(pdf_open_error_code(&password), "pdf-password-error");
         assert_eq!(pdf_open_error_code(&format), "pdf-open-failed");
     }
@@ -2689,8 +2537,7 @@ mod tests {
         });
         assert_close(point.x, 151.47876);
         assert_close(point.y, 437.57025);
-        let (x, y) =
-            geometry.normalize_optional_point(Some(214.47876), Some(509.57025));
+        let (x, y) = geometry.normalize_optional_point(Some(214.47876), Some(509.57025));
         assert_close(x.unwrap(), point.x);
         assert_close(y.unwrap(), point.y);
     }
@@ -2735,12 +2582,10 @@ mod tests {
             rotation: PdfPageRenderRotation::Degrees90,
         };
         assert!(geometry.valid());
-        let lower_right =
-            geometry.normalize_point(TextPoint { x: 532.0, y: 72.0 });
+        let lower_right = geometry.normalize_point(TextPoint { x: 532.0, y: 72.0 });
         assert_close(lower_right.x, 0.0);
         assert_close(lower_right.y, 0.0);
-        let upper_left =
-            geometry.normalize_point(TextPoint { x: 63.0, y: 738.0 });
+        let upper_left = geometry.normalize_point(TextPoint { x: 63.0, y: 738.0 });
         assert_close(upper_left.x, 666.0);
         assert_close(upper_left.y, 469.0);
         let (x, y) = geometry.normalize_optional_point(None, Some(400.0));
@@ -2763,17 +2608,12 @@ mod tests {
                 .write(true)
                 .open(path)
                 .unwrap()
-                .set_modified(
-                    UNIX_EPOCH
-                        + Duration::from_secs(1_700_000_000 + index as u64),
-                )
+                .set_modified(UNIX_EPOCH + Duration::from_secs(1_700_000_000 + index as u64))
                 .unwrap();
         }
         let unknown = directory.0.join("keep-me.png");
-        let temporary =
-            directory.0.join(format!("{}.123.tmp", "d".repeat(64),));
-        let directory_entry =
-            directory.0.join(format!("{}.png", "e".repeat(64),));
+        let temporary = directory.0.join(format!("{}.123.tmp", "d".repeat(64),));
+        let directory_entry = directory.0.join(format!("{}.png", "e".repeat(64),));
         fs::write(&unknown, b"unknown").unwrap();
         fs::write(&temporary, b"temporary").unwrap();
         fs::create_dir(&directory_entry).unwrap();
@@ -2824,15 +2664,9 @@ mod tests {
         let forward_start = SelectionPosition { page: 0, offset: 1 };
         let forward_end = SelectionPosition { page: 0, offset: 3 };
         let (start, end) = ordered_positions(forward_start, forward_end);
-        assert_eq!(
-            page_selection_range(5, 0, start, end).unwrap(),
-            Some(1..=3)
-        );
+        assert_eq!(page_selection_range(5, 0, start, end).unwrap(), Some(1..=3));
         let (start, end) = ordered_positions(forward_end, forward_start);
-        assert_eq!(
-            page_selection_range(5, 0, start, end).unwrap(),
-            Some(1..=3)
-        );
+        assert_eq!(page_selection_range(5, 0, start, end).unwrap(), Some(1..=3));
         let outside = SelectionPosition { page: 0, offset: 5 };
         assert_eq!(
             page_selection_range(5, 0, forward_start, outside)
@@ -2865,10 +2699,7 @@ mod tests {
             page_selection_range(10, 2, start, end).unwrap(),
             Some(3..=9)
         );
-        assert_eq!(
-            page_selection_range(8, 3, start, end).unwrap(),
-            Some(0..=7)
-        );
+        assert_eq!(page_selection_range(8, 3, start, end).unwrap(), Some(0..=7));
         assert_eq!(
             page_selection_range(10, 4, start, end).unwrap(),
             Some(0..=5)
@@ -2887,9 +2718,7 @@ mod tests {
         assert_eq!(ordered_positions(later, earlier), (earlier, later));
     }
 
-    fn searchable_characters(
-        values: &[(u32, &str)],
-    ) -> (String, Vec<SearchCharacter>) {
+    fn searchable_characters(values: &[(u32, &str)]) -> (String, Vec<SearchCharacter>) {
         let mut text = String::new();
         let mut characters = Vec::new();
         for (index, value) in values {
@@ -2907,13 +2736,8 @@ mod tests {
 
     #[test]
     fn literal_search_maps_unicode_bytes_to_pdfium_indices() {
-        let (text, characters) = searchable_characters(&[
-            (7, "A"),
-            (8, "你"),
-            (9, "好"),
-            (10, "ffi"),
-            (11, "."),
-        ]);
+        let (text, characters) =
+            searchable_characters(&[(7, "A"), (8, "你"), (9, "好"), (10, "ffi"), (11, ".")]);
         let pattern = compile_search_pattern("好ff", true).unwrap();
         let matches = search_page_text(
             3,
@@ -2996,13 +2820,8 @@ mod tests {
 
     #[test]
     fn literal_search_respects_cursor_and_match_limits() {
-        let (text, characters) = searchable_characters(&[
-            (0, "a"),
-            (1, " "),
-            (2, "a"),
-            (3, " "),
-            (4, "a"),
-        ]);
+        let (text, characters) =
+            searchable_characters(&[(0, "a"), (1, " "), (2, "a"), (3, " "), (4, "a")]);
         let pattern = compile_search_pattern("a", true).unwrap();
         let matches = search_page_text(
             0,

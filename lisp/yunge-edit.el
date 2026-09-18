@@ -4,7 +4,8 @@
 
 (require 'cl-lib)
 
-(setq-default indent-tabs-mode nil)
+(setq-default indent-tabs-mode nil
+              fill-column 100)
 
 (declare-function occur--targets-start "replace" (targets))
 

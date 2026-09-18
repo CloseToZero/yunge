@@ -87,9 +87,7 @@ impl SurfaceCallbacks {
 
 impl Bounds {
     fn validate(self) -> Result<Self, ServiceError> {
-        if self.x < -(MAX_VIEW_EXTENT as i32)
-            || self.y < -(MAX_VIEW_EXTENT as i32)
-        {
+        if self.x < -(MAX_VIEW_EXTENT as i32) || self.y < -(MAX_VIEW_EXTENT as i32) {
             return Err(ServiceError::new(
                 "invalid-view-bounds",
                 "view position lies outside the supported desktop extent",
@@ -104,9 +102,7 @@ impl Bounds {
         if self.width > MAX_VIEW_EXTENT || self.height > MAX_VIEW_EXTENT {
             return Err(ServiceError::new(
                 "invalid-view-bounds",
-                format!(
-                    "view width and height must not exceed {MAX_VIEW_EXTENT}"
-                ),
+                format!("view width and height must not exceed {MAX_VIEW_EXTENT}"),
             ));
         }
         Ok(self)
@@ -132,10 +128,7 @@ impl Bounds {
 }
 
 impl ParentWindow {
-    pub(super) fn current(
-        _value: u64,
-        frame: Option<Bounds>,
-    ) -> Result<Self, ServiceError> {
+    pub(super) fn current(_value: u64, frame: Option<Bounds>) -> Result<Self, ServiceError> {
         let mtm = MainThreadMarker::new().ok_or_else(|| {
             ServiceError::new(
                 "view-create-failed",
@@ -146,15 +139,12 @@ impl ParentWindow {
         let windows = application.windows();
         let candidates: Vec<_> = windows
             .iter()
-            .filter(|window| {
-                window.canBecomeMainWindow() && window.contentView().is_some()
-            })
+            .filter(|window| window.canBecomeMainWindow() && window.contentView().is_some())
             .collect();
         let matched = frame.and_then(|expected| {
             let primary = NSScreen::screens(mtm).firstObject()?;
             let primary_frame = primary.frame();
-            let primary_top =
-                primary_frame.origin.y + primary_frame.size.height;
+            let primary_top = primary_frame.origin.y + primary_frame.size.height;
             let mut matching = candidates
                 .iter()
                 .filter(|window| frame_matches(window, expected, primary_top));
@@ -162,9 +152,7 @@ impl ParentWindow {
             matching.next().is_none().then_some(candidate)
         });
         let window = matched
-            .or_else(|| {
-                (frame.is_none()).then(|| application.keyWindow()).flatten()
-            })
+            .or_else(|| (frame.is_none()).then(|| application.keyWindow()).flatten())
             .or_else(|| {
                 (frame.is_none())
                     .then(|| application.mainWindow())
@@ -174,10 +162,7 @@ impl ParentWindow {
             .ok_or_else(|| {
                 ServiceError::new(
                     "invalid-parent-window",
-                    concat!(
-                        "Emacs has no unambiguous frame for the EPUB ",
-                        "surface"
-                    ),
+                    concat!("Emacs has no unambiguous frame for the EPUB ", "surface"),
                 )
             })?;
         let content = window.contentView().ok_or_else(|| {
@@ -195,11 +180,7 @@ impl ParentWindow {
     }
 }
 
-fn frame_matches(
-    window: &NSWindow,
-    expected: Bounds,
-    primary_top: f64,
-) -> bool {
+fn frame_matches(window: &NSWindow, expected: Bounds, primary_top: f64) -> bool {
     let Some(content) = window.contentView() else {
         return false;
     };
@@ -269,10 +250,7 @@ impl NativeSurface {
         self.webview.evaluate_script_with_callback(script, callback)
     }
 
-    pub(super) fn set_bounds(
-        &mut self,
-        bounds: Bounds,
-    ) -> Result<Bounds, ServiceError> {
+    pub(super) fn set_bounds(&mut self, bounds: Bounds) -> Result<Bounds, ServiceError> {
         let bounds = bounds.validate()?;
         self.host
             .0
@@ -282,10 +260,7 @@ impl NativeSurface {
         Ok(bounds)
     }
 
-    pub(super) fn set_visible(
-        &mut self,
-        visible: bool,
-    ) -> Result<(), ServiceError> {
+    pub(super) fn set_visible(&mut self, visible: bool) -> Result<(), ServiceError> {
         self.host.0.setHidden(!visible);
         self.visible = visible;
         Ok(())
@@ -344,9 +319,7 @@ impl SurfaceRuntime {
         renderer: RendererOrigin,
         callbacks: SurfaceCallbacks,
     ) -> Result<NativeSurface, ServiceError> {
-        NativeSurface::create(
-            parent, view, bounds, visible, renderer, callbacks,
-        )
+        NativeSurface::create(parent, view, bounds, visible, renderer, callbacks)
     }
 }
 

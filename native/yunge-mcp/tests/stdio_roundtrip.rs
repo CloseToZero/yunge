@@ -16,16 +16,14 @@ use std::{
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use serde_json::{Value, json};
 
-const DISPATCH_FORM: &str =
-    "(progn (require 'yunge-mcp) (yunge-mcp-server-dispatch))";
+const DISPATCH_FORM: &str = "(progn (require 'yunge-mcp) (yunge-mcp-server-dispatch))";
 
 struct TestDirectory(PathBuf);
 
 impl TestDirectory {
     fn new() -> Result<Self, Box<dyn Error>> {
         let nonce = SystemTime::now().duration_since(UNIX_EPOCH)?.as_nanos();
-        let path = env::temp_dir()
-            .join(format!("yunge-mcp-stdio-{}-{nonce}", std::process::id()));
+        let path = env::temp_dir().join(format!("yunge-mcp-stdio-{}-{nonce}", std::process::id()));
         fs::create_dir(&path)?;
         Ok(Self(path))
     }
@@ -46,10 +44,7 @@ struct McpChild {
 }
 
 impl McpChild {
-    fn start(
-        directory: &Path,
-        fail_bridge: bool,
-    ) -> Result<Self, Box<dyn Error>> {
+    fn start(directory: &Path, fail_bridge: bool) -> Result<Self, Box<dyn Error>> {
         let current_executable = env::current_exe()?;
         let mut command = Command::new(env!("CARGO_BIN_EXE_yunge-mcp"));
         command
@@ -110,9 +105,7 @@ impl McpChild {
         let line = self
             .responses
             .recv_timeout(Duration::from_secs(5))
-            .map_err(|error| {
-                format!("timed out waiting for MCP response: {error}")
-            })?;
+            .map_err(|error| format!("timed out waiting for MCP response: {error}"))?;
         Ok(serde_json::from_str(&line)?)
     }
 
@@ -156,9 +149,7 @@ impl McpChild {
             .join()
             .map_err(|_| "MCP error reader panicked")?;
         if !status.success() {
-            return Err(
-                format!("MCP helper exited with {status}: {stderr}").into()
-            );
+            return Err(format!("MCP helper exited with {status}: {stderr}").into());
         }
         Ok(())
     }
@@ -190,9 +181,7 @@ fn fake_emacsclient() -> Result<(), Box<dyn Error>> {
         return Err("bridge changed its fixed dispatch form".into());
     }
     let build_id = arguments.get(eval + 2).ok_or("bridge omitted build ID")?;
-    if build_id.len() != 64
-        || !build_id.bytes().all(|byte| byte.is_ascii_hexdigit())
-    {
+    if build_id.len() != 64 || !build_id.bytes().all(|byte| byte.is_ascii_hexdigit()) {
         return Err("bridge supplied an invalid build ID".into());
     }
     let encoded = arguments
@@ -226,9 +215,7 @@ fn fake_emacsclient() -> Result<(), Box<dyn Error>> {
             _ => return Err("bridge changed the tool name".into()),
         },
         operation => {
-            return Err(
-                format!("unexpected bridge operation: {operation:?}").into()
-            );
+            return Err(format!("unexpected bridge operation: {operation:?}").into());
         }
     };
     let response = serde_json::to_vec(&response)?;
@@ -246,9 +233,7 @@ fn bridge_requests(log_file: &Path) -> Result<Vec<Value>, Box<dyn Error>> {
                 .iter()
                 .position(|argument| argument == "--eval")
                 .ok_or("logged bridge call omitted --eval")?;
-            if arguments.get(eval + 1).map(String::as_str)
-                != Some(DISPATCH_FORM)
-            {
+            if arguments.get(eval + 1).map(String::as_str) != Some(DISPATCH_FORM) {
                 return Err("logged bridge call changed dispatch form".into());
             }
             let encoded = arguments

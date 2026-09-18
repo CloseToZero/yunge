@@ -15,9 +15,8 @@ use base64::{Engine as _, engine::general_purpose::STANDARD};
 use rmcp::{
     ErrorData as McpError, ServerHandler, ServiceExt,
     model::{
-        CallToolRequestParams, CallToolResponse, CallToolResult, ContentBlock,
-        Implementation, ListToolsResult, PaginatedRequestParams,
-        ServerCapabilities, ServerInfo, Tool,
+        CallToolRequestParams, CallToolResponse, CallToolResult, ContentBlock, Implementation,
+        ListToolsResult, PaginatedRequestParams, ServerCapabilities, ServerInfo, Tool,
     },
     service::{RequestContext, RoleServer},
     transport::stdio,
@@ -26,8 +25,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use tokio::process::Command;
 
-const DISPATCH_FORM: &str =
-    "(progn (require 'yunge-mcp) (yunge-mcp-server-dispatch))";
+const DISPATCH_FORM: &str = "(progn (require 'yunge-mcp) (yunge-mcp-server-dispatch))";
 const BUILD_ID: &str = env!("YUNGE_MCP_BUILD_ID");
 
 #[derive(Clone, Debug)]
@@ -79,11 +77,9 @@ impl std::fmt::Display for BridgeError {
 impl Error for BridgeError {}
 
 impl EmacsBridge {
-    fn request_argument(
-        request: &BridgeRequest<'_>,
-    ) -> Result<String, BridgeError> {
-        let request_json = serde_json::to_vec(request)
-            .map_err(|error| BridgeError(error.to_string()))?;
+    fn request_argument(request: &BridgeRequest<'_>) -> Result<String, BridgeError> {
+        let request_json =
+            serde_json::to_vec(request).map_err(|error| BridgeError(error.to_string()))?;
         Ok(STANDARD.encode(request_json))
     }
 
@@ -95,9 +91,7 @@ impl EmacsBridge {
         Some(executable.parent()?.parent()?.join("runtime.json"))
     }
 
-    fn runtime_config_at(
-        file: &Path,
-    ) -> Result<Option<RuntimeConfig>, BridgeError> {
+    fn runtime_config_at(file: &Path) -> Result<Option<RuntimeConfig>, BridgeError> {
         if !file.exists() {
             return Ok(None);
         }
@@ -107,13 +101,12 @@ impl EmacsBridge {
                 file.display()
             ))
         })?;
-        let config: RuntimeConfig =
-            serde_json::from_slice(&bytes).map_err(|error| {
-                BridgeError(format!(
-                    "invalid runtime manifest {}: {error}",
-                    file.display()
-                ))
-            })?;
+        let config: RuntimeConfig = serde_json::from_slice(&bytes).map_err(|error| {
+            BridgeError(format!(
+                "invalid runtime manifest {}: {error}",
+                file.display()
+            ))
+        })?;
         if config.version != 1 {
             return Err(BridgeError(format!(
                 "unsupported runtime manifest version {}",
@@ -169,10 +162,7 @@ impl EmacsBridge {
         ))
     }
 
-    fn command_arguments(
-        &self,
-        request: &BridgeRequest<'_>,
-    ) -> Result<Vec<OsString>, BridgeError> {
+    fn command_arguments(&self, request: &BridgeRequest<'_>) -> Result<Vec<OsString>, BridgeError> {
         let request_argument = Self::request_argument(request)?;
         let mut arguments = self.connection_arguments.clone();
         arguments.extend([
@@ -185,27 +175,21 @@ impl EmacsBridge {
     }
 
     fn decode_response(stdout: &[u8]) -> Result<Value, BridgeError> {
-        let printed = std::str::from_utf8(stdout)
-            .map_err(|error| BridgeError(error.to_string()))?;
-        let encoded: String =
-            serde_json::from_str(printed.trim()).map_err(|error| {
-                BridgeError(format!(
-                    "invalid response from emacsclient: {error}"
-                ))
-            })?;
-        let response_json = STANDARD.decode(encoded).map_err(|error| {
-            BridgeError(format!("invalid response encoding: {error}"))
-        })?;
+        let printed =
+            std::str::from_utf8(stdout).map_err(|error| BridgeError(error.to_string()))?;
+        let encoded: String = serde_json::from_str(printed.trim())
+            .map_err(|error| BridgeError(format!("invalid response from emacsclient: {error}")))?;
+        let response_json = STANDARD
+            .decode(encoded)
+            .map_err(|error| BridgeError(format!("invalid response encoding: {error}")))?;
         let response: BridgeResponse = serde_json::from_slice(&response_json)
-            .map_err(|error| {
-            BridgeError(format!("invalid response from Yunge: {error}"))
-        })?;
+            .map_err(|error| BridgeError(format!("invalid response from Yunge: {error}")))?;
         if response.ok {
             Ok(response.value.unwrap_or(Value::Null))
         } else {
-            let error = response.error.ok_or_else(|| {
-                BridgeError("Yunge returned an unspecified error".into())
-            })?;
+            let error = response
+                .error
+                .ok_or_else(|| BridgeError("Yunge returned an unspecified error".into()))?;
             Err(BridgeError(format!(
                 "Yunge {}: {}",
                 error.kind, error.message
@@ -213,10 +197,7 @@ impl EmacsBridge {
         }
     }
 
-    async fn request(
-        &self,
-        request: &BridgeRequest<'_>,
-    ) -> Result<Value, BridgeError> {
+    async fn request(&self, request: &BridgeRequest<'_>) -> Result<Value, BridgeError> {
         let arguments = self.command_arguments(request)?;
         let mut command = Command::new(&self.program);
         let output = command
@@ -227,15 +208,13 @@ impl EmacsBridge {
             .kill_on_drop(true)
             .output()
             .await
-            .map_err(|error| {
-                BridgeError(format!("could not run emacsclient: {error}"))
-            })?;
+            .map_err(|error| BridgeError(format!("could not run emacsclient: {error}")))?;
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
-            let status = output.status.code().map_or_else(
-                || output.status.to_string(),
-                |code| code.to_string(),
-            );
+            let status = output
+                .status
+                .code()
+                .map_or_else(|| output.status.to_string(), |code| code.to_string());
             return Err(BridgeError(format!(
                 "emacsclient failed with status {}: {}",
                 status,
@@ -253,9 +232,8 @@ impl EmacsBridge {
                 arguments: None,
             })
             .await?;
-        serde_json::from_value(value).map_err(|error| {
-            BridgeError(format!("invalid Yunge tool descriptions: {error}"))
-        })
+        serde_json::from_value(value)
+            .map_err(|error| BridgeError(format!("invalid Yunge tool descriptions: {error}")))
     }
 
     async fn call_tool(
@@ -287,15 +265,13 @@ impl YungeMcpServer {
 
 impl ServerHandler for YungeMcpServer {
     fn get_info(&self) -> ServerInfo {
-        ServerInfo::new(
-            ServerCapabilities::builder().enable_tools().build(),
-        )
-        .with_server_info(
-            Implementation::new("yunge-mcp", env!("CARGO_PKG_VERSION"))
-                .with_title("芸阁（Yunge） MCP"),
-        )
-        .with_instructions(
-            "芸阁（Yunge） exposes the user's running Emacs to MCP clients. \
+        ServerInfo::new(ServerCapabilities::builder().enable_tools().build())
+            .with_server_info(
+                Implementation::new("yunge-mcp", env!("CARGO_PKG_VERSION"))
+                    .with_title("芸阁（Yunge） MCP"),
+            )
+            .with_instructions(
+                "芸阁（Yunge） exposes the user's running Emacs to MCP clients. \
 方寸（Fangcun） indexes ordinary Org files in configured 一隅（yiyu） note \
 roots and watches saved external changes automatically. Use Fangcun tools to \
 discover roots, search indexed node metadata, locate nodes, inspect semantic \
@@ -307,7 +283,7 @@ named target inside an ID node, use [[id:NODE-ID::target][DESCRIPTION]] and \
 define <<target>> there. Standalone target links are [[target][DESCRIPTION]] \
 or [[target]]. Radio targets are <<<radio target>>>; later exact plain-text \
 occurrences in the same document become links automatically.",
-        )
+            )
     }
 
     async fn list_tools(
@@ -333,10 +309,7 @@ occurrences in the same document become links automatically.",
             .await;
         Ok(match result {
             Ok(value) => CallToolResult::structured(value).into(),
-            Err(error) => CallToolResult::error(vec![ContentBlock::text(
-                error.to_string(),
-            )])
-            .into(),
+            Err(error) => CallToolResult::error(vec![ContentBlock::text(error.to_string())]).into(),
         })
     }
 }
@@ -360,10 +333,7 @@ mod tests {
         RuntimeConfig {
             version: 1,
             emacsclient: PathBuf::from("/runtime/emacsclient"),
-            connection_arguments: vec![
-                "--socket-name".into(),
-                "runtime".into(),
-            ],
+            connection_arguments: vec!["--socket-name".into(), "runtime".into()],
         }
     }
 
@@ -449,8 +419,7 @@ mod tests {
                 .to_vec()
         );
 
-        let bridge =
-            EmacsBridge::from_sources(Some(sample_runtime()), None, None);
+        let bridge = EmacsBridge::from_sources(Some(sample_runtime()), None, None);
         assert_eq!(
             bridge.program,
             PathBuf::from("/runtime/emacsclient").into_os_string()
@@ -469,9 +438,7 @@ mod tests {
     fn command_arguments_keep_connection_and_protocol_boundaries() {
         let bridge = EmacsBridge {
             program: OsString::from("emacsclient"),
-            connection_arguments: ["--socket-name", "work"]
-                .map(OsString::from)
-                .to_vec(),
+            connection_arguments: ["--socket-name", "work"].map(OsString::from).to_vec(),
         };
         let request = BridgeRequest {
             operation: "list-tools",
@@ -529,8 +496,7 @@ mod tests {
             .to_string();
         assert!(error.starts_with("invalid response encoding: "));
 
-        let invalid_response =
-            serde_json::to_vec(&STANDARD.encode(b"not json")).unwrap();
+        let invalid_response = serde_json::to_vec(&STANDARD.encode(b"not json")).unwrap();
         let error = EmacsBridge::decode_response(&invalid_response)
             .unwrap_err()
             .to_string();

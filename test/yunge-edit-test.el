@@ -6,6 +6,9 @@
 (require 'yunge-edit)
 (require 'replace)
 
+(ert-deftest yunge-edit-defaults-to-100-columns ()
+  (should (= (default-value 'fill-column) 100)))
+
 (ert-deftest yunge-edit-result-session-saves-touched-source-buffers ()
   (let* ((file (make-temp-file "yunge-edit-"))
          (source (find-file-noselect file))

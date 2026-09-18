@@ -7,16 +7,12 @@ use std::num::NonZeroIsize;
 use std::sync::Arc;
 use webview2_com::Microsoft::Web::WebView2::Win32::{
     COREWEBVIEW2_KEY_EVENT_KIND, COREWEBVIEW2_KEY_EVENT_KIND_KEY_DOWN,
-    COREWEBVIEW2_KEY_EVENT_KIND_SYSTEM_KEY_DOWN,
-    COREWEBVIEW2_PHYSICAL_KEY_STATUS,
+    COREWEBVIEW2_KEY_EVENT_KIND_SYSTEM_KEY_DOWN, COREWEBVIEW2_PHYSICAL_KEY_STATUS,
 };
-use webview2_com::{
-    AcceleratorKeyPressedEventHandler, FocusChangedEventHandler,
-};
+use webview2_com::{AcceleratorKeyPressedEventHandler, FocusChangedEventHandler};
 use windows::Win32::Foundation::HWND;
 use windows::Win32::UI::Input::KeyboardAndMouse::{
-    GetKeyState, VIRTUAL_KEY, VK_CONTROL, VK_MENU, VK_NEXT, VK_PRIOR, VK_SHIFT,
-    VK_SPACE,
+    GetKeyState, VIRTUAL_KEY, VK_CONTROL, VK_MENU, VK_NEXT, VK_PRIOR, VK_SHIFT, VK_SPACE,
 };
 use windows::Win32::UI::WindowsAndMessaging::IsWindow;
 
@@ -106,9 +102,7 @@ impl Bounds {
         if self.width > MAX_VIEW_EXTENT || self.height > MAX_VIEW_EXTENT {
             return Err(ServiceError::new(
                 "invalid-view-bounds",
-                format!(
-                    "view width and height must not exceed {MAX_VIEW_EXTENT}"
-                ),
+                format!("view width and height must not exceed {MAX_VIEW_EXTENT}"),
             ));
         }
         Ok(self)
@@ -139,10 +133,7 @@ impl ParentWindow {
         Ok(Self(value))
     }
 
-    pub(super) fn current(
-        value: u64,
-        _frame: Option<Bounds>,
-    ) -> Result<Self, ServiceError> {
+    pub(super) fn current(value: u64, _frame: Option<Bounds>) -> Result<Self, ServiceError> {
         Self::new(value)
     }
 }
@@ -168,10 +159,8 @@ impl NativeSurface {
             move |request| ipc(request),
         )?;
         let on_event = callbacks.event;
-        let accelerator_token =
-            install_accelerator_handler(&webview, view, Arc::clone(&on_event))?;
-        let (got_focus_token, lost_focus_token) =
-            install_focus_handlers(&webview, view, on_event)?;
+        let accelerator_token = install_accelerator_handler(&webview, view, Arc::clone(&on_event))?;
+        let (got_focus_token, lost_focus_token) = install_focus_handlers(&webview, view, on_event)?;
         Ok(Self {
             webview,
             accelerator_token,
@@ -194,39 +183,33 @@ impl NativeSurface {
         self.webview.evaluate_script_with_callback(script, callback)
     }
 
-    pub(super) fn set_bounds(
-        &mut self,
-        bounds: Bounds,
-    ) -> Result<Bounds, ServiceError> {
+    pub(super) fn set_bounds(&mut self, bounds: Bounds) -> Result<Bounds, ServiceError> {
         let bounds = bounds.validate()?;
-        self.webview.set_bounds(bounds).map_err(|error| {
-            ServiceError::new("view-update-failed", error.to_string())
-        })?;
+        self.webview
+            .set_bounds(bounds)
+            .map_err(|error| ServiceError::new("view-update-failed", error.to_string()))?;
         self.bounds = bounds;
         Ok(bounds)
     }
 
-    pub(super) fn set_visible(
-        &mut self,
-        visible: bool,
-    ) -> Result<(), ServiceError> {
-        self.webview.set_visible(visible).map_err(|error| {
-            ServiceError::new("view-update-failed", error.to_string())
-        })?;
+    pub(super) fn set_visible(&mut self, visible: bool) -> Result<(), ServiceError> {
+        self.webview
+            .set_visible(visible)
+            .map_err(|error| ServiceError::new("view-update-failed", error.to_string()))?;
         self.visible = visible;
         Ok(())
     }
 
     pub(super) fn focus(&self) -> Result<(), ServiceError> {
-        self.webview.focus().map_err(|error| {
-            ServiceError::new("view-focus-failed", error.to_string())
-        })
+        self.webview
+            .focus()
+            .map_err(|error| ServiceError::new("view-focus-failed", error.to_string()))
     }
 
     pub(super) fn focus_parent(&self) -> Result<(), ServiceError> {
-        self.webview.focus_parent().map_err(|error| {
-            ServiceError::new("view-focus-failed", error.to_string())
-        })
+        self.webview
+            .focus_parent()
+            .map_err(|error| ServiceError::new("view-focus-failed", error.to_string()))
     }
 
     pub(super) fn loaded(&self) -> bool {
@@ -287,8 +270,7 @@ impl Drop for NativeSurface {
         // WebView operations run on the service's single UI thread.
         unsafe {
             let controller = self.webview.controller();
-            let _ =
-                controller.remove_AcceleratorKeyPressed(self.accelerator_token);
+            let _ = controller.remove_AcceleratorKeyPressed(self.accelerator_token);
             let _ = controller.remove_GotFocus(self.got_focus_token);
             let _ = controller.remove_LostFocus(self.lost_focus_token);
         }
@@ -338,39 +320,37 @@ fn install_accelerator_handler(
     view: u64,
     on_event: EventHandler,
 ) -> Result<i64, ServiceError> {
-    let handler = AcceleratorKeyPressedEventHandler::create(Box::new(
-        move |_controller, args| {
-            let Some(args) = args else {
-                return Ok(());
-            };
-            let mut kind = COREWEBVIEW2_KEY_EVENT_KIND::default();
-            let mut key = 0;
-            let mut status = COREWEBVIEW2_PHYSICAL_KEY_STATUS::default();
-            // SAFETY: WebView2 owns the callback arguments for the duration
-            // of this callback and initializes both out parameters.
-            unsafe {
-                args.KeyEventKind(&mut kind)?;
-                args.VirtualKey(&mut key)?;
-                args.PhysicalKeyStatus(&mut status)?;
-                let routed = routed_key(
-                    kind,
+    let handler = AcceleratorKeyPressedEventHandler::create(Box::new(move |_controller, args| {
+        let Some(args) = args else {
+            return Ok(());
+        };
+        let mut kind = COREWEBVIEW2_KEY_EVENT_KIND::default();
+        let mut key = 0;
+        let mut status = COREWEBVIEW2_PHYSICAL_KEY_STATUS::default();
+        // SAFETY: WebView2 owns the callback arguments for the duration
+        // of this callback and initializes both out parameters.
+        unsafe {
+            args.KeyEventKind(&mut kind)?;
+            args.VirtualKey(&mut key)?;
+            args.PhysicalKeyStatus(&mut status)?;
+            let routed = routed_key(
+                kind,
+                key,
+                key_state(VK_CONTROL),
+                key_state(VK_MENU),
+                key_state(VK_SHIFT),
+            );
+            if let Some(key) = routed {
+                args.SetHandled(true)?;
+                on_event(SurfaceEvent::Accelerator {
+                    view,
                     key,
-                    key_state(VK_CONTROL),
-                    key_state(VK_MENU),
-                    key_state(VK_SHIFT),
-                );
-                if let Some(key) = routed {
-                    args.SetHandled(true)?;
-                    on_event(SurfaceEvent::Accelerator {
-                        view,
-                        key,
-                        repeat: status.WasKeyDown.as_bool(),
-                    });
-                }
+                    repeat: status.WasKeyDown.as_bool(),
+                });
             }
-            Ok(())
-        },
-    ));
+        }
+        Ok(())
+    }));
     let mut token = 0;
     // SAFETY: The callback remains owned by the controller until its token
     // is removed when `NativeSurface' is dropped.
@@ -378,9 +358,7 @@ fn install_accelerator_handler(
         webview
             .controller()
             .add_AcceleratorKeyPressed(&handler, &mut token)
-            .map_err(|error| {
-                ServiceError::new("view-create-failed", error.to_string())
-            })?;
+            .map_err(|error| ServiceError::new("view-create-failed", error.to_string()))?;
     }
     Ok(token)
 }
@@ -391,18 +369,14 @@ fn install_focus_handlers(
     on_event: EventHandler,
 ) -> Result<(i64, i64), ServiceError> {
     let got_events = Arc::clone(&on_event);
-    let got_handler = FocusChangedEventHandler::create(Box::new(
-        move |_controller, _args| {
-            got_events(SurfaceEvent::FocusGained { view });
-            Ok(())
-        },
-    ));
-    let lost_handler = FocusChangedEventHandler::create(Box::new(
-        move |_controller, _args| {
-            on_event(SurfaceEvent::FocusLost { view });
-            Ok(())
-        },
-    ));
+    let got_handler = FocusChangedEventHandler::create(Box::new(move |_controller, _args| {
+        got_events(SurfaceEvent::FocusGained { view });
+        Ok(())
+    }));
+    let lost_handler = FocusChangedEventHandler::create(Box::new(move |_controller, _args| {
+        on_event(SurfaceEvent::FocusLost { view });
+        Ok(())
+    }));
     let controller = webview.controller();
     let mut got_token = 0;
     let mut lost_token = 0;
@@ -411,17 +385,10 @@ fn install_focus_handlers(
     unsafe {
         controller
             .add_GotFocus(&got_handler, &mut got_token)
-            .map_err(|error| {
-                ServiceError::new("view-create-failed", error.to_string())
-            })?;
-        if let Err(error) =
-            controller.add_LostFocus(&lost_handler, &mut lost_token)
-        {
+            .map_err(|error| ServiceError::new("view-create-failed", error.to_string()))?;
+        if let Err(error) = controller.add_LostFocus(&lost_handler, &mut lost_token) {
             let _ = controller.remove_GotFocus(got_token);
-            return Err(ServiceError::new(
-                "view-create-failed",
-                error.to_string(),
-            ));
+            return Err(ServiceError::new("view-create-failed", error.to_string()));
         }
     }
     Ok((got_token, lost_token))

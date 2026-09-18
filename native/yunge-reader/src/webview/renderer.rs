@@ -7,13 +7,12 @@ use serde_json::{Value, json};
 
 use super::protocol::{PROTOCOL_VERSION, RENDERER_ACCELERATORS, Response};
 use super::{
-    EpubAppearance, EpubLocator, EpubNavigationTarget, EpubOutline,
-    EpubSearchCursor, EpubSearchMatch, EpubSelection, EpubStyle, EpubZoom,
-    MAX_EPUB_EXTERNAL_URI_BYTES, MAX_EPUB_OUTLINE_ITEMS,
-    MAX_EPUB_SEARCH_RESULT_BYTES, MAX_EPUB_SELECTION_CHARACTERS,
-    MAX_EPUB_SELECTION_RESULT_BYTES, MAX_RENDERER_ERROR_BYTES,
-    MAX_RENDERER_MESSAGE_BYTES, NavigationCommand, SearchDirection, ViewEvent,
-    ViewEventPayload, ViewSearchParams, ViewSelectionTextParams,
+    EpubAppearance, EpubLocator, EpubNavigationTarget, EpubOutline, EpubSearchCursor,
+    EpubSearchMatch, EpubSelection, EpubStyle, EpubZoom, MAX_EPUB_EXTERNAL_URI_BYTES,
+    MAX_EPUB_OUTLINE_ITEMS, MAX_EPUB_SEARCH_RESULT_BYTES, MAX_EPUB_SELECTION_CHARACTERS,
+    MAX_EPUB_SELECTION_RESULT_BYTES, MAX_RENDERER_ERROR_BYTES, MAX_RENDERER_MESSAGE_BYTES,
+    NavigationCommand, SearchDirection, ViewEvent, ViewEventPayload, ViewSearchParams,
+    ViewSelectionTextParams,
 };
 
 #[cfg(test)]
@@ -30,9 +29,7 @@ pub(super) struct RendererOrigin {
 }
 
 impl RendererOrigin {
-    pub(super) fn parse(
-        url: &str,
-    ) -> Result<Self, super::protocol::ServiceError> {
+    pub(super) fn parse(url: &str) -> Result<Self, super::protocol::ServiceError> {
         let uri: http::Uri = url.parse().map_err(|_| {
             super::protocol::ServiceError::new(
                 "invalid-renderer-url",
@@ -61,8 +58,7 @@ impl RendererOrigin {
             ));
         }
         let origin = format!("http://{authority}");
-        let resource_prefix =
-            format!("{origin}/{}/", token.unwrap_or_default());
+        let resource_prefix = format!("{origin}/{}/", token.unwrap_or_default());
         Ok(Self {
             url: url.to_owned(),
             blob_root: format!("blob:{origin}/"),
@@ -254,10 +250,7 @@ pub(super) fn shell_ready(request: &HttpRequest<String>) -> bool {
     )
 }
 
-pub(super) fn shell_ready_for(
-    origin: &RendererOrigin,
-    request: &HttpRequest<String>,
-) -> bool {
+pub(super) fn shell_ready_for(origin: &RendererOrigin, request: &HttpRequest<String>) -> bool {
     if !origin.source_allowed(&request.uri().to_string())
         || request.body().len() > MAX_RENDERER_MESSAGE_BYTES
     {
@@ -277,9 +270,9 @@ fn valid_external_uri(value: &str) -> bool {
     };
     !value.is_empty()
         && value.len() <= MAX_EPUB_EXTERNAL_URI_BYTES
-        && !value.chars().any(|character| {
-            character.is_whitespace() || character.is_control()
-        })
+        && !value
+            .chars()
+            .any(|character| character.is_whitespace() || character.is_control())
         && !scheme.is_empty()
         && scheme.bytes().enumerate().all(|(index, byte)| match byte {
             b'A'..=b'Z' | b'a'..=b'z' => true,
@@ -295,9 +288,7 @@ pub(super) struct RendererSearchCallback {
     pub(super) response: Value,
 }
 
-fn deserialize_present_option<'de, D, T>(
-    deserializer: D,
-) -> Result<Option<Option<T>>, D::Error>
+fn deserialize_present_option<'de, D, T>(deserializer: D) -> Result<Option<Option<T>>, D::Error>
 where
     D: serde::Deserializer<'de>,
     T: Deserialize<'de>,
@@ -316,21 +307,17 @@ pub(super) fn selection_text_response(
     value: &str,
 ) -> Response {
     if value.len() > MAX_EPUB_SELECTION_RESULT_BYTES {
-        return invalid_selection_result(
-            id,
-            "EPUB selection text result exceeds its byte limit",
-        );
+        return invalid_selection_result(id, "EPUB selection text result exceeds its byte limit");
     }
-    let envelope: RendererSelectionTextEnvelope =
-        match serde_json::from_str(value) {
-            Ok(envelope) => envelope,
-            Err(error) => {
-                return invalid_selection_result(
-                    id,
-                    format!("invalid EPUB selection text result: {error}"),
-                );
-            }
-        };
+    let envelope: RendererSelectionTextEnvelope = match serde_json::from_str(value) {
+        Ok(envelope) => envelope,
+        Err(error) => {
+            return invalid_selection_result(
+                id,
+                format!("invalid EPUB selection text result: {error}"),
+            );
+        }
+    };
     if envelope.ok {
         let Some(result) = envelope.result else {
             return invalid_selection_result(
@@ -347,19 +334,13 @@ pub(super) fn selection_text_response(
         let characters = match u32::try_from(result.text.chars().count()) {
             Ok(characters) => characters,
             Err(_) => {
-                return invalid_selection_result(
-                    id,
-                    "EPUB selection text chunk is too large",
-                );
+                return invalid_selection_result(id, "EPUB selection text chunk is too large");
             }
         };
         let next = match offset.checked_add(characters) {
             Some(next) => next,
             None => {
-                return invalid_selection_result(
-                    id,
-                    "EPUB selection text cursor overflowed",
-                );
+                return invalid_selection_result(id, "EPUB selection text cursor overflowed");
             }
         };
         let valid = result.total <= MAX_EPUB_SELECTION_CHARACTERS
@@ -368,20 +349,14 @@ pub(super) fn selection_text_response(
             && if result.done {
                 result.next_offset.is_none() && next == result.total
             } else {
-                characters > 0
-                    && next < result.total
-                    && result.next_offset == Some(next)
+                characters > 0 && next < result.total && result.next_offset == Some(next)
             };
         if !valid {
-            return invalid_selection_result(
-                id,
-                "EPUB selection text batch is inconsistent",
-            );
+            return invalid_selection_result(id, "EPUB selection text batch is inconsistent");
         }
         return Response::success(
             id,
-            serde_json::to_value(result)
-                .expect("validated selection text result is serializable"),
+            serde_json::to_value(result).expect("validated selection text result is serializable"),
         );
     }
     if envelope.result.is_some() {
@@ -391,18 +366,10 @@ pub(super) fn selection_text_response(
         );
     }
     let Some(error) = envelope.error else {
-        return invalid_selection_result(
-            id,
-            "failed EPUB selection text result has no error",
-        );
+        return invalid_selection_result(id, "failed EPUB selection text result has no error");
     };
-    if error.message.is_empty()
-        || error.message.len() > MAX_RENDERER_ERROR_BYTES
-    {
-        return invalid_selection_result(
-            id,
-            "EPUB selection text error message is invalid",
-        );
+    if error.message.is_empty() || error.message.len() > MAX_RENDERER_ERROR_BYTES {
+        return invalid_selection_result(id, "EPUB selection text error message is invalid");
     }
     let code = match error.code.as_str() {
         "invalid-selection-offset" => "invalid-selection-offset",
@@ -410,10 +377,7 @@ pub(super) fn selection_text_response(
         "selection-too-large" => "selection-too-large",
         "selection-unavailable" => "selection-unavailable",
         _ => {
-            return invalid_selection_result(
-                id,
-                "EPUB selection text error code is invalid",
-            );
+            return invalid_selection_result(id, "EPUB selection text error code is invalid");
         }
     };
     Response::failure(Some(id), code, error.message)
@@ -421,10 +385,7 @@ pub(super) fn selection_text_response(
 
 pub(super) fn current_selection_response(id: u64, value: &str) -> Response {
     if value.len() > MAX_EPUB_SELECTION_RESULT_BYTES {
-        return invalid_selection_result(
-            id,
-            "EPUB current selection exceeds its byte limit",
-        );
+        return invalid_selection_result(id, "EPUB current selection exceeds its byte limit");
     }
     let selection: Option<EpubSelection> = match serde_json::from_str(value) {
         Ok(selection) => selection,
@@ -446,48 +407,29 @@ fn invalid_search_result(id: u64, detail: impl Into<String>) -> Response {
     Response::failure(Some(id), "invalid-renderer-result", detail)
 }
 
-pub(super) fn search_response(
-    id: u64,
-    params: &ViewSearchParams,
-    value: &str,
-) -> Response {
+pub(super) fn search_response(id: u64, params: &ViewSearchParams, value: &str) -> Response {
     if value.len() > MAX_EPUB_SEARCH_RESULT_BYTES {
-        return invalid_search_result(
-            id,
-            "EPUB search result exceeds its byte limit",
-        );
+        return invalid_search_result(id, "EPUB search result exceeds its byte limit");
     }
     let envelope: RendererSearchEnvelope = match serde_json::from_str(value) {
         Ok(envelope) => envelope,
         Err(error) => {
-            return invalid_search_result(
-                id,
-                format!("invalid EPUB search result: {error}"),
-            );
+            return invalid_search_result(id, format!("invalid EPUB search result: {error}"));
         }
     };
     if envelope.ok {
         let Some(mut result) = envelope.result else {
-            return invalid_search_result(
-                id,
-                "successful EPUB search result has no payload",
-            );
+            return invalid_search_result(id, "successful EPUB search result has no payload");
         };
-        if envelope.error.is_some()
-            || result.matches.len() > params.match_limit as usize
-        {
-            return invalid_search_result(
-                id,
-                "successful EPUB search result is inconsistent",
-            );
+        if envelope.error.is_some() || result.matches.len() > params.match_limit as usize {
+            return invalid_search_result(id, "successful EPUB search result is inconsistent");
         }
-        result.cursor =
-            match result.cursor.map(EpubSearchCursor::validate).transpose() {
-                Ok(cursor) => cursor,
-                Err(error) => {
-                    return invalid_search_result(id, error.message);
-                }
-            };
+        result.cursor = match result.cursor.map(EpubSearchCursor::validate).transpose() {
+            Ok(cursor) => cursor,
+            Err(error) => {
+                return invalid_search_result(id, error.message);
+            }
+        };
         let cursor_is_valid = if result.done {
             result.cursor.is_none()
         } else if let Some(cursor) = result.cursor.as_ref() {
@@ -497,13 +439,9 @@ pub(super) fn search_response(
                 }
                 match (params.direction, old.offset, cursor.offset) {
                     (SearchDirection::Forward, None, Some(_)) => true,
-                    (SearchDirection::Forward, Some(old), Some(new)) => {
-                        new > old
-                    }
+                    (SearchDirection::Forward, Some(old), Some(new)) => new > old,
                     (SearchDirection::Backward, None, Some(_)) => true,
-                    (SearchDirection::Backward, Some(old), Some(new)) => {
-                        new < old
-                    }
+                    (SearchDirection::Backward, Some(old), Some(new)) => new < old,
                     _ => false,
                 }
             })
@@ -511,10 +449,7 @@ pub(super) fn search_response(
             false
         };
         if !cursor_is_valid {
-            return invalid_search_result(
-                id,
-                "EPUB search cursor did not advance",
-            );
+            return invalid_search_result(id, "EPUB search cursor did not advance");
         }
         let matches = result
             .matches
@@ -529,39 +464,24 @@ pub(super) fn search_response(
         };
         return Response::success(
             id,
-            serde_json::to_value(result)
-                .expect("validated search result is serializable"),
+            serde_json::to_value(result).expect("validated search result is serializable"),
         );
     }
     if envelope.result.is_some() {
-        return invalid_search_result(
-            id,
-            "failed EPUB search result contains a payload",
-        );
+        return invalid_search_result(id, "failed EPUB search result contains a payload");
     }
     let Some(error) = envelope.error else {
-        return invalid_search_result(
-            id,
-            "failed EPUB search result has no error",
-        );
+        return invalid_search_result(id, "failed EPUB search result has no error");
     };
-    if error.message.is_empty()
-        || error.message.len() > MAX_RENDERER_ERROR_BYTES
-    {
-        return invalid_search_result(
-            id,
-            "EPUB search error message is invalid",
-        );
+    if error.message.is_empty() || error.message.len() > MAX_RENDERER_ERROR_BYTES {
+        return invalid_search_result(id, "EPUB search error message is invalid");
     }
     let code = match error.code.as_str() {
         "invalid-search-cursor" => "invalid-search-cursor",
         "search-result-too-large" => "search-result-too-large",
         "search-unavailable" => "search-unavailable",
         _ => {
-            return invalid_search_result(
-                id,
-                "EPUB search error code is invalid",
-            );
+            return invalid_search_result(id, "EPUB search error code is invalid");
         }
     };
     Response::failure(Some(id), code, error.message)
@@ -622,8 +542,7 @@ fn search_callback_body(
     view: u64,
     request: &HttpRequest<String>,
 ) -> Option<RendererSearchCallback> {
-    let message: RendererSearchMessage =
-        serde_json::from_str(request.body()).ok()?;
+    let message: RendererSearchMessage = serde_json::from_str(request.body()).ok()?;
     if message.protocol != PROTOCOL_VERSION
         || message.event != "search-result"
         || message.request == 0
@@ -645,10 +564,7 @@ fn checked_renderer_error(protocol: u32, message: String) -> Option<String> {
 }
 
 #[cfg(test)]
-pub(super) fn event(
-    view: u64,
-    request: &HttpRequest<String>,
-) -> Option<ViewEvent> {
+pub(super) fn event(view: u64, request: &HttpRequest<String>) -> Option<ViewEvent> {
     if !app_renderer_source_allowed(&request.uri().to_string())
         || request.body().len() > MAX_RENDERER_MESSAGE_BYTES
     {
@@ -665,9 +581,7 @@ fn event_body(view: u64, request: &HttpRequest<String>) -> Option<ViewEvent> {
             key,
             repeat,
         } => {
-            if protocol != PROTOCOL_VERSION
-                || !RENDERER_ACCELERATORS.contains(&key.as_str())
-            {
+            if protocol != PROTOCOL_VERSION || !RENDERER_ACCELERATORS.contains(&key.as_str()) {
                 return None;
             }
             ViewEventPayload::Accelerator { key, repeat }
@@ -702,9 +616,7 @@ fn event_body(view: u64, request: &HttpRequest<String>) -> Option<ViewEvent> {
             user,
         } => {
             if protocol != PROTOCOL_VERSION
-                || outline_index.is_some_and(|index| {
-                    index as usize >= MAX_EPUB_OUTLINE_ITEMS
-                })
+                || outline_index.is_some_and(|index| index as usize >= MAX_EPUB_OUTLINE_ITEMS)
             {
                 return None;
             }
@@ -734,9 +646,7 @@ fn event_body(view: u64, request: &HttpRequest<String>) -> Option<ViewEvent> {
                 return None;
             }
             let outline = outline.validate().ok()?;
-            if outline_index
-                .is_some_and(|index| index as usize >= outline.items.len())
-            {
+            if outline_index.is_some_and(|index| index as usize >= outline.items.len()) {
                 return None;
             }
             ViewEventPayload::PublicationReady {
@@ -758,29 +668,21 @@ fn event_body(view: u64, request: &HttpRequest<String>) -> Option<ViewEvent> {
             if protocol != PROTOCOL_VERSION {
                 return None;
             }
-            let selection =
-                selection?.map(EpubSelection::validate).transpose().ok()?;
+            let selection = selection?.map(EpubSelection::validate).transpose().ok()?;
             ViewEventPayload::Selection { selection }
         }
-        RendererMessage::StyleError { protocol, message } => {
-            ViewEventPayload::StyleError {
-                message: checked_renderer_error(protocol, message)?,
-            }
-        }
+        RendererMessage::StyleError { protocol, message } => ViewEventPayload::StyleError {
+            message: checked_renderer_error(protocol, message)?,
+        },
         RendererMessage::ZoomChanged { protocol, scale } => {
-            if protocol != PROTOCOL_VERSION
-                || !scale.is_finite()
-                || scale <= 0.0
-            {
+            if protocol != PROTOCOL_VERSION || !scale.is_finite() || scale <= 0.0 {
                 return None;
             }
             ViewEventPayload::ZoomChanged { scale }
         }
-        RendererMessage::ZoomError { protocol, message } => {
-            ViewEventPayload::ZoomError {
-                message: checked_renderer_error(protocol, message)?,
-            }
-        }
+        RendererMessage::ZoomError { protocol, message } => ViewEventPayload::ZoomError {
+            message: checked_renderer_error(protocol, message)?,
+        },
     };
     Some(ViewEvent::new(view, payload))
 }
@@ -852,8 +754,8 @@ impl RendererCall {
     }
 
     fn script(&self) -> String {
-        let payload = serde_json::to_string(&self.payload)
-            .expect("renderer call payload is serializable");
+        let payload =
+            serde_json::to_string(&self.payload).expect("renderer call payload is serializable");
         let discard = if self.method.discards_result() {
             "void "
         } else {
@@ -921,10 +823,7 @@ fn appearance_call(view: u64, appearance: &EpubAppearance) -> RendererCall {
     )
 }
 
-pub(super) fn appearance_script(
-    view: u64,
-    appearance: &EpubAppearance,
-) -> String {
+pub(super) fn appearance_script(view: u64, appearance: &EpubAppearance) -> String {
     appearance_call(view, appearance).script()
 }
 
@@ -1011,10 +910,7 @@ fn set_selection_call(view: u64, selection: &EpubSelection) -> RendererCall {
     )
 }
 
-pub(super) fn set_selection_script(
-    view: u64,
-    selection: &EpubSelection,
-) -> String {
+pub(super) fn set_selection_script(view: u64, selection: &EpubSelection) -> String {
     set_selection_call(view, selection).script()
 }
 
@@ -1029,20 +925,16 @@ pub(super) fn current_selection_script(view: u64) -> String {
 fn selection_text_call(params: &ViewSelectionTextParams) -> RendererCall {
     RendererCall::new(
         RendererMethod::SelectionText,
-        serde_json::to_value(params)
-            .expect("selection text payload is serializable"),
+        serde_json::to_value(params).expect("selection text payload is serializable"),
     )
 }
 
-pub(super) fn selection_text_script(
-    params: &ViewSelectionTextParams,
-) -> String {
+pub(super) fn selection_text_script(params: &ViewSelectionTextParams) -> String {
     selection_text_call(params).script()
 }
 
 fn search_call(id: u64, params: &ViewSearchParams) -> RendererCall {
-    let mut payload =
-        serde_json::to_value(params).expect("search payload is serializable");
+    let mut payload = serde_json::to_value(params).expect("search payload is serializable");
     payload
         .as_object_mut()
         .expect("search payload is an object")
@@ -1054,11 +946,7 @@ pub(super) fn search_script(id: u64, params: &ViewSearchParams) -> String {
     search_call(id, params).script()
 }
 
-fn search_result_call(
-    view: u64,
-    selection: Option<&EpubSelection>,
-    reveal: bool,
-) -> RendererCall {
+fn search_result_call(view: u64, selection: Option<&EpubSelection>, reveal: bool) -> RendererCall {
     RendererCall::new(
         RendererMethod::SetSearchResult,
         json!({
@@ -1083,12 +971,11 @@ mod tests {
     use crate::webview::EpubZoomMode;
 
     fn recorded_script(script: &str) -> (bool, &str, Value) {
-        let (discards_result, script) =
-            if let Some(script) = script.strip_prefix("void ") {
-                (true, script)
-            } else {
-                (false, script)
-            };
+        let (discards_result, script) = if let Some(script) = script.strip_prefix("void ") {
+            (true, script)
+        } else {
+            (false, script)
+        };
         let invocation = script
             .strip_prefix("globalThis.yungeReader.")
             .and_then(|script| script.strip_suffix(");"))
@@ -1096,8 +983,7 @@ mod tests {
         let (method, payload) = invocation
             .split_once('(')
             .expect("renderer invocation has one payload");
-        let payload = serde_json::from_str(payload)
-            .expect("renderer invocation payload is JSON");
+        let payload = serde_json::from_str(payload).expect("renderer invocation payload is JSON");
         (discards_result, method, payload)
     }
 

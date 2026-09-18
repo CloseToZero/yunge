@@ -201,12 +201,7 @@ mod tests {
             assert!(contents.contains(&format!("CHAPTER {}", chapter.number)));
             assert!(contents.contains(chapter.marker));
             assert!(contents.contains("id=\"p-24\""));
-            assert!(
-                contents.contains(&format!(
-                    "cross chapter beacon {}",
-                    chapter.number
-                ))
-            );
+            assert!(contents.contains(&format!("cross chapter beacon {}", chapter.number)));
         }
     }
 
@@ -222,10 +217,7 @@ mod tests {
         ));
         write_fixture(&path).unwrap();
         let publication = Publication::open(&path).unwrap();
-        assert_eq!(
-            publication.metadata().layout,
-            PublicationLayout::Reflowable
-        );
+        assert_eq!(publication.metadata().layout, PublicationLayout::Reflowable);
         assert_eq!(publication.entry_count(), 7);
         drop(publication);
         fs::remove_file(path).unwrap();

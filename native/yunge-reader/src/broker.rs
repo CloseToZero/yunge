@@ -170,10 +170,7 @@ impl EpubBroker {
         })
     }
 
-    pub fn open(
-        &mut self,
-        path: impl AsRef<Path>,
-    ) -> Result<PublicationDescriptor, BrokerError> {
+    pub fn open(&mut self, path: impl AsRef<Path>) -> Result<PublicationDescriptor, BrokerError> {
         let path = path.as_ref();
         if !path.is_absolute() {
             return Err(BrokerError::new(
@@ -184,10 +181,7 @@ impl EpubBroker {
         let publication = Publication::open(path)?;
         let id = self.next_publication;
         self.next_publication = id.checked_add(1).ok_or_else(|| {
-            BrokerError::new(
-                "publication-id-exhausted",
-                "no publication IDs remain",
-            )
+            BrokerError::new("publication-id-exhausted", "no publication IDs remain")
         })?;
         let token = random_token()?;
         let descriptor = self.descriptor(id, &token, &publication);
@@ -196,10 +190,7 @@ impl EpubBroker {
             publication,
         }));
         let mut state = self.state.lock().map_err(|_| {
-            BrokerError::new(
-                "publication-store-failed",
-                "publication store failed",
-            )
+            BrokerError::new("publication-store-failed", "publication store failed")
         })?;
         state.tokens.insert(token, id);
         state.publications.insert(id, stored);
@@ -209,20 +200,14 @@ impl EpubBroker {
     pub fn info(&self, id: u64) -> Result<PublicationDescriptor, BrokerError> {
         let publication = self.publication(id)?;
         let publication = publication.lock().map_err(|_| {
-            BrokerError::new(
-                "publication-store-failed",
-                "publication store failed",
-            )
+            BrokerError::new("publication-store-failed", "publication store failed")
         })?;
         Ok(self.descriptor(id, &publication.token, &publication.publication))
     }
 
     pub fn close(&mut self, id: u64) -> Result<(), BrokerError> {
         let mut state = self.state.lock().map_err(|_| {
-            BrokerError::new(
-                "publication-store-failed",
-                "publication store failed",
-            )
+            BrokerError::new("publication-store-failed", "publication store failed")
         })?;
         let publication = state.publications.remove(&id).ok_or_else(|| {
             BrokerError::new(
@@ -232,12 +217,7 @@ impl EpubBroker {
         })?;
         let token = publication
             .lock()
-            .map_err(|_| {
-                BrokerError::new(
-                    "publication-store-failed",
-                    "publication store failed",
-                )
-            })?
+            .map_err(|_| BrokerError::new("publication-store-failed", "publication store failed"))?
             .token
             .clone();
         state.tokens.remove(&token);
@@ -246,28 +226,17 @@ impl EpubBroker {
 
     pub fn clear(&mut self) -> Result<(), BrokerError> {
         let mut state = self.state.lock().map_err(|_| {
-            BrokerError::new(
-                "publication-store-failed",
-                "publication store failed",
-            )
+            BrokerError::new("publication-store-failed", "publication store failed")
         })?;
         state.publications.clear();
         state.tokens.clear();
         Ok(())
     }
 
-    fn publication(
-        &self,
-        id: u64,
-    ) -> Result<Arc<Mutex<StoredPublication>>, BrokerError> {
+    fn publication(&self, id: u64) -> Result<Arc<Mutex<StoredPublication>>, BrokerError> {
         self.state
             .lock()
-            .map_err(|_| {
-                BrokerError::new(
-                    "publication-store-failed",
-                    "publication store failed",
-                )
-            })?
+            .map_err(|_| BrokerError::new("publication-store-failed", "publication store failed"))?
             .publications
             .get(&id)
             .cloned()
@@ -304,13 +273,12 @@ impl EpubBroker {
 
 impl HttpServer {
     fn start(state: Arc<Mutex<BrokerState>>) -> Result<Self, BrokerError> {
-        let listener =
-            TcpListener::bind(("127.0.0.1", 0)).map_err(|error| {
-                BrokerError::new(
-                    "epub-broker-unavailable",
-                    format!("could not bind EPUB broker: {error}"),
-                )
-            })?;
+        let listener = TcpListener::bind(("127.0.0.1", 0)).map_err(|error| {
+            BrokerError::new(
+                "epub-broker-unavailable",
+                format!("could not bind EPUB broker: {error}"),
+            )
+        })?;
         let address = listener.local_addr().map_err(|error| {
             BrokerError::new(
                 "epub-broker-unavailable",
@@ -339,21 +307,14 @@ impl HttpServer {
 impl Drop for HttpServer {
     fn drop(&mut self) {
         self.stopping.store(true, Ordering::Release);
-        let _ = TcpStream::connect_timeout(
-            &self.address,
-            Duration::from_millis(50),
-        );
+        let _ = TcpStream::connect_timeout(&self.address, Duration::from_millis(50));
         if let Some(thread) = self.thread.take() {
             let _ = thread.join();
         }
     }
 }
 
-fn serve_http(
-    listener: TcpListener,
-    state: Arc<Mutex<BrokerState>>,
-    stopping: Arc<AtomicBool>,
-) {
+fn serve_http(listener: TcpListener, state: Arc<Mutex<BrokerState>>, stopping: Arc<AtomicBool>) {
     let active = Arc::new(AtomicUsize::new(0));
     for connection in listener.incoming() {
         if stopping.load(Ordering::Acquire) {
@@ -364,10 +325,7 @@ fn serve_http(
         };
         if active.fetch_add(1, Ordering::AcqRel) >= MAX_ACTIVE_CONNECTIONS {
             active.fetch_sub(1, Ordering::AcqRel);
-            let _ = write_http_response(
-                &mut stream,
-                error_response(503, "EPUB broker is busy"),
-            );
+            let _ = write_http_response(&mut stream, error_response(503, "EPUB broker is busy"));
             continue;
         }
         let state = Arc::clone(&state);
@@ -387,9 +345,7 @@ fn serve_http(
     }
 }
 
-fn read_http_request(
-    stream: &mut TcpStream,
-) -> Result<HttpRequest, &'static str> {
+fn read_http_request(stream: &mut TcpStream) -> Result<HttpRequest, &'static str> {
     let mut header = Vec::with_capacity(1024);
     let mut chunk = [0_u8; 1024];
     while header.len() < MAX_HEADER_BYTES {
@@ -407,8 +363,7 @@ fn read_http_request(
     if !header.windows(4).any(|window| window == b"\r\n\r\n") {
         return Err("HTTP request headers are too large");
     }
-    let header = std::str::from_utf8(&header)
-        .map_err(|_| "HTTP request headers are not UTF-8")?;
+    let header = std::str::from_utf8(&header).map_err(|_| "HTTP request headers are not UTF-8")?;
     let request_line = header
         .split("\r\n")
         .next()
@@ -433,10 +388,7 @@ fn read_http_request(
     })
 }
 
-fn route_http(
-    state: &Arc<Mutex<BrokerState>>,
-    request: HttpRequest,
-) -> HttpResponse {
+fn route_http(state: &Arc<Mutex<BrokerState>>, request: HttpRequest) -> HttpResponse {
     let target = match request.target.split_once('?') {
         Some(_) => {
             return error_response(400, "resource queries are not supported");
@@ -491,10 +443,7 @@ fn route_http(
                 return error_response(413, "resource catalog is too large");
             }
             Err(_) => {
-                return error_response(
-                    500,
-                    "could not encode resource catalog",
-                );
+                return error_response(500, "could not encode resource catalog");
             }
         };
         return body_response(
@@ -622,10 +571,7 @@ fn epub_error_response(error: EpubError) -> HttpResponse {
     error_response(status, error.message())
 }
 
-fn write_http_response(
-    stream: &mut TcpStream,
-    response: HttpResponse,
-) -> std::io::Result<()> {
+fn write_http_response(stream: &mut TcpStream, response: HttpResponse) -> std::io::Result<()> {
     let reason = match response.status {
         200 => "OK",
         400 => "Bad Request",
@@ -670,9 +616,9 @@ fn decode_resource_path(encoded: &str) -> Result<String, &'static str> {
         .map_err(|_| "publication resource path is not UTF-8")?;
     if path.starts_with('/')
         || path.contains(['\\', '\0'])
-        || path.split('/').any(|component| {
-            component.is_empty() || matches!(component, "." | "..")
-        })
+        || path
+            .split('/')
+            .any(|component| component.is_empty() || matches!(component, "." | ".."))
     {
         return Err("publication resource path is not normalized");
     }
@@ -691,14 +637,11 @@ fn validate_percent_encoding(value: &str) -> Result<(), &'static str> {
             || !bytes[index + 1].is_ascii_hexdigit()
             || !bytes[index + 2].is_ascii_hexdigit()
         {
-            return Err(
-                "publication resource path has invalid percent encoding",
-            );
+            return Err("publication resource path has invalid percent encoding");
         }
         let first = bytes[index + 1].to_ascii_lowercase();
         let second = bytes[index + 2].to_ascii_lowercase();
-        if matches!((first, second), (b'2', b'f') | (b'5', b'c') | (b'0', b'0'))
-        {
+        if matches!((first, second), (b'2', b'f') | (b'5', b'c') | (b'0', b'0')) {
             return Err("publication resource path encodes a separator");
         }
         index += 3;
@@ -833,9 +776,7 @@ mod tests {
         let mut response = String::new();
         stream.read_to_string(&mut response).unwrap();
         assert!(response.starts_with("HTTP/1.1 200 OK\r\n"));
-        assert!(
-            response.contains("Content-Security-Policy: default-src 'none'")
-        );
+        assert!(response.contains("Content-Security-Policy: default-src 'none'"));
         assert!(response.contains("<!doctype html>"));
     }
 
@@ -880,8 +821,7 @@ mod tests {
     #[test]
     fn generated_resource_paths_preserve_normalization_invariants() {
         const ALPHABET: &[char] = &[
-            'a', 'Z', '0', '/', '.', '\\', '%', '2', 'f', '5', 'c', '0', '?',
-            '#', '\0', '界',
+            'a', 'Z', '0', '/', '.', '\\', '%', '2', 'f', '5', 'c', '0', '?', '#', '\0', '界',
         ];
         let mut state = 0x6a09_e667_f3bc_c909_u64;
         for _case in 0..10_000 {
@@ -924,10 +864,8 @@ mod tests {
         assert!(catalog.starts_with("HTTP/1.1 200 OK\r\n"));
         assert!(catalog.contains("\"path\":\"OPS/chapter.xhtml\""));
 
-        let resource_url =
-            format!("{}OPS/chapter.xhtml", descriptor.resource_root);
-        let resource =
-            String::from_utf8(request(&resource_url, "GET")).unwrap();
+        let resource_url = format!("{}OPS/chapter.xhtml", descriptor.resource_root);
+        let resource = String::from_utf8(request(&resource_url, "GET")).unwrap();
         assert!(resource.contains("Content-Type: application/xhtml+xml"));
         assert!(resource.contains("script-src 'none'"));
         assert!(resource.ends_with("<html><body>Chapter</body></html>"));
