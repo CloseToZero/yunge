@@ -7,6 +7,8 @@
 (require 'yunge-navigation)
 
 (declare-function evil-set-initial-state "evil-core" (mode state))
+(declare-function yunge-jump-history-track-command
+                  "yunge-jump-history" (command))
 (declare-function xref-edit-save-changes "xref" ())
 (declare-function xref-match-length "xref" (item))
 (declare-function xref-pulse-momentarily "xref" ())
@@ -58,6 +60,7 @@
     (evil-set-initial-state 'xref--xref-buffer-mode 'normal)
     (evil-set-initial-state 'xref--transient-buffer-mode 'normal)
     (evil-set-initial-state 'xref-edit-mode 'normal)
+    (yunge-jump-history-track-command 'xref-find-references)
     (yunge-key-evil-define 'normal xref--xref-buffer-mode-map
                            yunge-xref-normal-bindings)
     (yunge-key-evil-define 'normal xref--transient-buffer-mode-map

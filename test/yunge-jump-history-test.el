@@ -128,6 +128,29 @@
       (yunge-jump-history-test--kill older latest preview)
       (yunge-jump-history-test--reset))))
 
+(ert-deftest yunge-jump-history-defers-tracked-evil-jumps ()
+  (yunge-test-enable-evil)
+  (yunge-jump-history-test--reset)
+  (let ((older (yunge-jump-history-test--buffer " *yunge-jump-older*"))
+        (latest (yunge-jump-history-test--buffer " *yunge-jump-latest*")))
+    (unwind-protect
+        (save-window-excursion
+          (switch-to-buffer latest)
+          (goto-char 7)
+          (yunge-jump-history-test--record older 3)
+          (yunge-jump-history-backward)
+          (yunge-jump-history-track-command
+           'yunge-jump-history-test--navigate)
+
+          (let ((this-command 'yunge-jump-history-test--navigate))
+            (evil-set-jump))
+
+          (yunge-jump-history-forward)
+          (should (eq (current-buffer) latest))
+          (should (= (point) 7)))
+      (yunge-jump-history-test--kill older latest)
+      (yunge-jump-history-test--reset))))
+
 (ert-deftest yunge-jump-history-records-navigation-in-destination-window ()
   (yunge-test-enable-evil)
   (yunge-jump-history-test--reset)

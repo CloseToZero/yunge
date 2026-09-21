@@ -217,6 +217,10 @@ When BRANCH is non-nil, discard entries newer than the current one."
   (let* ((window (selected-window))
          (history (yunge-jump-history--history window)))
     (unless (or yunge-jump-history--moving
+                (and (symbolp this-command)
+                     (advice-member-p
+                      #'yunge-jump-history--track-navigation
+                      this-command))
                 (yunge-jump-history--history-pending history))
       (when-let* ((entry
                    (yunge-jump-history--entry position window)))
