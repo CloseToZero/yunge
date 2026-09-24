@@ -291,6 +291,10 @@ When ERROR-DATA is non-nil, explain why MODE could not start."
     (unless (advice-member-p wrapper (car entry))
       (advice-add (car entry) :override wrapper))))
 
+;; Emacs does not associate TypeScript module files with its built-in mode.
+(add-to-list 'auto-mode-alist
+             '("\\.\\(?:cts\\|mts\\)\\'" . typescript-ts-mode-maybe))
+
 ;; `markdown-ts-mode' is built in but experimental and intentionally has no
 ;; default file association in Emacs 31.  Keep it lazy while making it usable.
 (autoload 'markdown-ts-mode "markdown-ts-mode" nil t)
