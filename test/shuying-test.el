@@ -255,6 +255,67 @@
           (should (string-match-p "Consumer failed" warning)))
       (delete-directory root t))))
 
+(ert-deftest shuying-continues-after-a-cache-hit-callback-fails ()
+  (let* ((root (make-temp-file "shuying-cache-" t))
+         (shuying-cache-directory root)
+         (shuying-backends nil)
+         (shuying--pending-jobs (make-hash-table :test #'equal))
+         (shuying--waiting-batches nil)
+         (shuying--active-batch-count 0)
+         (shuying--scheduler-running nil)
+         (cached (shuying-test--spec "$cached$"))
+         (first (shuying-test--spec "$first$"))
+         (second (shuying-test--spec "$second$"))
+         (later (shuying-test--spec "$later$"))
+         seed-result results warnings)
+    (unwind-protect
+        (progn
+          (shuying-register-backend
+           'test
+           (lambda (requests complete)
+             (dolist (request requests)
+               (with-temp-file
+                   (shuying-backend-request-output-file request)
+                 (insert "artifact"))
+               (setf (shuying-backend-request-metadata request)
+                     '(:height 1.2 :depth 0.2))
+               (funcall complete request nil))))
+          (shuying-render
+           cached
+           (lambda (artifact error-data)
+             (setq seed-result (cons artifact error-data))))
+          (should seed-result)
+          (should-not (cdr seed-result))
+          (should (file-exists-p
+                   (shuying-artifact-path (car seed-result))))
+          (cl-labels ((record
+                       (label)
+                       (lambda (artifact error-data)
+                         (push (list label artifact error-data) results))))
+            (cl-letf (((symbol-function 'display-warning)
+                       (lambda (_type message &rest _arguments)
+                         (push message warnings))))
+              (shuying-render-batch
+               (list
+                (cons first (record 'first))
+                (cons cached
+                      (lambda (_artifact _error-data)
+                        (shuying-render first (record 'reentered))
+                        (error "Cache-hit consumer failed")))
+                (cons second (record 'second))))
+              (shuying-render later (record 'later))))
+          (should (seq-some
+                   (lambda (message)
+                     (string-match-p "Cache-hit consumer failed" message))
+                   warnings))
+          (dolist (label '(first reentered second later))
+            (let ((result (assoc label results)))
+              (should result)
+              (should-not (nth 2 result))
+              (should (file-exists-p
+                       (shuying-artifact-path (nth 1 result)))))))
+      (delete-directory root t))))
+
 (ert-deftest shuying-validates-a-batch-before-admitting-jobs ()
   (let* ((root (make-temp-file "shuying-cache-" t))
          (shuying-cache-directory root)

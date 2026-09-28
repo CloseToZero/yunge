@@ -191,7 +191,7 @@ Refuse to clear the cache while render jobs are pending."
       (prin1 (shuying--job-metadata job) (current-buffer)))))
 
 (defun shuying--notify-callbacks (callbacks artifact error-data)
-  "Notify CALLBACKS that ARTIFACT completed with ERROR-DATA."
+  "Notify CALLBACKS of ARTIFACT and ERROR-DATA, warning on callback errors."
   (dolist (callback callbacks)
     (condition-case callback-error
         (funcall callback artifact error-data)
@@ -358,7 +358,8 @@ Refuse to clear the cache while render jobs are pending."
   "Render REQUESTS through compatible backend batches.
 Each element of REQUESTS has the form (SPECIFICATION . CALLBACK).
 CALLBACK receives a `shuying-artifact' and an error value.  Cache hits complete
-immediately, while identical pending specifications share a job."
+immediately, while identical pending specifications share a job.  A callback
+error is reported as a warning without stopping other requests."
   (dolist (request requests)
     (shuying--validate-render-request request))
   (let (jobs)
@@ -374,7 +375,7 @@ immediately, while identical pending specifications share a job."
              (pending (gethash key shuying--pending-jobs)))
         (cond
          (artifact
-          (funcall callback artifact nil))
+          (shuying--notify-callbacks (list callback) artifact nil))
          (pending
           (push callback (shuying--job-callbacks pending)))
          (t
@@ -407,7 +408,7 @@ immediately, while identical pending specifications share a job."
 (defun shuying-render (specification callback)
   "Render SPECIFICATION and call CALLBACK with a Shuying artifact and error.
 Identical pending requests share one backend job.  Cached artifacts call
-CALLBACK immediately."
+CALLBACK immediately.  Callback errors are reported as warnings."
   (shuying-render-batch (list (cons specification callback))))
 
 (provide 'shuying)
