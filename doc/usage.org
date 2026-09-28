@@ -209,13 +209,14 @@ performs its ordinary buffer action.
 ** Separate tasks with tabs
 
 A tab remembers a window layout; it does not own a separate set of buffers.
-Create one with ~SPC TAB n~ and give it a task name. Set up its windows,
-then use ~SPC TAB TAB~ to switch to another tab. Both tabs can display the
-same buffer and see the same edits. The current tab name appears in the
-mode line when there is more than one tab.
+Create one with ~SPC TAB n~ and give it a task name. New names must be
+nonempty and distinct within the frame; surrounding whitespace is removed.
+Set up its windows, then use ~SPC TAB TAB~ to choose an existing tab.
+Both tabs can display the same buffer and see the same edits. The current
+tab name appears in the mode line when there is more than one tab.
 
-~SPC TAB r~ renames a tab, ~SPC TAB q~ closes it, and ~SPC TAB u~ restores
-a closed tab. Closing the tab leaves its buffers open.
+~SPC TAB r~ renames a tab using the same name rules. ~SPC TAB q~ closes it,
+and ~SPC TAB u~ restores a closed tab. Closing the tab leaves its buffers open.
 
 ** Save a layout across Emacs sessions
 
