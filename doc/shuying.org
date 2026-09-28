@@ -1,216 +1,40 @@
-#+title: 数影（Shuying）
+﻿#+title: 数影（Shuying）
 
-Shuying is an independent Emacs library for responsive, accurate LaTeX
-previews.  Org is its first front end, but rendering, scheduling, and caching
-belong to Shuying rather than to Org-specific configuration.
+Shuying renders Org LaTeX as cached SVG previews while keeping the source
+editable.  Yunge enables it in Org buffers; the rendering library can also
+serve other front ends.
 
-* Interaction
+* Start previewing
 
-The Org integration has one small interaction boundary:
+Open an Org file containing =\(x^2+y^2=z^2\)=.  In Yunge,
+=shuying-org-mode= starts with =org-mode=.  After a short idle pause, formulas
+visible in any window showing the buffer receive previews.  Move point into
+a formula to reveal its source; edit it and leave to request a fresh image.
+Opening a file does not compile every off-screen formula.
 
-- Point outside a LaTeX fragment shows its image.
-- Entering a fragment reveals its source.
-- Fragment display state belongs to the buffer rather than to a window.  When
-  several windows show the same buffer, entering or leaving a fragment in the
-  selected window changes that fragment in all of them; inactive windows do
-  not retain independent editing states.
-- Editing marks the fragment dirty without starting work for every keystroke.
-- Leaving a dirty fragment requests a new preview.
-- A late result from an older request cannot replace a newer result.
-- When an Org buffer is first displayed, scrolled, or resized, newly visible
-  fragments are requested without compiling every off-screen fragment.  All
-  windows showing the buffer contribute their visible ranges.
-- Rapid viewport changes replace the pending viewport update, so rendering
-  starts from the final visible range after scrolling settles.
-- Displaying rendered images rechecks the viewport until formulas exposed by
-  the changed layout are also populated.
-- Saving an Org buffer or changing the active theme rechecks visible previews.
-  Only formulas whose rendering inputs changed request new artifacts.
-- Inline previews use the height and depth reported by =dvisvgm=, or by
-  =preview.sty= for XDV input, to follow the surrounding text baseline.  Their
-  display height is expressed in =em=, so buffer-local font scaling resizes
-  cached SVGs without rerunning LaTeX.
-- SVG artifacts are tightly cropped.  The Org front end, rather than TeX's
-  page box, centers block math in the window text area.  Customize
-  =shuying-org-block-math-alignment= to retain the source column instead.
-- SVG artifacts use CSS =currentColor=.  Emacs resolves it from the live
-  display face, so theme changes require neither LaTeX nor an overlay scan.
-- Block math is centered only when its opening and closing physical lines
-  contain no other text.  Non-standalone block math remains previewed at its
-  source column because an overlay cannot reproduce TeX's line break faithfully.
-- Whitespace-only formulas are left as source and are not rendered.  Artifacts
-  with no visible geometry also remain source-visible without reporting an
-  error or being rendered again.
+To enable the Org integration outside Yunge, put Shuying on =load-path= and
+add:
 
-The Org adapter keeps a buffer-local catalog of fragment bounds and source
-text.  It builds the catalog with Org's parser, reuses it while the text is
-unchanged, and rebuilds it the next time fragments are enumerated after an
-edit.  Visible ranges are matched against the position-ordered catalog
-without reparsing the buffer.
+#+begin_src emacs-lisp
+(require 'shuying-org)
+(add-hook 'org-mode-hook #'shuying-org-mode)
+#+end_src
 
-Only automatic viewport discovery is delayed.  Manual previews and previews
-requested after leaving an edited fragment enter the renderer immediately.
+Yunge's default preview uses =xelatex= and =dvisvgm=.  Emacs must find both
+on =exec-path=.  The TeX installation needs =preview.sty= and the packages
+used by the Org export preamble.  Yunge adds =amssymb= and =ctex= for XeLaTeX,
+so its Unicode and Chinese setup also needs the relevant math, font, and CJK
+files.
 
-Numbered LaTeX environments follow their order in the Org buffer.  Each row
-of a multi-equation environment advances the counter unless it uses
-=\nonumber=, =\notag=, or =\tag=; row breaks inside nested environments do
-not affect the outer sequence.
+| Package or group                        | Files to check                                          | Use                                   |
+|-----------------------------------------+---------------------------------------------------------+---------------------------------------|
+| =preview=                               | =preview.sty=                                           | Isolate formulas and report geometry. |
+| =amsmath=, =amsfonts=                   | =amsmath.sty=, =amssymb.sty=                            | Common Org math and symbols.          |
+| =fontspec=, =xecjk=, =ctex=, =zhnumber= | =fontspec.sty=, =xeCJK.sty=, =ctex.sty=, =zhnumber.sty= | Yunge's XeLaTeX/CJK preamble.         |
+| =mylatexformat=                         | =mylatexformat.ltx=                                     | Optional preamble precompilation.     |
 
-Manual commands preview or clear a fragment, region, section, or buffer.
-Continuous rendering while typing is separate from this basic interaction and
-only belongs here if it proves useful in practice.
-
-* Library boundary
-
-The source layout is:
-
-- =shuying.el= owns render specifications, jobs, backends, and the cache.
-- =shuying-latex.el= runs batched LaTeX and dvisvgm processes.
-- =shuying-org.el= finds Org fragments and manages their display lifecycle.
-- =yunge-org.el= enables Shuying and assigns user-facing key bindings.
-
-The core must not depend on Org syntax or overlays.  An adapter supplies source
-text and context, then consumes completed render artifacts.
-
-* Render specifications
-
-A render specification contains every input that can change an artifact:
-
-- source text;
-- preamble and TeX engine;
-- backend, backend options, and output format;
-- foreground and background colors;
-- scale, page width, and equation-numbering context; and
-- a Shuying cache-format version.
-
-The hash of the complete render specification is the cache key.  A cache hit
-therefore means that all rendering inputs match, not merely that the source
-text matches.  Each cached image has a small sidecar containing backend
-metadata such as width, height, and depth.  The renderer owns that metadata;
-front ends decide how to apply it to their display system.
-
-=M-x shuying-clear-cache= removes completed artifacts and their metadata.
-It preserves precompiled formats, render work, and diagnostic logs, and
-refuses to run while rendering is in progress.
-
-Rendering cache, work, and LaTeX format files default below
-=shuying-state-directory= (=var/shuying/= under =user-emacs-directory=).
-Set this option before loading Shuying to choose another root. The individual
-=shuying-cache-directory=, =shuying-work-directory=, and
-=shuying-latex-format-directory= options can override their locations.
-
-An Org fragment also has independent display and work state:
-
-- display: source or image;
-- content: clean or dirty; and
-- work: idle or rendering, with a monotonically increasing generation.
-
-The generation is checked when asynchronous work completes.  This makes stale
-result rejection part of the model instead of an overlay-specific workaround.
-Each displayed overlay also remembers its render specification hash.  A later
-viewport pass can therefore distinguish an existing preview from one rendered
-with an obsolete preamble, color, scale, or backend configuration.
-
-* Foundations
-
-Shuying owns fragment discovery, display state, render specifications, cache
-keys, artifact locations, and the backend protocol from the beginning.  These
-concepts form the stable boundary between front ends and renderers.
-
-A backend accepts a compatible group of render requests and a completion
-function.  It completes each request independently, either immediately or
-asynchronously.  This keeps process management out of the Org adapter.
-
-* Scheduler and LaTeX renderer
-
-The scheduler accepts requests from every Shuying front end.  Identical render
-specifications share one pending job.  Compatible batches enter a FIFO queue,
-and at most =shuying-max-concurrent-batches= are owned by backends at once.  A
-batch keeps its scheduler slot until every request in it has completed.
-
-The direct TeX and =dvisvgm= backend uses this pipeline:
-
-1. Return cache hits immediately.
-2. Collect misses with compatible preambles and rendering options.
-3. Warm each new MiKTeX preamble through a serialized installer lane.
-4. Reuse or asynchronously build one precompiled format when the selected
-   engine supports it.
-5. Compile each compatible batch in one temporary TeX document.
-6. Convert every page to a tightly bounded SVG and collect its baseline
-   geometry.
-7. Map each SVG and its metadata back to the originating request.
-8. Publish each artifact and metadata sidecar atomically.
-9. Check the request generation before changing a buffer display.
-
-The TeX engine and dvisvgm run as a nonblocking process chain.  A batch uses an
-isolated working directory below =shuying-work-directory=.  Successful work is
-removed after its artifacts are published; failed work preserves a process log
-buffer for diagnosis.  A page containing a TeX error is never published, even
-if the engine left a partial intermediate page, so missing text cannot become a
-silent partial preview.
-
-The Org front end uses the same export environment for its snippet preamble and
-engine choice.  This configuration defaults =org-latex-compiler= to =xelatex=
-and adds =ctex= to XeLaTeX documents, so Org export and Shuying both support
-Unicode Chinese text.  A file-local =#+LATEX_COMPILER:= overrides the default
-for both paths.  =shuying-latex-engine-command= remains an explicit preview-only
-override for diagnostics or unusual toolchains.
-
-Precompiled formats are keyed by the complete preamble, preview setup, engine,
-and Shuying cache version, then retained below =shuying-latex-format-directory=.  Batches
-waiting for the same missing format share one build.  A batch normally exposes
-the cached format in its working directory with a hard link; filesystems that
-cannot create that link fall back to a local copy.  If a cached format fails,
-Shuying retries the batch once with the complete preamble.  The format is only
-discarded when that retry succeeds, distinguishing a stale format from an
-ordinary error in the fragment or preamble.
-
-MiKTeX warm-ups use the same complete-preamble key, independently of fragment
-source.  Consequently, changes to =#+LATEX_HEADER=, =#+LATEX_HEADER_EXTRA=,
-the document class, compiler, or other Org export inputs produce a new cold
-key.  Compatible requests share one warm-up, while distinct cold keys queue
-behind one package-installer lane.  MiKTeX is allowed to install missing
-packages only in that lane; format builds and ordinary batch compilers disable
-the installer explicitly.  A failed warm-up is retried once because MiKTeX can
-install a discovered package while still failing the process that requested
-it.  Warm state is session-local, and stale Org request generations still
-prevent an older preamble result from replacing a newer preview.
-
-Backends encapsulate process topology and artifact production.  Other engines
-or image formats do not add conditionals throughout the scheduler or the Org
-adapter.
-
-* External environment
-
-Shuying diagnoses missing tools and never silently installs a TeX distribution.
-A TeX installation is large, platform-managed state and may require
-administrator access.  MiKTeX is the one package-management exception: its
-configured on-demand installer may add a missing package during the serialized
-preamble warm-up described above.  Use =M-x shuying-setup= to install and verify
-the supported baseline explicitly.
-
-** Required programs
-
-The configured rendering path requires these commands on =exec-path=:
-
-- =xelatex= compiles a temporary Unicode document to XDV.
-- =dvisvgm= converts XDV pages to SVG.
-
-The backend also maps =pdflatex= and =lualatex= document compilers to their DVI
-output modes.  The classic =latex= command remains available for an unset
-compiler or an explicit engine override.
-
-The setup command, package diagnostics, and conditional integration tests also
-use =kpsewhich= to locate TeX files.  It is not called while rendering a
-preview.
-
-The backend resolves the engine and converter before creating render work or
-starting a process.  When either is unavailable, automatic previews remain
-quiet and stay eligible for a later preview request; an explicit preview
-reports the missing command and, on Windows, points to =M-x shuying-setup=.
-Existing cache hits remain displayable without the external toolchain.
-
-Verify them with:
+Check the commands and representative files from the same environment that
+starts Emacs:
 
 #+begin_src shell
 xelatex --version
@@ -219,170 +43,162 @@ kpsewhich preview.sty
 kpsewhich ctex.sty
 #+end_src
 
-** Required TeX packages
+=kpsewhich= helps diagnose missing packages and is used by Windows setup;
+rendering itself invokes the selected TeX engine and =dvisvgm=.  A different
+Org compiler or custom =#+LATEX_HEADER:= may require other files.
 
-Package names below are TeX package names, not necessarily operating-system
-package names.
+** Install or repair the toolchain
 
-| TeX package | Required file | Purpose |
-|-------------+---------------+---------|
-| =preview=   | =preview.sty= | Isolate fragments and report their geometry. |
-| =amsmath=   | =amsmath.sty= | Standard mathematical environments. |
-| =amsfonts=  | =amssymb.sty= | Symbols such as =\mathbb= under XeLaTeX. |
-| =fontspec=  | =fontspec.sty= | Unicode font selection for XeLaTeX. |
-| =xecjk=     | =xeCJK.sty=   | CJK font and character handling. |
-| =ctex=      | =ctex.sty=    | Chinese document configuration. |
-| =zhnumber=  | =zhnumber.sty= | Chinese number support loaded by =ctex=. |
+On Windows, =M-x shuying-setup= asks before running the bundled setup.  If
+MiKTeX is absent, it can download and install per-user Basic MiKTeX; it
+refuses to install a second distribution when another LaTeX command is
+present.  It checks the published installer SHA-256, rejects an invalid
+Authenticode signature, installs its package baseline, and verifies programs
+and TeX files.  Setup is explicit: opening a buffer or requesting a preview
+does not install a TeX distribution.  Setup configures MiKTeX to install
+missing packages without a prompt.  A first preview with a new preamble may
+use that installer during its preamble check; ordinary render batches do not.
+Read =*Shuying setup*= for progress or errors.  Setup can be rerun after failure:
+it reuses installed packages and does not roll them back.  The command
+currently supports Windows only.
 
-The optional =mylatexformat= package provides =mylatexformat.ltx= and enables
-preamble precompilation.  Rendering still works with complete preambles when
-that package is unavailable or precompilation fails.
+On macOS and GNU/Linux, install a TeX distribution with your system's normal
+installation method, then check the commands and files above.  The official
+[[https://tug.org/mactex/][MacTeX]] and [[https://tug.org/texlive/acquire.html][TeX Live]]
+pages describe distribution choices; [[https://miktex.org/download][MiKTeX's download page]] covers Windows.
+A smaller distribution may need additional packages for your document's
+preamble.  Restart Emacs or update its =exec-path= if manual installation
+changes the executable search path.
 
-The following are not Shuying runtime requirements, but are a useful baseline
-for mathematical notes and custom preambles:
+* Edit and control previews
 
-| TeX package | Representative files | Purpose |
-|-------------+----------------------+---------|
-| =mathtools= | =mathtools.sty=      | Extensions and fixes for =amsmath=. |
-| =graphics=  | =graphicx.sty=, =color.sty= | Graphics and basic colors. |
-| =xcolor=    | =xcolor.sty=         | Richer color handling. |
-| =ulem=      | =ulem.sty=           | Underline and strikeout commands. |
+Entering a formula reveals its text; leaving it displays the image or starts
+a render if it changed.  All windows showing the same Org buffer share its
+previews: entering a formula in the selected window reveals its source in
+every window.  In View mode, the preview at point remains visible.
 
-Individual notes may introduce further dependencies through their preamble;
-Shuying reports the missing file from the TeX log rather than guessing
-packages.
+Scrolling, resizing, and saving recheck visible formulas.  Cached images do
+not need another TeX run.  Empty formulas and renders without visible geometry
+remain source text.
 
-Verify the baseline files with:
+Inline images use measured height and depth to follow the text baseline.
+Their height is expressed in =em=, so buffer-local text scaling resizes a
+cached image without rerunning TeX.
 
-#+begin_src shell
-kpsewhich preview.sty
-kpsewhich mylatexformat.ltx
-kpsewhich amsmath.sty
-kpsewhich amssymb.sty
-kpsewhich mathtools.sty
-kpsewhich graphicx.sty
-kpsewhich xcolor.sty
-kpsewhich ulem.sty
-kpsewhich fontspec.sty
-kpsewhich xeCJK.sty
-kpsewhich ctex.sty
-kpsewhich zhnumber.sty
-#+end_src
+Standalone block math is tightly cropped and centered in the window text
+area by default.  A block sharing its physical line with other text stays
+at its source column.  SVG colors follow the live display face, so a theme
+change does not require a new SVG merely to recolor it.
 
-** Windows
+In Yunge, these keys are available in Evil Normal state in an Org buffer.
+The =M-x= commands work without Evil.
 
-A per-user Basic MiKTeX installation is recommended because it is small and
-does not require administrator access.  A shared MiKTeX installation or
-another TeX distribution works as long as the required programs and files are
-available.  For MiKTeX, refresh its package database and install the explicit
-baseline:
+| Key       | Command                      | Effect                                |
+|-----------+------------------------------+---------------------------------------|
+| =SPC m p= | =shuying-org-preview=        | Preview a region, formula, or section. |
+| =SPC m P= | =shuying-org-preview-buffer= | Preview every formula in this buffer. |
 
-#+begin_src powershell
-initexmf --set-config-value=[MPM]AutoInstall=1
-miktex packages update-package-database
-miktex packages install preview mylatexformat amsmath amsfonts graphics cm-super
-miktex packages install mathtools xcolor ulem
-miktex packages install xetex fontspec xecjk ctex zhnumber
-miktex fndb refresh
-miktex fontmaps configure
-#+end_src
+=shuying-org-preview= chooses the active region first, the formula at point
+next, and otherwise the current Org section.  Prefix arguments change it:
 
-On Windows, =M-x shuying-setup= performs this setup explicitly.  It downloads
-the current official installer when MiKTeX is absent, verifies its published
-SHA-256, verifies its Authenticode signature when one is present, requests a
-private unattended install, installs the package baseline above, and verifies
-every required program and file.  An unsigned installer is accepted only
-after its SHA-256 matches the digest published alongside it on MiKTeX's HTTPS
-download page; a present but invalid signature is rejected.  The command is
-never called during startup or preview rendering.  Other platforms are
-rejected until their setup paths can be tested.
+| Prefix        | Effect                                           |
+|---------------+--------------------------------------------------|
+| =C-u=         | Clear previews in the region or current section. |
+| =C-u C-u=     | Preview the whole buffer.                        |
+| =C-u C-u C-u= | Clear previews throughout the buffer.            |
 
-Package installation is idempotent: each package is queried immediately
-before installation and an existing package is skipped.  This avoids treating
-MiKTeX's nonzero "package is already installed" result as a setup failure,
-including when an earlier package installed a later one as a dependency.
-Every setup run also configures missing packages to install without a modal
-prompt.  Running the command again therefore migrates an existing MiKTeX
-installation as well as completing a partial package baseline.
+A section means the current heading's own text, not its descendants.
+=M-x shuying-org-clear-buffer= also removes every displayed preview.  Clearing
+previews does not disable automatic previewing: visible formulas may reappear.
+Toggle =M-x shuying-org-mode= off to stop the Org integration and clear its
+previews.  Yunge remaps Org's =org-latex-preview= to =shuying-org-preview=.
 
-Each invocation uses a private temporary directory.  The directory and the
-downloaded installer are removed after success, ordinary failure, or process
-startup failure, while the =*Shuying setup*= buffer is retained for diagnosis.
-A cancelled Windows installer can hold its downloaded executable briefly, so
-both the setup process and Emacs retry cleanup before reporting a leftover.
-PowerShell and native-tool output is normalized to UTF-8 before Emacs displays
-the log.  Setup does not uninstall MiKTeX or roll back packages after a later
-stage fails: some state may have existed before the command, so removing it
-would be unsafe.  The operation is repeatable and a later invocation continues
-from the installed state.  If Emacs itself is forcibly terminated, its
-temporary directory may remain in =setup/= below =shuying-state-directory= and can be removed
-manually.
+* Configure rendering
 
-MiKTeX can install a missing package on demand, but unattended preview jobs
-must not wait behind an installation dialog.  The setup command configures
-missing-package installation to =Always=; the equivalent manual setting is in
-MiKTeX Console.  The explicit baseline includes =cm-super= because Org's
-default T1 text encoding needs its scalable outlines when a document explicitly
-selects pdfLaTeX and uses commands such as =\text=.  The XeLaTeX baseline adds
-=xetex=, =fontspec=, =xecjk=, =ctex=, and =zhnumber= for Unicode Chinese.
-=zhnumber= remains explicit so the supported baseline is deterministic without
-depending on a first preview.  Packages introduced by custom preambles can use
-the serialized warm-up instead.  File and font maps are refreshed after
-installation so new fonts are visible to the converter immediately.  The
-setup command refreshes the current Emacs process after the installer changes
-=PATH=; restart Emacs if manual installation changes it instead.
+The Org adapter uses Org's LaTeX export preamble and compiler.  Yunge defaults
+=org-latex-compiler= to =xelatex= and adds =ctex= for XeLaTeX.  A file-local
+=#+LATEX_COMPILER:= changes both export and previews.  Set
+=shuying-latex-engine-command= to override only previews with a command
+prefix such as =("xelatex" "-no-pdf")=.  The adapter also maps =latex=,
+=pdflatex=, and =lualatex= to DVI-producing commands when Org selects them.
 
-** macOS
+| Option                              | Default        | Use                                                                        |
+|-------------------------------------+----------------+----------------------------------------------------------------------------|
+| =shuying-org-block-math-alignment=  | =center=       | Set =source= to keep block math at its source column.                      |
+| =shuying-org-visible-preview-delay= | =0.15= seconds | Delay viewport discovery until scrolling settles.                          |
+| =shuying-max-concurrent-batches=    | =4=            | Limit concurrently running render batches.                                |
+| =shuying-latex-converter-command=   | =("dvisvgm")=  | Override the SVG converter command prefix.                                 |
+| =shuying-latex-precompile-preamble= | =t=            | Reuse precompiled formats when available; otherwise use the full preamble. |
+| =org-format-latex-options= =:scale= | Org's value    | Change the rendered formula size and cache key.                            |
 
-BasicTeX, the small TeX Live distribution published with MacTeX, is the
-recommended macOS setup.  Full MacTeX and other compatible TeX distributions
-also work.  Add the required backend and packages to BasicTeX with =tlmgr=:
+Use Emacs text scaling when you only need a temporary per-buffer size change.
 
-#+begin_src shell
-sudo tlmgr update --self
-sudo tlmgr install dvisvgm preview mylatexformat amsmath amsfonts graphics
-sudo tlmgr install mathtools xcolor ulem xetex fontspec xecjk ctex zhnumber
-#+end_src
+Shuying reuses a cached image when its source and rendering settings match.
+Cached images can be displayed even while TeX is unavailable.  Numbered
+environments follow their order in the Org buffer; changing an earlier
+equation can refresh later numbers.
 
-The DVI-to-SVG path does not need MacTeX's optional Ghostscript extras.  Those
-extras are relevant when =dvisvgm= processes PDF or PostScript input.
+=shuying-state-directory= defaults to =var/shuying/= under
+=user-emacs-directory=.  Set it before loading Shuying to relocate defaults
+for cache, render work, formats, and Windows setup files.  Explicit
+=shuying-cache-directory=, =shuying-work-directory=, and
+=shuying-latex-format-directory= values take precedence.  Yunge supplies
+its own runtime root unless one was already configured.
 
-** GNU/Linux
+=M-x shuying-clear-cache= deletes cached images and their metadata.  It refuses
+to run while rendering is pending and leaves precompiled formats, render
+work, and log buffers alone.  New previews recreate deleted artifacts.
 
-Distribution-managed TeX Live packages are recommended so the operating
-system remains the owner of the installation.  An upstream TeX Live or another
-compatible distribution also works.  On Debian and Ubuntu, the corresponding
-packages are:
+* Diagnose a missing preview
 
-#+begin_src shell
-sudo apt install texlive-latex-base texlive-latex-recommended
-sudo apt install texlive-plain-generic preview-latex-style dvisvgm
-sudo apt install texlive-latex-extra texlive-xetex texlive-lang-chinese
-#+end_src
+Run =M-x shuying-org-preview= on the formula to surface errors that automatic
+viewport previewing leaves quiet when a tool is missing.  Check that Emacs
+can find the engine and =dvisvgm=, then use =kpsewhich= to locate a missing
+=.sty= file.  Custom Org preambles can add dependencies beyond the table.
+The error message names the relevant log buffer: =*Shuying LaTeX*= for
+rendering, =*Shuying LaTeX warm-up*= for package preparation, or
+=*Shuying LaTeX precompile*= for preamble compilation.  Windows installation
+uses =*Shuying setup*=.  A failed page is not published as a partial preview,
+and its source remains visible.
 
-On Arch Linux, they are:
+If a formula stays as source without an error, check that it contains
+visible math and that point has left it.  After changing compiler, preamble,
+or appearance settings, save the buffer or request a preview to recheck
+visible formulas.  A cached artifact is reused only when its rendering
+inputs match.
 
-#+begin_src shell
-sudo pacman -S texlive-latex texlive-latexrecommended
-sudo pacman -S texlive-latexextra texlive-plaingeneric dvisvgm
-sudo pacman -S texlive-xetex texlive-langchinese
-#+end_src
+* Render from another front end
 
-Other distributions divide TeX Live differently.  Their package search can
-identify the operating-system packages that provide =preview.sty= and the
-other files above.  Avoid mixing a system-managed TeX Live with =tlmgr=.
+Create a specification with =make-shuying-render-spec=.  Its fields describe
+the source, preamble, engine, backend, backend options, output format, colors,
+scale, page width, equation number, and cache format version.  Set
+=cache-version= to =shuying-cache-format-version=.  These fields together
+identify the cached artifact; include every input your backend uses.
 
-* Testing
+Call =(shuying-render specification callback)= for one render, or pass a list
+of =(SPECIFICATION . CALLBACK)= pairs to =shuying-render-batch=.  The callback
+receives two arguments, =ARTIFACT= and =ERROR=.  On success, =ERROR= is nil;
+use =shuying-artifact-path= and =shuying-artifact-metadata= to read the result.
+On failure, =ARTIFACT= is nil and =ERROR= describes the problem.
 
-Unit tests use fake backends and temporary caches, so the ordinary test suite
-does not require TeX.  The same backend contract tests cover immediate and
-deferred completion.  Conditional end-to-end tests compile fragments with the
-real TeX and =dvisvgm= programs, including Chinese text through XeLaTeX, and
-verify SVG output, cache reuse, and stale-result rejection.
+Completion can happen before the render call returns, including on a cache
+hit.  Keep the specification unchanged until completion, and check that your
+display target and request are still current before showing a late result.
+Callbacks should not signal errors: an error from a cache-hit callback
+propagates to the caller.  Identical pending specifications share a render;
+compatible requests can share a backend call while completing independently.
 
-* References
+Register a renderer with =(shuying-register-backend name function batch-key-function)=.
+The optional batch-key function receives a specification; only equal keys
+for the same backend share a call.  Without it, all requests for that backend
+are considered compatible.
 
-- [[https://orgmode.org/manual/LaTeX-Previews.html][Org manual: LaTeX previews]]
-- [[https://docs.miktex.org/manual/miktex-packages.html][MiKTeX packages]]
-- [[https://tug.org/mactex/morepackages.html][MacTeX and BasicTeX packages]]
-- [[https://tug.org/texlive/][TeX Live]]
+The renderer receives a list of =shuying-backend-request= objects and a
+completion function.  Read each request's =specification=, write its result
+to =output-file=, and set =metadata= if needed.  Call
+=(funcall complete request nil)= on success or
+=(funcall complete request error-data)= on failure, exactly once per request.
+Use an Emacs condition such as ='(error "Rendering failed")= for error data.
+Completion may happen after the renderer returns.  If the renderer signals
+an error, Shuying fails its unfinished requests.  Shuying manages cache
+publication and reuse; the front end decides how to display each artifact.
