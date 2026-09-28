@@ -295,6 +295,11 @@ Before assigning an uppercase letter, check its Evil meaning.  Keys such as
 
 * Dired
 
+~C~ copies files and ~R~ moves or renames them.  Both suggest a destination
+from another visible Dired window, choosing the one you selected most
+recently.  With no other visible Dired window, they suggest the current
+directory.
+
 Use ~y f~ to copy file names, ~y p~ for absolute paths, and ~y P~ for paths
 relative to the project root.  On a file line, these commands copy the marked
 files, or the file at point when nothing is marked.  Multiple names are
@@ -315,6 +320,9 @@ Copy here, Move here, Link here, or Cancel.  Choose the action in this menu;
 keyboard modifiers do not select it.  Open visits the files in Emacs.  Copy,
 move, and link use the target Dired directory.  Cancel leaves the files
 unchanged.
+
+Opening a project directory or one of its subdirectories in Dired adds the
+project root to Emacs's known projects.  Ordinary directories are not added.
 
 * Org buffers
 
