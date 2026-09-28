@@ -118,6 +118,12 @@ to match saved Org files. Run =M-x fangcun-db-rebuild= to parse every file again
 when recovering from a damaged or suspect index. Neither command rewrites notes.
 Set =fangcun-native-helper-enabled= to =nil= to disable the helper.
 
+When moving a node between files, keep its =ID= and save both files, then run
+=M-x fangcun-db-sync=. If synchronization reports a duplicate ID, use
+=M-x fangcun-check= to find it, correct and save the notes, and synchronize
+again. A failed synchronization or file-event batch keeps the previous index;
+queries may still show the old locations until synchronization succeeds.
+
 The helper may build asynchronously through Cargo; diagnostics appear in
 =*Fangcun Helper Build*=. =M-x fangcun-native-build= rebuilds it after changing
 its Rust sources. Its command-line protocol is documented in the

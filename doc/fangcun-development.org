@@ -40,6 +40,24 @@ Positions and line numbers describe the content that was read. They can
 become stale after an edit. Node navigation resolves an ID again in the
 destination buffer rather than treating an indexed position as permanent.
 
+* Applying file changes
+
+Complete synchronization and a queued batch of file events use the same
+update operation. Read every changed file before changing the database, then
+replace all affected file entries in one SQLite transaction. Remove the old
+entries before inserting new nodes so an ID can move between files within
+the batch. A parsing error or duplicate ID leaves the previous index intact.
+
+File events name the paths to reconcile; they do not describe the final note
+contents. Read those paths from disk when processing the batch, and remove
+entries for paths that no longer exist. Emacs rename and delete operations
+submit their affected paths together as well.
+
+Atomicity covers one batch. Separate saves can still expose a temporary
+duplicate ID, for example when a destination is saved before the source of
+a moved node. After correcting the saved files, run =fangcun-db-sync= to
+reconcile the whole index. Automatic failures warn without retrying in a loop.
+
 * Verification
 
 Run the Fangcun Lisp checks from the repository root:

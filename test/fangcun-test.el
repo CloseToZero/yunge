@@ -1006,57 +1006,76 @@
         (save-buffer))
       (should-not (file-exists-p fangcun-database-file)))))
 
-(ert-deftest fangcun-native-events-reconcile-each-path-once ()
-  (let ((fangcun--native-event-timer nil)
-        (fangcun--native-pending-files
-         (make-hash-table :test #'equal))
-        (fangcun--native-pending-full-sync-p nil)
-        (fangcun--session-active-p t)
-        timers
-        scheduled
-        cancelled
-        reconciled)
-    (cl-letf (((symbol-function 'run-with-idle-timer)
-               (lambda (_seconds _repeat function &rest arguments)
-                 (let ((timer (make-symbol "native-event-timer")))
-                   (push timer timers)
-                   (push (list timer function arguments) scheduled)
-                   timer)))
-              ((symbol-function 'timerp)
-               (lambda (timer) (memq timer timers)))
-              ((symbol-function 'cancel-timer)
-               (lambda (timer)
-                 (push timer cancelled)))
-              ((symbol-function 'file-exists-p)
-               (lambda (_file) t))
-              ((symbol-function 'file-regular-p)
-               (lambda (_file) t))
-              ((symbol-function 'fangcun--reconcile-file)
-               (lambda (file) (push file reconciled))))
-      (cl-labels
-          ((run-latest
-            ()
-            (pcase-let ((`(,_timer ,function ,arguments)
-                         (seq-find
-                          (lambda (entry)
-                            (not (memq (car entry) cancelled)))
-                          scheduled)))
-              (apply function arguments))))
-        (fangcun--queue-native-files
-         '("C:/notes/one.org" "C:/notes/one.org"))
-        (fangcun--queue-native-files '("C:/notes/two.org"))
-        (run-latest)
-        (should
-         (equal
-          (sort (mapcar #'file-name-nondirectory reconciled) #'string<)
-          '("one.org" "two.org")))
+(ert-deftest fangcun-native-events-move-ids-between-existing-files ()
+  (fangcun-test-with-notes
+    (fangcun-test--write-file
+     work-file
+     (concat
+      ":PROPERTIES:\n:ID: work-file\n:END:\n"
+      "* Work heading\n:PROPERTIES:\n:ID: work-heading\n:END:\n"))
+    (fangcun-db-sync)
+    (fangcun-test--write-file
+     personal-file
+     (concat
+      ":PROPERTIES:\n:ID: personal-file\n:END:\n"
+      "#+title: Personal\n"
+      "* Moved work heading\n:PROPERTIES:\n:ID: work-heading\n:END:\n"
+      "[[id:theorem][Moved reference]]\n"))
+    (fangcun-test--write-file
+     work-file
+     (concat
+      ":PROPERTIES:\n:ID: work-file\n:END:\n"
+      "* Moved theorem\n:PROPERTIES:\n:ID: theorem\n:END:\n"))
+    (set-file-times personal-file (time-add (current-time) 2))
+    (set-file-times work-file (time-add (current-time) 2))
+    (fangcun--queue-native-files (list work-file personal-file))
+    (cancel-timer fangcun--native-event-timer)
+    (fangcun--process-native-events)
+    (let ((theorem (fangcun-node-from-id "theorem"))
+          (work-heading (fangcun-node-from-id "work-heading")))
+      (should (equal (fangcun-node-file theorem) "projects/status.org"))
+      (should (equal (fangcun-node-title theorem) "Moved theorem"))
+      (should (equal (fangcun-node-file work-heading) "theorems.org"))
+      (should (equal (fangcun-node-title work-heading)
+                     "Moved work heading")))
+    (should
+     (equal (mapcar (lambda (item)
+                      (fangcun-node-id
+                       (fangcun-backlink-node item)))
+                    (fangcun-backlink-list "theorem"))
+            '("work-heading")))))
 
-        (setq reconciled nil)
-        (fangcun--queue-native-files '("C:/notes/one.org"))
-        (run-latest)
-        (should
-         (equal (mapcar #'file-name-nondirectory reconciled)
-                '("one.org")))))))
+(ert-deftest fangcun-native-events-roll-back-a-failed-batch ()
+  (fangcun-test-with-notes
+    (fangcun-db-sync)
+    (fangcun-test--write-file
+     personal-file
+     (concat
+      ":PROPERTIES:\n:ID: personal-file\n:END:\n"
+      "#+title: Changed but unindexed\n"
+      "[[id:work-file][New reference]]\n"))
+    (fangcun-test--write-file
+     work-file
+     (concat
+      ":PROPERTIES:\n:ID: work-file\n:END:\n"
+      "* Duplicate\n:PROPERTIES:\n:ID: personal-file\n:END:\n"))
+    (set-file-times personal-file (time-add (current-time) 2))
+    (set-file-times work-file (time-add (current-time) 2))
+    (fangcun--queue-native-files (list personal-file work-file))
+    (cancel-timer fangcun--native-event-timer)
+    (let (warning)
+      (cl-letf (((symbol-function 'display-warning)
+                 (lambda (_type message &rest _arguments)
+                   (setq warning message))))
+        (fangcun--process-native-events))
+      (should (string-match-p "reconciliation failed" warning)))
+    (should (equal (fangcun-node-title
+                    (fangcun-node-from-id "personal-file"))
+                   "Personal Notes"))
+    (should (equal (fangcun-node-file
+                    (fangcun-node-from-id "theorem"))
+                   "theorems.org"))
+    (should-not (fangcun-backlink-list "work-file"))))
 
 (ert-deftest fangcun-native-events-reconcile-a-renamed-file-before-its-new-path ()
   (fangcun-test-with-notes

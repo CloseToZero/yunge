@@ -823,6 +823,33 @@ When NO-MESSAGE is non-nil, do not report the indexed counts."
       (when (file-exists-p replacement-file)
         (delete-file replacement-file)))))
 
+(defun fangcun--apply-file-changes (database changed deleted)
+  "Replace CHANGED file states and remove DELETED keys in DATABASE.
+Parse every changed file first, then replace all affected rows in one
+transaction so node IDs can move between files."
+  (let ((parsed
+         (mapcar
+          (lambda (state)
+            (cons
+             state
+             (fangcun-org-read-file
+              (fangcun-file-state-yiyu state)
+              (fangcun-file-state-absolute-file state))))
+          changed)))
+    (with-sqlite-transaction database
+      (dolist (key
+               (append deleted
+                       (mapcar #'fangcun--file-state-key changed)))
+        (sqlite-execute
+         database
+         (concat
+          "DELETE FROM files "
+          "WHERE yiyu_id = ? AND file = ?")
+         (vector (car key) (cdr key))))
+      (dolist (entry parsed)
+        (fangcun--insert-file database (car entry))
+        (fangcun--insert-file-data database (cdr entry))))))
+
 (defun fangcun--sync-database (states &optional no-message)
   "Synchronize an existing Fangcun database with file STATES.
 When NO-MESSAGE is non-nil, do not report the changed file counts."
@@ -854,35 +881,12 @@ When NO-MESSAGE is non-nil, do not report the changed file counts."
         database-states)
        (setq changed (nreverse changed)
              deleted (nreverse deleted))
-       ;; Parse before changing the database.  A parse error therefore leaves
-       ;; the last successful index untouched.
-       (let ((parsed
-              (mapcar
-               (lambda (state)
-                 (cons
-                  state
-                  (fangcun-org-read-file
-                   (fangcun-file-state-yiyu state)
-                   (fangcun-file-state-absolute-file state))))
-               changed)))
-         (with-sqlite-transaction database
-           (dolist (key
-                    (append deleted
-                            (mapcar #'fangcun--file-state-key changed)))
-             (sqlite-execute
-              database
-              (concat
-               "DELETE FROM files "
-               "WHERE yiyu_id = ? AND file = ?")
-              (vector (car key) (cdr key))))
-           (dolist (entry parsed)
-             (fangcun--insert-file database (car entry))
-             (fangcun--insert-file-data database (cdr entry))))
-         (unless no-message
-           (message
-            "Fangcun synchronized files: %d added, %d updated, %d removed"
-            added-count updated-count (length deleted)))
-         (fangcun--database-counts database))))))
+       (fangcun--apply-file-changes database changed deleted)
+       (unless no-message
+         (message
+          "Fangcun synchronized files: %d added, %d updated, %d removed"
+          added-count updated-count (length deleted)))
+       (fangcun--database-counts database)))))
 
 ;;;###autoload
 (defun fangcun-db-rebuild ()
@@ -1187,17 +1191,15 @@ Return the normalized configured YIYUS, obtaining them when omitted."
   yiyus)
 
 (defun fangcun--db-update-file-in-yiyu
-    (file yiyu &optional no-message read-disk)
+    (file yiyu &optional no-message)
   "Replace database entries for saved Org FILE owned by YIYU.
-When NO-MESSAGE is non-nil, do not report the indexed counts.
-When READ-DISK is non-nil, ignore an unsaved visiting buffer."
+When NO-MESSAGE is non-nil, do not report the indexed counts."
   (unless (file-regular-p file)
     (user-error "Fangcun file does not exist: %s" file))
   (unless (string-match-p "\\.org\\'" file)
     (user-error "Fangcun only indexes Org files: %s" file))
   (when-let* ((buffer (find-buffer-visiting file)))
-    (when (and (not read-disk)
-               (buffer-modified-p buffer))
+    (when (buffer-modified-p buffer)
       (user-error "Save the Fangcun file before updating it")))
   (unless (file-exists-p fangcun-database-file)
     (user-error "Run fangcun-db-sync before updating individual files"))
@@ -1259,59 +1261,64 @@ When READ-DISK is non-nil, ignore an unsaved visiting buffer."
                          relative-file)))))
     (cons (elt row 0) (elt row 1))))
 
-(defun fangcun--forget-file-in-yiyu (file yiyu)
-  "Remove indexed data for FILE owned by YIYU."
-  (let ((relative-file
-         (file-relative-name file (fangcun-yiyu-root yiyu))))
-    (fangcun--call-with-database
-     (lambda (database)
-       (sqlite-execute
-        database
-        (concat
-         "DELETE FROM files "
-         "WHERE yiyu_id = ? AND file = ?")
-        (vector (fangcun-yiyu-id yiyu) relative-file))))))
-
-(defun fangcun--reconcile-file (file)
-  "Reconcile one absolute FILE with the active Fangcun database."
-  (when (and fangcun--session-active-p
-             (file-exists-p fangcun-database-file)
-             (string-match-p "\\.org\\'" file))
-    (when-let* ((yiyu
-                 (fangcun--yiyu-containing-file
-                  file fangcun--session-yiyus)))
-      (if (file-regular-p file)
-          (let* ((state (fangcun--read-file-state yiyu file))
-                 (relative-file
-                  (fangcun-file-state-relative-file state))
-                 (current
-                  (cons (fangcun-file-state-mtime state)
-                        (fangcun-file-state-size state)))
-                 (stored
-                  (fangcun--call-with-database
-                   (lambda (database)
-                     (fangcun--database-file-state
-                      database yiyu relative-file)))))
-            (unless (equal stored current)
-              (fangcun--db-update-file-in-yiyu
-               file yiyu t t)))
-        (fangcun--forget-file-in-yiyu file yiyu)))))
+(defun fangcun--reconcile-files (files)
+  "Update indexed Org FILES from one event batch atomically."
+  (when (and files
+             fangcun--session-active-p
+             (file-exists-p fangcun-database-file))
+    (let ((managed
+           (delq nil
+                 (mapcar
+                  (lambda (file)
+                    (when (and file (string-match-p "\\.org\\'" file))
+                      (when-let* ((absolute-file (expand-file-name file))
+                                  (yiyu
+                                   (fangcun--yiyu-containing-file
+                                    absolute-file fangcun--session-yiyus)))
+                        (cons absolute-file yiyu))))
+                  files))))
+      (when managed
+        (fangcun--call-with-database
+         (lambda (database)
+           (unless (fangcun--database-yiyus-match-p
+                    database fangcun--session-yiyus)
+             (user-error
+              "Fangcun yiyu configuration changed; run fangcun-db-sync"))
+           (let ((seen (make-hash-table :test #'equal))
+                 changed deleted)
+             (dolist (entry managed)
+               (let* ((file (car entry))
+                      (yiyu (cdr entry))
+                      (relative-file
+                       (file-relative-name file
+                                           (fangcun-yiyu-root yiyu)))
+                      (key (cons (fangcun-yiyu-id yiyu) relative-file)))
+                 (unless (gethash key seen)
+                   (puthash key t seen)
+                   (let ((stored
+                          (fangcun--database-file-state
+                           database yiyu relative-file)))
+                     (if (file-regular-p file)
+                         (let* ((state (fangcun--read-file-state yiyu file))
+                                (current
+                                 (cons (fangcun-file-state-mtime state)
+                                       (fangcun-file-state-size state))))
+                           (unless (equal stored current)
+                             (push state changed)))
+                       (when stored
+                         (push key deleted)))))))
+             (fangcun--apply-file-changes
+              database (nreverse changed) (nreverse deleted)))))))))
 
 (defun fangcun--process-native-events ()
   "Reconcile file events queued by the native monitor."
   (setq fangcun--native-event-timer nil)
   (let ((full-sync fangcun--native-pending-full-sync-p)
-        missing-files
-        existing-files)
+        files)
     (setq fangcun--native-pending-full-sync-p nil)
     (maphash
      (lambda (file _value)
-       ;; A rename can report its old and new Org paths as separate events.
-       ;; Remove every vanished path first so that a node ID may move to its
-       ;; new file without colliding with the row still owned by the old one.
-       (if (file-regular-p file)
-           (push file existing-files)
-         (push file missing-files)))
+       (push file files))
      fangcun--native-pending-files)
     (clrhash fangcun--native-pending-files)
     (when (and fangcun--session-active-p
@@ -1319,8 +1326,7 @@ When READ-DISK is non-nil, ignore an unsaved visiting buffer."
       (condition-case error-data
           (if full-sync
               (fangcun--sync-yiyus fangcun--session-yiyus t)
-            (dolist (file (nconc missing-files existing-files))
-              (fangcun--reconcile-file file)))
+            (fangcun--reconcile-files files))
         (error
          (display-warning
           'fangcun
@@ -1333,15 +1339,8 @@ When READ-DISK is non-nil, ignore an unsaved visiting buffer."
   (when (and fangcun--session-active-p
              (file-exists-p fangcun-database-file))
     (condition-case error-data
-        (progn
-          (dolist (file old-files)
-            (when (string-match-p "\\.org\\'" file)
-              (when-let* ((yiyu
-                           (fangcun--yiyu-containing-file
-                            file fangcun--session-yiyus)))
-                (fangcun--forget-file-in-yiyu file yiyu))))
-          (when new-file
-            (fangcun--reconcile-file new-file)))
+        (fangcun--reconcile-files
+         (append old-files (when new-file (list new-file))))
       (error
        (display-warning
         'fangcun
