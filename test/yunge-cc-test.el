@@ -11,8 +11,6 @@
    project))
 
 (ert-deftest yunge-cc-h-files-default-to-c++-mode ()
-  (should (eq (cdr (assoc yunge-cc-header-regexp auto-mode-alist))
-              'c++-mode))
   (with-temp-buffer
     (let ((buffer-file-name "example.h")
           (enable-local-variables nil)
@@ -22,50 +20,45 @@
 
 (ert-deftest yunge-cc-project-can-use-c-mode-for-h-files ()
   (let* ((root (make-temp-file "yunge-c-project-" t))
+         (directory (expand-file-name "src/" root))
          (locals-file (expand-file-name dir-locals-file root))
          (dir-locals-class-alist nil)
          (dir-locals-directory-cache nil)
-         project-current-arguments)
+         (major-mode-remap-alist nil)
+         buffers saved-locals)
     (unwind-protect
         (progn
+          (make-directory (expand-file-name ".git/" root))
+          (make-directory directory)
+          (dolist (name '("example.h" "example.inc" "settings.el"))
+            (with-temp-file (expand-file-name name directory)))
           (with-temp-file locals-file
             (prin1
              '((auto-mode-alist . (("\\.inc\\'" . c-mode)))
                (nil . ((fill-column . 79)))
-               (emacs-lisp-mode . ((indent-tabs-mode . nil))))
+               (emacs-lisp-mode . ((tab-width . 3))))
              (current-buffer)))
-          (cl-letf (((symbol-function 'project-current)
-                     (lambda (&optional maybe-prompt directory)
-                       (setq project-current-arguments
-                             (list maybe-prompt directory))
-                       'test-project))
-                    ((symbol-function 'project-root)
-                     (lambda (project)
-                       (should (eq project 'test-project))
-                       root)))
-            (yunge-project-use-c-mode-for-headers)
-            ;; Repeating the command must replace, not duplicate, the rule.
-            (yunge-project-use-c-mode-for-headers))
-          (should (equal project-current-arguments '(t nil)))
-          (with-current-buffer (find-file-noselect locals-file)
-            (save-excursion
-              (goto-char (point-min))
-              (let* ((variables (read (current-buffer)))
-                     (all-modes (alist-get nil variables))
-                     (mode-alist (alist-get 'auto-mode-alist variables)))
-                (should (equal (alist-get 'fill-column all-modes) 79))
-                (should (equal mode-alist
-                               `((,yunge-cc-header-regexp . c-mode)
-                                 ("\\.inc\\'" . c-mode))))
-                (should (equal
-                         (alist-get 'emacs-lisp-mode variables)
-                         '((indent-tabs-mode . nil)))))))
+          (let ((default-directory directory))
+            (call-interactively #'yunge-cc-use-c-headers)
+            (with-temp-buffer
+              (insert-file-contents locals-file)
+              (setq saved-locals (buffer-string)))
+            (call-interactively #'yunge-cc-use-c-headers))
           (with-temp-buffer
-            (let ((buffer-file-name (expand-file-name "example.h" root))
-                  (default-directory root)
-                  (major-mode-remap-alist nil))
-              (set-auto-mode)
-              (should (eq major-mode 'c-mode)))))
+            (insert-file-contents locals-file)
+            (should (equal (buffer-string) saved-locals)))
+          (dolist (name '("example.h" "example.inc" "settings.el"))
+            (let ((buffer (find-file-noselect (expand-file-name name directory))))
+              (push buffer buffers)
+              (with-current-buffer buffer
+                (should (= fill-column 79))
+                (if (equal name "settings.el")
+                    (progn
+                      (should (eq major-mode 'emacs-lisp-mode))
+                      (should (= tab-width 3)))
+                  (should (eq major-mode 'c-mode)))))))
+      (dolist (buffer buffers)
+        (when (buffer-live-p buffer) (kill-buffer buffer)))
       (when-let* ((buffer (find-buffer-visiting locals-file)))
         (with-current-buffer buffer
           (set-buffer-modified-p nil))

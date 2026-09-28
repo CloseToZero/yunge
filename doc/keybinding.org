@@ -328,6 +328,16 @@ unchanged.
 Opening a project directory or one of its subdirectories in Dired adds the
 project root to Emacs's known projects.  Ordinary directories are not added.
 
+* C and C++ headers
+
+Files ending in =.h= default to C++.  In a C project, run
+=M-x yunge-cc-use-c-headers= to use C mode for those files.  The command saves
+the association in the project root's =.dir-locals.el= and preserves the
+other directory-local settings.
+
+The association applies when a file's mode is selected.  Reopen or revert
+existing header buffers to apply it there.
+
 * Org buffers
 
 Org buffers use Evil's general editing model while making common motions,

@@ -10,15 +10,15 @@
 (defvar auto-insert)
 (defvar dir-locals-directory-cache)
 
-(defconst yunge-cc-header-regexp "\\.h\\'"
-  "Regexp matching C and C++ header file names.")
+(defconst yunge-cc--header-regexp "\\.h\\'"
+  "Regexp matching .h file names.")
 
 ;; Most headers in this configuration are C++.  Project-local associations
 ;; take precedence over this global default in Emacs 31.
 (add-to-list 'auto-mode-alist
-             (cons yunge-cc-header-regexp 'c++-mode))
+             (cons yunge-cc--header-regexp 'c++-mode))
 
-(defun yunge-cc--set-dir-local-c-header-mode (locals-file)
+(defun yunge-cc--save-c-header-rule (locals-file)
   "Update LOCALS-FILE so .h files use C mode, then save it.
 LOCALS-FILE must name a directory-local variables file."
   (let ((auto-insert nil))
@@ -33,8 +33,8 @@ LOCALS-FILE must name a directory-local variables file."
       (user-error "Invalid directory-local variables in %s" locals-file))
     (let* ((mode-alist (alist-get 'auto-mode-alist variables))
            (new-mode-alist
-            (cons (cons yunge-cc-header-regexp 'c-mode)
-                  (assoc-delete-all yunge-cc-header-regexp mode-alist))))
+            (cons (cons yunge-cc--header-regexp 'c-mode)
+                  (assoc-delete-all yunge-cc--header-regexp mode-alist))))
       (setf (alist-get 'auto-mode-alist variables) new-mode-alist))
     (delete-region start end)
     (insert (dir-locals-to-string variables))
@@ -45,7 +45,7 @@ LOCALS-FILE must name a directory-local variables file."
                             dir-locals-directory-cache))
     (save-buffer)))
 
-(defun yunge-project-use-c-mode-for-headers ()
+(defun yunge-cc-use-c-headers ()
   "Make .h files in the current project open in C mode.
 Store the override in the project root's `.dir-locals.el'.  Existing
 header buffers keep their current major mode until reopened or reverted."
@@ -56,7 +56,7 @@ header buffers keep their current major mode until reopened or reverted."
     (require 'files-x)
     (save-window-excursion
       ;; In Emacs 31 `auto-mode-alist' is a special top-level dir-local key.
-      (yunge-cc--set-dir-local-c-header-mode locals-file))
+      (yunge-cc--save-c-header-rule locals-file))
     (message "Project .h files now use C mode: %s" root)))
 
 (provide 'yunge-cc)
