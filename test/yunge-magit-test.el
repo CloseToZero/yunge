@@ -193,6 +193,7 @@
         (error "Transient was loaded by the Magit configuration")))))
 
 (ert-deftest yunge-magit-configures-transient-navigation ()
+  (yunge-test-enable-evil)
   (require 'magit-autoloads)
   (yunge-test-load-package-config 'yunge-magit)
   (require 'transient)

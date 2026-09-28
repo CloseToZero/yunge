@@ -175,12 +175,18 @@ To review a Git change:
 1. Open ~SPC g g~ for Magit status and use ~gr~ to refresh after external edits.
 2. Move through sections with ~C-j/C-k~ and expand a file with ~TAB~ or ~za~.
    ~RET~ visits its source; ~gf~ previews without selecting the source window.
-3. Press ~s~, choose the files to stage, and inspect the staged changes. This
-   stages whole files. ~u~ chooses files to unstage without discarding edits.
+3. On a file heading, press ~s~ to stage that file. Within a diff hunk, ~s~
+   stages the hunk. Inspect the staged changes; ~u~ there unstages the file
+   or hunk without discarding your working edits.
 4. Use ~c c~ to create a commit, write its message, then ~C-c C-c~ or Normal-state
    ~ZZ~ to finish. ~C-c C-k~ or Normal-state ~ZQ~ cancels the message editor.
 
-For staging just a hunk, put point on that hunk and run ~M-x magit-stage~.
+To stage only some lines of a hunk, start a linewise Visual selection with
+~V~, extend it to the changed lines, and press ~s~. Use ~u~ on a selection
+in the staged diff to unstage it. The same keys work in a separate diff
+buffer opened with ~M-x magit-diff-unstaged~ or ~M-x magit-diff-staged~.
+Away from a change section, ~s/u~ prompt for files instead.
+
 Committing records changes locally. Use ~p~ to open the push menu when you
 intend to publish them; inspect the selected destination before confirming.
 If a Git operation fails, ~g<~ opens its process output. ~q~ leaves status.

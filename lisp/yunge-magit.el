@@ -106,14 +106,18 @@
     ("X" magit-reset "reset")
     ("Z" magit-stash "stash")))
 
+(defconst yunge-magit-staging-bindings
+  '(("s" magit-stage-files "stage")
+    ("u" magit-unstage-files "unstage"))
+  "Staging commands for status and diff views.
+Magit's section maps select the file, hunk, or region operation at point.")
+
 (defconst yunge-magit-status-normal-bindings
   '(("gn" magit-jump-to-untracked "go to untracked")
     ("gs" magit-jump-to-staged "go to staged")
     ("gu" magit-jump-to-unstaged "go to unstaged")
     ("gz" magit-jump-to-stashes "go to stashes")
     ("q" magit-mode-bury-buffer "quit")
-    ("s" magit-stage-files "stage")
-    ("u" magit-unstage-files "unstage")
     ("x" magit-delete-thing "discard")))
 
 (defconst yunge-magit-history-normal-bindings
@@ -129,9 +133,7 @@
   '(("q" magit-mode-bury-buffer "quit")))
 
 (defconst yunge-magit-status-visual-bindings
-  '(("s" magit-stage-files "stage")
-    ("u" magit-unstage-files "unstage")
-    ("x" magit-delete-thing "discard")))
+  '(("x" magit-delete-thing "discard")))
 
 (defconst yunge-magit-rebase-normal-bindings
   '(("RET" git-rebase-show-commit "show commit")
@@ -333,20 +335,23 @@
       (yunge-key-evil-define
        'normal magit-mode-map
        yunge-magit-section-normal-bindings))
+    (with-eval-after-load 'magit-apply
+      ;; Exclude the final newline of an Evil linewise selection so Magit
+      ;; does not apply the action to the following line or section too.
+      (dolist (command '(magit-discard magit-stage magit-unstage))
+        (evil-add-command-properties command :exclude-newline t)))
     (with-eval-after-load 'magit-status
       (yunge-key-evil-define
        'normal magit-status-mode-map
        (append yunge-magit-section-normal-bindings
                yunge-magit-view-normal-bindings
                yunge-magit-repository-normal-bindings
+               yunge-magit-staging-bindings
                yunge-magit-status-normal-bindings))
       (yunge-key-evil-define
        'visual magit-status-mode-map
-       yunge-magit-status-visual-bindings)
-      ;; A linewise selection includes its final newline, which makes Magit
-      ;; treat the next section as selected too.
-      (dolist (command '(magit-discard magit-stage magit-unstage))
-        (evil-add-command-properties command :exclude-newline t)))
+       (append yunge-magit-staging-bindings
+               yunge-magit-status-visual-bindings)))
     (with-eval-after-load 'magit-stash
       ;; Keep a linewise stash selection from including the next stash.
       (evil-add-command-properties 'magit-stash-drop
@@ -378,7 +383,10 @@
        (append yunge-magit-section-normal-bindings
                yunge-magit-view-normal-bindings
                yunge-magit-repository-normal-bindings
-               yunge-magit-mode-quit-normal-bindings)))))
+               yunge-magit-staging-bindings
+               yunge-magit-mode-quit-normal-bindings))
+      (yunge-key-evil-define
+       'visual magit-diff-mode-map yunge-magit-staging-bindings))))
 
 (provide 'yunge-magit)
 
