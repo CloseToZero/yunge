@@ -193,10 +193,6 @@ inconsistently from keyboard modifiers and the source application."
   (interactive)
   (shell-command-do-open (list default-directory)))
 
-(defun yunge-dired--files-to-reveal ()
-  "Return marked Dired files, or the file at point when none are marked."
-  (dired-get-marked-files nil nil nil nil "No files specified"))
-
 (defun yunge-dired--powershell-literal (string)
   "Return STRING as a single-quoted PowerShell literal."
   (concat "'"
@@ -278,10 +274,9 @@ inconsistently from keyboard modifiers and the source application."
 
 (defun yunge-dired-reveal-in-file-manager ()
   "Reveal Dired files in the system file manager.
-If point is on a marked file, reveal all marked files where supported.
-Otherwise, ignore marks and reveal only the file at point."
+Reveal marked files where supported, or the file at point if none are marked."
   (interactive)
-  (let ((files (yunge-dired--files-to-reveal)))
+  (let ((files (dired-get-marked-files nil nil nil nil "No files specified")))
     (dolist (file files)
       (when (file-remote-p file)
         (user-error "Cannot reveal a remote file externally")))
@@ -352,14 +347,6 @@ Otherwise, ignore marks and reveal only the file at point."
 (with-eval-after-load 'dired
   (require 'dnd)
   (setq dired-dwim-target #'dired-dwim-target-recent)
-  ;; Remove bindings left by the earlier Windows-only implementation.
-  (dolist (event '([drag-n-drop]
-                   [C-drag-n-drop]
-                   [S-drag-n-drop]
-                   [C-S-drag-n-drop]))
-    (when (eq (lookup-key dired-mode-map event)
-              #'yunge-dired-handle-file-drop)
-      (define-key dired-mode-map event nil)))
   (add-hook 'dired-mode-hook #'yunge-dired--remember-project)
   (add-hook 'dired-mode-hook #'yunge-dired--setup-dnd))
 

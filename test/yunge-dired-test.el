@@ -7,22 +7,18 @@
 (declare-function dired-do-copy "dired-aux" (&optional arg))
 (declare-function dired-goto-file "dired" (file))
 (declare-function dired-mark "dired" (arg &optional interactive))
-(declare-function dired-unmark-all-marks "dired")
 (declare-function dired-dwim-target-directory "dired-aux")
 (declare-function dired-dwim-target-recent "dired-aux")
 (declare-function evil-ex-execute "evil-ex" (string))
 (declare-function project-known-project-roots "project")
-(declare-function yunge-dired--files-to-reveal "yunge-dired")
 (declare-function yunge-dired--perform-file-drop
                   "yunge-dired" (window uris action))
-(declare-function yunge-dired--reveal-on-windows "yunge-dired" (files))
 (declare-function yunge-dired--remember-project "yunge-dired")
 (declare-function yunge-dired--setup-dnd "yunge-dired")
 
 (defvar dired-directory)
 (defvar dired-do-revert-buffer)
 (defvar dired-dwim-target)
-(defvar dired-mode-map)
 (defvar dired-movement-style)
 (defvar dnd-protocol-alist)
 (defvar ls-lisp-filesize-d-fmt)
@@ -35,14 +31,39 @@
 
 (ert-deftest yunge-dired-copy-commands-select-path-kinds ()
   (require 'yunge-dired)
-  (let (arguments)
-    (cl-letf (((symbol-function 'dired-copy-filename-as-kill)
-               (lambda (&optional argument)
-                 (push argument arguments))))
-      (yunge-dired-copy-filename)
-      (yunge-dired-copy-absolute-path)
-      (yunge-dired-copy-project-path))
-    (should (equal (nreverse arguments) '(nil 0 1)))))
+  (yunge-test-enable-evil)
+  (let* ((root (make-temp-file "yunge-dired-copy-" t))
+         (directory (expand-file-name "notes/" root))
+         (first (expand-file-name "alpha.txt" directory))
+         (second (expand-file-name "beta space.txt" directory))
+         (kill-ring nil)
+         (kill-ring-yank-pointer nil)
+         (interprogram-cut-function nil)
+         (interprogram-paste-function nil)
+         (last-command nil)
+         buffer)
+    (make-directory (expand-file-name ".git/" root))
+    (make-directory directory)
+    (unwind-protect
+        (save-window-excursion
+          (with-temp-file first (insert "alpha\n"))
+          (with-temp-file second (insert "beta\n"))
+          (setq buffer (dired-noselect directory))
+          (switch-to-buffer buffer)
+          (dired-goto-file first)
+          (call-interactively (key-binding (kbd "y f")))
+          (should (equal (car kill-ring) "alpha.txt"))
+          (call-interactively (key-binding (kbd "y p")))
+          (should (equal (car kill-ring) first))
+          (call-interactively (key-binding (kbd "y P")))
+          (should (equal (car kill-ring) "notes/alpha.txt"))
+          (dired-mark 1)
+          (dired-goto-file second)
+          (dired-mark 1)
+          (call-interactively (key-binding (kbd "y f")))
+          (should (equal (car kill-ring) "alpha.txt \"beta space.txt\"")))
+      (when (buffer-live-p buffer) (kill-buffer buffer))
+      (delete-directory root t))))
 
 (ert-deftest yunge-dired-isolates-ls-lisp-widths-when-copying ()
   (require 'yunge-dired)
@@ -126,14 +147,7 @@
        ("y" . evil-yank)))
 
     (should (eq dired-movement-style 'bounded-files))
-    (should (eq dired-dwim-target #'dired-dwim-target-recent))
-
-    (dolist (event '([drag-n-drop]
-                     [C-drag-n-drop]
-                     [S-drag-n-drop]
-                     [C-S-drag-n-drop]))
-      (should-not (eq (lookup-key dired-mode-map event)
-                      #'yunge-dired-handle-file-drop)))))
+    (should (eq dired-dwim-target #'dired-dwim-target-recent))))
 
 (ert-deftest yunge-dired-opens-current-directory-externally ()
   (require 'yunge-dired)
@@ -145,86 +159,62 @@
       (call-interactively #'yunge-dired-open-directory-externally))
     (should (equal opened-files (list default-directory)))))
 
-(ert-deftest yunge-dired-reveal-prefers-marks-over-point ()
+(ert-deftest yunge-dired-reveal-selects-marked-files-or-file-at-point ()
   (require 'yunge-dired)
-  (require 'dired)
+  (yunge-test-enable-evil)
   (let* ((directory (make-temp-file "yunge-dired-reveal-" t))
-         (first (expand-file-name "first" directory))
-         (second (expand-file-name "second" directory))
-         (third (expand-file-name "third" directory))
-         buffer)
+         (first (expand-file-name "first file.txt" directory))
+         (second (expand-file-name "second's 测试.txt" directory))
+         (third (expand-file-name "third.txt" directory))
+         (yunge-config-directory
+          (file-name-as-directory (expand-file-name "Config Dir" directory)))
+         (script (expand-file-name "script/yunge-reveal.ps1"
+                                   yunge-config-directory))
+         (system-type 'windows-nt)
+         (powershell "pwsh")
+         buffer arguments)
     (unwind-protect
-        (progn
+        (save-window-excursion
           (dolist (file (list first second third))
             (write-region "" nil file nil 'silent))
           (setq buffer (dired-noselect directory))
-          (with-current-buffer buffer
+          (switch-to-buffer buffer)
+          (cl-letf (((symbol-function 'executable-find)
+                     (lambda (_program) powershell))
+                    ((symbol-function 'w32-shell-execute)
+                     (lambda (&rest args) (setq arguments args))))
+            (dired-goto-file third)
+            (call-interactively (key-binding (kbd "SPC m r")))
+            (should (equal arguments
+                           (list "open" "explorer.exe"
+                                 (format "/select,\"%s\""
+                                         (subst-char-in-string ?/ ?\\ third)))))
+
             (dired-goto-file first)
             (dired-mark 1)
+            (dired-goto-file second)
             (dired-mark 1)
-            (should (equal (yunge-dired--files-to-reveal)
-                           (list first second)))
-            (let ((inhibit-message t))
-              (dired-unmark-all-marks))
-            (should (equal (yunge-dired--files-to-reveal)
-                           (list third)))))
+            (dired-goto-file third)
+            (call-interactively (key-binding (kbd "SPC m r")))
+            (pcase-let* ((`("open" "pwsh" ,parameters 0) arguments)
+                         (encoded (car (last (split-string parameters))))
+                         (command
+                          (decode-coding-string
+                           (base64-decode-string encoded) 'utf-16le)))
+              (should (equal command
+                             (concat "& '" script "' '" first "' '"
+                                     (file-name-directory second)
+                                     "second''s 测试.txt'"))))
+
+            (setq powershell nil)
+            (call-interactively (key-binding (kbd "SPC m r")))
+            (should (equal arguments
+                           (list "open" "explorer.exe"
+                                 (format "/select,\"%s\""
+                                         (subst-char-in-string ?/ ?\\ first)))))))
       (when (buffer-live-p buffer)
         (kill-buffer buffer))
       (delete-directory directory t))))
-
-(ert-deftest yunge-dired-windows-reveal-selects-one-file-directly ()
-  (require 'yunge-dired)
-  (let (arguments)
-    (cl-letf (((symbol-function 'w32-shell-execute)
-               (lambda (&rest args)
-                 (setq arguments args))))
-      (yunge-dired--reveal-on-windows '("C:/a directory/file")))
-    (should (equal arguments
-                   '("open" "explorer.exe"
-                     "/select,\"C:\\a directory\\file\"")))))
-
-(ert-deftest yunge-dired-windows-reveal-uses-api-for-many-files ()
-  (require 'yunge-dired)
-  (let* ((yunge-config-directory
-          (file-name-as-directory
-           (expand-file-name "Config Dir" temporary-file-directory)))
-         (script
-          (expand-file-name "script/yunge-reveal.ps1"
-                            yunge-config-directory))
-        arguments)
-    (cl-letf (((symbol-function 'executable-find)
-               (lambda (_program) "pwsh"))
-              ((symbol-function 'w32-shell-execute)
-               (lambda (&rest args)
-                 (setq arguments args))))
-      (yunge-dired--reveal-on-windows
-       '("D:/测试/first file.txt" "D:/测试/second's.txt")))
-    (pcase-let* ((`("open" "pwsh" ,parameters 0) arguments)
-                 (encoded (car (last (split-string parameters))))
-                 (command
-                  (decode-coding-string
-                   (base64-decode-string encoded)
-                   'utf-16le)))
-      (should
-       (equal
-        command
-        (concat
-         "& " (yunge-dired--powershell-literal script) " "
-         "'D:/测试/first file.txt' 'D:/测试/second''s.txt'"))))))
-
-(ert-deftest yunge-dired-windows-reveal-falls-back-without-powershell ()
-  (require 'yunge-dired)
-  (let (arguments)
-    (cl-letf (((symbol-function 'executable-find) #'ignore)
-              ((symbol-function 'message) #'ignore)
-              ((symbol-function 'w32-shell-execute)
-               (lambda (&rest args)
-                 (setq arguments args))))
-      (yunge-dired--reveal-on-windows
-       '("C:/first" "C:/second")))
-    (should (equal arguments
-                   '("open" "explorer.exe"
-                     "/select,\"C:\\first\"")))))
 
 (ert-deftest yunge-dired-installs-portable-file-drop-handler ()
   (require 'yunge-dired)

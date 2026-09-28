@@ -293,6 +293,23 @@ Use ~SPC m SPC~ for a mode's primary command dispatcher when it provides one.
 Before assigning an uppercase letter, check its Evil meaning.  Keys such as
 ~B~, ~F~, ~M~, and ~V~ are already bound.
 
+* Dired
+
+Use ~y f~ to copy file names, ~y p~ for absolute paths, and ~y P~ for paths
+relative to the project root.  On a file line, these commands copy the marked
+files, or the file at point when nothing is marked.  Multiple names are
+separated by spaces and quoted when needed.  In Visual state, ~y~ copies the
+selected text instead.
+
+~SPC m o~ opens files in their default applications.  ~SPC m e~ opens the
+current directory in the system file manager, while ~SPC m r~ reveals the
+marked files there.  With no marks, it reveals the file at point; marks take
+precedence even when point is on another file.  Remote files cannot be
+revealed in the local file manager.
+
+On Windows, revealing multiple files uses PowerShell.  If PowerShell is
+unavailable, only the first selected file is revealed.
+
 * Org buffers
 
 Org buffers use Evil's general editing model while making common motions,
