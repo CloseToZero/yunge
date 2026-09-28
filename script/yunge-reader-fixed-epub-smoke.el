@@ -210,14 +210,20 @@
    yunge-reader-fixed-smoke--exit-status))
 
 (defun yunge-reader-fixed-smoke--await-stop ()
-  "Wait for the isolated helper to stop, then run the next action."
+  "Wait for Reader services to stop, then run the next action."
   (cond
-   ((and (process-live-p yunge-reader-webview--process)
+   ((and (or (process-live-p yunge-reader-webview--process)
+             (and (eq yunge-reader-fixed-smoke--next-action 'exit)
+                  (yunge-reader-native-live-p)))
          (< (float-time) yunge-reader-fixed-smoke--stop-deadline))
     (yunge-reader-graphical-smoke-schedule
      #'yunge-reader-fixed-smoke--await-stop))
-   ((process-live-p yunge-reader-webview--process)
+   ((or (process-live-p yunge-reader-webview--process)
+        (and (eq yunge-reader-fixed-smoke--next-action 'exit)
+             (yunge-reader-native-live-p)))
     (yunge-reader-webview-stop t)
+    (when (eq yunge-reader-fixed-smoke--next-action 'exit)
+      (yunge-reader-native-stop t))
     (setq yunge-reader-fixed-smoke--stop-deadline
           (+ (float-time) 1.0))
     (yunge-reader-graphical-smoke-schedule
@@ -233,6 +239,8 @@
         yunge-reader-fixed-smoke--stop-deadline
         (+ (float-time) 3.0))
   (yunge-reader-webview-stop)
+  (when (eq action 'exit)
+    (yunge-reader-native-stop))
   (yunge-reader-graphical-smoke-schedule
    #'yunge-reader-fixed-smoke--await-stop))
 

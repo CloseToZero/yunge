@@ -103,7 +103,7 @@ downloading it:
                  "view-clear-selection","view-create",
                  "view-destroy","view-events","view-focus",
                  "view-focus-parent","view-info","view-navigate",
-                 "view-open-publication","view-parent","view-search",
+                 "view-open-publication","view-search",
                  "view-search-result",
                  "view-current-selection",
                  "view-selection-text",
@@ -351,10 +351,10 @@ object, and optional =visible=.
 
 =view-bounds= moves or resizes one child, =view-visible= changes its
 visibility, =view-focus= gives it native focus, and =view-focus-parent= gives
-focus back to its parent.  =view-parent= reparents the same loaded child to a
-different Emacs frame and accepts the new parent, frame descriptor, and body
-bounds.  It does not reopen the publication.  =view-clear-selection= asks the
-trusted renderer to remove the active publication DOM selection, and
+focus back to its parent.  A presentation in another Emacs frame uses a new
+=view-create= request and surface ID; the logical view and publication remain
+shared.  =view-clear-selection= asks the trusted renderer to remove the active
+publication DOM selection, and
 =view-destroy= removes the child.  =view-status= reports whether the renderer
 shell announced that its API is ready, together with the last accepted bounds
 and visibility.  Both native backends hold early scripts until that explicit
@@ -596,8 +596,9 @@ The dynamic module executes view operations on Emacs's UI thread.  Asynchronous
 renderer callbacks wake its pipe, and that filter pumps completed protocol
 work without calling Lisp from a WebKit or WebView2 callback thread.
 =shutdown= drops every native view and publication.  Both platforms retain
-real in-process children and reparent the native NSView or HWND directly when
-an active presentation crosses frames.  WebKitGTK remains future work.
+real in-process children under the frame used at creation.  Moving a Reader
+buffer to another frame creates a new child there; it does not reparent the
+original NSView or HWND.  WebKitGTK remains future work.
 
 The WebView navigation policy admits the trusted renderer page and its
 renderer-owned =blob:= chapter documents.  WKWebView reports those blob iframe
@@ -824,9 +825,10 @@ exact retained CFI.  It treats Reader warnings as failures.  The same pass
 searches one shared beacon from chapter one into chapter two, turns that result
 into a real DOM selection, copies its text through Reader, and verifies the
 kill ring.  It then loads the exact three-entry publication outline and follows
-its last destination.  Finally, it reparents the same loaded surface to a
-second Emacs frame, verifies that its native ID and chapter-three locator are
-unchanged, and navigates it back to chapter one:
+its last destination.  Finally, it displays the same Reader buffer in a
+second Emacs frame, verifies a distinct surface ID and restored chapter-three
+locator, and navigates that presentation back to chapter one while the first
+window remains at chapter three:
 
 #+begin_src shell
 emacs -Q --load "$PWD/script/yunge-reader-reflow-epub-smoke.el"

@@ -19,6 +19,39 @@
   "Return the running Emacs executable."
   (expand-file-name invocation-name invocation-directory))
 
+(ert-deftest yunge-reader-graphical-smoke-isolates-state-from-installed-artifacts ()
+  (yunge-test-run-emacs
+   "-L" (expand-file-name "script" yunge-test-root)
+   "-l" "yunge-reader-graphical-smoke"
+   "--eval"
+   (prin1-to-string
+    '(let ((context
+            (yunge-reader-graphical-smoke-create
+             (expand-file-name "script" yunge-config-directory)
+             "Isolation check" "yunge-reader-isolation-" "NO_SMOKE_LOG")))
+       (unwind-protect
+           (progn
+             (yunge-reader-graphical-smoke-initialize context)
+             (unless (and
+                      (equal yunge-config-directory
+                             (yunge-reader-graphical-smoke-context-root
+                              context))
+                      (file-in-directory-p
+                       yunge-var-directory
+                       (yunge-reader-graphical-smoke-context-temporary-root
+                        context))
+                      (equal (yunge-reader-native--cargo-target-directory)
+                             (yunge-reader-graphical-smoke-context-target-directory
+                              context))
+                      (equal (yunge-reader-native-pdfium-directory)
+                             (expand-file-name
+                              yunge-reader-native-pdfium-api
+                              (expand-file-name
+                               "var/yunge-reader/pdfium"
+                               yunge-config-directory))))
+               (error "Graphical smoke paths escaped their intended roots")))
+         (yunge-reader-graphical-smoke-cleanup context))))))
+
 (ert-deftest yunge-reader-graphical-smoke-creates-and-cleans-contexts ()
   (let* ((process-environment (copy-sequence process-environment))
          (log-file (expand-file-name "graphical-smoke.log"

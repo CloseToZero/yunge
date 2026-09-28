@@ -909,6 +909,9 @@ formal Reader view survives window replacement: an invisible persistent view
 retains at most one healthy hidden surface and reuses it when compatible.
 Windows and macOS never reparent a surface across native parents.  A newly
 visible presentation creates its own child and restores the logical locator.
+Displaying one Reader buffer in a second frame keeps the first window's child
+and observed location; the second child can navigate independently.  Selecting
+either presentation adopts its observed location as the active view state.
 Killing the buffer destroys the logical view and all of its presentations.
 
 The renderer application and EPUB publications use separate tokenized loopback

@@ -5,6 +5,10 @@
 (require 'cl-lib)
 (require 'subr-x)
 
+(defvar yunge-config-directory)
+(defvar yunge-var-directory)
+(defvar yunge-reader-native-pdfium-api)
+
 (cl-defstruct
     (yunge-reader-graphical-smoke-context
      (:constructor yunge-reader-graphical-smoke--make-context))
@@ -59,10 +63,27 @@ LOG-ENVIRONMENT-VARIABLE optionally names a diagnostic log file."
   "Initialize isolated Emacs paths from smoke CONTEXT."
   (let ((root (yunge-reader-graphical-smoke-context-root context))
         (temporary
-         (yunge-reader-graphical-smoke-context-temporary-root context)))
-    (setq user-emacs-directory root)
+         (yunge-reader-graphical-smoke-context-temporary-root context))
+        (target
+         (yunge-reader-graphical-smoke-context-target-directory context)))
+    (setq user-emacs-directory
+          (file-name-as-directory (expand-file-name "emacs" temporary))
+          yunge-config-directory root
+          yunge-var-directory
+          (file-name-as-directory
+           (expand-file-name "var" user-emacs-directory)))
+    (make-directory user-emacs-directory t)
     (startup-redirect-eln-cache (expand-file-name "eln-cache" temporary))
-    (add-to-list 'load-path (expand-file-name "lisp" root))))
+    (add-to-list 'load-path (expand-file-name "lisp" root))
+    (require 'yunge-reader-native)
+    ;; Use shared build artifacts and PDFium beside disposable session state.
+    (advice-add 'yunge-reader-native--cargo-target-directory :override
+                (lambda () target))
+    (advice-add 'yunge-reader-native-pdfium-directory :override
+                (lambda ()
+                  (expand-file-name
+                   yunge-reader-native-pdfium-api
+                   (expand-file-name "var/yunge-reader/pdfium" root))))))
 
 (defun yunge-reader-graphical-smoke-log
     (context format-string &rest arguments)
