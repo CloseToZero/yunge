@@ -22,6 +22,7 @@ buffers, and ~SPC SPC~ to run a command by name. See the [[file:doc/usage.org][u
 
 * Feature guides
 
+- [[file:doc/org-editing.org][Editing Org documents]]: organize an outline and edit structured text.
 - [[file:doc/fangcun.org][Fangcun]]: create, link, and search Org notes.
 - [[file:doc/shuying.org][Shuying]]: preview LaTeX formulas while editing.
 - [[file:doc/yunge-reader.org][Yunge Reader]]: read PDF and EPUB documents and restore reading places.

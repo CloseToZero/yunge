@@ -98,8 +98,8 @@ as its counterpart in Insert, Replace, and Emacs states. Use ~SPC m~ for the
 current mode's commands. Ordinary mode maps must not replace the global
 leader; an active prompt's temporary map may take precedence.
 
-Group global commands by purpose. The [[file:usage.org::*Finding commands][usage guide's prefix table]] lists the
-groups. Put mode-specific administrative actions such as installing, pulling,
+Group global commands by purpose and use an existing group when it fits.
+Put mode-specific administrative actions such as installing, pulling,
 or rebuilding under the local leader unless a stronger convention applies.
 Use ~SPC m SPC~ for a mode's primary dispatcher when it has one. Promote an
 action to a shorter key when its observed frequency justifies it.

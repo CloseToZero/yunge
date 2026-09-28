@@ -1,0 +1,118 @@
+#+title: Editing Org documents
+# SPDX-FileCopyrightText: 2026 Chen Zhexuan
+# SPDX-License-Identifier: MIT
+
+* Write an outline
+
+Open a file ending in =.org= with ~SPC f f~, press ~i~, and enter an outline:
+
+#+begin_src org
+,* TODO Investigate the failing build
+,** Reproduce
+Record the command and its output here.
+,** Fix
+Describe the change here.
+#+end_src
+
+Stars at the beginning of a line set its heading level. Return to Normal
+state with Escape. ~C-j/C-k~ move between visible headings. On a heading,
+~za~ folds or unfolds it; ~zA~ cycles the whole document's visibility.
+~zO~ shows the full subtree, and ~zc~ folds it again.
+
+To add a heading after the current subtree, use ~C-RET~; ~C-S-RET~ adds a
+TODO heading. These commands enter Insert state for its title. If your
+terminal cannot send those keys, use ~M-x yunge-org-insert-heading-below~ or
+~M-x yunge-org-insert-todo-heading-below~. To change an existing heading's
+TODO state, use ~SPC m t~.
+
+Save with ~SPC f s~. For indexed notes that you can find and link by ID, use
+the [[file:fangcun.org][Fangcun guide]] to configure note roots and create nodes.
+
+* Reorganize the document
+
+Put point on a heading and use ~M-j/M-k~ to move its subtree down or up.
+~M-h/M-l~ promote or demote a heading; ~M-H/M-L~ change the level of the
+whole subtree. For example, promoting =Reproduce= with ~M-H~ makes it a
+top-level heading and keeps its child headings beneath it.
+
+Use ~[h/]h~ to move between headings at the same level, ~gh~ to move to the
+parent element, and ~gH~ to reach the outermost heading. ~gl~ moves into an
+element's contents. These structural moves work alongside ordinary Evil
+word, line, and search commands.
+
+To edit a section as a unit, ~vah~ selects its subtree, including the heading;
+~vih~ selects its contents. You can then copy, delete, or change the selection.
+More generally, the Org text objects combine with Visual selection or an
+operator:
+
+| Inside / around | Structure                                    |
+|-----------------+----------------------------------------------|
+| ~ie/ae~         | The object or element at point               |
+| ~iE/aE~         | The enclosing element, such as a paragraph    |
+| ~ic/ac~         | The enclosing container                      |
+| ~ih/ah~         | The subtree                                  |
+
+* Edit paragraphs, lists, and tables
+
+On a heading, ~I~ inserts at the start of its title and ~A~ appends before
+trailing tags. ~0~ first moves to the content start; press it again to reach
+the physical line beginning. ~$~ stops before heading tags first, then moves
+past them when repeated.
+
+For a list, type an item such as =- Check the build output=. In Normal state,
+~o~ adds an item below and ~O~ above. On a table row, the same commands insert
+rows. Elsewhere they insert ordinary text lines. Use ~M-j/M-k~ to move an
+item or row, and ~M-h/M-l~ to change an item's indentation or move a table
+column.
+
+Start a table by typing pipe-separated cells:
+
+#+begin_example
+| Task | Result |
+| Build | Passed |
+#+end_example
+
+Use ~M-x org-table-align~ to align it. In a heading or table, ~x/X~ delete
+characters while keeping its structure aligned. Ordinary Evil operators and
+Visual selections work on the text too. ~</>~ change the level of selected
+headings or list items; in ordinary text they shift indentation.
+
+* Link to another place
+
+At the destination, use ~SPC n l s~ to store a link. Return to the paragraph
+where you want it, use ~SPC n l i~, and choose the stored link and its
+description. The insert command also accepts a URL or file link directly.
+
+In Normal state, ~RET~ or ~gf~ follows the link at point. ~[l/]l~ move
+between links. To return after following one, use ~C-o~. For links between
+indexed notes, Fangcun provides node selection and backlink views.
+
+* Edit a source block
+
+Enclose code between a =#+begin_src= line with a language name and a
+=#+end_src= line. For example:
+
+#+begin_example
+#+begin_src emacs-lisp
+(message "Hello")
+#+end_src
+#+end_example
+
+Put point inside the block and press ~C-c '~. Org opens a separate editor
+using the block's language mode, so indentation and completion apply to the
+code. Use ~ZZ~ in Normal state or ~C-c '~ to finish and put the edited text
+back in the Org buffer. Save the Org buffer to write the document to disk.
+
+~C-x C-s~ in the source editor writes back and saves without leaving it.
+~ZQ~ in Normal state cancels edits made since the last write-back; it cannot
+undo an earlier save. ~[c/]c~ move between source blocks in the Org buffer.
+
+* Preview and export
+
+For a formula preview, put point on the formula and use ~SPC m p~. See
+[[file:shuying.org][Shuying]] for the required TeX tools and preview controls.
+
+To produce a separate document, run ~M-x org-export-dispatch~ and choose an
+export format and action from its menu. Export uses the current Org buffer;
+save the source as well if you want to keep the edits. PDF export also needs
+a working LaTeX toolchain.
