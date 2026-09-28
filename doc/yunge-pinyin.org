@@ -41,8 +41,8 @@ literal letters when case-sensitive search applies.
 - Orderless completion accepts Pinyin in ordinary components. For example,
   =bl= can match a candidate containing =保留=; =:py:beijx= selects mixed
   grammar. Use =:re:= for an Orderless regexp component or ~=bl~ for literal
-  matching. File-path completion uses partial completion instead of this
-  Orderless matching style.
+  matching. File paths first use partial matching across path components;
+  when that finds nothing, Pinyin can still match a Chinese file name.
 - Evil's =f=, =F=, =t=, and =T= also expand a *lowercase ASCII letter* to
   Chinese characters with that Pinyin initial. The letter itself remains a
   match. Uppercase character-find prompts are not expanded this way.
