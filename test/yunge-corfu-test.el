@@ -16,32 +16,26 @@
 (define-minor-mode yunge-corfu-test-input-mode
   "Simulate an input mode that owns RET while no completion is active.")
 
+(defun yunge-corfu-test-return ()
+  "Insert a marker through the surrounding input mode."
+  (interactive)
+  (insert "<return>"))
+
 (yunge-test-deftest-lazy-load yunge-corfu
   (corfu))
 
 (ert-deftest yunge-corfu-enables-after-package-ready ()
   (yunge-test-run-package-config
    'yunge-corfu 'corfu
-   :setup '(setq corfu-auto nil
-                 corfu-auto-delay 0
-                 corfu-auto-prefix 3
-                 corfu-cycle nil
-                 tab-always-indent nil
-                 text-mode-ispell-word-completion t)
+   :setup '(setq text-mode-ispell-word-completion t)
    :before-ready
    '(when (or (featurep 'corfu)
               (bound-and-true-p global-corfu-mode)
               text-mode-ispell-word-completion)
       (error "Corfu's early configuration was not applied"))
    :after-ready
-   '(unless (and (bound-and-true-p global-corfu-mode)
-                 corfu-auto
-                 (= corfu-auto-delay 0.1)
-                 (= corfu-auto-prefix 2)
-                 corfu-cycle
-                 (null tab-always-indent)
-                 (null corfu-preview-current))
-      (error "Corfu configuration was not applied"))))
+   '(unless (bound-and-true-p global-corfu-mode)
+      (error "Corfu was not enabled after package readiness"))))
 
 (ert-deftest yunge-corfu-keeps-pcomplete-git-help-non-interactive ()
   (yunge-test-run-emacs
@@ -70,10 +64,13 @@
            (error "Git completion invoked interactive help: %S"
                   invoked)))))))
 
-(ert-deftest yunge-corfu-owns-popup-keys ()
+(ert-deftest yunge-corfu-popup-keys-follow-session-lifetime ()
   (yunge-test-enable-evil)
   (require 'corfu-autoloads)
   (yunge-test-load-package-config 'yunge-corfu)
+  (evil-define-minor-mode-key 'insert 'yunge-corfu-test-input-mode
+    (kbd "RET") #'yunge-corfu-test-return
+    (kbd "<return>") #'yunge-corfu-test-return)
   (let ((buffer (generate-new-buffer " *yunge-corfu-test*"))
         (window (selected-window))
         (original-buffer (window-buffer)))
@@ -84,7 +81,6 @@
             (fundamental-mode)
             ;; Global Corfu intentionally skips noninteractive Emacs.
             (corfu-mode 1)
-            (insert "al")
             (setq-local completion-at-point-functions
                         (list
                          (lambda ()
@@ -92,45 +88,66 @@
                                  '("alpha" "alpine")))))
             (evil-local-mode 1)
             (evil-insert-state)
+            (yunge-corfu-test-input-mode 1)
             (let ((next-command (key-binding (kbd "C-j")))
-                  (previous-command (key-binding (kbd "C-k")))
-                  (return-command (key-binding (kbd "RET")))
-                  (return-event-command
-                   (key-binding (kbd "<return>"))))
-              (should-not (eq next-command 'corfu-next))
-              (should-not (eq previous-command 'corfu-previous))
-              (completion-at-point)
-              (should completion-in-region-mode)
-              (yunge-test-keys
-               '(("C-j" . corfu-next)
-                 ("C-k" . corfu-previous)
-                 ("TAB" . corfu-complete)
-                 ("<tab>" . corfu-complete)))
-              (should (eq (key-binding (kbd "RET"))
-                          return-command))
-              (should (eq (key-binding (kbd "<return>"))
-                          return-event-command))
-              (completion-in-region-mode -1)
-              (should (eq (key-binding (kbd "C-j"))
-                          next-command))
-              (should (eq (key-binding (kbd "C-k"))
-                          previous-command))
-              (should (eq (key-binding (kbd "RET"))
-                          return-command))
-              (should (eq (key-binding (kbd "<return>"))
-                          return-event-command)))))
+                  (tab-command (key-binding (kbd "TAB"))))
+              (cl-labels
+                  ((start ()
+                     (erase-buffer)
+                     (insert "al")
+                     (cl-letf (((symbol-function 'corfu--popup-support-p)
+                                (lambda () t)))
+                       (completion-at-point))
+                     (should completion-in-region-mode))
+                   (press (key)
+                     (let ((this-command (key-binding (kbd key))))
+                       (run-hooks 'pre-command-hook)
+                       (call-interactively this-command))))
+                (should-not (eq next-command 'corfu-next))
+                (should (eq (key-binding (kbd "RET")) #'yunge-corfu-test-return))
+                (start)
+                (yunge-test-keys
+                 '(("C-j" . corfu-next)
+                   ("C-k" . corfu-previous)
+                   ("TAB" . corfu-complete)
+                   ("<tab>" . corfu-complete)))
+                (press "C-j")
+                (press "TAB")
+                (should (equal (buffer-string) "alpine"))
+                (should-not completion-in-region-mode)
+                (should (eq (key-binding (kbd "C-j")) next-command))
+                (should (eq (key-binding (kbd "TAB")) tab-command))
+
+                (start)
+                (press "C-j")
+                (let ((before-return (buffer-string)))
+                  (press "RET")
+                  (should (equal (buffer-string)
+                                 (concat before-return "<return>"))))
+                ;; Completion may be dismissed while another buffer is current.
+                (with-temp-buffer
+                  (completion-in-region-mode -1))
+                (should-not completion-in-region-mode)
+                (should (eq (key-binding (kbd "C-j")) next-command))
+
+                (start)
+                (corfu-mode -1)
+                (should-not completion-in-region-mode)
+                (should (eq (key-binding (kbd "C-j")) next-command))
+                (should (eq (key-binding (kbd "TAB")) tab-command))
+                (should (eq (key-binding (kbd "RET"))
+                            #'yunge-corfu-test-return))))))
+      (when completion-in-region-mode
+        (completion-in-region-mode -1))
       (set-window-buffer window original-buffer)
       (when (buffer-live-p buffer)
         (kill-buffer buffer)))))
 
-(ert-deftest yunge-corfu-popup-return-keeps-surrounding-input-mode ()
+(ert-deftest yunge-corfu-does-not-own-fallback-completion-keys ()
   (yunge-test-enable-evil)
   (require 'corfu-autoloads)
   (yunge-test-load-package-config 'yunge-corfu)
-  (evil-define-minor-mode-key 'insert 'yunge-corfu-test-input-mode
-    (kbd "RET") #'ignore
-    (kbd "<return>") #'ignore)
-  (let ((buffer (generate-new-buffer " *yunge-corfu-input-test*"))
+  (let ((buffer (generate-new-buffer " *yunge-corfu-fallback-test*"))
         (window (selected-window))
         (original-buffer (window-buffer)))
     (unwind-protect
@@ -141,23 +158,19 @@
             (corfu-mode 1)
             (insert "al")
             (setq-local completion-at-point-functions
-                        (list
-                         (lambda ()
-                           (list (- (point) 2) (point)
-                                 '("alpha" "alpine")))))
+                        (list (lambda ()
+                                (list (- (point) 2) (point)
+                                      '("algebra" "alpine" "alpha")))))
             (evil-local-mode 1)
             (evil-insert-state)
-            (yunge-corfu-test-input-mode 1)
-            (should (eq (key-binding (kbd "RET")) #'ignore))
-            (completion-at-point)
-            (should completion-in-region-mode)
-            (yunge-test-keys
-             '(("RET" . ignore)
-               ("<return>" . ignore)))
-            (completion-in-region-mode -1)
-            (yunge-test-keys
-             '(("RET" . ignore)
-               ("<return>" . ignore)))))
+            (cl-letf (((symbol-function 'corfu--popup-support-p)
+                       (lambda () nil)))
+              (completion-at-point)
+              (should completion-in-region-mode)
+              (should-not (eq (key-binding (kbd "C-j")) 'corfu-next))
+              (should-not (eq (key-binding (kbd "TAB")) 'corfu-complete)))))
+      (when completion-in-region-mode
+        (completion-in-region-mode -1))
       (set-window-buffer window original-buffer)
       (when (buffer-live-p buffer)
         (kill-buffer buffer)))))

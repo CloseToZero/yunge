@@ -4,10 +4,10 @@
 
 (require 'yunge-key)
 
+(declare-function corfu-quit "corfu")
 (declare-function global-corfu-mode "corfu")
 (declare-function pcomplete-from-help "pcomplete")
 
-(defvar completion-in-region-mode)
 (defvar corfu-auto)
 (defvar corfu-auto-delay)
 (defvar corfu-auto-prefix)
@@ -49,46 +49,46 @@ keyword arguments."
     ("TAB" corfu-complete "complete candidate")
     ("<tab>" corfu-complete nil)))
 
-(defvar-keymap yunge-corfu--completion-mode-map
-  :doc "Keymap active while Corfu owns a completion session.")
+(defvar-keymap yunge-corfu--popup-map
+  :doc "Keymap active while a Corfu popup owns completion.")
 
-(yunge-key-define yunge-corfu--completion-mode-map
-                  yunge-corfu-popup-bindings)
+(yunge-key-define yunge-corfu--popup-map yunge-corfu-popup-bindings)
+
+(defvar-local yunge-corfu--popup-keys-active nil
+  "Non-nil while this buffer owns an active Corfu popup.")
 
 (defvar yunge-corfu--emulation-map-alist
-  `((yunge-corfu--completion-mode
-     . ,yunge-corfu--completion-mode-map)))
+  `((yunge-corfu--popup-keys-active . ,yunge-corfu--popup-map)))
 
-(define-minor-mode yunge-corfu--completion-mode
-  "Give Corfu's active completion session precedence over Evil."
-  :init-value nil
-  :lighter nil
-  :keymap yunge-corfu--completion-mode-map)
+(defun yunge-corfu--start-popup-keys (&rest _)
+  "Give the current Corfu popup's keys precedence over Evil."
+  (setq-local yunge-corfu--popup-keys-active t)
+  (setq emulation-mode-map-alists
+        (cons 'yunge-corfu--emulation-map-alist
+              (remove 'yunge-corfu--emulation-map-alist
+                      emulation-mode-map-alists))))
 
-(defun yunge-corfu--sync-completion-mode ()
-  "Track whether Corfu owns the active completion session."
-  (yunge-corfu--completion-mode
-   (if (and completion-in-region-mode corfu-mode) 1 -1)))
+(defun yunge-corfu--finish-popup-keys (buffer)
+  "Restore the ordinary keys in Corfu popup owner BUFFER."
+  (when (buffer-live-p buffer)
+    (with-current-buffer buffer
+      (setq yunge-corfu--popup-keys-active nil))))
 
-(defun yunge-corfu--setup-keys ()
-  "Set up bindings for Corfu."
-  (add-hook 'completion-in-region-mode-hook
-            #'yunge-corfu--sync-completion-mode))
+(defun yunge-corfu--quit-popup-on-mode-disable ()
+  "End this buffer's Corfu popup when `corfu-mode' is disabled."
+  (when (and yunge-corfu--popup-keys-active (not corfu-mode))
+    (corfu-quit)))
 
 (with-eval-after-load 'corfu
   ;; Return belongs to the surrounding interface; Tab accepts completion.
   (keymap-unset corfu-map "RET")
-  (yunge-corfu--setup-keys))
-
-(with-eval-after-load 'evil
-  (with-eval-after-load 'corfu
-    ;; Completion navigation must outrank surrounding Evil minor-mode maps.
-    (add-to-list 'emulation-mode-map-alists
-                 'yunge-corfu--emulation-map-alist)))
+  (advice-add 'corfu--setup :after #'yunge-corfu--start-popup-keys)
+  (advice-add 'corfu--teardown :after #'yunge-corfu--finish-popup-keys)
+  (add-hook 'corfu-mode-hook #'yunge-corfu--quit-popup-on-mode-disable))
 
 (with-eval-after-load 'which-key
   (yunge-key-add-which-key-descriptions
-   yunge-corfu--completion-mode-map yunge-corfu-popup-bindings))
+   yunge-corfu--popup-map yunge-corfu-popup-bindings))
 
 (elpaca corfu
   (setq corfu-auto t
