@@ -7,20 +7,24 @@
 (declare-function consult--customize-args "consult"
                   (options &rest defaults))
 (declare-function consult--async-min-input "consult" (&optional min-input))
+(declare-function consult--file-preview "consult")
+(declare-function consult-bookmark "consult" (name))
 (declare-function evil-get-command-property "evil-common")
 (declare-function evil-visual-state "evil-states")
-(declare-function yunge-jump-history--track-navigation "yunge-jump-history")
+(declare-function yunge-jump-history-backward "yunge-jump-history")
 
 (defvar evil-command-line-map)
 (defvar evil-eval-map)
 (defvar evil-state)
-(defvar consult-async-min-input)
+(defvar bookmark-alist)
+(defvar bookmark-default-file)
+(defvar bookmark-save-flag)
 (defvar consult-source-buffer)
 
 (yunge-test-deftest-lazy-load yunge-consult
   (consult consult-imenu))
 
-(ert-deftest yunge-consult-configures-after-package-ready ()
+(ert-deftest yunge-consult-binds-keys-only-after-package-ready ()
   (yunge-test-run-package-config
    'yunge-consult 'consult
    :before-ready
@@ -58,22 +62,12 @@
       (when (featurep 'consult)
         (error "Consult was loaded by its configuration")))))
 
-(ert-deftest yunge-consult-integrates-with-evil ()
+(ert-deftest yunge-consult-binds-navigation-keys-without-evil-jumps ()
   (yunge-test-enable-evil)
   (require 'which-key)
   (require 'consult-autoloads)
   (yunge-test-load-package-config 'yunge-consult)
   (require 'consult)
-
-  (should
-   (advice-member-p
-    #'yunge-consult--suppress-reader-file-preview
-    'consult--file-preview))
-  (should
-   (advice-member-p
-    #'yunge-consult--explain-async-min-input
-    'consult--async-min-input))
-  (should (= consult-async-min-input 2))
 
   (yunge-test-evil-normal-keys
    'fundamental-mode
@@ -105,38 +99,46 @@
                      consult-line consult-line-multi consult-recent-file
                      consult-grep consult-ripgrep))
     (should-not (evil-get-command-property command :jump))
-    (should-not (evil-get-command-property command :repeat t))
-    (should
-     (advice-member-p #'yunge-jump-history--track-navigation command)))
+    (should-not (evil-get-command-property command :repeat t)))
 
   (dolist (command '(yunge-consult-project-search
                      yunge-consult-project-search-symbol))
     (should-not (evil-get-command-property command :jump))
     (should-not (evil-get-command-property command :repeat t))))
 
-(ert-deftest yunge-consult-suppresses-reader-file-previews ()
+(ert-deftest yunge-consult-previews-text-without-opening-reader-files ()
   (yunge-test-enable-evil)
   (require 'consult)
   (yunge-test-load-package-config 'yunge-consult)
-  (let (actions)
-    (let ((state
-           (yunge-consult--suppress-reader-file-preview
-            (lambda (&rest _arguments)
-              (lambda (action candidate)
-                (push (list action candidate) actions))))))
-      (funcall state 'preview "/tmp/book.epub")
-      (funcall state 'preview "/tmp/PAPER.PDF")
-      (funcall state 'preview "/tmp/notes.txt")
-      (funcall state 'return "/tmp/book.epub")
-      (funcall state 'exit nil)
-      (should
-       (equal
-        (nreverse actions)
-        '((preview nil)
-          (preview nil)
-          (preview "/tmp/notes.txt")
-          (return "/tmp/book.epub")
-          (exit nil)))))))
+  (let* ((root (make-temp-file "yunge-consult-preview-" t))
+         (epub (expand-file-name "book.epub" root))
+         (pdf (expand-file-name "PAPER.PDF" root))
+         (text-file (expand-file-name "notes.txt" root))
+         (preview-buffer (generate-new-buffer " *yunge-consult-preview*"))
+         (original-buffer (window-buffer))
+         opened)
+    (unwind-protect
+        (save-window-excursion
+          (cl-letf (((symbol-function 'consult--find-file-temporarily)
+                     (lambda (file)
+                       (push file opened)
+                       preview-buffer)))
+            (let ((preview (consult--file-preview)))
+              (funcall preview 'preview epub)
+              (funcall preview 'preview pdf)
+              (should-not opened)
+              (funcall preview 'preview text-file)
+              (should (equal (mapcar #'expand-file-name opened)
+                             (list text-file)))
+              (should (eq (window-buffer) preview-buffer))
+              (funcall preview 'preview epub)
+              (should (equal (mapcar #'expand-file-name opened)
+                             (list text-file)))
+              (should (eq (window-buffer) original-buffer))
+              (funcall preview 'exit nil))))
+      (when (buffer-live-p preview-buffer)
+        (kill-buffer preview-buffer))
+      (delete-directory root t))))
 
 (ert-deftest yunge-consult-prefers-the-selected-window-history ()
   (require 'consult)
@@ -150,13 +152,43 @@
           (set-window-buffer (split-window-right) shared)
           (switch-to-buffer current)
           (should (get-buffer-window shared))
-          (should (eq (yunge-consult--previous-window-buffer) shared))
-          (should (eq (plist-get consult-source-buffer :items)
-                      #'yunge-consult--buffer-items))
-          (should (eq (cdar (yunge-consult--buffer-items)) shared)))
+          (should (eq (cdar (funcall (plist-get consult-source-buffer :items)))
+                      shared)))
       (dolist (buffer (list shared current))
         (when (buffer-live-p buffer)
           (kill-buffer buffer))))))
+
+(ert-deftest yunge-consult-bookmark-navigation-can-jump-back ()
+  (yunge-test-enable-evil)
+  (require 'consult)
+  (require 'bookmark)
+  (yunge-test-load-package-config 'yunge-consult)
+  (let* ((root (make-temp-file "yunge-consult-bookmark-" t))
+         (file (expand-file-name "target.txt" root))
+         (bookmark-default-file (expand-file-name "bookmarks" root))
+         (bookmark-save-flag nil)
+         (bookmark-alist nil)
+         (origin (generate-new-buffer " *yunge-consult-origin*"))
+         destination)
+    (unwind-protect
+        (progn
+          (with-temp-file file (insert "target"))
+          (setq destination (find-file-noselect file))
+          (save-window-excursion
+            (with-current-buffer destination
+              (goto-char 3)
+              (bookmark-set "yunge-consult-target"))
+            (set-window-parameter nil 'yunge-jump-history nil)
+            (switch-to-buffer origin)
+            (consult-bookmark "yunge-consult-target")
+            (should (eq (current-buffer) destination))
+            (yunge-jump-history-backward)
+            (should (eq (current-buffer) origin))))
+      (set-window-parameter nil 'yunge-jump-history nil)
+      (dolist (buffer (list origin destination))
+        (when (buffer-live-p buffer)
+          (kill-buffer buffer)))
+      (delete-directory root t))))
 
 (ert-deftest yunge-consult-project-search-starts-from-visual-selection ()
   (yunge-test-enable-evil)
@@ -238,39 +270,21 @@
       (yunge-consult-project-search "needle"))
     (should (equal called '(nil "needle")))))
 
-(ert-deftest yunge-consult-project-search-allows-two-character-queries ()
-  (require 'consult)
-  (yunge-test-load-package-config 'yunge-consult)
-  (let ((query (string #x4f8b #x5b50))
-        called)
-    (cl-letf (((symbol-function 'executable-find)
-               (lambda (name) (and (equal name "rg") "rg")))
-              ((symbol-function 'consult-ripgrep)
-               (lambda (&optional directory initial)
-                 (setq called
-                       (list directory initial
-                             consult-async-min-input)))))
-      (yunge-consult-project-search query))
-    (should (equal called `(nil ,query 2)))))
-
 (ert-deftest yunge-consult-async-searches-explain-short-queries ()
   (yunge-test-enable-evil)
   (require 'consult)
   (yunge-test-load-package-config 'yunge-consult)
   (with-temp-buffer
-    (let* (actions
+    (let* ((query (string #x4f8b #x5b50))
+           submitted
            (stage
-            (funcall
-             (consult--async-min-input)
-             (lambda (action) (push action actions)))))
+            (funcall (consult--async-min-input)
+                     (lambda (action)
+                       (when (stringp action)
+                         (push action submitted))))))
       (funcall stage 'setup)
-      (let ((overlay
-             (seq-find
-              (lambda (candidate)
-                (eq (overlay-get candidate 'category)
-                    'yunge-consult-min-input-notice))
-              (append (car (overlay-lists))
-                      (cdr (overlay-lists))))))
+      (let ((overlay (car (append (car (overlay-lists))
+                                  (cdr (overlay-lists))))))
         (should overlay)
         (funcall stage "x")
         (let ((notice (overlay-get overlay 'after-string)))
@@ -278,13 +292,15 @@
            (equal notice
                   " [Type at least 2 characters to start search]"))
           (should (eq (get-text-property 1 'face notice) 'warning)))
-        (funcall stage "xy")
+        (should-not submitted)
+        (funcall stage query)
+        (should (equal submitted (list query)))
         (should-not (overlay-get overlay 'after-string))
         (funcall stage (propertize "x" 'consult--force t))
         (should-not (overlay-get overlay 'after-string))
+        (should (equal submitted (list "x" query)))
         (funcall stage 'destroy)
-        (should-not (overlay-buffer overlay)))
-      (should (= (length actions) 5)))))
+        (should-not (overlay-buffer overlay))))))
 
 (ert-deftest yunge-consult-project-search-falls-back-to-grep ()
   (require 'consult)

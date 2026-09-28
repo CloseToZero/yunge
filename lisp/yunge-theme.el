@@ -16,8 +16,8 @@
 (defconst yunge-theme-dark 'modus-vivendi
   "Dark theme used by this configuration.")
 
-(defvar yunge-theme--immersion-restore-theme nil
-  "Theme to restore when leaving immersion, or nil when inactive.")
+(defvar yunge-theme--theme-before-immersion nil
+  "Theme active before immersion, if any.")
 
 (defvar-keymap yunge-theme-immersion-map
   :doc "Theme-specific immersion commands.")
@@ -29,8 +29,8 @@
                '(fullboth fullscreen))))
     ;; A non-fullscreen entry starts a new immersion even if the preceding
     ;; session was left with F11 instead of `yunge-theme-exit-immersion'.
-    (unless (and fullscreen yunge-theme--immersion-restore-theme)
-      (setq yunge-theme--immersion-restore-theme
+    (unless (and fullscreen yunge-theme--theme-before-immersion)
+      (setq yunge-theme--theme-before-immersion
             (car custom-enabled-themes)))
     (unless (memq theme custom-enabled-themes)
       (modus-themes-load-theme theme))
@@ -53,10 +53,10 @@
   (when (memq (frame-parameter nil 'fullscreen)
               '(fullboth fullscreen))
     (toggle-frame-fullscreen))
-  (when-let* ((theme yunge-theme--immersion-restore-theme))
+  (when-let* ((theme yunge-theme--theme-before-immersion))
     (unless (memq theme custom-enabled-themes)
       (modus-themes-load-theme theme))
-    (setq yunge-theme--immersion-restore-theme nil)))
+    (setq yunge-theme--theme-before-immersion nil)))
 
 (defconst yunge-theme-immersion-bindings
   '(("d" yunge-theme-enter-dark-immersion "dark")

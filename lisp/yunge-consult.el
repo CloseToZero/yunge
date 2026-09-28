@@ -73,7 +73,7 @@ Optional MINIMUM retains the threshold accepted by
     ("B" consult-line-multi "search project buffers")
     ("p" yunge-consult-project-search "search project")
     ("P" yunge-consult-project-search-symbol
-     "search symbol in project")))
+     "search selection or symbol in project")))
 
 (defconst yunge-consult-jump-bindings
   '(("b" consult-bookmark "jump to bookmark")
