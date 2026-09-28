@@ -126,8 +126,8 @@ While a completion interface is active:
 
 - ~TAB~ incorporates the current candidate or common prefix into the input and
   keeps the interface active when further completion is possible.
-- In minibuffer completion, ~RET~ accepts the current candidate or input and
-  leaves the completion interface.
+- In minibuffer completion, ~RET~ accepts the current candidate or input when
+  the prompt permits it and leaves the completion interface.
 - In a Corfu popup, ~C-j~/~C-k~ move between candidates and ~TAB~ completes the selected
   candidate. ~RET~ keeps the surrounding mode's action; it does not accept the
   candidate.
@@ -137,6 +137,9 @@ page, and ~C-f~/~C-b~ move a full page. ~gg~ selects the first candidate, or
 the prompt when already at the first; ~G~ selects the last. In insert state,
 ~C-j~/~C-k~ move one candidate. ~TAB~ inserts the selected candidate into the
 minibuffer; ~RET~ accepts it and exits.
+
+Minibuffer prompts open in Evil insert state. Escape switches to normal state
+without closing the prompt; ~RET~ still runs that prompt's acceptance action.
 
 These bindings apply only while completion is active.  The surrounding mode's
 bindings resume when completion ends.

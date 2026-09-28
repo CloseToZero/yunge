@@ -255,16 +255,6 @@ Other Elpaca declarations remain deferred."
   (should (eq evil-state state))
   (yunge-test-keys bindings))
 
-(defun yunge-test-assert-calls-interactively
-    (function expected &rest arguments)
-  "Check that FUNCTION calls EXPECTED interactively with ARGUMENTS."
-  (let (called)
-    (cl-letf (((symbol-function 'call-interactively)
-               (lambda (command &rest _arguments)
-                 (setq called command))))
-      (apply function arguments))
-    (should (eq called expected))))
-
 (defun yunge-test-evil-normal-keys (mode bindings)
   "Activate major MODE and check its normal-state BINDINGS."
   (with-temp-buffer

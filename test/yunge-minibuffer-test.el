@@ -4,63 +4,70 @@
 
 (require 'yunge-test-helper)
 
-(declare-function evil-local-mode "evil-core")
-(declare-function evil-normal-state "evil-states")
-
-(defvar evil-local-mode)
 (defvar evil-echo-state)
 (defvar evil-state)
+(defvar last-command-event)
 
 (yunge-test-deftest-lazy-load yunge-minibuffer
   (evil))
 
-(ert-deftest yunge-minibuffer-preserves-prompt-actions ()
+(ert-deftest yunge-minibuffer-return-follows-current-prompt ()
   (require 'yunge-minibuffer)
   (yunge-test-enable-evil)
-
-  (let ((evil-position
-         (seq-position minibuffer-setup-hook 'evil-initialize))
-        (setup-position
-         (seq-position minibuffer-setup-hook #'yunge-minibuffer--setup)))
-    (should evil-position)
-    (should setup-position)
-    (should (< evil-position setup-position)))
-
   (yunge-test-with-evil-minibuffer
-    (cl-labels
-        ((verify (map expected)
-           (use-local-map map)
-           (let ((minibuffer-setup-hook
-                  (seq-filter
-                   (lambda (function)
-                     (memq function
-                           '(evil-initialize yunge-minibuffer--setup)))
-                   minibuffer-setup-hook)))
-             ;; Simulate a reused minibuffer whose local value was reset.
-             (setq-local evil-echo-state t)
-             (run-hooks 'minibuffer-setup-hook))
+    (let ((original-input (minibuffer-contents-no-properties))
+          (original-echo-state evil-echo-state)
+          (echo-local (local-variable-p 'evil-echo-state)))
+      (unwind-protect
+          (progn
+            (use-local-map minibuffer-local-map)
+            (run-hooks 'minibuffer-setup-hook)
+            (should (eq evil-state 'insert))
+            (call-interactively (key-binding (kbd "<escape>")))
+            (should (eq evil-state 'normal))
+            ;; Batch Emacs has no recursive minibuffer edit. Simulate its
+            ;; active loop so the real Return commands can exit.
+            (cl-letf (((symbol-function 'minibuffer-innermost-command-loop-p)
+                       (lambda (&rest _) t))
+                      ((symbol-function 'innermost-minibuffer-p)
+                       (lambda (&rest _) t)))
+              (cl-labels
+                  ((press (key event)
+                     (let ((last-command-event event))
+                       (catch 'exit
+                         (call-interactively (key-binding (kbd key)))
+                         'not-exited))))
+                (delete-minibuffer-contents)
+                (insert "probe")
+                (should-not (press "RET" ?\r))
+                (should (equal (minibuffer-contents-no-properties) "probe"))
 
-           (should evil-local-mode)
-           (should-not evil-echo-state)
-           (should (eq evil-state 'insert))
-           (evil-normal-state)
-           (yunge-minibuffer--setup)
-           (yunge-test-evil-keys
-            'insert
-            '(("<escape>" . evil-normal-state)
-              ("C-g" . abort-minibuffers)))
-           (evil-normal-state)
-           (yunge-test-evil-keys
-            'normal
-            '(("<escape>" . evil-force-normal-state)
-              ("RET" . yunge-minibuffer--return)
-              ("<return>" . yunge-minibuffer--return)
-              ("C-g" . abort-minibuffers)))
+                (use-local-map minibuffer-local-must-match-map)
+                (let ((minibuffer-completion-table '("alpha" "beta"))
+                      (minibuffer-completion-predicate nil)
+                      (minibuffer-completion-confirm nil))
+                  (delete-minibuffer-contents)
+                  (insert "zz")
+                  (should (eq (press "<return>" 'return) 'not-exited))
+                  (should (equal (minibuffer-contents-no-properties) "zz"))
+                  (delete-minibuffer-contents)
+                  (insert "alpha")
+                  (should-not (press "<return>" 'return))
+                  (should (equal (minibuffer-contents-no-properties) "alpha")))
 
-           (yunge-test-assert-calls-interactively
-            #'yunge-minibuffer--return expected ?\r)))
-      (verify minibuffer-local-map 'exit-minibuffer)
-      (verify minibuffer-local-must-match-map
-              'minibuffer-complete-and-exit))))
+                (let ((map (copy-keymap minibuffer-local-map)))
+                  (define-key map (kbd "RET") #'delete-backward-char)
+                  (use-local-map map)
+                  (dolist (key '("RET" "<return>"))
+                    (delete-minibuffer-contents)
+                    (insert "probe")
+                    (should (eq (press key (if (equal key "RET") ?\r 'return))
+                                'not-exited))
+                    (should (equal (minibuffer-contents-no-properties) "prob")))))))
+        (delete-minibuffer-contents)
+        (insert original-input)
+        (if echo-local
+            (setq-local evil-echo-state original-echo-state)
+          (kill-local-variable 'evil-echo-state))))))
 
 ;;; yunge-minibuffer-test.el ends here
