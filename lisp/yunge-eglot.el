@@ -208,7 +208,7 @@ Each entry is a plist containing :root, :modes, and optionally
     (nreverse databases)))
 
 (defun yunge-eglot--read-other-compilation-database (root default)
-  "Read a compilation database below ROOT, initially offering DEFAULT."
+  "Read a compilation database, initially offering DEFAULT or ROOT."
   (let* ((directory (if default
                         (file-name-directory default)
                       root))

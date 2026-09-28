@@ -105,28 +105,68 @@
           (should (equal default-seen preferred)))
       (delete-directory root t))))
 
-(ert-deftest yunge-eglot-persists-project-language-groups ()
-  (let* ((root (make-temp-file "yunge-eglot-project-" t))
-         (state-directory (make-temp-file "yunge-eglot-state-" t))
-         (yunge-eglot-state-file
-          (expand-file-name "projects.eld" state-directory))
+(ert-deftest yunge-eglot-restores-language-choices-after-restart ()
+  (skip-unless (executable-find "git"))
+  (require 'eglot)
+  (let* ((workspace (make-temp-file "yunge-eglot-workspace-" t))
+         (root (expand-file-name "project/" workspace))
+         (yunge-eglot-state-file (expand-file-name "projects.eld" workspace))
          (yunge-eglot-projects nil)
          (database (expand-file-name "build/compile_commands.json" root))
-         (modes '(c-mode c-ts-mode c++-mode c++-ts-mode objc-mode)))
-    (unwind-protect
-        (progn
-          (yunge-eglot--set-entry root modes database)
-          (yunge-eglot--save-state)
-          (setq yunge-eglot-projects nil)
-          (yunge-eglot--load-state)
-          (let ((entry (yunge-eglot--entry root 'c++-ts-mode)))
-            (should entry)
-            (should (equal (plist-get entry :compile-commands)
-                           database)))
-          (yunge-eglot--remove-entry root modes)
-          (should-not (yunge-eglot--entry root 'c-mode)))
-      (delete-directory root t)
-      (delete-directory state-directory t))))
+         (cpp (expand-file-name "main.cpp" root))
+         (c (expand-file-name "main.c" root))
+         (python (expand-file-name "main.py" root))
+         (major-mode-remap-alist nil)
+         buffers shutdowns server)
+    (cl-labels
+        ((check-after-restart (expected)
+           (yunge-test-run-emacs
+            "--eval"
+            (prin1-to-string
+             `(progn
+                (defvar yunge-eglot-state-file ,yunge-eglot-state-file)
+                (defmacro elpaca (&rest _body) nil)
+                (require 'yunge-eglot)
+                (require 'eglot)
+                (let ((major-mode-remap-alist nil)
+                      ensured)
+                  (cl-letf (((symbol-function 'eglot-ensure)
+                             (lambda () (push buffer-file-name ensured))))
+                    (dolist (file ',(list cpp c python))
+                      (find-file-noselect file)))
+                  (unless (equal (sort ensured #'string<)
+                                 (sort ',(copy-sequence expected) #'string<))
+                    (error "Unexpected Eglot starts: %S" ensured))))))))
+      (unwind-protect
+          (progn
+            (make-directory (file-name-directory database) t)
+            (should (zerop (process-file "git" nil nil nil
+                                         "init" "--quiet" root)))
+            (with-temp-file database (insert "[]\n"))
+            (dolist (file (list cpp c python))
+              (with-temp-file file (insert "\n")))
+            (cl-letf (((symbol-function 'read-file-name)
+                       (lambda (&rest _) database))
+                      ((symbol-function 'eglot-current-server)
+                       (lambda () server))
+                      ((symbol-function 'eglot-ensure) #'ignore)
+                      ((symbol-function 'eglot-shutdown)
+                       (lambda (server &rest _)
+                         (push server shutdowns))))
+              (dolist (file (list cpp python))
+                (let ((buffer (find-file-noselect file)))
+                  (push buffer buffers)
+                  (with-current-buffer buffer
+                    (yunge-eglot-enable-project))))
+              (check-after-restart (list cpp c python))
+              (setq server 'cpp-server)
+              (with-current-buffer (get-file-buffer cpp)
+                (yunge-eglot-disable-project))
+              (should (equal shutdowns '(cpp-server)))
+              (check-after-restart (list python))))
+        (dolist (buffer buffers)
+          (when (buffer-live-p buffer) (kill-buffer buffer)))
+        (delete-directory workspace t)))))
 
 (ert-deftest yunge-eglot-clangd-contact-uses-the-database-directory ()
   (let* ((root (file-name-as-directory
@@ -215,146 +255,57 @@
       (should (equal (yunge-eglot--clangd-executable)
                      "/usr/bin/clangd")))))
 
-(ert-deftest yunge-eglot-enables-the-current-project-language ()
-  (let* ((root (file-name-as-directory
-                (make-temp-file "yunge-eglot-project-" t)))
-         (database (expand-file-name "output/compile_commands.json" root))
+(ert-deftest yunge-eglot-restarts-only-when-the-compilation-database-changes ()
+  (skip-unless (executable-find "git"))
+  (require 'eglot)
+  (let* ((workspace (make-temp-file "yunge-eglot-workspace-" t))
+         (root (expand-file-name "project/" workspace))
+         (yunge-eglot-state-file (expand-file-name "projects.eld" workspace))
          (yunge-eglot-projects nil)
-         saved ensured)
+         (old-database (expand-file-name "build-old/compile_commands.json" root))
+         (new-database (expand-file-name "build-new/compile_commands.json" root))
+         (source (expand-file-name "main.cpp" root))
+         (major-mode-remap-alist nil)
+         selected server shutdowns starts buffer)
     (unwind-protect
-        (with-temp-buffer
-          (setq major-mode 'c++-mode)
-          (cl-letf (((symbol-function 'project-current)
-                     (lambda (&rest _) 'test-project))
-                    ((symbol-function 'project-root)
-                     (lambda (_project) root))
-                    ((symbol-function 'yunge-eglot--language-modes)
-                     (lambda () yunge-eglot--clangd-modes))
-                    ((symbol-function
-                      'yunge-eglot--read-compilation-database)
-                     (lambda (_root &optional _preferred) database))
-                    ((symbol-function 'yunge-eglot--save-state)
-                     (lambda () (setq saved t)))
-                    ((symbol-function 'eglot-current-server)
-                     (lambda () nil))
-                    ((symbol-function 'eglot-ensure)
-                     (lambda () (setq ensured t))))
-            (yunge-eglot-enable-project)
-            (should saved)
-            (should ensured)
-            (should
-             (equal (plist-get
-                     (yunge-eglot--entry root 'c-mode)
-                     :compile-commands)
-                    database))))
-      (delete-directory root t))))
-
-(ert-deftest yunge-eglot-restarts-clangd-after-database-change ()
-  (let* ((root (file-name-as-directory
-                (make-temp-file "yunge-eglot-project-" t)))
-         (old-database
-          (expand-file-name "build-old/compile_commands.json" root))
-         (new-database
-          (expand-file-name "build-new/compile_commands.json" root))
-         (yunge-eglot-projects
-          (list (list :root root
-                      :modes yunge-eglot--clangd-modes
-                      :compile-commands old-database)))
-         preferred saved shutdown-server ensured)
-    (unwind-protect
-        (with-temp-buffer
-          (setq major-mode 'c++-mode)
-          (cl-letf (((symbol-function
-                      'yunge-eglot--current-project-and-modes)
-                     (lambda ()
-                       (list root yunge-eglot--clangd-modes)))
-                    ((symbol-function
-                      'yunge-eglot--read-compilation-database)
-                     (lambda (_root default)
-                       (setq preferred default)
-                       new-database))
-                    ((symbol-function 'yunge-eglot--save-state)
-                     (lambda () (setq saved t)))
-                    ((symbol-function 'eglot-current-server)
-                     (lambda () 'test-server))
-                    ((symbol-function 'eglot-shutdown)
-                     (lambda (server &rest _)
-                       (setq shutdown-server server)))
-                    ((symbol-function 'eglot-ensure)
-                     (lambda () (setq ensured t))))
-            (yunge-eglot-enable-project)
-            (should (equal preferred old-database))
-            (should saved)
-            (should (eq shutdown-server 'test-server))
-            (should ensured)
-            (should
-             (equal (plist-get
-                     (yunge-eglot--entry root 'c-mode)
-                     :compile-commands)
-                    new-database))))
-      (delete-directory root t))))
-
-(ert-deftest yunge-eglot-keeps-clangd-when-database-is-unchanged ()
-  (let* ((root (file-name-as-directory
-                (make-temp-file "yunge-eglot-project-" t)))
-         (database
-          (expand-file-name "build/compile_commands.json" root))
-         (yunge-eglot-projects
-          (list (list :root root
-                      :modes yunge-eglot--clangd-modes
-                      :compile-commands database)))
-         ensured)
-    (unwind-protect
-        (with-temp-buffer
-          (setq major-mode 'c++-mode)
-          (cl-letf (((symbol-function
-                      'yunge-eglot--current-project-and-modes)
-                     (lambda ()
-                       (list root yunge-eglot--clangd-modes)))
-                    ((symbol-function
-                      'yunge-eglot--read-compilation-database)
-                     (lambda (_root _default) database))
-                    ((symbol-function 'yunge-eglot--save-state)
-                     #'ignore)
-                    ((symbol-function 'eglot-current-server)
-                     (lambda () 'test-server))
-                    ((symbol-function 'eglot-shutdown)
-                     (lambda (&rest _)
-                       (ert-fail "Unchanged clangd was restarted")))
-                    ((symbol-function 'eglot-ensure)
-                     (lambda () (setq ensured t))))
-            (yunge-eglot-enable-project)
-            (should ensured)))
-      (delete-directory root t))))
-
-(ert-deftest yunge-eglot-disables-only-the-current-project-language ()
-  (let* ((root (file-name-as-directory
-                (make-temp-file "yunge-eglot-project-" t)))
-         (python-modes '(python-mode python-ts-mode))
-         (yunge-eglot-projects
-          (list (list :root root :modes yunge-eglot--clangd-modes)
-                (list :root root :modes python-modes)))
-         saved shutdown-server)
-    (unwind-protect
-        (with-temp-buffer
-          (setq major-mode 'c++-mode)
-          (cl-letf (((symbol-function
-                      'yunge-eglot--current-project-and-modes)
-                     (lambda ()
-                       (list root yunge-eglot--clangd-modes)))
-                    ((symbol-function 'yunge-eglot--save-state)
-                     (lambda () (setq saved t)))
-                    ((symbol-function 'eglot-current-server)
-                     (lambda () 'test-server))
-                    ((symbol-function 'eglot-shutdown)
-                     (lambda (server &rest _)
-                       (setq shutdown-server server))))
-            (yunge-eglot-disable-project)
-            (should saved)
-            (should (eq shutdown-server 'test-server))
-            (should-not (yunge-eglot--entry root 'c-mode))
-            (should (yunge-eglot--entry root 'python-mode))))
-      (delete-directory root t))))
+        (progn
+          (dolist (database (list old-database new-database))
+            (make-directory (file-name-directory database) t)
+            (with-temp-file database (insert "[]\n")))
+          (should (zerop (process-file "git" nil nil nil
+                                       "init" "--quiet" root)))
+          (with-temp-file source (insert "\n"))
+          (setq buffer (find-file-noselect source))
+          (with-current-buffer buffer
+            (cl-letf (((symbol-function 'completing-read)
+                       (lambda (_prompt choices &rest _)
+                         (should (member selected choices))
+                         selected))
+                      ((symbol-function 'eglot-current-server)
+                       (lambda () server))
+                      ((symbol-function 'eglot-shutdown)
+                       (lambda (current &rest _)
+                         (push current shutdowns)
+                         (setq server nil)))
+                      ((symbol-function 'eglot-ensure)
+                       (lambda ()
+                         (unless server
+                           (setq server (intern (format "server-%d"
+                                                        (1+ (length starts)))))
+                           (push server starts)))))
+              (setq selected old-database)
+              (yunge-eglot-enable-project)
+              (should (eq server 'server-1))
+              (setq selected new-database)
+              (yunge-eglot-enable-project)
+              (should (eq server 'server-2))
+              (should (equal shutdowns '(server-1)))
+              (yunge-eglot-enable-project)
+              (should (eq server 'server-2))
+              (should (equal shutdowns '(server-1)))
+              (should (equal starts '(server-2 server-1))))))
+      (when (buffer-live-p buffer) (kill-buffer buffer))
+      (delete-directory workspace t))))
 
 (ert-deftest yunge-eglot-only-auto-starts-enabled-project-languages ()
   (require 'eglot)
