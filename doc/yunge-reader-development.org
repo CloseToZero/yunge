@@ -30,6 +30,13 @@ keep resources used by in-flight work alive until that work releases them.
 EPUB's native surface belongs to one frame for its lifetime. Moving a view
 to another frame creates a separate presentation and restores its location.
 
+The EPUB driver owns the broker publication shared by its views. WebView
+borrows that publication to display native surfaces. Hiding a Reader buffer
+keeps its logical view alive and retains one hidden surface for redisplay.
+Detaching a view destroys its surfaces; the EPUB driver waits for pending
+detachments before closing the publication. If opening returns a publication
+with invalid metadata, the driver releases it before reporting the failure.
+
 An outline request and its cached result belong to the shared document.
 Each Reader view owns an outline buffer with its own point and folded
 branches. Completion updates those buffers without displaying them. Closing

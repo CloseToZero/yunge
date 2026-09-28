@@ -2155,35 +2155,7 @@
      (equal requests
             '(("view-focus-parent" ((view . 40))))))))
 
-(ert-deftest yunge-reader-webview-destroys-a-replaced-window-view ()
-  (let* ((buffer (generate-new-buffer " *webview owner*"))
-         (other (generate-new-buffer " *webview replacement*"))
-         (window (selected-window))
-         (view
-          (yunge-reader-webview--make-view
-           :surface
-           (yunge-reader-webview-test--surface
-            9 'native-ready :window window)
-           :buffer buffer))
-         requests)
-    (unwind-protect
-        (let ((yunge-reader-webview--views
-               (make-hash-table :test #'eql)))
-          (puthash 9 view yunge-reader-webview--views)
-          (cl-letf
-              (((symbol-function 'window-buffer)
-                (lambda (_window) other))
-               ((symbol-function 'process-live-p)
-                (lambda (_process) t))
-               ((symbol-function 'yunge-reader-webview--request)
-                (lambda (operation parameters _complete)
-                  (push (list operation parameters) requests))))
-            (yunge-reader-webview--sync-view view))
-          (should (equal (caar requests) "view-destroy")))
-      (kill-buffer buffer)
-      (kill-buffer other))))
-
-(ert-deftest yunge-reader-webview-hides-persistent-native-surfaces ()
+(ert-deftest yunge-reader-webview-hides-native-surface-with-buffer ()
   (let* ((system-type 'darwin)
          (buffer (generate-new-buffer " *persistent EPUB owner*"))
          (other (generate-new-buffer " *persistent EPUB replacement*"))
@@ -2201,7 +2173,6 @@
             :style (copy-tree style)
             :zoom 'fit-width)
            :buffer buffer
-           :persistent t
            :publication 6
            :appearance appearance
            :style style
@@ -2247,15 +2218,14 @@
       (kill-buffer buffer)
       (kill-buffer other))))
 
-(ert-deftest yunge-reader-webview-releases-focus-before-hiding-persistent-surface ()
+(ert-deftest yunge-reader-webview-releases-focus-before-hiding-surface ()
   (let* ((surface
           (yunge-reader-webview-test--surface
            16 'ready :window 'window :native-focused t))
          (view
           (yunge-reader-webview--make-view
            :surface surface
-           :buffer (current-buffer)
-           :persistent t))
+           :buffer (current-buffer)))
          (yunge-reader-webview--process 'fake-webview-process)
          (yunge-reader-webview--views
           (make-hash-table :test #'eql))
@@ -2288,8 +2258,7 @@
           (yunge-reader-webview--make-view
            :surface
            (yunge-reader-webview-test--surface 16 'failed :window 'window)
-           :buffer (current-buffer)
-           :persistent t))
+           :buffer (current-buffer)))
          released)
     (cl-letf (((symbol-function 'yunge-reader-webview--visible-window)
                (lambda (_view) nil))
@@ -2304,13 +2273,12 @@
       (yunge-reader-webview--sync-view view))
     (should (eq released view))))
 
-(ert-deftest yunge-reader-webview-recreates-visible-persistent-surfaces ()
+(ert-deftest yunge-reader-webview-recreates-surface-when-buffer-reappears ()
   (let* ((buffer (generate-new-buffer " *persistent EPUB visible*"))
          (window (selected-window))
          (view
           (yunge-reader-webview--make-view
            :buffer buffer
-           :persistent t
            :publication 8
            :renderer-url "http://127.0.0.1/renderer/"
            :appearance-function
@@ -2508,7 +2476,7 @@
           (yunge-reader-webview--make-view
            :surface
            (yunge-reader-webview-test--surface 31 'native-ready)
-           :persistent t :publication 8))
+           :publication 8))
          (yunge-reader-webview--process 'fake-webview-process)
          (yunge-reader-webview--views
           (make-hash-table :test #'eql))
@@ -2535,34 +2503,5 @@
       (should-not finished)
       (funcall (cdr (assq 31 requests)) nil nil)
       (should finished))))
-
-(ert-deftest yunge-reader-webview-closes-publication-after-destroy ()
-  (let* ((view
-          (yunge-reader-webview--make-view
-           :surface
-           (yunge-reader-webview-test--surface 10 'native-ready)
-           :publication 3
-           :broker-session 9 :owns-publication t))
-         (yunge-reader-webview--process 'fake-webview-process)
-         (yunge-reader-webview--views
-          (make-hash-table :test #'eql))
-         requests
-         closed)
-    (puthash 10 view yunge-reader-webview--views)
-    (cl-letf (((symbol-function 'process-live-p) (lambda (_process) t))
-              ((symbol-function 'yunge-reader-webview--request)
-               (lambda (operation parameters complete)
-                 (push (list operation parameters complete) requests)))
-              ((symbol-function 'yunge-reader-webview--close-publication)
-               (lambda (session publication complete)
-                 (setq closed (list session publication))
-                 (funcall complete '((closed . t)) nil))))
-      (yunge-reader-webview--destroy-view view)
-      (should (equal (caar requests) "view-destroy"))
-      (funcall (nth 2 (car requests)) nil nil)
-      (should (equal closed '(9 3)))
-      (should
-       (equal (mapcar #'car (nreverse requests))
-              '("view-destroy"))))))
 
 ;;; yunge-reader-webview-test.el ends here

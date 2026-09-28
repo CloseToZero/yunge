@@ -8,8 +8,6 @@
 (require 'yunge-reader-webview-service)
 (require 'yunge-reader-webview-view)
 
-(declare-function yunge-reader-webview--destroy-view
-                  "yunge-reader-webview" (view &optional complete))
 (declare-function yunge-reader-webview--maybe-finish-view-destroy
                   "yunge-reader-webview" (view))
 (declare-function yunge-reader-webview--resolved-scroll-bar-mode
@@ -296,9 +294,7 @@ SURFACE defaults to VIEW's active presentation."
     (yunge-reader-webview--set-buffer-message
      view (error-message-string error-data))
     (display-warning
-     'yunge-reader (error-message-string error-data) :warning)
-    (unless (yunge-reader-webview--view-persistent view)
-      (yunge-reader-webview--destroy-view view)))
+     'yunge-reader (error-message-string error-data) :warning))
    (t
     (let ((surface
            (yunge-reader-webview--view-surface-for-id view id)))

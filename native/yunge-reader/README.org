@@ -875,8 +875,8 @@ cargo run --example fixed_epub_fixture -- --variant rtl rtl.epub
 cargo run --example fixed_epub_fixture -- --variant vertical-rl vertical.epub
 #+end_src
 
-Open the result through the ordinary Reader command rather than the WebView
-spike.  Every package declares =pre-paginated= layout and no synthetic spreads.
+Open the result with =C-x C-f=. Every package declares =pre-paginated= layout
+and no synthetic spreads.
 The =rtl= variant changes spine progression and document direction.  The
 =vertical-rl= variant additionally uses Japanese language metadata and CSS
 vertical writing without depending on a copyrighted book.

@@ -11,14 +11,6 @@
 (require 'yunge-reader-webview-renderer)
 (require 'yunge-reader-webview-surface)
 
-(define-derived-mode yunge-reader-webview-spike-mode special-mode
-  "Yunge-WebView"
-  "Major mode used behind a native child WebView spike."
-  (setq-local cursor-type nil)
-  (setq-local truncate-lines t)
-  (add-hook 'kill-buffer-hook
-            #'yunge-reader-webview--kill-buffer nil t))
-
 (defun yunge-reader-webview--surface-value-complete
     (view id surface requested read-applied set-applied
           _result error-data)
@@ -640,31 +632,27 @@ queued creation request."
             (when-let* ((surface
                          (yunge-reader-webview--view-surface view)))
               (yunge-reader-webview--adopt-surface-state view surface)))
-        (if (yunge-reader-webview--view-persistent view)
-            (when-let* ((surface
-                         (or active-surface (car surfaces))))
-              (if (eq (yunge-reader-webview--surface-state surface)
-                      'failed)
-                  (yunge-reader-webview--release-surface
-                   view nil surface)
-                (dolist (other surfaces)
-                  (unless (eq other surface)
-                    (yunge-reader-webview--release-surface
-                     view nil other)))
-                (setf (yunge-reader-webview--view-surface view) surface)
-                ;; Hiding a native child does not reliably return keyboard
-                ;; focus.  Keep the recorded state until the native request
-                ;; completes so a quick return cannot strand the first key.
-                (when
-                    (yunge-reader-webview--surface-native-focused surface)
-                  (let ((yunge-reader-webview--operation-surface surface))
-                    (yunge-reader-webview--request-parent-focus view)))
-                (yunge-reader-webview--clear-view-selection view)
-                (yunge-reader-webview--set-view-selection view nil)
-                (yunge-reader-webview--set-view-visible view nil surface)))
-          (dolist (surface surfaces)
-            (yunge-reader-webview--release-surface view nil surface))
-          (yunge-reader-webview--destroy-view view))))))
+        (when-let* ((surface
+                     (or active-surface (car surfaces))))
+          (if (eq (yunge-reader-webview--surface-state surface)
+                  'failed)
+              (yunge-reader-webview--release-surface
+               view nil surface)
+            (dolist (other surfaces)
+              (unless (eq other surface)
+                (yunge-reader-webview--release-surface
+                 view nil other)))
+            (setf (yunge-reader-webview--view-surface view) surface)
+            ;; Hiding a native child does not reliably return keyboard
+            ;; focus.  Keep the recorded state until the native request
+            ;; completes so a quick return cannot strand the first key.
+            (when
+                (yunge-reader-webview--surface-native-focused surface)
+              (let ((yunge-reader-webview--operation-surface surface))
+                (yunge-reader-webview--request-parent-focus view)))
+            (yunge-reader-webview--clear-view-selection view)
+            (yunge-reader-webview--set-view-selection view nil)
+            (yunge-reader-webview--set-view-visible view nil surface)))))))
 
 (defun yunge-reader-webview--sync-views (&rest _ignored)
   "Synchronize every logical view after an Emacs window change."
@@ -695,13 +683,6 @@ queued creation request."
            (yunge-reader-webview--request-parent-focus view)))))
    yunge-reader-webview--logical-views))
 
-(defun yunge-reader-webview--close-owned-publication
-    (session publication)
-  "Close broker PUBLICATION owned by native helper SESSION."
-  (when (and (integerp session) publication)
-    (yunge-reader-webview--close-publication
-     session publication (lambda (_result _error-data)))))
-
 (defun yunge-reader-webview--finish-view-destroy (view)
   "Finish permanent destruction of logical VIEW."
   (unless (yunge-reader-webview--view-destroy-finished view)
@@ -710,13 +691,7 @@ queued creation request."
           (yunge-reader-webview--view-search-result view) nil)
     (yunge-reader-webview--finish-outline-waiters
      view nil '(error "The EPUB view was destroyed before its outline loaded"))
-    (let ((publication
-           (prog1 (yunge-reader-webview--view-publication view)
-             (setf (yunge-reader-webview--view-publication view) nil))))
-      (when (yunge-reader-webview--view-owns-publication view)
-        (yunge-reader-webview--close-owned-publication
-         (yunge-reader-webview--view-broker-session view)
-         publication)))
+    (setf (yunge-reader-webview--view-publication view) nil)
     (let ((waiters
            (prog1
                (yunge-reader-webview--view-destroy-waiters view)
@@ -788,12 +763,6 @@ queued creation request."
 
 (add-hook 'yunge-reader-webview-service-stopped-hook
           #'yunge-reader-webview--forget-all-surfaces)
-
-(defun yunge-reader-webview--kill-buffer ()
-  "Destroy the native view owned by the current buffer."
-  (when yunge-reader-webview--buffer-view
-    (yunge-reader-webview--destroy-view
-     yunge-reader-webview--buffer-view)))
 
 (defun yunge-reader-webview--current-ready-view ()
   "Return the current buffer's ready EPUB WebView."
@@ -872,7 +841,6 @@ Invoke EXTERNAL-LINK-FUNCTION with the view and a validated absolute URI."
   (let ((view
          (yunge-reader-webview--make-view
           :buffer (current-buffer)
-          :persistent t
           :publication publication
           :broker-session broker-session
           :renderer-url renderer-url
@@ -900,128 +868,6 @@ Invoke EXTERNAL-LINK-FUNCTION with the view and a validated absolute URI."
         (yunge-reader-webview--destroy-view view complete)
       (when complete
         (funcall complete)))))
-
-(defun yunge-reader-webview--navigation-complete (_result error-data)
-  "Report an asynchronous EPUB navigation ERROR-DATA."
-  (when error-data
-    (display-warning
-     'yunge-reader (error-message-string error-data) :warning)))
-
-;;;###autoload
-(defun yunge-reader-webview-previous-screen ()
-  "Move the current EPUB spike view backward by one screen."
-  (interactive)
-  (yunge-reader-webview--navigate-view
-   (yunge-reader-webview--current-ready-view)
-   "previous-screen"
-   #'yunge-reader-webview--navigation-complete))
-
-;;;###autoload
-(defun yunge-reader-webview-next-screen ()
-  "Move the current EPUB spike view forward by one screen."
-  (interactive)
-  (yunge-reader-webview--navigate-view
-   (yunge-reader-webview--current-ready-view)
-   "next-screen"
-   #'yunge-reader-webview--navigation-complete))
-
-(defun yunge-reader-webview--publication-open-complete
-    (view result error-data)
-  "Finish opening VIEW's publication from native RESULT."
-  (if error-data
-      (progn
-        (yunge-reader-webview--set-buffer-message
-         view (error-message-string error-data))
-        (yunge-reader-webview--destroy-view view)
-        (display-warning
-         'yunge-reader (error-message-string error-data) :warning))
-    (let ((publication (alist-get 'publication result)))
-      (unless (and (integerp publication) (> publication 0))
-        (error "Malformed EPUB publication result: %S" result))
-      (if (yunge-reader-webview--view-destroyed view)
-          (yunge-reader-webview--close-owned-publication
-           (alist-get 'session result) publication)
-        (setf (yunge-reader-webview--view-publication view) publication
-              (yunge-reader-webview--view-broker-session view)
-              (alist-get 'session result)
-              (yunge-reader-webview--view-renderer-url view)
-              (alist-get 'renderer-url result)
-              (yunge-reader-webview--view-resource-root view)
-              (alist-get 'resource-root result)
-              (yunge-reader-webview--view-layout view)
-              (pcase (alist-get 'layout (alist-get 'metadata result))
-                ("reflowable" 'reflow)
-                ("pre-paginated" 'fixed)
-                (_ (error "Malformed EPUB publication layout")))
-              (yunge-reader-webview--view-owns-publication view) t)
-        (yunge-reader-webview--register-view view)))))
-
-;;;###autoload
-(defun yunge-reader-webview-spike (&optional window)
-  "Embed a selectable reflowable WebView test page in WINDOW.
-This command is an architecture spike, not an EPUB reader yet."
-  (interactive)
-  (unless (display-graphic-p)
-    (user-error "The WebView spike requires a graphical display"))
-  (unless (memq system-type '(windows-nt darwin))
-    (user-error "The current WebView spike supports Windows and macOS"))
-  (let* ((window (or window (selected-window)))
-         (buffer
-          (generate-new-buffer
-           "*Yunge Reader WebView*"))
-         (view
-          (yunge-reader-webview--make-view
-           :buffer buffer)))
-    (with-current-buffer buffer
-      (yunge-reader-webview-spike-mode)
-      (setq yunge-reader-webview--buffer-view view)
-      (let ((inhibit-read-only t))
-        (insert "Creating native WebView...\n")
-        (set-buffer-modified-p nil)))
-    (set-window-buffer window buffer)
-    (yunge-reader-webview--register-view view)
-    buffer))
-
-;;;###autoload
-(defun yunge-reader-webview-epub-spike
-    (file &optional window location)
-  "Open local EPUB FILE at LOCATION in a native child WebView in WINDOW.
-This manual architecture spike does not register EPUB file associations or
-save a persistent reading position."
-  (interactive "fEPUB file: ")
-  (unless (display-graphic-p)
-    (user-error "The EPUB WebView spike requires a graphical display"))
-  (unless (memq system-type '(windows-nt darwin))
-    (user-error
-     "The current EPUB WebView spike supports Windows and macOS"))
-  (setq file (expand-file-name file))
-  (when (file-remote-p file)
-    (user-error "The EPUB WebView spike accepts local files only"))
-  (unless (and (file-regular-p file) (file-readable-p file))
-    (user-error "EPUB file is not readable: %s" file))
-  (when location
-    (yunge-reader-webview--check-location location))
-  (let* ((window (or window (selected-window)))
-         (buffer
-          (generate-new-buffer
-           (format "*Yunge EPUB %s*" (file-name-nondirectory file))))
-         (view
-          (yunge-reader-webview--make-view
-           :buffer buffer
-           :location (and location (copy-tree location))
-           :path file)))
-    (with-current-buffer buffer
-      (yunge-reader-webview-spike-mode)
-      (setq yunge-reader-webview--buffer-view view)
-      (let ((inhibit-read-only t))
-        (insert "Validating EPUB publication...\n")
-        (set-buffer-modified-p nil)))
-    (set-window-buffer window buffer)
-    (yunge-reader-webview--open-publication
-     file
-     (apply-partially
-      #'yunge-reader-webview--publication-open-complete view))
-    buffer))
 
 (provide 'yunge-reader-webview)
 

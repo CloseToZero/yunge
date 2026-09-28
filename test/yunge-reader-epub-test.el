@@ -237,8 +237,9 @@
     (let (closed error-data)
       (cl-letf
           (((symbol-function
-             'yunge-reader-webview--close-owned-publication)
-            (lambda (_session publication) (setq closed publication))))
+             'yunge-reader-webview--close-publication)
+            (lambda (session publication _complete)
+              (setq closed (list session publication)))))
         (yunge-reader-epub--open-complete
          (lambda (_value _properties error)
            (setq error-data error))
@@ -249,7 +250,7 @@
            (metadata . ((layout . ,layout))))
          nil))
       (should error-data)
-      (should (= closed 11)))))
+      (should (equal closed '(1 11))))))
 
 (ert-deftest yunge-reader-epub-resolves-scroll-bar-policy ()
   (let ((window (selected-window)))
@@ -647,7 +648,6 @@
                      :buffer (current-buffer)
                      :publication publication
                      :layout layout
-                     :persistent t
                      :appearance-function
                      (plist-get options :appearance-function)
                      :style
@@ -714,9 +714,6 @@
         (should-not
          (memq #'yunge-reader-epub--appearance-changed
                yunge-reader-appearance-change-hook))
-        (should (= (yunge-reader-epub-handle-pending-detaches
-                    handle)
-                   1))
         (yunge-reader-epub--close document)
         (should-not closed-publication)
         (funcall detach-complete)
@@ -1299,8 +1296,7 @@
           (yunge-reader-epub--locator-position location))
          (view
           (yunge-reader-webview--make-view
-           :publication 3
-           :persistent t))
+           :publication 3))
          navigations)
     (with-temp-buffer
       (setq yunge-reader-webview--buffer-view view)
@@ -1329,7 +1325,6 @@
          (view
           (yunge-reader-webview--make-view
            :publication 3
-           :persistent t
            :location (copy-tree stable)))
          navigation)
     (with-temp-buffer
@@ -1364,8 +1359,7 @@
            :buffer buffer
            :surface
            (yunge-reader-epub-test--surface
-            9 'opening :window window)
-           :persistent t))
+            9 'opening :window window)))
          recorded)
     (unwind-protect
         (with-current-buffer buffer
@@ -1390,8 +1384,7 @@
            :buffer buffer
            :surface
            (yunge-reader-epub-test--surface
-            9 'ready :window (selected-window))
-           :persistent t)))
+            9 'ready :window (selected-window)))))
     (unwind-protect
         (with-current-buffer buffer
           (yunge-reader-mode)

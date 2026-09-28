@@ -55,8 +55,6 @@
   surface
   surfaces
   destroyed
-  persistent
-  owns-publication
   broker-session
   layout
   publication
@@ -74,7 +72,6 @@
   outline-waiters
   selection
   search-result
-  path
   pending-destroys
   destroy-waiters
   destroy-finished

@@ -259,11 +259,13 @@ scrolling behavior."
              (list :layout layout :metadata metadata)
              nil)))
       (error
-       (when-let* ((publication (alist-get 'publication result))
+       (when-let* ((session (alist-get 'session result))
+                   ((integerp session))
+                   (publication (alist-get 'publication result))
                    ((integerp publication))
                    ((> publication 0)))
-         (yunge-reader-webview--close-owned-publication
-          (alist-get 'session result) publication))
+         (yunge-reader-webview--close-publication
+          session publication (lambda (_result _error-data))))
        (funcall complete nil nil validation-error)))))
 
 (defun yunge-reader-epub--open (file complete)
