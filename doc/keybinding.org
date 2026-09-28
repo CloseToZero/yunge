@@ -345,71 +345,21 @@ common ~q~, ~RET~, ~TAB~, and ~S-TAB~ conventions.
 
 * Document readers
 
-Document readers use one viewer vocabulary whether or not Evil is available.
-Do not maintain a second set of Emacs-specific fallback keys.
+Document readers share search, outline, selection, marks, and view commands
+with or without Evil.  Movement follows the format: PDF scrolls a continuous
+page roll, reflowable EPUB moves through content lines and screens, and
+fixed-layout EPUB moves within publisher pages.  Keys that depend on page
+geometry or native text layout belong to the corresponding adapter.
 
-Shared reader bindings are:
+Reader views persist after leaving their window, so their main buffers do not
+bind ~q~ to close.  Outline side windows do use ~q~ to close.  Semantic
+navigation adds a window-local jump; with Evil, ~C-o/C-i~ traverse it.
+Ordinary scrolling and page turns do not add jumps.  Evil Normal mode offers
+one-shot view and appearance actions under ~SPC m~; the same commands have
+~M-x~ entry points.
 
-- ~y~ copies the reader's logical text selection in Normal state.  Visual ~y~
-  remains ~evil-yank~.
-- ~/~ starts a literal document search and ~n/N~ visits the next or previous
-  match.
-- ~+/-~ zoom in or out, ~=~ resets zoom, and ~W/P~ fit the document width or
-  page to the window.
-- ~o~ toggles the document outline side window when the active format
-  provides one.
-- ~gr~ refreshes the rendered view.  A persistent document view does not
-  repurpose ~q~ as a window command; Evil retains macro recording there.
-
-Reader view administration remains under the mode-local leader:
-
-- ~SPC m a d~ sets the current book's appearance, ~SPC m a D~ sets the
-  format default, and ~SPC m a u~ restores inheritance from that default.
-- ~SPC m v~ creates an additional view from the current stable place.
-- ~SPC m p~ makes the current view primary.
-- In reflowable EPUB views, ~SPC m l +/-~ changes line height,
-  ~SPC m l </>~ changes content width, and ~SPC m l =~ resets both.
-
-These commands execute once and do not enter a persistent Reader control map.
-
-In fixed-layout readers, ~J/K~ move to the next or previous page, ~gg/G~ move
-to the first or last page, and ~gp~ prompts for a page.  ~C-d/C-u~ scroll by
-half a screen in pixels; they must not interpret one rendered page as one
-text line.  For the same reason, ~j/k~ scroll by one screen-line height in
-pixels.  ~h/l~ and the Left/Right keys pan a page which is wider than its
-window.  ~zH/zL~ pan horizontally by half a window, while ~z0/z$~ move to
-the left or right page edge.  Page Down and Page Up retain screen-scrolling
-behavior.  All of these movements use the fixed-layout viewport, so an
-image taller than the window pans inside the page before the continuous
-roll crosses a page boundary.  These page keys stay separate from search
-repeat keys.
-Search-result changes and ~gg/G/gp~ are semantic jumps, so ~C-o/C-i~ can
-revisit them.  Paging and ordinary scrolling do not add jump entries.
-
-PDF mouse-wheel input likewise scrolls by bounded device pixels rather than
-rendered buffer lines.  Reader does not apply Emacs's progressive text-line
-acceleration to the continuous PDF roll.
-
-In paginated reflowable readers, ~J/K~ and ~C-d/C-u~ move to the next or
-previous reflowed screen; Page Down and Page Up provide the same commands.
-~j/k~ move by one computed content line without the screen-transition
-animation.  At a spine-item boundary, line movement continues into the
-adjacent linear item.
-
-Mouse-1 selects one character and dragging selects a text range.
-Ctrl-Mouse-1 follows a link at the pointer.  ~RET~ remains the portable primary
-link action and does not require a GUI modifier.
-
-Outline trees use ~j/k~ and ~gg/G~ for movement, ~TAB~ for folding, and ~q~
-to close the side window.  ~RET~ follows an entry and selects its Reader
-window.  ~gf~ follows the entry while preserving outline focus, matching
-the existing Xref, Grep, and Occur preview convention.  Do not use ~C-RET~
-or ~M-RET~ for this distinction: they carry unrelated structural meanings
-and are less portable to terminals.
-
-Choosing an outline destination is a semantic jump and participates in
-~C-o/C-i~.  Loading an outline may update its hidden buffer, but never opens
-a late window or changes focus after the user has moved elsewhere.
+The per-format key tables and command names live in
+[[file:yunge-reader.org][the Yunge Reader guide]].
 
 * Cross-platform rules
 

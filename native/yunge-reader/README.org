@@ -1,9 +1,10 @@
 #+title: Yunge Reader native protocol
 
-The PDF helper is a child process owned by Emacs and exchanges UTF-8
-newline-delimited JSON over stdin and stdout.  The EPUB service uses the same
-request and event protocol through an Emacs dynamic-module pipe.  EPUB native
-views exist only in the Emacs process; the executable has no WebView mode.
+The native helper is a child process owned by Emacs.  It handles PDF operations
+and serves EPUB publications over tokenized loopback origins, exchanging UTF-8
+newline-delimited JSON over stdin and stdout.  The WebView service uses an
+Emacs dynamic-module pipe for requests and events.  EPUB native views exist
+only in the Emacs process; the executable has no WebView mode.
 
 * Environment
 
@@ -17,9 +18,10 @@ run when the engine is unavailable.
 The helper writes one message immediately after startup:
 
 #+begin_src json
-{"kind":"ready","protocol":1,"build-id":"HASH",
+{"kind":"ready","protocol":2,"build-id":"HASH",
  "pdfium-api":"7881",
- "capabilities":["cache-maintenance","lifecycle","pdf-links",
+ "capabilities":["cache-maintenance","epub-publications","epub-renderer",
+                 "epub-resources","lifecycle","pdf-links",
                  "pdf-outline","pdf-render","pdf-search","pdf-text"]}
 #+end_src
 
@@ -47,8 +49,9 @@ reject unknown fields.
 #+begin_src json
 {"id":1,"op":"ping"}
 {"id":1,"ok":true,
- "result":{"protocol":1,"backend":"pdfium",
-           "capabilities":["cache-maintenance","lifecycle","pdf-links",
+ "result":{"protocol":2,"build-id":"HASH","backend":"pdfium",
+           "capabilities":["cache-maintenance","epub-publications",
+                           "epub-renderer","epub-resources","lifecycle","pdf-links",
                            "pdf-outline","pdf-render","pdf-search",
                            "pdf-text"]}}
 #+end_src
@@ -98,8 +101,7 @@ downloading it:
 
 #+begin_src json
 {"available":true,"build-id":"HASH",
- "capabilities":["publication-close","publication-info","publication-open",
-                 "publication-resources","view-appearance","view-bounds",
+ "capabilities":["view-appearance","view-bounds",
                  "view-clear-selection","view-create",
                  "view-destroy","view-events","view-focus",
                  "view-focus-parent","view-info","view-navigate",
@@ -114,7 +116,7 @@ downloading it:
                  "C-d","C-g","C-u","G","J","K","M-m","SPC",
                  "g","j","k","m","y"],
  "engine":"webview2","kind":"webview-ready","platform":"windows",
- "protocol":1,"version":"151.0.4129.86"}
+ "protocol":2,"version":"151.0.4129.86"}
 #+end_src
 
 On macOS the equivalent fields are ="platform":"macos"=,
@@ -125,12 +127,13 @@ When the runtime is missing, =available= is false and =message= tells the user
 which environment to install.  The service remains responsive so
 =view-info= and =shutdown= still work.
 
-=publication-open= accepts an absolute local EPUB path.  Rust validates and
-owns the ZIP container, returns the package path and minimal OPF metadata, and
-assigns a process-local publication ID.  It does not expose the filesystem
-path to JavaScript.  =publication-info= repeats the bounded metadata and
-resource statistics, while =publication-close= releases the ZIP handle.  Both
-open and info also return a private =resource-root= capability URL.
+The native helper's =epub-open= accepts an absolute local EPUB path.  It
+validates and owns the ZIP container, returns bounded OPF metadata and resource
+statistics, and assigns a publication ID local to that helper process.  It
+does not expose the filesystem path to JavaScript.  =epub-info= returns the
+same descriptor; =epub-close= releases the publication and returns
+={"closed":true}=.  Emacs keeps the helper session alive while views use its
+publication.
 
 The metadata =layout= is =reflowable= when the package omits
 =rendition:layout=, and =pre-paginated= only when the package declares that
@@ -138,34 +141,36 @@ standard value.  Invalid or duplicate package-level layout declarations reject
 the publication before a renderer view is created.
 
 #+begin_src json
-{"id":1,"op":"publication-open",
- "params":{"path":"D:/books/example.epub"}}
+{"id":1,"op":"epub-open","params":{"path":"D:/books/example.epub"}}
 {"id":1,"ok":true,
  "result":{"publication":1,
-           "metadata":{"layout":"reflowable",...},
-           "resource-root":"yunge-reader-book://TOKEN/",...}}
+           "metadata":{"package-path":"OPS/package.opf",
+                       "layout":"reflowable","title":"Example",
+                       "language":"en","identifier":null,"version":"3.0"},
+           "entry-count":12,"expanded-size":81920,
+           "renderer-url":"http://127.0.0.1:32123/0123456789abcdef0123456789abcdef/app/index.html",
+           "resource-root":"http://127.0.0.1:32123/0123456789abcdef0123456789abcdef/book/fedcba9876543210fedcba9876543210/"}}
 #+end_src
 
-Every child WebView registers =yunge-reader-book= as a private HTTPS-equivalent
-custom protocol.  Both direct backends resolve resources in their native
-request callbacks.  In particular, replying to WKURLSchemeTask from a worker
-can defer the first chapter until WebKit's system timeout.  A request below
-=resource-root= reads only a normalized ZIP
-entry belonging to that random 128-bit publication token.  Closing the
-publication invalidates the token.  Each expanded response is limited to 128
-MiB, and ZIP access remains serialized per process.
+The helper starts a broker on =127.0.0.1= when first needed.  It serves its
+bundled renderer below the tokenized =renderer-url= path and publication
+resources below =resource-root=.  The service token and each publication token
+are random 128-bit values; the port is selected at runtime.  The URLs above
+illustrate the shape, not fixed values.  Closing a publication revokes its
+resource token.  Each expanded resource response is limited to 128 MiB, and
+ZIP access is serialized for each publication.
 
-Only =GET= and =HEAD= are accepted.  Query strings, absolute paths, encoded
-separators, dot components, missing entries, resources absent from the OPF
-manifest, and media types outside the browser allowlist receive explicit HTTP
-errors.  Package and =META-INF= XML remain available for the EPUB loader.
-JavaScript media types are deliberately outside the allowlist.  Responses deny
-sniffing and caching, allow token-bearing cross-origin reads, and apply a CSP
-that blocks scripts, objects, frames, forms, connections, and external
-subresources.
+Only =GET= and =HEAD= are accepted.  Query strings, invalid or non-normalized
+paths, encoded separators, missing entries, resources absent from the OPF
+manifest, and media types outside the browser allowlist receive HTTP errors.
+Package and =META-INF= XML remain available for the EPUB loader.  JavaScript
+media types are outside the publication resource allowlist.  Responses disable
+sniffing and caching and apply separate renderer and resource CSPs.  The
+renderer CSP admits its bundled scripts and =blob:= chapter frames; the
+publication resource CSP blocks scripts and external connections.
 
-The built-in child page opens the validated publication through its private
-resource origin.  Its bundled, script-disabled Foliate renderer provides CSS
+The child page loads the bundled Foliate renderer from =renderer-url= and
+opens the validated publication through =resource-root=.  It provides CSS
 layout, native text selection, links, relocation events, and semantic screen
 navigation without exposing the local EPUB path.
 
@@ -175,21 +180,28 @@ frame's content view; on Windows a WebView2 controller remains a child of the
 owning frame HWND.  There is no helper application or companion panel to
 activate, raise, hide, or align.
 
-=view-open-publication= attaches an open publication to a child view.  It
-accepts an optional stable locator, a required appearance, and a required
-resolved scroll bar policy.  Appearance is a strict object whose mode is
-=original= or =follow-emacs=.  It remains independent from reflow style and
-fixed zoom.  A reflowable publication accepts a complete semantic reading
-style:
+=view-open-publication= attaches a helper-owned publication to a child view.
+Emacs passes the helper's publication ID, metadata =layout=, and
+=resource-root=; the module checks that the root belongs to the view's
+renderer broker.  The request also accepts an optional stable locator, a
+required appearance, and a required resolved scroll bar policy.  Appearance
+is a strict object whose mode is =original= or =follow-emacs=.  It remains
+independent from reflow style and fixed zoom.  A reflowable publication accepts
+a complete semantic reading style:
 
 #+begin_src json
 {"id":2,"op":"view-open-publication",
- "params":{"view":1,"publication":1,
+ "params":{"view":1,"publication":1,"layout":"reflowable",
+           "resource-root":"http://127.0.0.1:32123/0123456789abcdef0123456789abcdef/book/fedcba9876543210fedcba9876543210/",
            "appearance":{"mode":"original"},
            "scroll-bars":false,
            "style":{"font-scale":1.0,"line-height":1.6,
                     "content-width":720,"side-padding":7.0}}}
+{"id":2,"ok":true,"result":{"view":1,"publication":1,"opening":true}}
 #+end_src
+
+The response acknowledges the open request.  The later =publication-ready=
+event reports when the renderer has loaded the publication.
 
 Font scale is bounded to 0.5--3.0, line height to 1.0--3.0, content width to
 320--1,600 CSS pixels, and side padding to 0--20 percent.  Omission selects
@@ -203,7 +215,8 @@ A pre-paginated publication instead accepts =zoom= as =fit-page=,
 
 #+begin_src json
 {"id":3,"op":"view-open-publication",
- "params":{"view":2,"publication":2,
+ "params":{"view":2,"publication":2,"layout":"pre-paginated",
+           "resource-root":"http://127.0.0.1:32123/0123456789abcdef0123456789abcdef/book/abcdef0123456789abcdef0123456789/",
            "appearance":{"mode":"original"},
            "scroll-bars":false,"zoom":"fit-page"}}
 #+end_src
@@ -336,16 +349,22 @@ within 4,096 UTF-8 bytes.  JavaScript, Rust, and Emacs validate it
 independently.  WebView2 new windows remain denied; only Emacs may pass an
 allowlisted scheme to =browse-url=.
 
-=view-create= accepts a logical =view= ID, a live Emacs frame HWND on Windows
-or opaque Emacs frame ID on macOS as =parent=, an optional outer =frame=
-descriptor used to resolve the macOS =NSWindow=, a frame-relative =bounds=
-object, and optional =visible=.
+=view-create= accepts a caller-assigned native =view= ID, the helper's
+=renderer-url=, and a live Emacs frame HWND on Windows or opaque Emacs frame
+ID on macOS as =parent=.  It also accepts an optional outer =frame= descriptor
+used to resolve the macOS =NSWindow=, a frame-relative =bounds= object, and
+optional =visible=.  The module accepts
+only the expected tokenized loopback renderer URL shape.
 
 #+begin_src json
 {"id":1,"op":"view-create",
  "params":{"view":1,"parent":1902902,
+           "renderer-url":"http://127.0.0.1:32123/0123456789abcdef0123456789abcdef/app/index.html",
            "frame":{"x":120,"y":80,"width":920,"height":700},
            "bounds":{"x":10,"y":16,"width":900,"height":630},
+           "visible":true}}
+{"id":1,"ok":true,
+ "result":{"view":1,"bounds":{"x":10,"y":16,"width":900,"height":630},
            "visible":true}}
 #+end_src
 
@@ -365,9 +384,7 @@ or the trusted renderer.  Emacs selects the surface's owning window on entry
 and requests =view-focus-parent= when another Emacs window becomes selected.
 =C-d=, =C-g=, and =C-u= are routed by WebView2's accelerator callback on
 Windows.  On macOS the trusted renderer relays the same bounded reader-key
-vocabulary through the common accelerator protocol.  The standalone protocol
-fallback keeps a bounded control-key route because it has no in-process Emacs
-view.
+vocabulary through the common accelerator protocol.
 The platform layer reports only a normalized key and its native repeat state.
 Emacs owns prefix-map policy: =SPC=, =M-m=, and the first =g=, =m=, or ='=
 return focus before Emacs queues the key, while their repeated keydown events
@@ -579,23 +596,23 @@ policy through the owning EPUB buffer's active maps.  Leader and Reader prefix
 keys return focus and re-enter Emacs's input loop; after =<escape>= or =C-g=,
 the child also returns focus to its owning Emacs window.
 
-The ready handshake carries that exact normalized accelerator list for
-WebView2 and standalone protocol routing.  Rust also passes the renderer-owned
-subset to JavaScript when opening a publication.  Lisp, Rust, and JavaScript
-keep independent allowlists and reject contract drift before routing a key.
+The module's ready handshake carries that exact normalized accelerator list.
+Rust also passes the renderer-owned subset to JavaScript when opening a
+publication.  Lisp, Rust, and JavaScript keep independent allowlists and reject
+contract drift before routing a key.
 
 View IDs are independent, so multiple Reader views do not share layout or
 scroll state.  Windows positions are nonnegative frame-relative pixels;
 macOS permits signed frame-relative coordinates for transient clipped
-layouts.  Dimensions must be
-positive and at most 32,768 pixels.  Duplicate views, unknown views, invalid
-HWNDs or ambiguous macOS frames, unknown parameters, and unavailable runtimes
-return stable protocol errors.
+layouts.  Dimensions must be positive and at most 32,768 pixels.  Duplicate
+views, unknown views, invalid HWNDs or ambiguous macOS frames, unknown
+parameters, and unavailable runtimes return stable protocol errors.
 
 The dynamic module executes view operations on Emacs's UI thread.  Asynchronous
 renderer callbacks wake its pipe, and that filter pumps completed protocol
 work without calling Lisp from a WebKit or WebView2 callback thread.
-=shutdown= drops every native view and publication.  Both platforms retain
+=shutdown= drops every native view; the helper separately closes its EPUB
+publications on =epub-close= or helper shutdown.  Both platforms retain
 real in-process children under the frame used at creation.  Moving a Reader
 buffer to another frame creates a new child there; it does not reparent the
 original NSView or HWND.  WebKitGTK remains future work.
