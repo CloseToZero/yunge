@@ -7,11 +7,18 @@
 (declare-function evil-local-mode "evil-core")
 (declare-function evil-normal-state "evil-states")
 (declare-function vertico--advice "vertico")
+(declare-function vertico--exhibit "vertico")
+(declare-function vertico--prepare "vertico")
+(declare-function vertico--update "vertico")
+(declare-function vertico-first "vertico")
+(declare-function vertico-insert "vertico")
+(declare-function vertico-last "vertico")
 
 (defvar evil-local-mode)
 (defvar evil-state)
 (defvar vertico-count)
-(defvar vertico-map)
+(defvar vertico--candidates-ov)
+(defvar vertico--count-ov)
 
 (yunge-test-deftest-lazy-load yunge-vertico
   (vertico))
@@ -29,17 +36,48 @@
 
 (ert-deftest yunge-vertico-moves-by-half-pages ()
   (require 'vertico-autoloads)
+  (yunge-test-enable-evil)
   (yunge-test-load-package-config 'yunge-vertico)
-  (let ((vertico-count 10)
-        movement)
-    (cl-letf (((symbol-function 'vertico-next)
-               (lambda (count) (setq movement count))))
-      (yunge-vertico-next-half-page 1)
-      (should (= movement 5)))
-    (cl-letf (((symbol-function 'vertico-previous)
-               (lambda (count) (setq movement count))))
-      (yunge-vertico-previous-half-page 1)
-      (should (= movement 5)))))
+  (yunge-test-with-evil-minibuffer
+    (let ((original-input (minibuffer-contents-no-properties))
+          (minibuffer-completion-table
+           (cl-loop for n below 14 collect (format "item-%02d" n)))
+          (minibuffer-completion-predicate nil)
+          (minibuffer--require-match t)
+          (vertico-count 10))
+      (unwind-protect
+          (progn
+            (use-local-map minibuffer-local-completion-map)
+            (vertico--advice (lambda () (run-hooks 'minibuffer-setup-hook)))
+            (cl-labels
+                ((selected (start command count &optional narrowed-input)
+                   (delete-minibuffer-contents)
+                   (vertico--update)
+                   (if (eq start 'first) (vertico-first) (vertico-last))
+                   (when narrowed-input (insert narrowed-input))
+                   (let ((this-command command))
+                     (run-hooks 'pre-command-hook))
+                   (funcall command count)
+                   (vertico-insert)
+                   (minibuffer-contents-no-properties)))
+              ;; The typed query has changed while Vertico's display is still stale.
+              (should (equal (selected 'first #'yunge-vertico-next-half-page
+                                       1 "item-1")
+                             "item-13"))
+              (should (equal (selected 'first #'yunge-vertico-next-half-page 2)
+                             "item-10"))
+              (should (equal (selected 'last #'yunge-vertico-previous-half-page 1)
+                             "item-08"))
+              (should (equal (selected 'last #'yunge-vertico-previous-half-page 5)
+                             "item-00"))))
+        (delete-minibuffer-contents)
+        (insert original-input)
+        (when (overlayp vertico--candidates-ov)
+          (delete-overlay vertico--candidates-ov))
+        (when (overlayp vertico--count-ov)
+          (delete-overlay vertico--count-ov))
+        (remove-hook 'pre-command-hook #'vertico--prepare t)
+        (remove-hook 'post-command-hook #'vertico--exhibit t)))))
 
 (ert-deftest yunge-vertico-integrates-with-minibuffer ()
   (require 'yunge-minibuffer)
@@ -61,7 +99,6 @@
       (let ((minibuffer-setup-hook setup-hook))
         (run-hooks 'minibuffer-setup-hook))
 
-      (should (eq (current-local-map) vertico-map))
       (yunge-test-evil-keys
        'insert
        '(("M-p" . previous-history-element)

@@ -131,6 +131,12 @@ While a completion interface is active:
 - In Corfu, ~RET~ keeps the surrounding mode's action; it does not accept the
   selected completion candidate.
 
+In Vertico's normal state, ~j~/~k~ move one candidate, ~C-d~/~C-u~ move half a
+page, and ~C-f~/~C-b~ move a full page. ~gg~ selects the first candidate, or
+the prompt when already at the first; ~G~ selects the last. In insert state,
+~C-j~/~C-k~ move one candidate. ~TAB~ inserts the selected candidate into the
+minibuffer; ~RET~ accepts it and exits.
+
 These bindings apply only while completion is active.  The surrounding mode's
 bindings resume when completion ends.
 

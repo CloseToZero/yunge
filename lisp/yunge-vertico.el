@@ -5,6 +5,7 @@
 (require 'yunge-key)
 
 (declare-function vertico-mode "vertico")
+(declare-function vertico--update "vertico")
 (declare-function vertico-next "vertico")
 (declare-function vertico-previous "vertico")
 
@@ -34,11 +35,13 @@
 (defun yunge-vertico-next-half-page (&optional count)
   "Move forward COUNT half-pages through Vertico candidates."
   (interactive "p")
+  (vertico--update)
   (vertico-next (* (or count 1) (max 1 (/ vertico-count 2)))))
 
 (defun yunge-vertico-previous-half-page (&optional count)
   "Move backward COUNT half-pages through Vertico candidates."
   (interactive "p")
+  (vertico--update)
   (vertico-previous (* (or count 1) (max 1 (/ vertico-count 2)))))
 
 (defun yunge-vertico--setup-keys ()
