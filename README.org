@@ -4,6 +4,7 @@
 
 * Documentation
 
+- [[file:doc/development.org][Development and checks]]
 - [[file:doc/fangcun.org][Fangcun]]
 - [[file:doc/shuying.org][Shuying]]
 - [[file:doc/yunge-mcp.org][Yunge MCP]]

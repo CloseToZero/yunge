@@ -5,11 +5,30 @@
 (defconst yunge-test-root
   (expand-file-name ".." (file-name-directory load-file-name)))
 
+(defvar yunge-test-state-root
+  (or (getenv "YUNGE_TEST_STATE_ROOT")
+      (let ((parent (expand-file-name "var/test/runs/" yunge-test-root)))
+        (make-directory parent t)
+        (make-temp-file (expand-file-name "run-" parent) t)))
+  "Per-run writable state root, separate from the configuration's live state.")
+
+(make-directory (expand-file-name "xdg-config/emacs/" yunge-test-state-root) t)
+(setenv "XDG_CONFIG_HOME"
+        (expand-file-name "xdg-config/" yunge-test-state-root))
+(setenv "XDG_CACHE_HOME"
+        (expand-file-name "xdg-cache/" yunge-test-state-root))
+(setenv "XDG_DATA_HOME"
+        (expand-file-name "xdg-data/" yunge-test-state-root))
+(setq user-emacs-directory
+      (file-name-as-directory
+       (expand-file-name "emacs/" yunge-test-state-root)))
+(make-directory user-emacs-directory t)
+
 (defvar yunge-config-directory
   (file-name-as-directory yunge-test-root))
 
 (defvar yunge-var-directory
-  (expand-file-name "var/" yunge-test-root))
+  (expand-file-name "var/" user-emacs-directory))
 
 (startup-redirect-eln-cache
  (expand-file-name "eln-cache/" yunge-var-directory))
@@ -34,7 +53,7 @@
 (add-to-list 'load-path (expand-file-name "lisp" yunge-test-root))
 
 (defvar elpaca-directory
-  (expand-file-name "elpaca/" yunge-var-directory))
+  (expand-file-name "var/elpaca/" yunge-test-root))
 (defvar elpaca-cache-directory
   (expand-file-name "cache/" elpaca-directory))
 (defvar elpaca-builds-directory
@@ -56,8 +75,8 @@ Elpaca manages itself separately, so it is not recorded in its lock file."
 
 (defun yunge-test-package-directory (package)
   "Return PACKAGE's Elpaca build directory."
-  (expand-file-name (format "elpaca/build/%s" package)
-                    yunge-var-directory))
+  (expand-file-name (format "var/elpaca/build/%s" package)
+                    yunge-test-root))
 
 (defun yunge-test-package-arguments ()
   "Return command-line load path arguments for locked packages."

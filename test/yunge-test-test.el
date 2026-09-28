@@ -13,92 +13,73 @@
           (file-name-as-directory (expand-file-name "state" root)))
          (buffer (get-buffer-create "*yunge-test*"))
          command
-         xdg-config-home)
+         xdg-config-home
+         xdg-cache-home
+         state-root)
     (unwind-protect
         (progn
           (make-directory yunge-config-directory t)
           (cl-letf (((symbol-function 'make-process)
                      (lambda (&rest arguments)
                        (setq command (plist-get arguments :command)
-                             xdg-config-home (getenv "XDG_CONFIG_HOME"))
+                             xdg-config-home (getenv "XDG_CONFIG_HOME")
+                             xdg-cache-home (getenv "XDG_CACHE_HOME")
+                             state-root (getenv "YUNGE_TEST_STATE_ROOT"))
                        'yunge-test-process))
                     ((symbol-function 'display-buffer) #'ignore))
             (yunge-test))
-          (should
-           (equal
-            command
-            (list
-             (expand-file-name invocation-name invocation-directory)
-             "--batch" "-Q"
-             "-L" (expand-file-name "test/" yunge-config-directory)
-             "-l" "yunge-test-runner")))
-          (should
-           (equal
-            xdg-config-home
-            (yunge-var-subdirectory "test")))
+          (should (member "-Q" command))
+          (should (member "yunge-test-runner" command))
+          (should (file-in-directory-p state-root yunge-var-directory))
+          (should (file-in-directory-p xdg-config-home state-root))
+          (should (file-in-directory-p xdg-cache-home state-root))
+          (should-not (equal state-root yunge-var-directory))
           (with-current-buffer buffer
             (should (equal default-directory yunge-config-directory))))
       (when (buffer-live-p buffer)
         (kill-buffer buffer))
       (delete-directory root t))))
 
-(ert-deftest yunge-test-external-checks-cover-native-and-renderer-suites ()
-  (let* ((yunge-config-directory
-          (file-name-as-directory
-           (expand-file-name "source" temporary-file-directory)))
-         (commands
-          (mapcar #'cdr (yunge-test--external-checks))))
-    (dolist
-        (expected
-         `(("cargo" "test" "--manifest-path"
-            ,(concat yunge-config-directory
-                     "native/fangcun-watch/Cargo.toml"))
-           ("cargo" "test" "--manifest-path"
-            ,(concat yunge-config-directory
-                     "native/yunge-mcp/Cargo.toml"))
-           ("cargo" "test" "--manifest-path"
-            ,(concat yunge-config-directory
-                     "native/yunge-reader/Cargo.toml"))
-           ("node" "--check"
-            ,(concat yunge-config-directory
-                     "native/yunge-reader/renderer/yunge-reader.js"))
-           ("node" "--test"
-            ,(concat yunge-config-directory
-                     "native/yunge-reader/renderer-test/"
-                     "yunge-reader-core.test.mjs"))))
-      (should (member expected commands)))))
-
-(ert-deftest yunge-test-required-command-reports-its-result ()
-  (dolist (case '((0 . t) (7 . nil)))
-    (with-temp-buffer
-      (let ((standard-output (current-buffer)))
-        (cl-letf (((symbol-function 'executable-find)
-                   (lambda (_program) "/bin/check"))
-                  ((symbol-function 'call-process)
-                   (lambda (_program _input destination _display
-                            &rest arguments)
-                     (should (equal arguments '("--verify")))
-                     (with-current-buffer destination
-                       (insert "check output\n"))
-                     (car case))))
-          (should (eq (yunge-test--run-command
-                       "Native check" "check" '("--verify"))
-                      (cdr case))))
-        (should (string-match-p "check output" (buffer-string)))
-        (should (string-match-p
-                 (if (cdr case) "passed" "failed")
-                 (buffer-string)))))))
-
-(ert-deftest yunge-test-required-command-does-not-skip-a-missing-tool ()
+(defun yunge-test-test--run (&rest arguments)
+  "Return the exit code and output of a runner with ARGUMENTS."
   (with-temp-buffer
-    (let ((standard-output (current-buffer)))
-      (cl-letf (((symbol-function 'executable-find) #'ignore))
-        (should-not
-         (yunge-test--run-command "Native check" "missing" nil)))
-      (should
-       (string-match-p
-        "Required program is unavailable: missing"
-        (buffer-string))))))
+    (let ((status
+           (apply #'call-process
+                  (expand-file-name invocation-name invocation-directory)
+                  nil t nil "--batch" "-Q"
+                  "-L" (expand-file-name "test" yunge-test-root)
+                  "-l" "yunge-test-runner" "--" arguments)))
+      (cons status (buffer-string)))))
+
+(ert-deftest yunge-test-focuses-ert-on-one-file-family ()
+  (pcase-let ((`(,status . ,output)
+               (yunge-test-test--run "--suite" "ert"
+                                     "--module" "theme")))
+    (should (equal status 0))
+    (should (string-match-p "yunge-theme-test.el" output))
+    (should (string-match-p "passed.*yunge-theme-" output))
+    (should-not (string-match-p "yunge-consult-test.el" output))
+    (should-not (string-match-p "Fangcun Watch Rust tests" output))))
+
+(ert-deftest yunge-test-rejects-unmatched-or-invalid-selection ()
+  (dolist (arguments '(("--suite" "ert" "--module" "absent")
+                       ("--suite" "unknown")
+                       ("--suite" "static" "--module" "theme")
+                       ("--suite" "native" "--module" "absent")))
+    (pcase-let ((`(,status . ,output)
+                 (apply #'yunge-test-test--run arguments)))
+      (should-not (equal status 0))
+      (should (string-match-p "Repository checks failed:" output)))))
+
+(ert-deftest yunge-test-required-native-tool-fails-the-suite ()
+  (let ((process-environment (copy-sequence process-environment)))
+    (setenv "PATH" "")
+    (pcase-let ((`(,status . ,output)
+                 (yunge-test-test--run "--suite" "native"
+                                       "--module" "fangcun")))
+      (should-not (equal status 0))
+      (should (string-match-p "Required program is unavailable: cargo"
+                              output)))))
 
 (provide 'yunge-test-test)
 

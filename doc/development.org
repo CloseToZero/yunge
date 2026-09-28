@@ -1,0 +1,71 @@
+#+title: Development and checks
+# SPDX-FileCopyrightText: 2026 Chen Zhexuan
+# SPDX-License-Identifier: MIT
+
+* Setup
+
+Run checks from the repository root with Emacs 31 or newer. Install the
+packages pinned in =elpaca-lock.el= before running Emacs tests. Native
+checks need a Rust toolchain and Cargo; renderer checks need Node. Some ERT
+integrations also require platform tools and report skips when unavailable.
+
+After changing an autoload declaration, run =M-x yunge-autoload-generate=
+and review the tracked =autoloads.sha256= change. The generated loaddefs
+cache is under ignored =var/=.
+
+* Checks
+
+Run all checks:
+
+#+begin_src sh
+emacs --batch -Q -L test -l yunge-test-runner
+#+end_src
+
+Arguments follow =--=, which separates them from Emacs options:
+
+#+begin_src sh
+emacs --batch -Q -L test -l yunge-test-runner -- --suite ert --module theme
+emacs --batch -Q -L test -l yunge-test-runner -- --suite static
+emacs --batch -Q -L test -l yunge-test-runner -- --suite native --module reader
+emacs --batch -Q -L test -l yunge-test-runner -- --suite renderer
+#+end_src
+
+=--suite= accepts =all= (default), =ert=, =static=, =native=, or
+=renderer=. =--module= works with =ert= and =native=. An ERT module names
+a test file family without =yunge-= or =-test.el=: =theme= loads
+=yunge-theme-test.el=; =reader= loads =yunge-reader-test.el= and
+=yunge-reader-*-test.el=. Native modules are =fangcun=, =mcp=, and
+=reader=. Invalid options, empty selections, and failed checks exit nonzero.
+
+=ert= runs Emacs behavior and integration tests; inspect reported skips.
+=static= byte-compiles Lisp sources without writing =.elc= files. =native=
+runs Cargo tests; =renderer= runs Node syntax and renderer tests. =all=
+runs each group once. =M-x yunge-test= starts the full gate in a clean
+Emacs process; =(yunge-test 'ert "theme")= starts a focused run from Lisp.
+
+Each run writes Emacs state and XDG caches to a new ignored
+=var/test/runs/run-*/= directory while reading pinned package builds from
+=var/elpaca/=. Run directories remain for diagnostics and may be removed
+after checks finish. Cargo target output stays in its normal project paths.
+
+Graphical smoke is a separate workflow on a machine with the platform
+WebView and PDF dependencies. Run regular Emacs, with a display, using the
+scripts documented in [[file:../native/yunge-reader/README.org][Reader's native README]]:
+
+#+begin_src sh
+emacs -Q --load script/yunge-reader-reflow-epub-smoke.el
+emacs -Q --load script/yunge-reader-fixed-epub-smoke.el
+emacs -Q --load script/yunge-reader-pdf-smoke.el
+#+end_src
+
+=test/yunge-reader-graphical-smoke-test.el= checks the harness in batch; the
+scripts above open real graphical Reader sessions and build native release
+artifacts.
+
+* Test contracts
+
+Prefer assertions about effects observable by a user or another module:
+commands, key resolution, return values, errors, callback completion,
+protocol messages, persisted results, and resource cleanup. A test may
+control a clock, process, filesystem, or backend boundary to make an
+asynchronous case deterministic. Do not test internal implementation details.
