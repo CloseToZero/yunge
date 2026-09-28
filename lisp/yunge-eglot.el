@@ -380,16 +380,23 @@ Offer PREFERRED first when it still names a compilation database."
 
 (defun yunge-eglot--maybe-ensure ()
   "Start Eglot when this file's project and language are enabled."
-  (when (and (fboundp 'eglot-ensure)
-             buffer-file-name
-             (cl-find-if
-              (lambda (entry)
-                (and (file-in-directory-p
-                      buffer-file-name (plist-get entry :root))
-                     (yunge-eglot--mode-matches-p
-                      major-mode (plist-get entry :modes))))
-              yunge-eglot-projects))
-    (eglot-ensure)))
+  (when-let* (((fboundp 'eglot-ensure))
+              (file buffer-file-name)
+              (entries
+               (cl-remove-if-not
+                (lambda (entry)
+                  (and (file-in-directory-p file (plist-get entry :root))
+                       (yunge-eglot--mode-matches-p
+                        major-mode (plist-get entry :modes))))
+                yunge-eglot-projects)))
+    (let ((project (project-current nil (file-name-directory file))))
+      (when (or (null project)
+                (cl-some
+                 (lambda (entry)
+                   (yunge-eglot--same-root-p (plist-get entry :root)
+                                             (project-root project)))
+                 entries))
+        (eglot-ensure)))))
 
 (defun yunge-eglot--ensure-existing-buffers ()
   "Start Eglot where existing file buffers match saved projects."

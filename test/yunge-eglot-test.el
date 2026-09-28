@@ -357,32 +357,39 @@
       (delete-directory root t))))
 
 (ert-deftest yunge-eglot-only-auto-starts-enabled-project-languages ()
+  (require 'eglot)
   (let* ((root (file-name-as-directory
                 (make-temp-file "yunge-eglot-project-" t)))
+         (nested (expand-file-name "nested/" root))
+         (source (expand-file-name "main.cpp" root))
+         (nested-source (expand-file-name "main.cpp" nested))
+         (notes (expand-file-name "README.org" root))
+         (major-mode-remap-alist nil)
          (yunge-eglot-projects
           (list (list :root root
                       :modes yunge-eglot--clangd-modes)))
-         ensured)
+         buffers ensured)
     (unwind-protect
-        (cl-letf (((symbol-function 'eglot-ensure)
-                   (lambda () (setq ensured t))))
-          (with-temp-buffer
-            (setq buffer-file-name (expand-file-name "src/main.cpp" root)
-                  major-mode 'c++-mode)
-            (yunge-eglot--maybe-ensure)
-            (should ensured))
-          (setq ensured nil)
-          (with-temp-buffer
-            (setq buffer-file-name (expand-file-name "README.org" root)
-                  major-mode 'org-mode)
-            (yunge-eglot--maybe-ensure)
-            (should-not ensured))
-          (cl-letf (((symbol-function 'eglot-ensure) nil))
-            (with-temp-buffer
-              (setq buffer-file-name
-                    (expand-file-name "src/early.cpp" root)
-                    major-mode 'c++-mode)
-              (should-not (yunge-eglot--maybe-ensure)))))
+        (progn
+          (make-directory (expand-file-name ".git/" root))
+          (make-directory (expand-file-name ".git/" nested) t)
+          (cl-letf (((symbol-function 'eglot-ensure)
+                     (lambda () (push buffer-file-name ensured))))
+            (dolist (file (list source notes nested-source))
+              (with-temp-file file)
+              (push (find-file-noselect file) buffers)))
+          (should (equal ensured (list source)))
+          (setq yunge-eglot-projects
+                (append yunge-eglot-projects
+                        (list (list :root nested :modes yunge-eglot--clangd-modes))))
+          (let ((file (expand-file-name "enabled.cpp" nested)))
+            (with-temp-file file)
+            (cl-letf (((symbol-function 'eglot-ensure)
+                       (lambda () (push buffer-file-name ensured))))
+              (push (find-file-noselect file) buffers))
+            (should (equal ensured (list file source)))))
+      (dolist (buffer buffers)
+        (when (buffer-live-p buffer) (kill-buffer buffer)))
       (delete-directory root t))))
 
 (ert-deftest yunge-eglot-catches-up-existing-project-buffers ()
