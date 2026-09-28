@@ -2,12 +2,33 @@
 # SPDX-FileCopyrightText: 2026 Chen Zhexuan
 # SPDX-License-Identifier: MIT
 
-* Documentation
+Yunge is an Emacs configuration using Evil for modal editing.
 
-- [[file:doc/development.org][Development and checks]]
-- [[file:doc/fangcun.org][Fangcun]]
-- [[file:doc/shuying.org][Shuying]]
-- [[file:doc/yunge-mcp.org][Yunge MCP]]
-- [[file:doc/yunge-pinyin.org][Pinyin search]]
-- [[file:doc/yunge-reader.org][Yunge Reader]]
-- [[file:doc/keybinding.org][Keybinding conventions and workflows]]
+* Start
+
+Use Emacs 31 or newer, with Git on =PATH=. Place this checkout in your Emacs
+initialization directory, or start Emacs with an explicit directory:
+
+#+begin_src sh
+emacs --init-directory /path/to/yunge
+#+end_src
+
+The first startup downloads and builds packages through Elpaca, using
+=elpaca-lock.el=. It needs network access. Native tools have their own setup
+requirements, described in the feature guides below.
+
+In Evil Normal state, use ~SPC f f~ to open a file, ~SPC b b~ to switch
+buffers, and ~SPC SPC~ to run a command by name. See the [[file:doc/usage.org][usage guide]].
+
+* Feature guides
+
+- [[file:doc/fangcun.org][Fangcun]]: create, link, and search Org notes.
+- [[file:doc/shuying.org][Shuying]]: preview LaTeX formulas while editing.
+- [[file:doc/yunge-reader.org][Yunge Reader]]: read PDF and EPUB documents and restore reading places.
+- [[file:doc/yunge-pinyin.org][Pinyin search]]: find Chinese text with Latin letters.
+- [[file:doc/yunge-mcp.org][Yunge MCP]]: connect AI clients to Emacs note tools.
+
+* Development
+
+- [[file:doc/development.org][Development and checks]]: prepare dependencies and run checks.
+- [[file:doc/keybinding-design.org][Keybinding design]]: choose keys and integrate modes consistently.

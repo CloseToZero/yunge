@@ -1,0 +1,308 @@
+#+title: Using Yunge
+# SPDX-FileCopyrightText: 2026 Chen Zhexuan
+# SPDX-License-Identifier: MIT
+
+See the [[file:../README.org][README]] for startup and feature-specific guides.
+
+* Finding commands
+
+In Normal and Visual states, ~SPC~ starts the global leader and ~SPC m~
+opens commands for the current mode. In Insert, Replace, and Emacs states,
+use ~M-m~ in place of ~SPC~. Pause after a prefix to see available keys.
+Use ~SPC SPC~ or ~M-x~ to run a command by name.
+
+| Prefix    | Commands                     |
+|-----------+------------------------------|
+| ~SPC TAB~ | Tabs and saved workspaces    |
+| ~SPC b~   | Buffers                      |
+| ~SPC f~   | Files                        |
+| ~SPC g~   | Context-related destinations |
+| ~SPC h~   | Help                         |
+| ~SPC j~   | Jumps                        |
+| ~SPC l~   | Language services            |
+| ~SPC m~   | Current mode                 |
+| ~SPC n~   | Notes                        |
+| ~SPC p~   | Projects                     |
+| ~SPC q~   | Exit, restart, and frames    |
+| ~SPC s~   | Search                       |
+| ~SPC t~   | Toggles and terminals        |
+| ~SPC w~   | Windows                      |
+
+** Choosing a completion
+
+Minibuffer prompts start in Evil Insert state. ~C-j/C-k~ move through
+candidates; ~TAB~ inserts the candidate or common prefix, and ~RET~ accepts.
+Escape switches to Normal state without closing the prompt. There, ~j/k~
+move one candidate, ~C-d/C-u~ move half a page, and ~C-f/C-b~ move a full
+page. ~gg~ selects the first candidate, or the prompt when already at the
+first; ~G~ selects the last.
+
+In an in-buffer Corfu popup, ~C-j/C-k~ select a candidate and ~TAB~ completes
+it. ~RET~ keeps the surrounding mode's action.
+
+** Acting on an item
+
+~M-a~ opens Embark actions for the target at point or the current completion
+candidate. In its menu, ~y~ copies the target. For a buffer, ~q~ kills it
+and ~Q~ also closes its window; for a tab, ~q~ closes the tab. Functions
+offer a ~D~ prefix for debugging and tracing. On a Git SSH address such as
+~git@host:owner/repo.git~, ~h~ copies its HTTPS URL.
+
+* Files and projects
+
+Use ~SPC f f~ to open a file, ~SPC f r~ to choose a recent file, and
+~SPC f s~ to save. ~SPC b b~ switches buffers; ~SPC b q~ closes the current
+buffer. Use ~SPC f d~ to open a directory in Dired.
+
+~SPC f y p~ copies the current file's absolute path; ~SPC f y P~ copies its
+project-relative path. Git submodules are independent projects, so project
+commands and relative paths use the submodule's own root when working inside
+one.
+
+Use ~SPC t t~ to open a terminal in the current directory or ~SPC p t~ for
+one at the project root.
+
+** Working in Dired
+
+~C~ copies files and ~R~ moves or renames them.  Both suggest a destination
+from another visible Dired window, choosing the one you selected most
+recently.  With no other visible Dired window, they suggest the current
+directory.
+
+Use ~y f~ to copy file names, ~y p~ for absolute paths, and ~y P~ for paths
+relative to the project root.  On a file line, these commands copy the marked
+files, or the file at point when nothing is marked.  Multiple names are
+separated by spaces and quoted when needed.  In Visual state, ~y~ copies the
+selected text instead.
+
+~SPC m o~ opens files in their default applications.  ~SPC m e~ opens the
+current directory in the system file manager, while ~SPC m r~ reveals the
+marked files there.  With no marks, it reveals the file at point; marks take
+precedence even when point is on another file.  Remote files cannot be
+revealed in the local file manager.
+
+On Windows, revealing multiple files uses PowerShell.  If PowerShell is
+unavailable, only the first selected file is revealed.
+
+Dragging files into a Dired window opens a menu for the whole group: Open,
+Copy here, Move here, Link here, or Cancel.  Choose the action in this menu;
+keyboard modifiers do not select it.  Open visits the files in Emacs.  Copy,
+move, and link use the target Dired directory.  Cancel leaves the files
+unchanged.
+
+Opening a project directory or one of its subdirectories in Dired adds the
+project root to Emacs's known projects.  Ordinary directories are not added.
+
+* Search and navigation
+
+Use ~SPC s b~ to search the current buffer, ~SPC s B~ to search project
+buffers, and ~SPC s p~ to search project files. ~SPC s P~ starts project
+search with the selection or symbol at point. Project file search requires
+=ripgrep= (=rg=) or =grep= on =PATH=.
+
+Evil's ~/~ and ~?~ search literal text with Pinyin expansion; start a query
+with ~:re:~ for an ordinary Evil regexp. Character-find commands ~f/F/t/T~
+also accept lowercase Pinyin initials and match corresponding Chinese
+punctuation. The [[file:yunge-pinyin.org][Pinyin search guide]] explains query syntax and matching.
+
+Use ~SPC j i~ to choose a symbol in the current buffer and ~SPC j b~ to
+choose a bookmark. ~C-o/C-i~ visit older and newer jump locations in the
+selected window. Splitting a window copies its history; subsequent jumps in
+either window are independent. A new jump after going backward replaces that
+window's newer branch. Unavailable targets are skipped. A pending visit must
+finish before another history traversal can start.
+
+** Working with results
+
+Grep, Occur, and Xref use ~j/k~ for line movement and ~C-j/C-k~ to move
+between results while showing the source. ~RET~ visits a result and ~gf~
+previews it while keeping focus in the list. Grep and Xref use ~[[/]]~ to
+move between file groups. In Grep and Occur, ~gr~ refreshes the results.
+
+From Consult project search, ~M-a E~ exports results to Grep. Use ~i~ in
+Grep, Occur, or Xref to edit through the results. Xref also offers ~SPC m r~
+for query replacement. See [[*Finishing edits][Finishing edits]] for how those edits are saved.
+
+Magit follows the same visit/preview distinction: ~RET~ visits the item and
+~gf~ previews its revision without selecting the preview window.
+
+* Editing
+
+Use Evil's operators and Visual selections for ordinary text editing.
+~C-=~ expands a structural selection and ~C--~ contracts it.
+
+** Finishing edits
+
+In Org source edit buffers, Wdired, and Magit commit messages:
+
+- ~ZZ~, ~:wq~, and ~:x~ finish editing.
+- ~ZQ~ and ~:q~ cancel editing.
+
+For an Org source block, ~C-c '~ opens a separate buffer in the block's
+language mode.  Finishing writes the edited text back to the Org buffer;
+save that buffer to write the file.  ~C-x C-s~ in the source editor writes
+back and saves without leaving.  Canceling discards edits made since the
+last save, so it cannot undo an earlier save.
+
+In Dired, ~i~ makes the file names editable.  Finishing applies the renames
+to the files; canceling restores the listing without renaming them.  Both
+actions return to Dired.
+
+Grep, Occur, and Xref result editors update the source buffers as you type.
+Use ~ZZ~, ~:wq~, ~:x~, or ~C-c C-c~ to save the files edited through the
+results and return to the result view.  This saves each affected buffer in
+full, including any changes you made there before editing the results.
+Other buffers are left unsaved.
+
+To reverse an edit, undo it in the results before finishing.  ~ZQ~ and ~:q~
+report an error and keep the editor open because quitting cannot discard
+changes already applied to the source buffers.
+
+** Working in Org
+
+Org buffers use Evil's general editing model while making common motions,
+edits, and text objects aware of Org structure.
+
+*** Moving through structure
+
+- On structured lines, ~0~ moves to the content start first and to the physical
+  line start when invoked again.  On headings, ~$~ similarly stops before
+  trailing tags first and moves past them when invoked again.
+- ~C-j/C-k~ move to the next or previous visible heading.
+- ~[E/]E~ move to the previous or next Org element.  ~gh/gl~ move to its
+  parent or into its contents, and ~gH~ moves to the outermost containing
+  heading.
+- ~[h/]h~ move to the previous or next heading at the same level.
+- ~[l/]l~ move to the previous or next link.
+- ~[c/]c~ move to the previous or next source block.
+- ~M-h/M-l~ promote or demote the current heading, list item, or table column.
+- ~M-j/M-k~ move the current Org structure down or up.
+- ~M-H/M-L~ promote or demote an entire subtree.
+
+*** Editing structure
+
+- ~I/A~ enter Insert state at the Org content boundaries.  On headings, ~A~
+  stays before trailing tags and fold ellipses.
+- ~o/O~ create an Org row or list item when point is in that structure, and
+  otherwise retain Evil's ordinary open-line behavior.
+- ~C-RET/C-S-RET~ insert a heading or TODO heading after the current Org
+  contents and enter Insert state.
+- ~d~ retains Evil's operator, register, count, and repeat behavior, then
+  repairs affected lists and heading-tag alignment.
+- In tables and headings, ~x/X~ use Org's character deletion so columns and
+  tags remain aligned.  Elsewhere, and in Visual state, they retain Evil's
+  ordinary deletion behavior.
+- ~</>~ promote or demote selected headings and indent or outdent selected
+  list items.  In other contexts they retain Evil's ordinary shifting.
+- In Insert state, ~C-t/C-d~ demote or promote the current heading or list
+  item and move the current table column.  Elsewhere they shift the line.
+
+*** Opening and folding
+
+- ~RET~ and ~gf~ open the Org object at point.
+- ~<tab>~ and ~za~ cycle local visibility; ~S-TAB~ and ~zA~ cycle the buffer.
+- ~zc/zo~ close or open the current fold.  ~zC~ closes the child folds while
+  retaining their headings, and ~zO~ opens the complete subtree.
+
+*** Selecting structure
+
+Text objects work with operators and Visual selections.  Lowercase ~i/a~
+select inside or around the structure:
+
+- ~ie/ae~ select the Org context at point, whether it is an object or element.
+- ~iE/aE~ select the current Org element.
+- ~ic/ac~ select the enclosing container.
+- ~ih/ah~ select the enclosing subtree.
+
+*** Links and TODO states
+
+Use ~SPC n l i~ to insert an Org link and ~SPC n l s~ to store one.
+Use ~SPC m t~ to change the current heading's TODO state.
+
+* Windows and workspaces
+
+~SPC w s~ splits below and ~SPC w v~ splits to the right, selecting the new
+window. Use ~SPC w h/j/k/l~ to select a neighboring window, ~SPC w q~ to
+close one, and ~SPC w =~ to balance sizes.
+
+Window commands execute once. ~SPC w SPC~ enters persistent window control
+for several operations: its recognized keys remain window commands until
+~SPC~, ~RET~, or ~ESC~ exits. An unrecognized key exits and then performs
+its ordinary action in the selected buffer.
+
+~SPC w u/r~ undo and redo window layouts within the current tab. ~SPC TAB u~
+restores a closed tab instead.
+
+** Saving a workspace
+
+~SPC TAB s~ saves the current file buffers, tabs, tab names, and window
+layouts as a named workspace. ~SPC TAB l~ chooses a workspace to restore.
+Starting Emacs does not restore one automatically.
+
+=yunge-workspace-auto-save-mode= is enabled by default. It updates the
+workspace named =default= every five minutes and before a normal exit,
+including ~SPC q r~ to restart Emacs. Restore =default= to recover that
+layout. Non-file and remote buffers are excluded; a layout region showing
+one of them may collapse during restoration.
+
+** Theme and fullscreen
+
+~SPC t d~ toggles the configured dark and light themes. ~SPC t i l~ enters
+fullscreen with the light theme; ~SPC t i d~ uses the dark theme. Both keep
+an already-fullscreen frame fullscreen. ~SPC t i q~ leaves fullscreen and
+restores the theme active before entry.
+
+* Language services
+
+** Enabling a language server
+
+Use ~SPC l e~ to enable Eglot for the current language in the current
+project, and ~SPC l d~ to disable it. The language server must be installed
+separately.
+
+The choice is saved for that project and language group; C and C++, for
+example, share clangd.  Opening matching files starts Eglot automatically.
+Nested projects, including Git submodules, must be enabled separately.
+
+For C and C++, enabling Eglot asks for an existing =compile_commands.json=.
+The prompt offers databases in the project root and build directories such
+as =build= or =cmake-build-debug=; you can also choose a file elsewhere.
+Run ~SPC l e~ again to change the database.  Choosing a different database
+restarts the active clangd session; choosing the same one keeps it running.
+
+Disabling Eglot stops the current language server and saves that language
+group as disabled for the project.  Other language groups keep their saved
+settings.  Since C and C++ share a server, disabling either disables both.
+
+** Navigating and editing code
+
+While Eglot manages a buffer, use ~g D~ for declarations and ~g r~ for
+references.  Use ~g a~ to switch between a source and header with clangd.
+Use ~SPC l i~ for implementations, ~SPC l t~ for type definitions, and
+~SPC l s~ to search workspace symbols.  ~SPC l c~ opens the incoming and
+outgoing call hierarchy; ~SPC l T~ opens the supertype and subtype hierarchy.
+Use ~SPC l a~ for code actions, ~SPC l f~ to format, ~SPC l o~ to organize
+imports, and ~SPC l r~ to rename.  Code actions and formatting also operate
+on Visual selections.  Automatic ElDoc feedback stays on one echo-area line.
+Use ~K~, or ~SPC l h~, to show complete documentation in a child frame;
+documentation never opens a child frame automatically. These navigation and
+editing bindings apply while Eglot manages the buffer. When management ends,
+the buffer's ordinary bindings take effect; ~SPC l e/d~ remain available.
+
+** Exploring hierarchies
+
+Call and type hierarchies open as trees.  Use ~RET~ to visit a node or toggle
+an expansion control, ~g]/g[~ or ~TAB/S-TAB~ to move between controls, and
+~gc~ to rebuild the hierarchy with the current node as its root.  Use ~q~ to
+close the hierarchy window.
+
+** Choosing a mode for C headers
+
+Files ending in =.h= default to C++.  In a C project, run
+=M-x yunge-cc-use-c-headers= to use C mode for those files.  The command saves
+the association in the project root's =.dir-locals.el= and preserves the
+other directory-local settings.
+
+The association applies when a file's mode is selected.  Reopen or revert
+existing header buffers to apply it there.
+

@@ -1,0 +1,141 @@
+#+title: Keybinding design
+# SPDX-FileCopyrightText: 2026 Chen Zhexuan
+# SPDX-License-Identifier: MIT
+
+Choose keys by what an action means and where it is used. The result should
+be predictable across modes. Bind frequent actions; leave infrequent ones
+available through ~M-x~. The [[file:usage.org][usage guide]] describes the configured workflows.
+
+* Choosing a binding
+
+Evil provides the editing model. Preserve its movement, operators, search,
+marks, and Visual selection unless a mode has a stronger reason to use a key.
+In particular, retain ~h/j/k/l~, word and line motions, ~gg/G~, scrolling,
+~/~, ~n/N~, ~f/F/t/T~, and the editing operators in ordinary text buffers.
+
+Resolve a conflict by considering the action's frequency, its importance in
+that mode, the cost of changing an established convention, and the available
+alternatives. There is no fixed priority between Evil and a major mode.
+An unused command alone does not justify reassigning its key.
+
+Navigable read-only buffers normally use Evil Normal state. When users move
+by items or sections, a frequent mode action may replace a text motion if
+navigation stays convenient. Apply the same choice across related views.
+A separate Evil state is justified only when frequent actions would otherwise
+cause widespread conflicts.
+
+Prefer established conventions when the practical value is otherwise close.
+Treat a package's defaults as a reference, and choose keys by meaning rather
+than preserving its original letters. Check uppercase keys too: ~B~, ~F~,
+~M~, and ~V~ already have Evil meanings. An uppercase variant should broaden
+its lowercase action only when that relationship is clear.
+
+* Shared meanings
+
+Apply these meanings where the action makes sense. In editable text, ~q~
+keeps macro recording and ~RET~ keeps its editing behavior.
+
+| Key         | Meaning                                               |
+|-------------+-------------------------------------------------------|
+| ~RET~       | Invoke the primary action for the item at point.       |
+| ~q~         | Close a temporary buffer, window, tab, or menu.         |
+| ~K~         | Describe the symbol at point in programming buffers.   |
+| ~gr~        | Refresh the current contents.                         |
+| ~C-j/C-k~   | Move between candidates, matches, chunks, or sections. |
+| ~M-p/M-n~   | Move through minibuffer or REPL input history.         |
+| ~M-h~       | Move to the parent in a hierarchical view.             |
+| ~TAB/S-TAB~ | Move between buttons in a document-oriented buffer.    |
+
+Closing an interface does not delete its underlying data. Use ~q~ for
+closing, and reserve deletion commands for domain objects. A persistent
+document buffer need not bind ~q~ to close merely because it is read-only.
+
+In lists with queued actions, use ~m~ for marking, ~d~ for marking deletion,
+~u~ for unmarking, and ~x~ for executing the marks. In an immediate action
+menu, ~x~ can perform a destructive action directly. Do not make ~d~ mean
+both deferred and immediate deletion in related interfaces.
+
+Keep movement, search, and Visual selection available in lists. Structured
+views may use Normal-state ~y~ as a prefix for copying names, paths, or
+identifiers; Visual ~y~ copies the selected text. Commands that accept a
+region should honor the Visual selection.
+
+Use ~za~ to toggle a fold, ~zc/zo~ to close or open it, ~zC/zO~ for child
+sections, and ~z1~ through ~z4~ for supported outline depths.
+
+** Navigation
+
+Extend Evil's ~g~ prefix with related actions:
+
+| Key  | Meaning                                         |
+|------+-------------------------------------------------|
+| ~gd~ | Visit a definition.                             |
+| ~gf~ | Visit or preview the associated file or source.  |
+| ~gF~ | Visit an alternate associated location.          |
+| ~g<~ | Show recorded output from an external command.   |
+| ~gx~ | Open the associated URL in an external program.  |
+
+In result lists, ~RET~ visits and selects the destination; ~gf~ previews it
+while keeping focus in the list. Keep that distinction across related views.
+Extend the existing keymap without replacing it. Check ~gg~, ~gd~, ~gf~,
+~gt~, ~gu~, and ~gv~ before adding a sequence.
+
+** Completion and edit sessions
+
+Completion owns its keys only while its interface is active. ~TAB~ inserts
+the candidate or common prefix; a minibuffer prompt uses ~RET~ to accept.
+An in-buffer completion popup keeps ~RET~ available to the surrounding mode.
+
+Use ~ZZ~, ~:wq~, and ~:x~ to finish an edit session. Use ~ZQ~ and ~:q~ to
+cancel only when the session can discard its edits. If edits already changed
+source buffers, do not present quitting as rollback. Explain the actual save
+and undo behavior in the workflow guide.
+
+* Command prefixes
+
+Reserve ~SPC~ for the global leader in Normal and Visual states, with ~M-m~
+as its counterpart in Insert, Replace, and Emacs states. Use ~SPC m~ for the
+current mode's commands. Ordinary mode maps must not replace the global
+leader; an active prompt's temporary map may take precedence.
+
+Group global commands by purpose. The [[file:usage.org::*Finding commands][usage guide's prefix table]] lists the
+groups. Put mode-specific administrative actions such as installing, pulling,
+or rebuilding under the local leader unless a stronger convention applies.
+Use ~SPC m SPC~ for a mode's primary dispatcher when it has one. Promote an
+action to a shorter key when its observed frequency justifies it.
+
+Commands normally execute once. Repeated control needs an explicit entry and
+exit, as with ~SPC w SPC~ for window control. After an ordinary ~SPC w h~,
+the next ~j~ belongs to the selected buffer.
+
+* Terminal and graphical input
+
+Give essential actions a binding that works without Super, Hyper, function
+keys, or platform-specific modifiers. Prefer Space, ASCII keys, ~RET~, and
+~TAB~.
+
+Terminals usually cannot distinguish ~TAB~ from ~C-i~. Preserve ~C-i~ for
+jump history in Normal state. Use ~<tab>~ for graphical button navigation
+and ~g]~ as a portable alternative. Completion can use ~TAB~ while it owns
+input. Do not depend on terminals distinguishing ~S-RET~ or ~M-RET~.
+
+~C-u~ scrolls upward in Evil. Give useful command variants distinct bindings,
+such as ~gf~ and ~gF~, instead of requiring a ~C-u~ prefix.
+
+Bind both ~S-TAB~ and ~<backtab>~ where Emacs reports them differently.
+Handle observed input differences without adding speculative fallbacks.
+
+* Implementing and checking bindings
+
+Keep Evil's core bindings and leader routing in =yunge-evil.el=. Each feature
+owns its mode bindings. Bind package command maps to Evil's ~[localleader]~
+event so the physical ~SPC m~ routing stays in one place.
+
+Install an integration after both Evil and its target feature have loaded.
+Do not load an unused package just to configure its keys or call ~elpaca-wait~
+to force ordering.
+
+Check the binding in a real buffer, including the applicable Evil state,
+ordinary navigation, the primary action, and any relevant terminal input.
+Test meaningful behavior without enumerating keymap combinations that cannot
+arise in normal use. Update the workflow documentation when behavior changes.
