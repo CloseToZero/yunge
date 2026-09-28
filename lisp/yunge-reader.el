@@ -10,6 +10,7 @@
 (require 'yunge-reader-model)
 (require 'yunge-reader-task)
 (require 'yunge-reader-search)
+(require 'yunge-reader-selection)
 
 (declare-function browse-url "browse-url" (url &rest arguments))
 (declare-function evil-refresh-cursor
@@ -50,16 +51,6 @@
 (defcustom yunge-reader-zoom-factor 1.2
   "Factor applied by each zoom step."
   :type 'number
-  :group 'yunge-reader)
-
-(defcustom yunge-reader-copy-unit-limit 8
-  "Maximum document units read by one selection text batch."
-  :type '(integer :tag "Units" 1 64)
-  :group 'yunge-reader)
-
-(defcustom yunge-reader-copy-character-limit 16384
-  "Maximum indexed characters read by one selection text batch."
-  :type '(integer :tag "Characters" 1 65536)
   :group 'yunge-reader)
 
 (defcustom yunge-reader-default-appearances
@@ -187,21 +178,6 @@ An omitted format also defaults to `original'."
 (defvar-local yunge-reader-effective-scale nil
   "Scale most recently resolved by the active view adapter.")
 
-(defvar-local yunge-reader-selection nil
-  "Current logical `yunge-reader-selection', or nil.")
-
-(defvar-local yunge-reader--copy-generation 0
-  "Generation used to reject late selection text completions.")
-
-(defvar-local yunge-reader--copy-pending nil
-  "Non-nil while the current selection is being copied in batches.")
-
-(defvar-local yunge-reader--copy-task nil
-  "Cancellable task serving the active selection copy.")
-
-(defvar-local yunge-reader-selection-change-hook nil
-  "Hook run after the logical document selection changes.")
-
 (defvar-local yunge-reader--outline-generation 0
   "Generation used to reject late document outline completions.")
 
@@ -310,7 +286,7 @@ Functions run in the affected Reader buffer without arguments.")
   "Dismiss Reader highlights after an interactive Evil quit."
   (when (and (eq this-command 'evil-force-normal-state)
              (derived-mode-p 'yunge-reader-mode))
-    (yunge-reader--clear-transient-highlights)))
+    (yunge-reader--dismiss-transients)))
 
 (defun yunge-reader--prevent-evil-editing-state
     (function &rest arguments)
@@ -330,9 +306,6 @@ Functions run in the affected Reader buffer without arguments.")
   (setq-local yunge-reader--view-attached nil)
   (setq-local yunge-reader--active-presentation nil)
   (setq-local yunge-reader--outline-buffer nil)
-  (setq-local yunge-reader--copy-generation 0)
-  (setq-local yunge-reader--copy-pending nil)
-  (setq-local yunge-reader--copy-task nil)
   (setq-local yunge-reader--last-stable-place nil)
   (add-hook 'post-command-hook
             #'yunge-reader--note-view-activity nil t)
@@ -1860,16 +1833,11 @@ Capture and save this view's stable place before changing the primary view."
   "Detach the current view and close its driver-owned document resource."
   (let ((entry yunge-reader--document-entry)
         (document yunge-reader-document)
-        (copy-task yunge-reader--copy-task)
         cancelled)
     (cl-incf yunge-reader--open-generation)
     (cl-incf yunge-reader--outline-generation)
-    (cl-incf yunge-reader--copy-generation)
-    (setq yunge-reader--copy-pending nil
-          yunge-reader--copy-task nil)
+    (yunge-reader-selection-cancel-copy "The Reader view was closed")
     (yunge-reader-search-reset "The Reader view was closed")
-    (when (yunge-reader-task-active-p copy-task)
-      (yunge-reader-task-cancel copy-task "The Reader view was closed"))
     (when (buffer-live-p yunge-reader--outline-buffer)
       (let ((outline yunge-reader--outline-buffer))
         (setq yunge-reader--outline-buffer nil)
@@ -2343,59 +2311,24 @@ Render OUTLINE when non-nil; otherwise display STATUS."
     (error "Reader effective scale must be positive: %S" scale))
   (setq yunge-reader-effective-scale scale))
 
-(defun yunge-reader-set-selection (start end &optional text)
-  "Select the logical document range from START through END.
-START and END are `yunge-reader-position' objects.  TEXT may be supplied by a
-driver that already resolved the selected glyphs."
-  (unless (and (yunge-reader-position-p start)
-               (yunge-reader-position-p end))
-    (error "Reader selection endpoints must be reader positions"))
-  (let ((selection
-         (make-yunge-reader-selection
-          :start start :end end :text text))
-        (obsolete yunge-reader--copy-task))
-    (cl-incf yunge-reader--copy-generation)
-    (setq yunge-reader--copy-pending nil
-          yunge-reader--copy-task nil)
-    (when (yunge-reader-task-active-p obsolete)
-      (yunge-reader-task-cancel obsolete "The selection changed"))
-    (unless (equal selection yunge-reader-selection)
-      (setq yunge-reader-selection selection)
-      (run-hooks 'yunge-reader-selection-change-hook))))
-
-(defun yunge-reader-clear-selection (&optional defer-refresh)
-  "Clear the logical selection in the current reader buffer.
-When DEFER-REFRESH is non-nil, leave repainting to the caller."
-  (interactive)
-  (let ((changed yunge-reader-selection)
-        (obsolete yunge-reader--copy-task))
-    (cl-incf yunge-reader--copy-generation)
-    (setq yunge-reader-selection nil
-          yunge-reader--copy-pending nil
-          yunge-reader--copy-task nil)
-    (when (yunge-reader-task-active-p obsolete)
-      (yunge-reader-task-cancel obsolete "The selection was cleared"))
-    (when changed
-      (run-hooks 'yunge-reader-selection-change-hook)))
-  (unless defer-refresh
-    (yunge-reader-refresh)))
-
-(defun yunge-reader--clear-transient-highlights ()
-  "Clear the selection and hide the active search highlight.
-Return non-nil when at least one transient highlight was active."
-  (let ((selection yunge-reader-selection)
+(defun yunge-reader--dismiss-transients ()
+  "Cancel a pending copy, clear the selection, and hide the search highlight.
+Return non-nil when any transient Reader activity was dismissed."
+  (let ((copy-cancelled
+         (yunge-reader-selection-cancel-copy "Reader copy was cancelled"))
+        (selection yunge-reader-selection)
         (search-highlight yunge-reader-search-highlight-visible))
     (when selection
       (yunge-reader-clear-selection search-highlight))
     (when search-highlight
       (yunge-reader-hide-search-highlight))
-    (or selection search-highlight)))
+    (or copy-cancelled selection search-highlight)))
 
 (defun yunge-reader-keyboard-quit ()
   "Dismiss Reader highlights or perform the ordinary keyboard quit."
   (interactive)
   (let ((cancelled (yunge-reader-search-cancel-navigation))
-        (cleared (yunge-reader--clear-transient-highlights)))
+        (cleared (yunge-reader--dismiss-transients)))
     (unless (or cancelled cleared)
       (keyboard-quit))))
 
@@ -2403,155 +2336,9 @@ Return non-nil when at least one transient highlight was active."
   "Clear Reader highlights or perform the ordinary escape action."
   (interactive)
   (let ((cancelled (yunge-reader-search-cancel-navigation))
-        (cleared (yunge-reader--clear-transient-highlights)))
+        (cleared (yunge-reader--dismiss-transients)))
     (unless (or cancelled cleared)
       (keyboard-escape-quit))))
-
-(defun yunge-reader--selection-batch-valid-p (batch)
-  "Return non-nil when BATCH follows the selection text contract."
-  (when (yunge-reader-selection-batch-p batch)
-    (let ((cursor (yunge-reader-selection-batch-cursor batch))
-          (done (yunge-reader-selection-batch-done batch)))
-      (and (stringp (yunge-reader-selection-batch-text batch))
-           (memq done '(nil t))
-           (if done
-               (null cursor)
-             (yunge-reader-position-p cursor))))))
-
-(defun yunge-reader--copy-current-p
-    (document selection generation)
-  "Return whether DOCUMENT copy of SELECTION at GENERATION is current."
-  (and yunge-reader--copy-pending
-       (= generation yunge-reader--copy-generation)
-       (eq document yunge-reader-document)
-       (eq selection yunge-reader-selection)))
-
-(defun yunge-reader--copy-text (text)
-  "Put nonempty selected TEXT in the kill ring."
-  (unless (and (stringp text) (not (string-empty-p text)))
-    (user-error "The document selection contains no text"))
-  (kill-new text)
-  (message "Copied document text")
-  text)
-
-(defun yunge-reader--schedule-selection-batch
-    (buffer document selection generation cursor fragments)
-  "Schedule the next selection batch for BUFFER and DOCUMENT."
-  (run-at-time
-   0 nil
-   (lambda ()
-     (when (buffer-live-p buffer)
-       (with-current-buffer buffer
-         (when (yunge-reader--copy-current-p
-                document selection generation)
-           (yunge-reader--request-selection-batch
-            buffer document selection generation cursor fragments)))))))
-
-(defun yunge-reader--complete-selection-batch
-    (buffer document selection generation old-cursor fragments
-            value error-data)
-  "Complete one selection text request made from BUFFER."
-  (when (buffer-live-p buffer)
-    (with-current-buffer buffer
-      (when (yunge-reader--copy-current-p
-             document selection generation)
-        (setq yunge-reader--copy-task nil)
-        (cond
-         (error-data
-          (setq yunge-reader--copy-pending nil)
-          (display-warning
-           'yunge-reader
-           (format "Could not copy document text: %s"
-                   (error-message-string error-data))
-           :warning))
-         ((not (yunge-reader--selection-batch-valid-p value))
-          (setq yunge-reader--copy-pending nil)
-          (display-warning
-           'yunge-reader
-           "Reader driver returned an invalid selection text batch"
-           :warning))
-         (t
-          (let* ((text (yunge-reader-selection-batch-text value))
-                 (cursor (yunge-reader-selection-batch-cursor value))
-                 (done (yunge-reader-selection-batch-done value))
-                 (fragments (cons text fragments)))
-            (cond
-             (done
-              (let ((complete-text
-                     (mapconcat #'identity
-                                (nreverse fragments) "")))
-                (setq yunge-reader--copy-pending nil)
-                (condition-case copy-error
-                    (progn
-                      (yunge-reader--copy-text complete-text)
-                      (setf (yunge-reader-selection-text selection)
-                            complete-text))
-                  (error
-                   (display-warning
-                    'yunge-reader
-                    (format "Could not copy document text: %s"
-                            (error-message-string copy-error))
-                    :warning)))))
-             ((equal cursor old-cursor)
-              (setq yunge-reader--copy-pending nil)
-              (display-warning
-               'yunge-reader
-               "Reader selection text cursor did not advance"
-               :warning))
-             (t
-              (yunge-reader--schedule-selection-batch
-               buffer document selection generation cursor
-               fragments))))))))))
-
-(defun yunge-reader--request-selection-batch
-    (buffer document selection generation cursor fragments)
-  "Request one bounded text batch for SELECTION in DOCUMENT."
-  (let ((task
-         (yunge-reader-request
-          'selection-text
-          (list :start (yunge-reader-selection-start selection)
-                :end (yunge-reader-selection-end selection)
-                :cursor cursor
-                :unit-limit yunge-reader-copy-unit-limit
-                :character-limit yunge-reader-copy-character-limit)
-          (lambda (value error-data)
-            (yunge-reader--complete-selection-batch
-             buffer document selection generation cursor fragments
-             value error-data))
-          :revision generation)))
-    (when (and (yunge-reader-task-active-p task)
-               (= generation yunge-reader--copy-generation))
-      (setq yunge-reader--copy-task task))))
-
-(defun yunge-reader-copy-selection ()
-  "Copy the current logical document selection.
-Ask the active driver for text when the selection does not already carry it."
-  (interactive)
-  (unless yunge-reader-selection
-    (user-error "There is no document selection"))
-  (cond
-   ((yunge-reader-selection-text yunge-reader-selection)
-    (let ((obsolete yunge-reader--copy-task))
-      (cl-incf yunge-reader--copy-generation)
-      (setq yunge-reader--copy-pending nil
-            yunge-reader--copy-task nil)
-      (when (yunge-reader-task-active-p obsolete)
-        (yunge-reader-task-cancel obsolete "Cached selection text was used")))
-    (yunge-reader--copy-text
-     (yunge-reader-selection-text yunge-reader-selection)))
-   (yunge-reader--copy-pending
-    (message "Document selection is still being copied"))
-   (t
-    (let ((buffer (current-buffer))
-          (document yunge-reader-document)
-          (selection yunge-reader-selection)
-          (generation (cl-incf yunge-reader--copy-generation)))
-      (unless document
-        (user-error "This reader buffer has no open document"))
-      (setq yunge-reader--copy-pending t)
-      (message "Copying document text...")
-      (yunge-reader--request-selection-batch
-       buffer document selection generation nil nil)))))
 
 (yunge-jump-history-register-target
  'reader

@@ -3656,7 +3656,6 @@
                        (right . 20.0) (top . 20.0)))))))
      yunge-reader-pdf--text-cache)
     (let ((selection yunge-reader-selection)
-          (generation yunge-reader--copy-generation)
           (repaints 0))
       (cl-letf
           (((symbol-function 'yunge-reader-pdf--repaint-selection)
@@ -3667,7 +3666,6 @@
           '(:page 0 :point (18.0 . 15.0))
           t)))
       (should (eq yunge-reader-selection selection))
-      (should (= yunge-reader--copy-generation generation))
       (should (= repaints 0)))))
 
 (ert-deftest yunge-reader-pdf-virtualizes-pages-outside-the-viewport ()

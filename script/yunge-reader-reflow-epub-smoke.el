@@ -178,7 +178,7 @@
     (text . ,(and yunge-reader-selection
                   (yunge-reader-selection-text
                    yunge-reader-selection)))
-    (copy-pending . ,yunge-reader--copy-pending)
+    (copy-pending . ,yunge-reader-selection--copy-phase)
     (kill . ,(and kill-ring (current-kill 0 t)))))
 
 (defun yunge-reader-reflow-smoke--selection-settled-p
@@ -585,7 +585,7 @@
                  (yunge-reader-reflow-smoke--continue)))
               ('selection-copied
                (if (and
-                    (not yunge-reader--copy-pending)
+                    (not yunge-reader-selection--copy-phase)
                     (equal
                      (yunge-reader-selection-text
                       yunge-reader-selection)

@@ -148,8 +148,13 @@ page. The copied text goes to the Emacs kill ring. A highlighted search
 match alone is not a selection. If copying is still in progress, changing
 or clearing the selection cancels that copy.
 
-=C-g= or =ESC= dismisses the selection and search highlight. The query stays
-available for =n/N=; use =M-x yunge-reader-clear-search= to discard it too.
+Wait for =Copied document text= before pasting a long selection. Until the
+copy succeeds, the kill ring still contains what you copied previously;
+a failed copy does not leave a partial passage there.
+
+=C-g= or =ESC= cancels a pending copy and dismisses the selection and search
+highlight. The query stays available for =n/N=; use
+=M-x yunge-reader-clear-search= to discard it too.
 
 PDF =RET= lists links visible in the selected Reader window; Ctrl-Mouse-1
 follows a link at the pointer.  EPUB internal links navigate inside the book.

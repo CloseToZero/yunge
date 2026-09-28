@@ -21,6 +21,10 @@ The core loads the search module; the search module declares those core
 services without loading the core back. Document teardown and manual
 navigation use search operations rather than modifying its private state.
 
+=yunge-reader-selection.el= owns the logical selection and copying. It keeps
+selection capture, text requests, and cancellation in one place. EPUB supplies
+the live native selection; it does not manage the copy's task state.
+
 Format drivers implement document operations and presentation. They must
 keep resources used by in-flight work alive until that work releases them.
 EPUB's native surface belongs to one frame for its lifetime. Moving a view
@@ -95,6 +99,29 @@ the query or clearing the search invalidates earlier completions before
 cancelling their tasks. Manual reading movement detaches a pending jump;
 the next search movement starts from the new stable location. Hiding a
 highlight keeps the query and results available.
+
+* Selection and copying
+
+A copy publishes one complete string to the kill ring. Drivers may supply
+text with a selection or resolve it in bounded batches. Accumulate partial
+text privately; a failed batch must not replace previously copied text.
+
+EPUB first reads the live native selection, then requests its text. Both
+steps belong to the same copy attempt. Selection changes, clearing, or view
+teardown invalidate that attempt and cancel its current task. A late capture
+must not restore an obsolete selection, and late text must not reach the
+kill ring.
+
+=yunge-reader-copy-selection= accepts an optional =read-current= function
+for this capture step. It receives =(complete revision)= and returns a
+cancellable task. Call =complete= with a =yunge-reader-selection= (or nil
+for no selection) and an error value. Return the selection without changing
+the view: the selection module first checks that the copy is still current,
+then adopts it and notifies =yunge-reader-selection-change-hook=.
+
+Either step may complete synchronously. A capture callback can therefore
+start a text request before the capture call returns. Retaining the returned
+capture task must not overwrite the text task that now needs cancellation.
 
 * Task completion and cancellation
 

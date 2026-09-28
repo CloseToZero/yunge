@@ -813,6 +813,21 @@
             (make-yunge-reader-position
              :unit "OPS/chapter.xhtml"
              :offset "epubcfi(/6/4!/4/2/1:8)")))
+          (yunge-reader-set-selection
+           (make-yunge-reader-position
+            :unit "OPS/chapter.xhtml"
+            :offset "epubcfi(/6/4!/4/2/1:1)")
+           (make-yunge-reader-position
+            :unit "OPS/chapter.xhtml"
+            :offset "epubcfi(/6/4!/4/2/1:8)")
+           "cached")
+          (should
+           (equal (yunge-reader-selection-text yunge-reader-selection)
+                  "cached"))
+          (should
+           (equal (alist-get 'start
+                            (yunge-reader-webview--view-selection view))
+                  "epubcfi(/6/4!/4/2/1:1)"))
           (let (echoed-clear)
             (cl-letf
                 (((symbol-function
@@ -824,7 +839,7 @@
           (should yunge-reader-search-highlight-visible))
       (kill-buffer buffer))))
 
-(ert-deftest yunge-reader-epub-copy-reads-the-live-native-selection ()
+(ert-deftest yunge-reader-epub-copy-publishes-once-and-cancels-text-work ()
   (let* ((buffer (generate-new-buffer " *EPUB live copy*"))
          (view
           (yunge-reader-webview--make-view
@@ -832,71 +847,123 @@
            :buffer buffer
            :selection-changed-function
            #'yunge-reader-epub--selection-changed))
-         requested
-         completion
-         copied)
+         (yunge-reader-drivers nil)
+         (kill-ring nil)
+         (kill-ring-yank-pointer nil)
+         (interprogram-cut-function nil)
+         (interprogram-paste-function nil)
+         (requests 0)
+         text-complete
+         text-child)
     (unwind-protect
         (with-current-buffer buffer
           (yunge-reader-mode)
           (yunge-reader-epub-view-mode 1)
           (setq yunge-reader-webview--buffer-view view)
+          (let ((driver
+                 (yunge-reader-register-driver
+                  'epub-copy-test
+                  :match #'ignore :open #'ignore :close #'ignore
+                  :selection-text
+                  (lambda (_document _arguments complete)
+                    (cl-incf requests)
+                    (if (= requests 1)
+                        (funcall
+                         complete
+                         (make-yunge-reader-selection-batch
+                          :text "copied" :done t)
+                         nil)
+                      (setq text-complete complete
+                            text-child
+                            (yunge-reader-task-create
+                             'native-text #'ignore))
+                      text-child)))))
+            (setq yunge-reader-document
+                  (yunge-reader-epub-test--document))
+            (setf (yunge-reader-document-driver yunge-reader-document)
+                  driver))
+          ;; The native capture completes before its request returns.
           (cl-letf
               (((symbol-function
                  'yunge-reader-webview--current-ready-view)
                 (lambda () view))
                ((symbol-function
                  'yunge-reader-webview--request-current-selection)
-                (lambda (actual complete &optional revision)
-                  (setq requested actual
-                        completion complete)
-                  (should (= revision 1))))
-               ((symbol-function 'yunge-reader-copy-selection)
-                (lambda ()
-                  (setq copied (copy-tree yunge-reader-selection)))))
+                (lambda (_view complete &optional _revision)
+                  (funcall complete
+                           (yunge-reader-epub-test--selection) nil)
+                  nil)))
             (yunge-reader-epub-copy-selection)
-            (should (eq requested view))
-            (should yunge-reader--copy-pending)
-            (funcall completion
-                     (yunge-reader-epub-test--selection) nil)
-            (should-not yunge-reader--copy-pending)
-            (should copied)
+            (should (equal (car kill-ring) "copied"))
             (should
              (equal (yunge-reader-webview--view-selection view)
-                    (yunge-reader-epub-test--selection)))))
+                    (yunge-reader-epub-test--selection)))
+            (should
+             (equal (yunge-reader-selection-text yunge-reader-selection)
+                    "copied"))
+            (yunge-reader-epub-copy-selection)
+            (should (yunge-reader-task-active-p text-child))
+            (yunge-reader-clear-selection t)
+            (should (eq (yunge-reader-task-state text-child) 'cancelled))
+            (funcall text-complete
+                     (make-yunge-reader-selection-batch
+                      :text "late" :done t)
+                     nil)
+            (should (equal kill-ring '("copied")))))
       (kill-buffer buffer))))
 
-(ert-deftest yunge-reader-epub-copy-rejects-a-stale-live-selection ()
-  (let* ((buffer (generate-new-buffer " *EPUB stale live copy*"))
+(ert-deftest yunge-reader-epub-copy-discards-a-late-native-selection ()
+  (let* ((buffer (generate-new-buffer " *EPUB late copy*"))
          (view
           (yunge-reader-webview--make-view
            :surface (yunge-reader-epub-test--surface 7 'ready)
            :buffer buffer
            :selection-changed-function
            #'yunge-reader-epub--selection-changed))
-         completion
-         copied)
+         (yunge-reader-drivers nil)
+         (kill-ring nil)
+         (kill-ring-yank-pointer nil)
+         (interprogram-cut-function nil)
+         (interprogram-paste-function nil)
+         capture-complete
+         capture-task)
     (unwind-protect
         (with-current-buffer buffer
           (yunge-reader-mode)
           (yunge-reader-epub-view-mode 1)
           (setq yunge-reader-webview--buffer-view view)
+          (let ((driver
+                 (yunge-reader-register-driver
+                  'epub-copy-test
+                  :match #'ignore :open #'ignore :close #'ignore
+                  :selection-text
+                  (lambda (_document _arguments _complete)
+                    (error "Late capture must not request text")))))
+            (setq yunge-reader-document
+                  (yunge-reader-epub-test--document))
+            (setf (yunge-reader-document-driver yunge-reader-document)
+                  driver))
           (cl-letf
               (((symbol-function
                  'yunge-reader-webview--current-ready-view)
                 (lambda () view))
                ((symbol-function
                  'yunge-reader-webview--request-current-selection)
-                (lambda (_view complete &optional revision)
-                  (should (= revision 1))
-                  (setq completion complete)))
-               ((symbol-function 'yunge-reader-copy-selection)
-                (lambda () (setq copied t))))
+                (lambda (_view complete &optional _revision)
+                  (setq capture-complete complete
+                        capture-task
+                        (yunge-reader-task-create
+                         'native-selection #'ignore))
+                  capture-task)))
             (yunge-reader-epub-copy-selection)
-            (cl-incf yunge-reader--copy-generation)
-            (funcall completion
+            (yunge-reader-keyboard-quit)
+            (should (eq (yunge-reader-task-state capture-task)
+                        'cancelled))
+            (funcall capture-complete
                      (yunge-reader-epub-test--selection) nil)
-            (should-not copied)
-            (should yunge-reader--copy-pending)))
+            (should-not yunge-reader-selection)
+            (should-not (yunge-reader-webview--view-selection view))
+            (should-not kill-ring)))
       (kill-buffer buffer))))
 
 (ert-deftest yunge-reader-epub-clears-native-selection-from-reader ()

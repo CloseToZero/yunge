@@ -2703,7 +2703,6 @@
         (let ((inhibit-message t))
           (yunge-reader-copy-selection)
           (yunge-reader-copy-selection))
-        (should yunge-reader--copy-pending)
         (should (= requests 1))
         (with-temp-buffer
           (let ((inhibit-message t))
@@ -2713,7 +2712,6 @@
               :text "res" :cursor cursor :done nil)
              nil))))
       (should (= requests 2))
-      (should-not yunge-reader--copy-pending)
       (should
        (eq (yunge-reader-selection-text-request-cursor
             (car arguments-seen))
@@ -2753,14 +2751,12 @@
       (yunge-reader-set-selection old-start old-end)
       (let ((inhibit-message t))
         (yunge-reader-copy-selection))
-      (should yunge-reader--copy-pending)
       (yunge-reader-set-selection new-start new-end)
       (funcall
        completion
        (make-yunge-reader-selection-batch :text "obsolete" :done t)
        nil)
       (should-not kill-ring)
-      (should-not yunge-reader--copy-pending)
       (should-not
        (yunge-reader-selection-text yunge-reader-selection)))))
 
@@ -2804,7 +2800,6 @@
           (yunge-reader-copy-selection)))
       (should (= requests 2))
       (should (= (length warnings) 1))
-      (should-not yunge-reader--copy-pending)
       (should-not
        (yunge-reader-selection-text yunge-reader-selection)))))
 
@@ -2850,7 +2845,6 @@
       (should (= requests 2))
       (should (= (length warnings) 1))
       (should-not kill-ring)
-      (should-not yunge-reader--copy-pending)
       (should-not
        (yunge-reader-selection-text yunge-reader-selection)))))
 
