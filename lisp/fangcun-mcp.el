@@ -537,7 +537,8 @@ KEY-PREDICATE returns non-nil for a valid decoded sort key."
 
 (defun fangcun-mcp--call-with-org-file-edit (file yiyu function)
   "Call FUNCTION in saved Org FILE, then save and reindex it for YIYU.
-Refuse to save an already modified visiting buffer."
+Refuse to save a modified visiting buffer.  Refresh a clean buffer when its
+visited file has changed on disk before editing."
   (let* ((visiting-buffer (find-buffer-visiting file))
          (buffer (or visiting-buffer (find-file-noselect file)))
          (temporary-buffer-p (null visiting-buffer))
@@ -550,6 +551,8 @@ Refuse to save an already modified visiting buffer."
             (user-error
              "Fangcun file has unsaved changes; save it before MCP edits: %s"
              file))
+          (unless (verify-visited-file-modtime buffer)
+            (revert-buffer t t t))
           (save-excursion
             (save-restriction
               (widen)
@@ -745,7 +748,8 @@ optional annotations, in that order."
             "Give one existing Org heading its own 方寸（Fangcun） node ID, then "
             "save and index the file. Emacs generates the ID; an existing local ID "
             "is retained. The exact heading path excludes TODO keywords, priorities, "
-            "and tags.")
+            "and tags. The tool refuses files with unsaved Emacs edits and "
+            "refreshes an unmodified buffer from disk when the file has changed.")
            '(:type "object"
                    :properties
                    (:yiyu

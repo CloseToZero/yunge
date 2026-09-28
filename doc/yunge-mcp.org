@@ -82,7 +82,8 @@ To make a heading in an *existing* file into a node, call
 exact titles from outermost heading to target, excluding TODO keywords,
 priorities, and tags. Missing or ambiguous paths fail; an existing local ID
 is kept. The tool refuses to save a file already modified in a visiting Emacs
-buffer. Save or reconcile those changes first.
+buffer. Save or reconcile those changes first. If an unmodified buffer no
+longer matches the saved file, the tool refreshes it from disk before editing.
 
 Saved edits made outside Emacs are indexed after Fangcun's optional watcher
 notices them and Emacs processes the events. If monitoring is unavailable or
