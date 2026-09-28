@@ -87,11 +87,7 @@
        '((id . 2) (revision . 4)
          (ok) (error . ((message . "failed")))))
       (should (equal first '(((value . 1)) nil)))
-      (should (equal second '(nil (test-error "failed"))))
-      (should
-       (zerop
-        (hash-table-count
-         (yunge-reader-transport--session-callbacks session)))))))
+      (should (equal second '(nil (test-error "failed")))))))
 
 (ert-deftest yunge-reader-transport-frames-events-and-responses ()
   (yunge-reader-transport-test--with-process
@@ -156,17 +152,16 @@
          session 'fake-process "pending" nil
          (lambda (_result error-data) (push error-data errors))))
       (yunge-reader-transport--fail session '(test-session-lost))
+      (yunge-reader-transport--fail session '(test-session-lost))
+      (yunge-reader-transport--handle-message
+       session 'fake-process '((kind . "ready")))
       (should (equal errors
                      '((test-session-lost) (test-session-lost))))
-      (should-not (yunge-reader-transport--session-outbound session))
-      (should
-       (zerop
-        (hash-table-count
-         (yunge-reader-transport--session-callbacks session)))))))
+      (should-not sent))))
 
 (ert-deftest yunge-reader-transport-cancels-queued-and-sent-tasks ()
   (yunge-reader-transport-test--with-process
-    (let* (queued-error sent-error
+    (let* (queued-error sent-error (sent-calls 0)
            (session
             (yunge-reader-transport--make-session
              :label "test helper"
@@ -190,7 +185,9 @@
       (let ((task
              (yunge-reader-transport--request
               session 'fake-process "sent" nil
-              (lambda (_value error-data) (setq sent-error error-data))
+              (lambda (_value error-data)
+                (cl-incf sent-calls)
+                (setq sent-error error-data))
               :owner 'document)))
         (should (eq (yunge-reader-task-state task) 'sent))
         (should (yunge-reader-task-cancel task))
@@ -201,10 +198,8 @@
         (yunge-reader-transport--handle-message
          session 'fake-process
          `((id . ,(yunge-reader-task-id task)) (ok . t) (result))))
-      (should
-       (zerop
-        (hash-table-count
-        (yunge-reader-transport--session-retired session)))))))
+      (should (= sent-calls 1))
+      (should (eq (car sent-error) 'yunge-reader-task-cancelled)))))
 
 (ert-deftest yunge-reader-transport-rejects-mismatched-active-revisions ()
   (yunge-reader-transport-test--with-process
@@ -229,12 +224,11 @@
             (revision . 6) (ok . t) (result)))
          :type 'error)
         (should-not completed)
-        (should (eq (yunge-reader-task-state task) 'sent))
-        (should
-         (eq task
-             (gethash
-              (yunge-reader-task-id task)
-              (yunge-reader-transport--session-callbacks session))))))))
+        (yunge-reader-transport--handle-message
+         session 'fake-process
+         `((id . ,(yunge-reader-task-id task))
+           (revision . 7) (ok . t) (result)))
+        (should completed)))))
 
 (ert-deftest yunge-reader-transport-rejects-mismatched-retired-revisions ()
   (yunge-reader-transport-test--with-process
@@ -256,18 +250,16 @@
           `((id . ,(yunge-reader-task-id task))
             (revision . 6) (ok . t) (result)))
          :type 'error)
-        (should
-         (gethash
-          (yunge-reader-task-id task)
-          (yunge-reader-transport--session-retired session)))
         (yunge-reader-transport--handle-message
          session 'fake-process
          `((id . ,(yunge-reader-task-id task))
            (revision . 7) (ok . t) (result)))
-        (should-not
-         (gethash
-          (yunge-reader-task-id task)
-          (yunge-reader-transport--session-retired session)))))))
+        (should-error
+         (yunge-reader-transport--handle-message
+          session 'fake-process
+          `((id . ,(yunge-reader-task-id task))
+            (revision . 7) (ok . t) (result)))
+         :type 'error)))))
 
 (ert-deftest yunge-reader-transport-cancels-tasks-by-owner ()
   (yunge-reader-transport-test--with-process
@@ -276,27 +268,32 @@
              :label "test helper"
              :validate-ready #'ignore
              :response-error-function #'ignore))
-           cancelled
-           retained)
+           cancelled retained-result)
       (yunge-reader-transport--bind session 'fake-process)
       (dotimes (_ 2)
         (yunge-reader-transport--request
          session 'fake-process "owned" nil
          (lambda (_value error-data) (push error-data cancelled))
          :owner 'document))
-      (setq retained
-            (yunge-reader-transport--request
-             session 'fake-process "other" nil #'ignore :owner 'other))
+      (yunge-reader-transport--request
+       session 'fake-process "other" nil
+       (lambda (value _error-data) (setq retained-result value))
+       :owner 'other)
       (should
        (= (yunge-reader-transport-cancel-owner
            session 'document "document closed")
           2))
       (should (= (length cancelled) 2))
-      (should (eq (yunge-reader-task-state retained) 'queued))
-      (should
-       (= (hash-table-count
-           (yunge-reader-transport--session-callbacks session))
-          1)))))
+      (yunge-reader-transport--handle-message
+       session 'fake-process '((kind . "ready")))
+      (should (= (length sent) 1))
+      (should (equal (alist-get 'op
+                                (yunge-reader-transport-test--parse
+                                 (car sent)))
+                     "other"))
+      (yunge-reader-transport--handle-message
+       session 'fake-process '((id . 3) (ok . t) (result . "kept")))
+      (should (equal retained-result "kept")))))
 
 (ert-deftest yunge-reader-transport-times-out-owned-tasks ()
   (yunge-reader-transport-test--with-process

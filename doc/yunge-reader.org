@@ -5,7 +5,7 @@ backend, and EPUB now has a bounded WebView driver.  The core models
 ownership, location, selection, and view state without assuming that every
 document consists of immutable pages.
 
-* Current PDF slice
+* PDF
 
 Run =M-x yunge-reader-native-setup= once, then visit a =.pdf= file normally.
 The PDF adapter is autoloaded through =auto-mode-alist= and turns that file
@@ -96,7 +96,7 @@ PDF and EPUB headers identify each buffer as =Primary= or =Additional=.
 In Evil Normal state, =SPC m v= creates a view and =SPC m p= makes the
 current view primary.  Both commands are one-shot localleader actions.
 
-* Current EPUB slice
+* EPUB
 
 Run =M-x yunge-reader-native-setup= once, then visit a local =.epub= file in
 graphical Emacs on Windows or macOS.  The adapter is autoloaded through
@@ -305,75 +305,66 @@ complete style of only the current logical view, so hidden surfaces and
 Additional views retain independent choices.  The normal primary-only rule
 continues to govern persistent place recording after reflow.
 
-* Library boundary
+* Asynchronous Reader operations
 
-The implementation is divided along explicit ownership boundaries:
+Reader work returns a =yunge-reader-task= when it can outlive the call that
+started it.  The task exposes its operation, owner, revision, deadline, and
+state.  A completion receives either =(value nil)= or =(nil error-data)=,
+where =error-data= is an ordinary Emacs error value.  Completion may run during
+the initiating call or later from process output or a timer.  It runs at most
+once: the task becomes terminal before completion runs, so a callback can
+safely cancel or finish the same task without another notification.  Callback
+errors produce a warning and do not interrupt transport response handling.
 
-- =yunge-reader.el= owns drivers, document sessions, Reader views,
-  presentations, stable positions, logical selections, outlines, bounded
-  search state, reader buffers, and zoom state.
-- =yunge-reader-state.el= owns versioned persistent per-document records,
-  fingerprints, path aliases, and MRU bounds.
-- =yunge-reader-task.el= owns cancellable, revisioned asynchronous work and
-  its exactly-once lifecycle independently of any transport.
-- =yunge-reader-transport.el= owns NDJSON framing, handshake queues, request
-  identifiers, response callbacks, and session failure.
-- =yunge-reader-native.el= owns the PDF helper process, build identity,
-  reference counting, cache policy, idle shutdown, and explicit lifecycle
-  commands.
-- =yunge-reader-setup.el= owns the pinned engine manifest and verified,
-  operation-private installation transaction.
-- =yunge-reader-pdf.el= is the PDF driver facade.  Its protocol, backend,
-  geometry, viewport, rendering, and interaction modules separately own
-  native mapping, recovery, spatial calculations, the continuous page roll,
-  caches and painting, and pointer behavior.
-- =yunge-reader-webview-protocol.el= owns the WebView handshake and bounded
-  validation of renderer locations, selections, outlines, search, appearance,
-  and styles.
-- =yunge-reader-webview-view.el= owns logical view records, surface state, and
-  the registries that keep them independent from disposable native surfaces.
-- =yunge-reader-webview-renderer.el= maps validated EPUB operations onto
-  WebView module requests and checks their bounded asynchronous results.
-- =yunge-reader-webview-events.el= validates asynchronous renderer events and
-  routes them to logical view state and the owning Emacs presentation.
-- =yunge-reader-webview-service.el= owns the dynamic-module service, pipe
-  transport, shutdown deadline, and stopped-service notification.
-- =yunge-reader-webview-surface.el= owns child-surface identifiers, native
-  parent geometry, creation, renderer attachment, resize coalescing, and
-  asynchronous release barriers.
-- =yunge-reader-webview.el= maps persistent logical views onto active Emacs
-  presentation windows and owns their buffer-facing integration.
-- =yunge-reader-epub.el= maps shared EPUB publications and reflowable
-  locations onto the Reader driver interface.
+This standalone example completes a task on a later Emacs timer event.  The
+returned task can be cancelled before that event; the later finish then has no
+effect.
 
-The broker in =src/broker.rs= owns the loopback HTTP server, renderer assets,
-opaque service and publication tokens, normalized EPUB paths, bounded resource
-responses, and revocation.  =src/epub.rs= owns archive and publication parsing.
-The same executable provides PDF and EPUB operations, while the dynamic module
-exposes only the native WebView surface service to Emacs.
+#+begin_src emacs-lisp
+(require 'yunge-reader-task)
+(let ((task (yunge-reader-task-create
+             'preview
+             (lambda (value error-data)
+               (message "Preview: %S %S" value error-data))
+             :timeout 5)))
+  (run-at-time 0.1 nil #'yunge-reader-task-finish
+               task 'completed "ready" nil)
+  task)
+#+end_src
 
-The native WebView service keeps request decoding, stable operation names,
-response envelopes, and protocol errors in =src/webview/protocol.rs=.
-Unsupported operations are rejected before they can reach native resources.
+Cancel a task with =yunge-reader-task-cancel=.  It returns non-nil only for
+active work, calls completion with =yunge-reader-task-cancelled= before
+returning, and makes later results inert.  Cancellation prevents local work
+from publishing a result; it does not promise to interrupt native work that
+has already been sent.  A queued request is removed before the handshake
+flushes it.  A sent request remains recognizable so its eventual response can
+be discarded without becoming a protocol error.  Owners such as a document or
+view can cancel their requests together when they close.  An operation that
+adopts a child task cancels that child when the parent is cancelled; adopting
+a child after the parent finished cancels the child immediately.
 
-=src/webview/surface.rs= owns the validated parent-window adapter, child
-WebView construction, bounds, visibility, load state, focus, routed
-accelerators, and controller event tokens.  It emits semantic surface events
-that the service maps onto protocol events.  It stores no publication handle,
-resource token, EPUB locator, or renderer search state, so dropping a native
-surface cannot implicitly destroy its persistent logical view or publication.
+A backend providing custom cancellation or timeout functions must make the
+task terminal and invoke completion synchronously.  Child cancellation is
+best effort: if the child backend throws, the parent still reports its own
+outcome.  Keep resources needed by in-flight backend work alive until that
+backend releases them; task cancellation alone does not prove the work stopped.
 
-=src/webview/renderer.rs= owns the browser IPC envelopes, bounded renderer
-result validation, semantic renderer-event conversion, and serialization of
-every JavaScript command sent to the renderer.  The service owns pending
-request identities and decides when to execute those commands.  The renderer
-bridge has no child-window handles, publication store, filesystem access, or
-EPUB resource-serving authority.
+A positive timeout starts when the task is created, including time spent
+waiting for a service handshake.  Expiry reports
+=yunge-reader-task-timed-out= once and cancels the active child.  If child
+cancellation fails, Reader warns.  A successful response or session failure
+also finishes the task once and cancels its timer.
 
-PDF selection and search geometry uses one compound SVG path per page and
-highlight kind.  Overlapping glyph bounds therefore share one opacity pass
-instead of producing darker intersections.  Adjacent axis-aligned glyphs
-coalesce into continuous line runs without bridging columns or line breaks.
+PDF and EPUB service requests use newline-delimited JSON.  A validated ready
+message releases queued requests in order.  Each response must match the
+request ID and, when supplied, its revision.  A wrong revision is a protocol
+error rather than a result for the current request.  The first matching
+response for cancelled or timed-out work is ignored; duplicates are protocol
+errors.  Losing a service session fails its pending requests.  Output from an
+older process cannot complete requests in a replacement session.  The PDF and
+WebView services validate their own handshakes and map their own response errors.
+
+* Reader core and views
 
 The core never depends on PDFium, PDF page objects, or PNG.  A driver supplies
 a name and file matcher, resource and view lifecycle functions, stable location
@@ -416,7 +407,12 @@ This prevents an EPUB backend from having to imitate permanent PDF pages and
 prevents the PDF backend from pretending its glyphs are ordinary Emacs buffer
 text.
 
-* Locations, selection, and later annotations
+* Locations and selection
+
+PDF selection and search geometry uses one compound SVG path per page and
+highlight kind.  Overlapping glyph bounds therefore share one opacity pass
+instead of producing darker intersections.  Adjacent axis-aligned glyphs
+coalesce into continuous line runs without bridging columns or line breaks.
 
 A =yunge-reader-position= contains a document unit, a stable text offset or
 driver anchor, and optional unscaled coordinates.  PDF coordinates remain in
@@ -990,158 +986,21 @@ provide an equivalent surface owner.
 
 * Testing
 
-ERT tests cover driver precedence, canonical open coalescing, shared resource
-release, public view cloning, explicit and automatic primary promotion,
-role-change notification, primary-place ownership, pending-view loss,
-document/view lifecycle order, partial view cleanup, asynchronous cleanup,
-zoom, logical selection, native lifecycle, strict setup validation, PDF request
-mapping,
-lease balance, fit calculations, stable roll slots, visible-page
-virtualization, prefetch bounds, one-at-a-time render-first scheduling, rapid
-viewport replacement, interactive request priority, explicit-stop queue
-cancellation, error continuation, and exact working-set cache pruning.  A
-50,000-page roll test checks stable first, middle, and last slots without live
-page images, while 1,000 viewport replacements verify bounded queued work.
-Further tests cover stale render widths, text caching, cross-page hit testing,
-cooperatively batched copying, stale-copy rejection, partial-copy failure,
-nonadvancing cursor rejection, rotated polygon painting, rectangle fallback,
-bounded search continuation, stale search rejection, independent match
-painting, precise match scrolling, canonical viewport capture, painted-width
-resize anchoring, coalesced resize work, manual viewport growth, cross-scale
-place restoration, page clamping, deferred window restoration, failed-open
-place protection, rejected restores, immutable Reader jump capture, failed
-live-jump rollback, asynchronous reopen, late-window protection, semantic page
-tracking, shared outline caching, independent outline trees, hidden outline
-updates, outline-place restoration, keyed render completions, bounded link
-mapping and hit testing,
-tagged URI validation, allowlisted explicit activation, link request
-coalescing, late link caching, password retry, cancellation, attempt bounds,
-late-prompt rejection, cache replacement, lease balance, cache limits,
-prune-before-stop ordering, and lease races.  Recovery tests cover shared
-reopen, requesting-view recovery, file replacement before and during open, a
-single interrupted-request retry, late close cleanup, background password
-rejection, view and saved-place preservation, and authoritative explicit stop.
-Native lifecycle tests
-additionally cover unique helper session identities, one-shot callback
-failure, stale-session request rejection, intentional-stop errors, and
-process-local handle collisions.  Rust tests cover the handshake, strict
-parameters, stable PDF password errors, bounded outline, link labels and URIs,
-destination view mapping, safe cache eviction, Unicode literal matching,
-byte-to-PDFium-index mapping, search and selection cursors and limits, regular
-and singular-angle quadrilateral recovery, cross-page inclusive ranges,
-protocol errors, shutdown ordering, EOF, WebView bounds validation, omitted
-empty parameters, native Reader-key filtering, embedded renderer assets,
-strict renderer IPC, bounded EPUB locators, bounded EPUB outlines, internal
-href targets, bounded semantic EPUB styles, and bounded EPUB resource
-catalogs.
-Transport ERT tests cover FIFO handshake flushing, fragmented NDJSON,
-asynchronous events and responses, invalid output, and isolated session
-failure.
-WebView ERT tests cover the separate handshake, strict capability validation,
-asynchronous renderer event routing, per-view EPUB locations, owning-window
-focus recovery, owning-buffer key dispatch, frame handle parsing, coalesced
-resize requests, destruction after buffer replacement, persistent surface
-retention and reuse, cross-frame presentation creation, multi-surface
-destruction barriers, outline waiter completion, and ordered publication
-release.  They
-also cover deferred and
-live style updates,
-opening-time reconciliation, surface reset, and retryable failures.  EPUB
-driver tests cover registration, reflowable key
-bindings, native open result validation, shared publication ownership,
-printable place conversion, bounded outline mapping, transient href targets,
-view-local reading styles, bounded font zoom, strict zoom-state validation,
-restore timing, and primary-only place recording.
-Isolated graphical Emacs smoke tests open real EPUBs, move one screen, hide
-and show the retained native view, and preserve the exact CFI.  The
-reflowable pass also crosses a chapter during search, copies a real DOM
-selection, follows an exact outline destination, creates a presentation in a
-second Emacs frame, and navigates its independent surface.  The formal
-driver smoke test
-opens through =auto-mode-alist=, hides and reuses a persistent surface,
-verifies primary place ownership, and closes the resource only after both
-views detach.
-A focused-key smoke test sends =+=, =-=, and === to a real child WebView,
-requires the expected Reader font-scale changes, and then sends =J= and =C-d=
-to require two successive locator changes.
-A generated fixed-layout smoke opens LTR, RTL, and vertical-rl EPUBs through
-ordinary file registration.  Each variant starts in fit-page mode, moves from
-page one to page two and back through logical page commands, changes to manual
-scale, and moves to a nonzero viewport y coordinate.  Hiding the owning buffer
-retains its native surface; displaying it again reuses that surface with the
-exact href, x, and y and no Reader warnings.
-The same smoke narrows and shortens the live window independently.  Fit-width
-and fit-page recompute their effective scales without replacing the native
-surface.  Manual zoom remains unchanged, and a subsequent line movement
-proves that resize retained the page-relative viewport before recreation.
+Run these checks from the repository root:
 
-A generated graphical PDF smoke opens a three-page A4 fixture through ordinary
-file registration and waits for its real PDFium render to become an Emacs
-image.  It requires centered display geometry, changes the live window in
-fit-width and fit-page modes, and retains the same stable page position while
-both effective scales change.  Manual scale and a nonzero page-relative
-viewport remain unchanged across a third resize.  The Reader buffer stays
-unchanged while the smoke switches from =original= to =follow-emacs= and back.
-The themed render uses a distinct cache path, restoring =original= reuses the
-first path, and neither transition moves the stable location.  The buffer
-kills without a save query and leaves no fixture or render cache.
+#+begin_src sh
+emacs --batch -Q -L test -l yunge-test-runner -- --suite ert --module reader
+emacs --batch -Q -L test -l yunge-test-runner -- --suite native --module reader
+emacs --batch -Q -L test -l yunge-test-runner -- --suite renderer
+#+end_src
 
-The integration path installs the pinned Windows library through the public
-setup command, runs its =pdfium-info= smoke test, opens a five-page A4 fixture,
-checks all page geometries, renders neighboring pages, closes the handle, and
-shuts down.  It also extracts 1,938 indexed characters from the first page,
-selects =3..14= in either direction, copies =Introduction=, and paints the
-selection as SVG.  A second integration selects across the first two pages,
-verifies the explicit page separator, paints both slots as SVG, then confirms
-that an offscreen page returns to a same-size placeholder.  Rendered pages
-have been compared visually with Poppler.  A generated fixture with 0, 30, 45,
-and 90 degree text verifies native quadrilaterals, local hit testing, and
-polygon highlights against the rendered glyphs.
+The Reader ERT family exercises Emacs behavior and service handling.  The
+native suite runs the Rust tests; the renderer suite checks JavaScript syntax
+and behavior.  See [[file:development.org][the development guide]] for the full repository gate and
+static Lisp check.  Batch checks do not verify that PDF images or native EPUB
+surfaces display and respond correctly.
 
-A real PDF search check finds case-sensitive =SLIME= at offsets =0..4= in the
-reference-card fixture.  A case-insensitive =compile= query returns two bounded
-results, resumes at cursor =1485= without duplication, and returns the final
-match before reporting =done=.
-
-A real outline smoke check opens =pdfium-render/test/test-toc.pdf= through the
-pinned PDFium build.  It returns 101 entries in preorder, preserves depths zero
-through three, maps destinations across all seven pages, and reports that the
-result was not truncated before closing the document and helper cleanly.
-
-A generated two-page link smoke fixture contains one same-document link and
-one URI link on its first page.  The helper returns both tagged actions and no
-links for the second page.  The public =links-test.pdf= fixture independently
-returns its HTTPS action and label before the document and helper close
-cleanly.
-
-A generated encrypted PDF smoke fixture rejects both a missing password and
-an incorrect password with =pdf-password-error=.  Its correct password opens
-the document, returns the expected page geometry, and permits an orderly
-document close and helper shutdown.  The temporary credential and fixture are
-not retained.
-
-A real lifecycle smoke check opens a PDF as document 1, forcibly terminates
-the helper, waits for a distinct replacement session, and opens the fixture as
-document 1 again.  A request bound to the old session is rejected locally;
-the same page request succeeds in the new session before its document closes
-and the replacement helper shuts down cleanly.
-
-A Reader-level recovery smoke check opens the public five-page fixture, moves
-the Emacs-side view to page 3 at manual scale 1.5, and forcibly terminates the
-helper.  The same Reader document reopens in a distinct session and completes a
-page 3 information request without changing its page, zoom, place-recording
-state, or saved places.  Its replacement native document then closes and
-releases the original service lease normally.
-
-A real background-prefetch smoke check opens the public five-page fixture and
-waits for render, text, and link tasks for pages 0 and 1 to drain in order.  It
-then replaces the working set with page 3 and confirms that all three
-in-memory caches shrink from two pages to that single page.  The native
-document closes and its service lease is released normally.
-
-A bounded-copy smoke check makes a backward selection across the first two
-pages of the same fixture.  One-page, three-character requests finish in six
-cursor batches and concatenate to the exact result of one comparison request,
-including the page separator.  The complete Reader path independently stores
-the resulting 17 characters in both the logical selection and kill ring.  The
-document and helper then close normally.
+For graphical checks, use the PDF and EPUB smoke commands in
+[[file:../native/yunge-reader/README.org][the native Reader guide]].
+It covers platform requirements.  The scripts launch graphical Emacs with
+real PDFium or WebView components and generate their own fixtures.

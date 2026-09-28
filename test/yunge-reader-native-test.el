@@ -58,9 +58,9 @@
    yunge-reader-native--transport 'fake-reader-process))
 
 (defun yunge-reader-native-test--pending-count ()
-  "Return the fake native transport's pending callback count."
+  "Return the fake native transport's pending task count."
   (hash-table-count
-   (yunge-reader-transport--session-callbacks
+   (yunge-reader-transport--session-pending-tasks
     yunge-reader-native--transport)))
 
 (ert-deftest yunge-reader-native-resolves-platform-pdfium-layouts ()
