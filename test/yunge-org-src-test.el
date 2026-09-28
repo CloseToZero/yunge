@@ -1,36 +1,39 @@
-;;; yunge-org-src-test.el --- Tests -*- lexical-binding: t; -*-
+;;; yunge-org-src-test.el --- Org source editing tests -*- lexical-binding: t; -*-
 ;; SPDX-FileCopyrightText: 2026 Chen Zhexuan
 ;; SPDX-License-Identifier: MIT
 
 (require 'yunge-test-helper)
 
-(defun yunge-org-src-test--load-config ()
-  "Load the Org source editing configuration."
+(ert-deftest yunge-org-source-edit-applies-or-discards-changes ()
   (yunge-test-enable-evil)
   (require 'yunge-org)
-  (require 'org-src))
-
-(ert-deftest yunge-org-configures-source-edit-lifecycle ()
-  (yunge-org-src-test--load-config)
-  (should
-   (eq (lookup-key org-src-mode-map
-                   [remap evil-save-and-close])
-       #'org-edit-src-exit))
-  (should
-   (eq (lookup-key org-src-mode-map
-                   [remap evil-save-modified-and-close])
-       #'org-edit-src-exit))
-  (should
-   (eq (lookup-key org-src-mode-map [remap evil-quit])
-       #'org-edit-src-abort)))
-
-(ert-deftest yunge-org-source-edit-commands-resolve-through-evil ()
-  (yunge-org-src-test--load-config)
-  (with-temp-buffer
-    (org-mode)
-    (org-src-mode)
-    (evil-normal-state)
-    (should (eq (key-binding (kbd "ZZ")) #'org-edit-src-exit))
-    (should (eq (key-binding (kbd "ZQ")) #'org-edit-src-abort))))
+  (require 'org-src)
+  (dolist (finish '(t nil))
+    (let ((source (generate-new-buffer " *yunge-org-source*"))
+          edit)
+      (unwind-protect
+          (save-window-excursion
+            (switch-to-buffer source)
+            (insert "#+begin_src emacs-lisp\n(+ 1 2)\n#+end_src\n")
+            (org-mode)
+            (forward-line -2)
+            (call-interactively #'org-edit-special)
+            (setq edit (window-buffer (selected-window)))
+            (should-not (eq edit source))
+            (with-current-buffer edit
+              (goto-char (point-min))
+              (delete-region (point-min) (point-max))
+              (insert "(+ 2 3)\n")
+              (evil-normal-state)
+              (call-interactively (key-binding (kbd (if finish "ZZ" "ZQ")))))
+            (should (eq (window-buffer (selected-window)) source))
+            (should-not (buffer-live-p edit))
+            (with-current-buffer source
+              (should (equal (buffer-string)
+                             (concat "#+begin_src emacs-lisp\n"
+                                     (if finish "  (+ 2 3)\n" "(+ 1 2)\n")
+                                     "#+end_src\n")))))
+        (when (buffer-live-p edit) (kill-buffer edit))
+        (when (buffer-live-p source) (kill-buffer source))))))
 
 ;;; yunge-org-src-test.el ends here

@@ -10,9 +10,8 @@
 (declare-function dired-unmark-all-marks "dired")
 (declare-function dired-dwim-target-directory "dired-aux")
 (declare-function dired-dwim-target-recent "dired-aux")
+(declare-function evil-ex-execute "evil-ex" (string))
 (declare-function project-known-project-roots "project")
-(declare-function wdired-abort-changes "wdired")
-(declare-function wdired-finish-edit "wdired")
 (declare-function yunge-dired--files-to-reveal "yunge-dired")
 (declare-function yunge-dired--perform-file-drop
                   "yunge-dired" (window uris action))
@@ -359,32 +358,37 @@
           (kill-buffer buffer)))
       (delete-directory root t))))
 
-(ert-deftest yunge-wdired-integrates-with-evil-editing ()
+(ert-deftest yunge-wdired-applies-or-discards-renames ()
   (require 'yunge-dired)
   (yunge-test-enable-evil)
-  (require 'which-key)
-  (let* ((directory (make-temp-file "yunge-wdired-" t))
-         (buffer (dired-noselect directory)))
-    (unwind-protect
-        (with-current-buffer buffer
-          (call-interactively (key-binding (kbd "i")))
-          (yunge-test-evil-keys
-           'normal
-           '(("i" . evil-insert)
-             ("ZQ" . wdired-abort-changes)
-             ("ZZ" . wdired-finish-edit)))
-          (should
-           (eq (command-remapping #'evil-save-and-close)
-               #'wdired-finish-edit))
-          (should
-           (eq (command-remapping #'evil-save-modified-and-close)
-               #'wdired-finish-edit))
-          (should
-           (eq (command-remapping #'evil-quit)
-               #'wdired-abort-changes))
-          (wdired-abort-changes))
-      (when (buffer-live-p buffer)
-        (kill-buffer buffer))
-      (delete-directory directory t))))
+  (dolist (finish '(t nil))
+    (let* ((directory (make-temp-file "yunge-wdired-" t))
+           (original (expand-file-name "old.txt" directory))
+           (renamed (expand-file-name "new.txt" directory))
+           buffer)
+      (unwind-protect
+          (save-window-excursion
+            (with-temp-file original (insert "file contents\n"))
+            (setq buffer (dired-noselect directory))
+            (switch-to-buffer buffer)
+            (dired-goto-file original)
+            (call-interactively (key-binding (kbd "i")))
+            (should (eq major-mode 'wdired-mode))
+            (beginning-of-line)
+            (search-forward "old.txt" (line-end-position))
+            (replace-match "new.txt")
+            (evil-normal-state)
+            (if finish
+                (call-interactively (key-binding (kbd "ZZ")))
+              (evil-ex-execute "q"))
+            (should (eq major-mode 'dired-mode))
+            (should (eq (window-buffer (selected-window)) buffer))
+            (should (file-exists-p (if finish renamed original)))
+            (should-not (file-exists-p (if finish original renamed)))
+            (with-temp-buffer
+              (insert-file-contents (if finish renamed original))
+              (should (equal (buffer-string) "file contents\n"))))
+        (when (buffer-live-p buffer) (kill-buffer buffer))
+        (delete-directory directory t)))))
 
 ;;; yunge-dired-test.el ends here

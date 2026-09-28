@@ -333,10 +333,6 @@ Otherwise, ignore marks and reveal only the file at point."
     ("x" dired-do-flagged-delete "delete flagged files")
     ("y" ,yunge-dired-copy-map "copy")))
 
-(defconst yunge-wdired-normal-bindings
-  '(("ZQ" wdired-abort-changes "discard changes")
-    ("ZZ" wdired-finish-edit "apply changes")))
-
 (defun yunge-dired--setup-keys ()
   "Set up Evil bindings for Dired."
   (yunge-key-evil-define '(normal visual) dired-mode-map
@@ -346,8 +342,6 @@ Otherwise, ignore marks and reveal only the file at point."
 
 (defun yunge-dired--setup-wdired-keys ()
   "Set up Evil bindings for Wdired."
-  (yunge-key-evil-define 'normal wdired-mode-map
-                         yunge-wdired-normal-bindings)
   (define-key wdired-mode-map [remap evil-save-and-close]
               #'wdired-finish-edit)
   (define-key wdired-mode-map [remap evil-save-modified-and-close]

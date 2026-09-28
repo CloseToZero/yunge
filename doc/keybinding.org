@@ -108,6 +108,16 @@ In Org source edit buffers, Wdired, and Magit commit messages:
 - ~ZZ~, ~:wq~, and ~:x~ finish editing.
 - ~ZQ~ and ~:q~ cancel editing.
 
+For an Org source block, ~C-c '~ opens a separate buffer in the block's
+language mode.  Finishing writes the edited text back to the Org buffer;
+save that buffer to write the file.  ~C-x C-s~ in the source editor writes
+back and saves without leaving.  Canceling discards edits made since the
+last save, so it cannot undo an earlier save.
+
+In Dired, ~i~ makes the file names editable.  Finishing applies the renames
+to the files; canceling restores the listing without renaming them.  Both
+actions return to Dired.
+
 Grep, Occur, and Xref result editors update the source buffers as you type.
 Use ~ZZ~, ~:wq~, ~:x~, or ~C-c C-c~ to save the files edited through the
 results and return to the result view.  This saves each affected buffer in
