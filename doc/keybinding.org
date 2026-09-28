@@ -225,6 +225,10 @@ theme.  These commands keep an already-fullscreen frame fullscreen.  Use
 ~SPC t i q~ to leave fullscreen and restore the theme active before entry.
 Use ~SPC t t~ to open a terminal in the current directory.  Under the
 project map, ~SPC p t~ opens a terminal at the current project root.
+
+Git submodules are independent projects.  When you work inside a submodule,
+project commands and project-relative paths use that submodule's root.
+
 Use ~SPC l e~ to enable Eglot for the current language in the current
 project, and ~SPC l d~ to disable it.
 
