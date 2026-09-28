@@ -53,6 +53,11 @@ contents. Read those paths from disk when processing the batch, and remove
 entries for paths that no longer exist. Emacs rename and delete operations
 submit their affected paths together as well.
 
+Full scans and native event batches require every configured root to exist.
+Check roots before resolving event paths: =file-in-directory-p= returns nil
+for a missing directory, which would silently discard its events. A missing
+root stops the batch with a warning and leaves the index unchanged.
+
 Atomicity covers one batch. Separate saves can still expose a temporary
 duplicate ID, for example when a destination is saved before the source of
 a moved node. After correcting the saved files, run =fangcun-db-sync= to

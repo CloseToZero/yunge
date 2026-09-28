@@ -610,14 +610,16 @@ directory or any notes below it."
       (error "Native Fangcun scan returned no ready message"))
     (nreverse states)))
 
-(defun fangcun--scan-file-states (yiyus)
-  "Return the current Org file states below YIYUS."
-  ;; Validate every root before a missing root could be mistaken for an empty
-  ;; root and cause its indexed files to be removed.
+(defun fangcun--validate-yiyu-roots (yiyus)
+  "Signal a user error if any root in YIYUS is missing."
   (dolist (yiyu yiyus)
     (unless (file-directory-p (fangcun-yiyu-root yiyu))
       (user-error "Fangcun yiyu does not exist: %s"
-                  (fangcun-yiyu-root yiyu))))
+                  (fangcun-yiyu-root yiyu)))))
+
+(defun fangcun--scan-file-states (yiyus)
+  "Return the current Org file states below YIYUS."
+  (fangcun--validate-yiyu-roots yiyus)
   (if (and yiyus (fangcun--native-helper-available-p))
       (condition-case error-data
           (fangcun--native-scan-file-states yiyus)
@@ -1326,6 +1328,7 @@ When NO-MESSAGE is non-nil, do not report the indexed counts."
       (condition-case error-data
           (if full-sync
               (fangcun--sync-yiyus fangcun--session-yiyus t)
+            (fangcun--validate-yiyu-roots fangcun--session-yiyus)
             (fangcun--reconcile-files files))
         (error
          (display-warning

@@ -124,6 +124,11 @@ When moving a node between files, keep its =ID= and save both files, then run
 again. A failed synchronization or file-event batch keeps the previous index;
 queries may still show the old locations until synchronization succeeds.
 
+If a note root becomes unavailable, for example after disconnecting a drive,
+full synchronization and native file-event updates stop and report the missing
+directory. The previous index stays available. Restore the directory at its
+configured path, then run =M-x fangcun-db-sync= to catch up with saved changes.
+
 The helper may build asynchronously through Cargo; diagnostics appear in
 =*Fangcun Helper Build*=. =M-x fangcun-native-build= rebuilds it after changing
 its Rust sources. Its command-line protocol is documented in the

@@ -1006,6 +1006,37 @@
         (save-buffer))
       (should-not (file-exists-p fangcun-database-file)))))
 
+(ert-deftest fangcun-native-events-preserve-index-while-a-root-is-unavailable ()
+  (fangcun-test-with-notes
+    (fangcun-db-sync)
+    (let ((unavailable (expand-file-name "work-unavailable" root)))
+      (rename-file work-root unavailable)
+      (fangcun-test--write-file
+       personal-file
+       (concat ":PROPERTIES:\n:ID: personal-file\n:END:\n"
+               "#+title: Updated personal notes\n"))
+      (fangcun--queue-native-files (list personal-file work-file))
+      (cancel-timer fangcun--native-event-timer)
+      (let (warning)
+        (cl-letf (((symbol-function 'display-warning)
+                   (lambda (_type message &rest _arguments)
+                     (setq warning message))))
+          (fangcun--process-native-events))
+        (should (fangcun-node-from-id "work-file"))
+        (should (equal (fangcun-node-title
+                        (fangcun-node-from-id "personal-file"))
+                       "Personal Notes"))
+        (should (string-match-p (regexp-quote work-root) warning)))
+      ;; Restore the root, then remove a note while its directory is available.
+      (rename-file unavailable (directory-file-name work-root))
+      (let ((fangcun--session-active-p nil))
+        (delete-file work-file))
+      (fangcun-db-sync)
+      (should-not (fangcun-node-from-id "work-file"))
+      (should (equal (fangcun-node-title
+                      (fangcun-node-from-id "personal-file"))
+                     "Updated personal notes")))))
+
 (ert-deftest fangcun-native-events-move-ids-between-existing-files ()
   (fangcun-test-with-notes
     (fangcun-test--write-file
