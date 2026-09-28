@@ -35,6 +35,9 @@
           (fangcun--session-yiyus nil)
           (fangcun--native-build-process nil)
           (fangcun--native-watch-process nil)
+          (fangcun--native-watch-yiyus nil)
+          (fangcun--native-restart-count 0)
+          (fangcun--native-warning-shown-p nil)
           (fangcun--native-event-timer nil)
           (fangcun--native-pending-files
            (make-hash-table :test #'equal))
@@ -65,6 +68,7 @@
              ":ID: work-file\n"
              ":END:\n"))
            ,@body)
+       (fangcun--stop-session)
        (fangcun-test--kill-buffers-below root)
        (delete-directory root t))))
 

@@ -784,6 +784,68 @@
          (fangcun-node-from-id "personal-file"))
         "Renamed")))))
 
+(ert-deftest fangcun-file-update-applies-changed-roots ()
+  (fangcun-test-with-notes
+    (fangcun-db-sync)
+    (setq fangcun-yiyus
+          `((personal :name "Renamed" :root ,personal-root)))
+    (fangcun-db-update-file personal-file t)
+    (should-not (fangcun-node-from-id "work-file"))
+    (should (equal (fangcun-node-yiyu-name
+                    (fangcun-node-from-id "personal-file"))
+                   "Renamed"))))
+
+(ert-deftest fangcun-configuration-change-discards-old-monitor-events ()
+  (fangcun-test-with-notes
+    (fangcun-db-sync)
+    (let ((monitor (make-pipe-process
+                    :name "fangcun-test-monitor" :noquery t
+                    :sentinel #'fangcun--native-watch-sentinel)))
+      (setq fangcun--native-watch-process monitor)
+      (fangcun--native-watch-filter
+       monitor
+       (concat (json-serialize
+                `((kind . "ready")
+                  (build-id . ,(fangcun--native-helper-build-id))))
+               "\n{\"kind\":\"rescan\"}"))
+      (cl-letf (((symbol-function 'customize-save-variable)
+                 (lambda (_symbol value &optional _comment)
+                   (setq fangcun-yiyus value))))
+        (fangcun-yiyu-remove 'work))
+      (should-not (process-live-p monitor))
+      (fangcun--native-watch-filter monitor "\n"))
+    (fangcun-test--write-file
+     personal-file
+     (concat ":PROPERTIES:\n:ID: personal-file\n:END:\n"
+             "#+title: Waiting for its own event\n"))
+    (let ((new-file (expand-file-name "new.org" personal-root)))
+      (fangcun-test--write-file
+       new-file ":PROPERTIES:\n:ID: new-file\n:END:\n")
+      (fangcun--queue-native-files (list new-file))
+      (cancel-timer fangcun--native-event-timer)
+      (fangcun--process-native-events)
+      (should (fangcun-node-from-id "new-file"))
+      (should (equal (fangcun-node-title
+                      (fangcun-node-from-id "personal-file"))
+                     "Personal Notes"))
+      (should-not (fangcun-node-from-id "work-file")))))
+
+(ert-deftest fangcun-empty-configuration-stops-automatic-updates ()
+  (fangcun-test-with-notes
+    (fangcun-db-sync)
+    (setq fangcun-yiyus nil)
+    (should-error (fangcun-db-sync) :type 'user-error)
+    (fangcun-test--write-file
+     personal-file
+     (concat ":PROPERTIES:\n:ID: personal-file\n:END:\n"
+             "#+title: No longer monitored\n"))
+    (fangcun--queue-native-files (list personal-file))
+    (cancel-timer fangcun--native-event-timer)
+    (fangcun--process-native-events)
+    (should (equal (fangcun-node-title
+                    (fangcun-node-from-id "personal-file"))
+                   "Personal Notes"))))
+
 (ert-deftest fangcun-updates-one-file-and-its-outgoing-links ()
   (fangcun-test-with-notes
     (fangcun-test--write-file
@@ -1134,53 +1196,26 @@
         (should (equal (fangcun-node-title node)
                        "Renamed personal notes"))))))
 
-(ert-deftest fangcun-native-monitor-output-belongs-to-its-process ()
-  (let ((fangcun--native-watch-process 'current-monitor)
-        (properties (make-hash-table :test #'equal))
-        handled)
-    (cl-letf (((symbol-function 'process-get)
-               (lambda (process property)
-                 (gethash (cons process property) properties)))
-              ((symbol-function 'process-put)
-               (lambda (process property value)
-                 (puthash (cons process property) value properties)))
-              ((symbol-function 'fangcun--handle-native-message)
-               (lambda (process line)
-                 (push (cons process line) handled))))
-      (fangcun--native-watch-filter 'current-monitor "partial")
-      (setq fangcun--native-watch-process 'new-monitor)
-      (fangcun--native-watch-filter 'current-monitor " stale\n")
-      (fangcun--native-watch-filter 'new-monitor "fresh\n"))
-    (should
-     (equal
-      (gethash (cons 'current-monitor 'fangcun-output) properties)
-      "partial"))
-    (should (equal handled '((new-monitor . "fresh"))))))
-
-(ert-deftest fangcun-first-use-synchronizes-once ()
+(ert-deftest fangcun-session-keeps-indexed-content-until-an-update ()
   (fangcun-test-with-notes
     (fangcun-db-sync)
-    (setq fangcun--session-active-p nil)
-    (with-temp-buffer
-      (insert-file-contents personal-file)
-      (goto-char (point-min))
-      (re-search-forward "A theorem")
-      (replace-match "Changed between sessions")
-      (write-region nil nil personal-file nil 'silent))
-    (let ((sync-function (symbol-function 'fangcun--sync-yiyus))
-          (sync-calls 0))
-      (cl-letf (((symbol-function 'fangcun--sync-yiyus)
-                 (lambda (yiyus no-message)
-                   (cl-incf sync-calls)
-                   (funcall sync-function yiyus no-message))))
-        (fangcun--ensure-session)
-        (fangcun--ensure-session))
-      (should (= sync-calls 1)))
-    (should
-     (equal
-      (fangcun-node-title
-       (fangcun-test--node "theorem" (fangcun-node-list)))
-      "Changed between sessions"))))
+    (fangcun--stop-session)
+    (fangcun-test--write-file
+     personal-file
+     (concat ":PROPERTIES:\n:ID: personal-file\n:END:\n"
+             "#+title: Changed between sessions\n"))
+    (fangcun--ensure-session)
+    (should (equal (fangcun-node-title
+                    (fangcun-node-from-id "personal-file"))
+                   "Changed between sessions"))
+    (fangcun-test--write-file
+     personal-file
+     (concat ":PROPERTIES:\n:ID: personal-file\n:END:\n"
+             "#+title: External edit awaiting synchronization\n"))
+    (fangcun--ensure-session)
+    (should (equal (fangcun-node-title
+                    (fangcun-node-from-id "personal-file"))
+                   "Changed between sessions"))))
 
 (ert-deftest fangcun-save-hook-updates-managed-files-silently ()
   (fangcun-test-with-notes

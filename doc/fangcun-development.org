@@ -63,6 +63,24 @@ duplicate ID, for example when a destination is saved before the source of
 a moved node. After correcting the saved files, run =fangcun-db-sync= to
 reconcile the whole index. Automatic failures warn without retrying in a loop.
 
+* Synchronization sessions
+
+A session owns a synchronized root configuration, helper processes, and queued
+file events. Commands prepare the session before using the index; changing a
+root's ID, name, or path requires synchronization with the new configuration.
+Database queries such as =fangcun-node-list= read the stored index directly.
+
+=fangcun--stop-session= ends that ownership: stop helper processes, cancel
+the idle timer, discard pending events, and reset monitor recovery state.
+Changing roots or rebuilding an active session stops it before scanning.
+Only a successful synchronization activates the new session. If it fails,
+the previous database stays available without continuing its old monitoring.
+
+Detach a process before terminating it so its callbacks cannot restart it or
+submit events. Stopping only the monitor for a restart or helper rebuild keeps
+the session active. A scan may itself start a helper build, so session cleanup
+must precede the scan rather than canceling that new build afterward.
+
 * Verification
 
 Run the Fangcun Lisp checks from the repository root:

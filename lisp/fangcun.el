@@ -91,7 +91,7 @@ When the helper is unavailable, synchronization falls back to Emacs."
   "Fangcun native helper is outdated")
 
 (defvar fangcun--session-active-p nil
-  "Whether this Emacs session has synchronized Fangcun once.")
+  "Whether synchronization is active for `fangcun--session-yiyus'.")
 
 (defvar fangcun--session-yiyus nil
   "Normalized yiyus used by the active Fangcun session.")
@@ -106,7 +106,7 @@ When the helper is unavailable, synchronization falls back to Emacs."
   "Signature of yiyus watched by the native monitor.")
 
 (defvar fangcun--native-restart-count 0
-  "Number of native monitor restarts attempted this session.")
+  "Number of native monitor restarts attempted in the current Fangcun session.")
 
 (defvar fangcun--native-event-timer nil
   "Timer for pending native file events.")
@@ -119,7 +119,7 @@ When the helper is unavailable, synchronization falls back to Emacs."
   "Whether native events require a complete incremental sync.")
 
 (defvar fangcun--native-warning-shown-p nil
-  "Whether helper degradation was already reported this session.")
+  "Whether helper degradation was reported in the current Fangcun session.")
 
 (defvar-keymap fangcun-backlinks-mode-map
   :parent special-mode-map
@@ -201,11 +201,10 @@ When the helper is unavailable, synchronization falls back to Emacs."
 (defun fangcun--apply-yiyu-configuration ()
   "Synchronize Fangcun after `fangcun-yiyus' changes."
   (let ((yiyus (fangcun--configured-yiyus)))
-    (fangcun--shutdown-native-helper)
     (if yiyus
         (prog1 (fangcun--sync-yiyus yiyus t)
           (fangcun--activate-session yiyus))
-      (setq fangcun--session-yiyus nil)
+      (fangcun--stop-session)
       (fangcun--rebuild-database nil nil t))))
 
 (defun fangcun--read-new-yiyu ()
@@ -896,7 +895,10 @@ When NO-MESSAGE is non-nil, do not report the changed file counts."
   (interactive)
   (let ((yiyus (fangcun--configured-yiyus)))
     (unless yiyus
+      (fangcun--stop-session)
       (user-error "Configure `fangcun-yiyus' before syncing"))
+    (when fangcun--session-active-p
+      (fangcun--stop-session))
     (prog1
         (fangcun--rebuild-database
          yiyus (fangcun--scan-file-states yiyus))
@@ -904,6 +906,9 @@ When NO-MESSAGE is non-nil, do not report the changed file counts."
 
 (defun fangcun--sync-yiyus (yiyus no-message)
   "Synchronize YIYUS, suppressing results when NO-MESSAGE is non-nil."
+  (when (and fangcun--session-active-p
+             (not (equal yiyus fangcun--session-yiyus)))
+    (fangcun--stop-session))
   (let ((states (fangcun--scan-file-states yiyus)))
     (if (and
          (file-exists-p fangcun-database-file)
@@ -920,6 +925,7 @@ When NO-MESSAGE is non-nil, do not report synchronization results."
   (interactive)
   (let ((yiyus (fangcun--configured-yiyus)))
     (unless yiyus
+      (fangcun--stop-session)
       (user-error "Configure `fangcun-yiyus' before syncing"))
     (prog1 (fangcun--sync-yiyus yiyus no-message)
       (fangcun--activate-session yiyus))))
@@ -943,12 +949,11 @@ When NO-MESSAGE is non-nil, do not report synchronization results."
 
 (defun fangcun--stop-native-watch ()
   "Stop the Fangcun native monitor intentionally."
-  (when (process-live-p fangcun--native-watch-process)
-    (process-put fangcun--native-watch-process
-                 'fangcun-intentional-stop t)
-    (delete-process fangcun--native-watch-process))
-  (setq fangcun--native-watch-process nil
-        fangcun--native-watch-yiyus nil))
+  (let ((process fangcun--native-watch-process))
+    (setq fangcun--native-watch-process nil
+          fangcun--native-watch-yiyus nil)
+    (when (process-live-p process)
+      (delete-process process))))
 
 (defun fangcun--schedule-native-events ()
   "Schedule processing of queued native monitor events."
@@ -1038,16 +1043,15 @@ When NO-MESSAGE is non-nil, do not report synchronization results."
   (when (and (memq (process-status process) '(exit signal failed))
              (eq process fangcun--native-watch-process))
     (setq fangcun--native-watch-process nil)
-    (unless (process-get process 'fangcun-intentional-stop)
-      (if (and fangcun--session-active-p
-               (< fangcun--native-restart-count 1))
-          (progn
-            (cl-incf fangcun--native-restart-count)
-            (fangcun--start-native-watch fangcun--session-yiyus))
-        (fangcun--native-warning
-         (concat
-          "Fangcun native monitoring stopped; external changes require "
-          "`fangcun-db-sync'"))))))
+    (if (and fangcun--session-active-p
+             (< fangcun--native-restart-count 1))
+        (progn
+          (cl-incf fangcun--native-restart-count)
+          (fangcun--start-native-watch fangcun--session-yiyus))
+      (fangcun--native-warning
+       (concat
+        "Fangcun native monitoring stopped; external changes require "
+        "`fangcun-db-sync'")))))
 
 (defun fangcun--start-native-watch (yiyus)
   "Start recursively monitoring YIYUS."
@@ -1145,7 +1149,7 @@ When NO-MESSAGE is non-nil, do not report synchronization results."
   (fangcun--build-native-helper))
 
 (defun fangcun--install-operation-advice ()
-  "Install exact file operation synchronization once."
+  "Install file-operation updates once."
   ;; These operations are infrequent and give immediate database state.  Keep
   ;; them active with the monitor; its duplicate event will compare unchanged.
   (unless (advice-member-p #'fangcun--around-rename-file
@@ -1166,27 +1170,34 @@ When NO-MESSAGE is non-nil, do not report synchronization results."
   (fangcun--install-operation-advice)
   (fangcun--ensure-native-helper yiyus))
 
-(defun fangcun--shutdown-native-helper ()
-  "Stop Fangcun helper processes and pending work before Emacs exits."
-  (setq fangcun--session-active-p nil)
+(defun fangcun--stop-session ()
+  "Stop synchronization and discard work belonging to the current session."
+  (setq fangcun--session-active-p nil
+        fangcun--session-yiyus nil)
   (fangcun--stop-native-watch)
   (when (timerp fangcun--native-event-timer)
     (cancel-timer fangcun--native-event-timer))
-  (setq fangcun--native-event-timer nil)
-  (when (process-live-p fangcun--native-build-process)
-    (set-process-sentinel fangcun--native-build-process #'ignore)
-    (delete-process fangcun--native-build-process))
-  (setq fangcun--native-build-process nil))
+  (setq fangcun--native-event-timer nil
+        fangcun--native-pending-full-sync-p nil
+        fangcun--native-restart-count 0
+        fangcun--native-warning-shown-p nil)
+  (clrhash fangcun--native-pending-files)
+  (let ((process fangcun--native-build-process))
+    (setq fangcun--native-build-process nil)
+    (when (process-live-p process)
+      (delete-process process))))
 
-(add-hook 'kill-emacs-hook #'fangcun--shutdown-native-helper)
+(add-hook 'kill-emacs-hook #'fangcun--stop-session)
 
 (defun fangcun--ensure-session (&optional yiyus)
-  "Synchronize Fangcun on its first use in this Emacs session.
+  "Synchronize Fangcun on first use or after its configured roots change.
 Return the normalized configured YIYUS, obtaining them when omitted."
   (setq yiyus (or yiyus (fangcun--configured-yiyus)))
   (unless yiyus
+    (fangcun--stop-session)
     (user-error "Configure `fangcun-yiyus' before using Fangcun"))
   (unless (and fangcun--session-active-p
+               (equal yiyus fangcun--session-yiyus)
                (file-exists-p fangcun-database-file))
     (fangcun--sync-yiyus yiyus t)
     (fangcun--activate-session yiyus))

@@ -20,6 +20,12 @@ Custom file. =M-x fangcun-yiyu-remove= removes a root from the configuration and
 index after confirmation; it does not delete notes. Both commands synchronize
 the index after the change.
 
+After editing =fangcun-yiyus= yourself, evaluate the setting and run
+=M-x fangcun-db-sync= to apply it immediately. The next node search also
+picks up changed settings. If synchronization fails, correct the
+reported problem and synchronize again; monitoring the previous roots stops
+when the configuration changes are applied.
+
 * Create and save nodes
 
 =M-x fangcun-file-node-create= prepares a new Org file with a file-level =ID=.
