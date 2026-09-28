@@ -1,8 +1,6 @@
 #+title: Yunge Reader
-
-Yunge Reader opens PDF and EPUB documents in Emacs 31 or newer.  Reading
-keys, saved places, outlines, search, and additional views share one
-interface; page movement and layout controls follow the document format.
+# SPDX-FileCopyrightText: 2026 Chen Zhexuan
+# SPDX-License-Identifier: MIT
 
 * Start reading
 
@@ -133,20 +131,25 @@ commands are =yunge-reader-epub-increase-line-height=,
 
 ** Search, selection, and links
 
-Search is a literal, asynchronous document search.  =/= starts a query, and
-=n/N= move among its results.  Reader searches in bounded batches, so a
-large document does not block the command loop.  If the next result is still
-loading, the latest repeat direction wins.  A manual reading move detaches
-that pending jump; the next =n/N= searches from the new stable position.
-After one complete wrap, the status changes from =Match N+= to
-=Match N/TOTAL= and the discovered cycle can be navigated without another
-scan.  Hiding a highlight does not clear its query.
+Press =/= and enter the text to find. Search matches literal text, not a
+regular expression. It ignores case unless the query contains an uppercase
+letter. Use =n/N= to visit the next or previous match, wrapping at the end
+or beginning of the book.
 
-Selection and search highlights are separate.  =y= copies only a logical text
-selection and publishes it to the kill ring after all text batches succeed.
-A changed or cleared selection makes a late copy result inert.  PDF supports
-cross-page drag selection.  EPUB uses the native text surface for selection;
-its copy command captures the current range before requesting exact text.
+You can keep reading while a search is running. If you change direction with
+=n/N= before a result arrives, Reader follows the latest direction. Scrolling
+or paging cancels the pending jump; the next =n/N= searches from your new
+location. =Match N+= means more results may be found; =Match N/TOTAL= means
+Reader has searched the whole book.
+
+To copy a passage, select its text and press =y=. In a PDF, drag across the
+text; the selection can span pages. In an EPUB, select text on the native
+page. The copied text goes to the Emacs kill ring. A highlighted search
+match alone is not a selection. If copying is still in progress, changing
+or clearing the selection cancels that copy.
+
+=C-g= or =ESC= dismisses the selection and search highlight. The query stays
+available for =n/N=; use =M-x yunge-reader-clear-search= to discard it too.
 
 PDF =RET= lists links visible in the selected Reader window; Ctrl-Mouse-1
 follows a link at the pointer.  EPUB internal links navigate inside the book.
@@ -156,18 +159,21 @@ external link does not change the saved reading place.
 
 ** Views, places, marks, and history
 
-Multiple Reader buffers can share one open document.  The first is =Primary=
-and alone updates the persistent reading place during ordinary navigation.
-=yunge-reader-new-view= creates an =Additional= buffer at the current stable
-location and zoom.  It replaces the active window; display the source buffer
-in another window first if both should remain visible.  Additional views
-can move and zoom independently.  =yunge-reader-make-primary= transfers
-persistent-place ownership after saving the current stable location.
+To compare two parts of a book:
 
-The place saves a stable document position and zoom state, not an Emacs buffer
-point.  PDF stores a page and unscaled viewport coordinates.  Reflowable EPUB
-stores a spine href and CFI; fixed EPUB also retains its unscaled viewport.
-Opening restores the last successful primary place.  A failed open or restore
+1. Open the book and press =SPC w v= to split the window.
+2. In the new window, press =SPC m v= to create an additional view at the
+   same location and zoom.
+3. Navigate to the passage you want to compare. Each view can move and zoom
+   independently.
+
+The first view is =Primary= and updates the place restored when you reopen
+the book. An =Additional= view lets you consult another passage without
+changing that saved place. Use =SPC m p= in an additional view to make it
+primary and save its current location. Without Evil, use
+=M-x yunge-reader-new-view= and =M-x yunge-reader-make-primary=.
+
+Reopening restores the last saved location and zoom. A failed open or restore
 does not replace an older saved place with a temporary starting location.
 When the Primary buffer closes, its latest stable place is saved and the most
 recently active surviving view becomes Primary.  Promotion alone does not
@@ -175,9 +181,8 @@ overwrite the saved place.
 
 Lowercase marks are shared by all views of a document.  A mark saves only a
 stable position, so visiting it keeps the current view's zoom and layout.
-Document state also holds appearance choices.  It is saved through =savehist=
-using a bounded content fingerprint and known path aliases, so a move can
-retain state without relying only on the old path.  Run
+Marks and appearance choices are saved alongside the reading place. Reader
+can recognize a moved book by its contents and recover that state. Run
 =M-x yunge-reader-cleanup-missing-document-state= to remove records only
 when all known aliases have disappeared; Reader never does this on a timer.
 
@@ -187,16 +192,12 @@ With Evil, =C-o/C-i= traverse window-local semantic jump history.  The
 Search results, outline choices, marks, =gg/G=, and PDF =gp= add jumps;
 ordinary scrolling, wheel movement, and =J/K= paging do not.  A jump
 remembers its own stable position and zoom, independent of the book's newer
-saved place.  If its buffer was killed, Reader opens it before replacing the jump window; a
-failed restore or a window changed during the wait leaves that window alone.
+saved place. If its buffer was killed, Reader reopens it in the jump window.
+If opening fails, or you use that window for something else while waiting,
+Reader leaves the window alone.
 
-One Reader buffer may appear in several windows or frames.  Each presentation
-has its own observed position and, for EPUB, its own native child surface.
-Selecting a presentation adopts its observed location into the active view.
-EPUB surfaces stay attached to their native frame; a new frame gets a new
-surface and restores the logical view's location.  Removing a window releases
-its presentation, while killing the buffer detaches the logical view.  The
-last view releases the shared document.
+Closing a window leaves its Reader buffer available through =SPC b b=.
+Use =SPC b q= to close a view. Closing the last view releases the open document.
 
 ** Appearance, zoom, and layout
 
@@ -249,115 +250,5 @@ service session.  An unexpected loss can reopen an unchanged document on the
 next request; explicit stop ends pending work and does not start recovery
 until a new operation asks for it.  Stopping the helper also interrupts EPUB
 publication requests; =yunge-reader-webview-stop= controls the separate
-native-surface service.  The native guide describes artifact verification,
-protocol messages, and graphical checks.
-
-* Extending Reader
-
-** Driver, view, and location contracts
-
-=yunge-reader-register-driver= accepts a symbolic name, an absolute-file
-=:match= predicate, =:open=, and =:close= functions.  =:open= receives the
-file and a completion callback; it supplies a handle, a properties plist
-with =:layout= (=fixed= or =reflow=) and optional =:metadata=, and an error
-value.  It may complete immediately or later.  =:close= receives the shared
-document.  Concurrent views of the same canonical file share one open and
-release it only after the last view detaches.
-
-Optional =:attach= and =:detach= are a pair for buffer-specific setup and
-teardown.  Attach receives =(document initial-place)= in the Reader buffer;
-detach receives =document= there.  =:location= and =:restore= are another
-pair: location receives =(document window)= and returns a stable
-=yunge-reader-position=; restore receives =(document position window)= and
-returns non-nil once it accepts the target.  Its =unit= identifies a page or
-reflowable item, =offset= is a stable text offset or driver anchor, and
-=x/y= are optional unscaled coordinates.  A transient renderer range or
-native handle is not a persistent location.  A =:deferred= restore leaves
-the saved place intact until a stable-location event confirms it.
-
-Drivers may provide these capabilities:
-
-- =:outline= returns =yunge-reader-outline-data= with titled entries and
-  optional location actions.  =:outline-index= locates the nearest entry
-  for =(document window outline)=.
-- =:search= accepts a =yunge-reader-search-request= and returns a bounded
-  =yunge-reader-search-batch=.  Its continuation cursor is transient.
-- =:selection-text= accepts a =yunge-reader-selection-text-request= and
-  returns a =yunge-reader-selection-batch=.  The caller publishes copied
-  text only after every batch succeeds.
-
-The asynchronous capabilities receive =(document request complete)=; the
-outline request value is nil.  They call =complete= with a result or error
-once and may return a child task for the core to adopt.  They can finish
-synchronously, so callers must be ready for completion before the capability
-returns.
-
-A logical Reader view belongs to its buffer, while each displaying window
-owns a presentation.  A driver must keep any resource used by in-flight work
-alive until that work releases it.  Detaching one view must not close a
-resource still used by another.  EPUB's native surface has one owning frame
-for its lifetime; moving a logical view to another frame creates a separate
-presentation and restores its stable location.
-
-** Asynchronous tasks and transport
-
-Use a =yunge-reader-task= for work that can outlive its initiating call.  A
-completion receives =(value nil)= or =(nil error-data)=, where =error-data=
-is an Emacs error value.  It may run during the initiating call or later.
-Reader makes the task terminal before invoking completion, so reentrant
-finish or cancel attempts cannot notify twice.  A callback error becomes a
-warning and does not interrupt response routing.
-
-This standalone example finishes a task from a later Emacs timer event.
-Cancelling the returned task first makes the timer's finish inert.
-
-#+begin_src emacs-lisp
-(require 'yunge-reader-task)
-(let ((task (yunge-reader-task-create
-             'preview
-             (lambda (value error-data)
-               (message "Preview: %S %S" value error-data))
-             :timeout 5)))
-  (run-at-time 0.1 nil #'yunge-reader-task-finish
-               task 'completed "ready" nil)
-  task)
-#+end_src
-
-=yunge-reader-task-cancel= returns non-nil only for active work.  Its
-completion runs synchronously with =yunge-reader-task-cancelled=, and a late
-result cannot publish a second outcome.  Cancellation prevents a local
-result from taking effect; work already sent to a backend may continue.
-An owned child is cancelled with its parent, including one adopted after the
-parent finished.  If child cancellation signals, the parent still completes
-and Reader warns.  Keep backend resources alive until the backend releases
-them; task cancellation alone does not prove native work stopped.
-
-A positive timeout begins at task creation, including handshake wait.  It
-completes once with =yunge-reader-task-timed-out= and cancels the active
-child.  Custom cancel and timeout functions must make the task terminal and
-invoke completion synchronously.  A successful response or service failure
-also cancels the timer.
-
-Service requests use newline-delimited JSON.  A validated handshake releases
-queued work.  Each response belongs to one request ID and, when supplied,
-the same revision.  A wrong revision is a protocol error.  The first late
-response for cancelled or timed-out work is discarded; a duplicate remains
-invalid.  Losing a service session fails its pending tasks, and output from
-an older session cannot complete tasks in its replacement.  See the
-[[file:../native/yunge-reader/README.org][native Reader guide]] for wire-level messages and service ownership.
-
-* Verify Reader
-
-Run these checks from the repository root:
-
-#+begin_src sh
-emacs --batch -Q -L test -l yunge-test-runner -- --suite ert --module reader
-emacs --batch -Q -L test -l yunge-test-runner -- --suite native --module reader
-emacs --batch -Q -L test -l yunge-test-runner -- --suite renderer
-#+end_src
-
-The [[file:development.org][development guide]] gives the full repository gate and static Lisp
-check.  Batch checks cannot establish that graphical PDF pages or EPUB native
-surfaces display and respond correctly.  For graphical runs, use the PDF and
-EPUB smoke commands in the [[file:../native/yunge-reader/README.org][native Reader guide]].  The scripts generate
-their own fixtures and use real PDFium and WebView components.
+native-surface service. For driver contracts and development checks, see
+[[file:yunge-reader-development.org][Reader development]].

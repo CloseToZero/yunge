@@ -33,3 +33,4 @@ buffers, and ~SPC SPC~ to run a command by name. See the [[file:doc/usage.org][u
 
 - [[file:doc/development.org][Development and checks]]: prepare dependencies and run checks.
 - [[file:doc/keybinding-design.org][Keybinding design]]: choose keys and integrate modes consistently.
+- [[file:doc/yunge-reader-development.org][Reader development]]: implement drivers and asynchronous document operations.

@@ -499,7 +499,7 @@ Positive PIXELS moves forward through the continuous PDF roll."
   (when (and (window-live-p window)
              (eq (window-buffer window) (current-buffer))
              (> (yunge-reader-pdf--page-count) 0))
-    (yunge-reader--detach-search-navigation)
+    (yunge-reader-search-detach-navigation)
     (pcase-let ((`(,page . ,offset)
                  (yunge-reader-pdf--vertical-pan-target
                   window pixels)))
@@ -515,7 +515,7 @@ POSITION is a column number, `left', or `right'."
   (setq window (or window (selected-window)))
   (when (and (window-live-p window)
              (eq (window-buffer window) (current-buffer)))
-    (yunge-reader--detach-search-navigation)
+    (yunge-reader-search-detach-navigation)
     (yunge-reader-pdf--sync-current-page window)
     (let* ((maximum
             (yunge-reader-pdf--maximum-window-hscroll window))
@@ -680,13 +680,13 @@ WINDOW identifies the presentation which triggered this update."
              (eq (window-buffer window) (current-buffer)))
     (unless (or yunge-reader-pdf--programmatic-scroll
                 (not (yunge-reader--active-presentation-p window)))
-      (yunge-reader--detach-search-navigation))
+      (yunge-reader-search-detach-navigation))
     (yunge-reader-pdf--update-visible-pages window)))
 
 (defun yunge-reader-pdf--set-page (page)
   "Display zero-based PDF PAGE."
   (unless yunge-reader-pdf--programmatic-scroll
-    (yunge-reader--detach-search-navigation))
+    (yunge-reader-search-detach-navigation))
   (let ((count (yunge-reader-pdf--page-count)))
     (unless (> count 0)
       (user-error "This PDF has no pages"))

@@ -403,30 +403,46 @@
                   "new query"))
                ((symbol-function 'yunge-reader--current-position)
                 (lambda (&optional _window) origin))
-               ((symbol-function 'yunge-reader--request-search-batch)
+               ((symbol-function 'yunge-reader-search--request-batch)
                 #'ignore))
         (call-interactively #'yunge-reader-search))
       (should (equal yunge-reader-search-query "new query"))
-      (should (eq yunge-reader--search-direction 'forward))
-      (should (eq yunge-reader--search-origin origin))
+      (should (eq yunge-reader-search--direction 'forward))
+      (should (eq yunge-reader-search--origin origin))
       (should yunge-reader-search-highlight-visible))))
 
-(ert-deftest yunge-reader-validates-search-batch-completion-state ()
-  (let ((cursor (make-yunge-reader-search-cursor :value 'next)))
-    (should
-     (yunge-reader--search-batch-valid-p
-      (make-yunge-reader-search-batch :results nil :done t)))
-    (should
-     (yunge-reader--search-batch-valid-p
-      (make-yunge-reader-search-batch
-       :results nil :cursor cursor :done nil)))
-    (should-not
-     (yunge-reader--search-batch-valid-p
-      (make-yunge-reader-search-batch :results nil :done nil)))
-    (should-not
-     (yunge-reader--search-batch-valid-p
-      (make-yunge-reader-search-batch
-       :results nil :cursor cursor :done t)))))
+(ert-deftest yunge-reader-rejects-an-incomplete-search-batch-without-a-cursor ()
+  (with-temp-buffer
+    (yunge-reader-mode)
+    (let* ((yunge-reader-drivers nil)
+           completion warning
+           (match
+            (make-yunge-reader-search-result
+             :start (make-yunge-reader-position :unit 0 :offset 1)
+             :end (make-yunge-reader-position :unit 0 :offset 7)
+             :text "needle"))
+           (driver
+            (yunge-reader-register-driver
+             'invalid-search-test
+             :match #'ignore :open #'ignore :close #'ignore
+             :search (lambda (_document _request finish)
+                       (setq completion finish)))))
+      (setq yunge-reader-document
+            (make-yunge-reader-document
+             :file "search.pdf" :driver driver :handle 'handle
+             :layout 'fixed))
+      (cl-letf (((symbol-function 'yunge-reader--current-position) #'ignore)
+                ((symbol-function 'display-warning)
+                 (lambda (_type text &rest _arguments)
+                   (setq warning text))))
+        (yunge-reader-search "needle")
+        (funcall completion
+                 (make-yunge-reader-search-batch
+                  :results (list match) :done nil)
+                 nil))
+      (should-not yunge-reader-search-results)
+      (should-not yunge-reader-search-result)
+      (should (string-match-p "invalid search batch" warning)))))
 
 (ert-deftest yunge-reader-search-navigation-restores-hidden-highlight ()
   (with-temp-buffer
@@ -443,8 +459,8 @@
             yunge-reader-search-results (list first second)
             yunge-reader-search-result first
             yunge-reader-search-highlight-visible nil
-            yunge-reader--search-index 0
-            yunge-reader--search-direction 'forward)
+            yunge-reader-search--index 0
+            yunge-reader-search--direction 'forward)
       (yunge-reader-search-next)
       (should yunge-reader-search-highlight-visible)
       (should (eq yunge-reader-search-result second)))))
@@ -749,7 +765,7 @@
                    :file file :driver driver :layout 'fixed)
                   yunge-reader--place-recording-enabled t
                   yunge-reader-search-query "needle"
-                  yunge-reader--search-navigation-intent 'forward)
+                  yunge-reader-search--navigation-intent 'forward)
             (let ((item
                    (make-yunge-reader-outline-item
                     :title "Target"
@@ -765,8 +781,8 @@
                 (should
                  (yunge-reader--follow-outline-item item)))))
           (should (= (yunge-reader-position-unit current) 9))
-          (should yunge-reader--search-detached)
-          (should-not yunge-reader--search-navigation-intent)
+          (should yunge-reader-search--detached)
+          (should-not yunge-reader-search--navigation-intent)
           (should (eq yunge-reader-zoom-mode 'manual))
           (should (= yunge-reader-scale 2.0))
           (should
@@ -2925,7 +2941,7 @@
                    (lambda (window)
                      (should (eq window (selected-window)))
                      (push 'record events))))
-          (yunge-reader--set-search-index 0))
+          (yunge-reader-search--set-index 0))
         (should (equal (nreverse events) '(record visit)))))))
 
 (ert-deftest yunge-reader-search-loads-bounded-batches-on-demand ()
@@ -2968,7 +2984,7 @@
          (yunge-reader-search-request-case-sensitive (car requests)))
         (should
          (= (yunge-reader-search-request-unit-limit (car requests))
-            yunge-reader-search-page-limit))
+            yunge-reader-search-unit-limit))
         (funcall
          (pop completions)
          (make-yunge-reader-search-batch
@@ -3222,7 +3238,7 @@
                  (lambda (format-string &rest arguments)
                    (push (apply #'format-message format-string arguments)
                          messages))))
-        (yunge-reader--start-search-run 'backward origin)
+        (yunge-reader-search--start-run 'backward origin)
         (funcall
          (pop completions)
          (make-yunge-reader-search-batch
@@ -3604,7 +3620,7 @@
                  (lambda (&optional _window) current)))
         (let ((inhibit-message t))
           (yunge-reader-search "needle")
-          (yunge-reader--detach-search-navigation)
+          (yunge-reader-search-detach-navigation)
           (setq current
                 (make-yunge-reader-position :unit 9 :offset 7))
           (yunge-reader-search-next)))

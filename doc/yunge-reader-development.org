@@ -1,0 +1,162 @@
+#+title: Reader development
+# SPDX-FileCopyrightText: 2026 Chen Zhexuan
+# SPDX-License-Identifier: MIT
+
+* Ownership and dependencies
+
+An open document is a shared resource. Each Reader buffer attaches a logical
+view to it, and each window displaying that buffer owns a presentation.
+Closing one window must not release a document still used by another view.
+
+The core in =yunge-reader.el= owns document opening, view attachment, and
+release. Private registry entries and pending view requests stay there.
+=yunge-reader-model.el= defines the records exchanged with drivers: documents,
+positions, requests, results, selections, and outline actions. It does not
+load the core or manage live documents.
+
+=yunge-reader-search.el= owns a view's query, loaded results, continuation,
+and pending navigation. It uses the shared records and task API, and calls
+the core to request driver work and obtain the current reading position.
+The core loads the search module; the search module declares those core
+services without loading the core back. Document teardown and manual
+navigation use search operations rather than modifying its private state.
+
+Format drivers implement document operations and presentation. They must
+keep resources used by in-flight work alive until that work releases them.
+EPUB's native surface belongs to one frame for its lifetime. Moving a view
+to another frame creates a separate presentation and restores its location.
+
+* Driver callbacks
+
+=yunge-reader-register-driver= accepts a symbolic name, an absolute-file
+=:match= predicate, =:open=, and =:close= functions.  =:open= receives the
+file and a completion callback; it supplies a handle, a properties plist
+with =:layout= (=fixed= or =reflow=) and optional =:metadata=, and an error
+value.  It may complete immediately or later.  =:close= receives the shared
+document.  Concurrent views of the same canonical file share one open and
+release it only after the last view detaches.
+
+Optional =:attach= and =:detach= are a pair for buffer-specific setup and
+teardown.  Attach receives =(document initial-place)= in the Reader buffer;
+detach receives =document= there.  =:location= and =:restore= are another
+pair: location receives =(document window)= and returns a stable
+=yunge-reader-position=; restore receives =(document position window)= and
+returns non-nil once it accepts the target.  Its =unit= identifies a page or
+reflowable item, =offset= is a stable text offset or driver anchor, and
+=x/y= are optional unscaled coordinates.  A transient renderer range or
+native handle is not a persistent location.  A =:deferred= restore leaves
+the saved place intact until a stable-location event confirms it.
+
+Drivers may provide these capabilities:
+
+- =:outline= returns =yunge-reader-outline-data= with titled entries and
+  optional location actions.  =:outline-index= locates the nearest entry
+  for =(document window outline)=.
+- =:search= accepts a =yunge-reader-search-request= and returns a bounded
+  =yunge-reader-search-batch=.  Its continuation cursor is transient.
+- =:selection-text= accepts a =yunge-reader-selection-text-request= and
+  returns a =yunge-reader-selection-batch=.  The caller publishes copied
+  text only after every batch succeeds.
+
+The asynchronous capabilities receive =(document request complete)=; the
+outline request value is nil.  They call =complete= with a result or error
+once and may return a child task for the core to adopt.  They can finish
+synchronously, so callers must be ready for completion before the capability
+returns.
+
+* Locations and saved state
+
+A saved place includes a stable position and zoom state. PDF uses a page
+and unscaled viewport coordinates. Reflowable EPUB uses a spine href and CFI;
+fixed EPUB also keeps its unscaled viewport. Marks store a position alone,
+so following one retains the receiving view's zoom and layout.
+
+The primary view records the place during ordinary navigation. Additional
+views share document marks and appearance choices but do not replace that
+place. Each presentation reports its observed position; selecting it adopts
+that position into the active view. A failed open or deferred restore must
+not overwrite an older saved place with an interim location.
+
+=yunge-reader-state.el= stores document state through =savehist=. A bounded
+content fingerprint identifies the document, and known path aliases allow
+state to survive moves. Missing-file cleanup removes a record only when all
+its known aliases have disappeared.
+
+* Search sessions
+
+A search starts at a stable document position and requests bounded batches.
+The driver owns the opaque continuation cursor. It returns ordered results
+and either a continuation or a completed batch; a completed batch has no
+cursor. On wrapping, Reader recognizes repeated result endpoints to close
+the cycle. The completed cycle can then be navigated without another scan.
+
+Pending navigation belongs to the current query and direction. Replacing
+the query or clearing the search invalidates earlier completions before
+cancelling their tasks. Manual reading movement detaches a pending jump;
+the next search movement starts from the new stable location. Hiding a
+highlight keeps the query and results available.
+
+* Task completion and cancellation
+
+Use a =yunge-reader-task= for work that can outlive its initiating call.  A
+completion receives =(value nil)= or =(nil error-data)=, where =error-data=
+is an Emacs error value.  It may run during the initiating call or later.
+Reader makes the task terminal before invoking completion, so reentrant
+finish or cancel attempts cannot notify twice.  A callback error becomes a
+warning and does not interrupt response routing.
+
+This standalone example finishes a task from a later Emacs timer event.
+Cancelling the returned task first makes the timer's finish inert.
+
+#+begin_src emacs-lisp
+(require 'yunge-reader-task)
+(let ((task (yunge-reader-task-create
+             'preview
+             (lambda (value error-data)
+               (message "Preview: %S %S" value error-data))
+             :timeout 5)))
+  (run-at-time 0.1 nil #'yunge-reader-task-finish
+               task 'completed "ready" nil)
+  task)
+#+end_src
+
+=yunge-reader-task-cancel= returns non-nil only for active work.  Its
+completion runs synchronously with =yunge-reader-task-cancelled=, and a late
+result cannot publish a second outcome.  Cancellation prevents a local
+result from taking effect; work already sent to a backend may continue.
+An owned child is cancelled with its parent, including one adopted after the
+parent finished.  If child cancellation signals, the parent still completes
+and Reader warns.  Keep backend resources alive until the backend releases
+them; task cancellation alone does not prove native work stopped.
+
+A positive timeout begins at task creation, including handshake wait.  It
+completes once with =yunge-reader-task-timed-out= and cancels the active
+child.  Custom cancel and timeout functions must make the task terminal and
+invoke completion synchronously.  A successful response or service failure
+also cancels the timer.
+
+* Service transport
+
+Service requests use newline-delimited JSON.  A validated handshake releases
+queued work.  Each response belongs to one request ID and, when supplied,
+the same revision.  A wrong revision is a protocol error.  The first late
+response for cancelled or timed-out work is discarded; a duplicate remains
+invalid.  Losing a service session fails its pending tasks, and output from
+an older session cannot complete tasks in its replacement.  See the
+[[file:../native/yunge-reader/README.org][native Reader guide]] for wire-level messages and service ownership.
+
+* Verify Reader
+
+Run these checks from the repository root:
+
+#+begin_src sh
+emacs --batch -Q -L test -l yunge-test-runner -- --suite ert --module reader
+emacs --batch -Q -L test -l yunge-test-runner -- --suite native --module reader
+emacs --batch -Q -L test -l yunge-test-runner -- --suite renderer
+#+end_src
+
+The [[file:development.org][development guide]] gives the full repository gate and static Lisp
+check.  Batch checks cannot establish that graphical PDF pages or EPUB native
+surfaces display and respond correctly.  For graphical runs, use the PDF and
+EPUB smoke commands in the [[file:../native/yunge-reader/README.org][native Reader guide]].  The scripts generate
+their own fixtures and use real PDFium and WebView components.

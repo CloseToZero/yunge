@@ -386,7 +386,7 @@ USER is non-nil when direct reader movement produced the location."
                  (eq view yunge-reader-webview--buffer-view))
         (yunge-reader-epub--update-header)
         (when user
-          (yunge-reader--detach-search-navigation))
+          (yunge-reader-search-detach-navigation))
         (when-let* ((surface
                      (yunge-reader-webview--view-surface view))
                     ((yunge-reader-webview--surface-ready-p surface)))
@@ -1281,7 +1281,7 @@ VALUES is an alist containing complete, already bounded property values."
 
 (defun yunge-reader-epub--navigate (command)
   "Run semantic EPUB navigation COMMAND in the current view."
-  (yunge-reader--detach-search-navigation)
+  (yunge-reader-search-detach-navigation)
   (yunge-reader-webview--navigate-view
    (yunge-reader-webview--current-ready-view)
    command #'yunge-reader-epub--restore-complete))

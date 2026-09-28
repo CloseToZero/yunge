@@ -35,7 +35,7 @@
          (end (make-yunge-reader-position :unit 0 :offset 8))
          (search-arguments
           (list :query "Needle" :case-sensitive t :direction 'forward
-                :origin nil :cursor nil :match-limit 9 :page-limit 3))
+                :origin nil :cursor nil :match-limit 9 :unit-limit 3))
          (selection-arguments
           (list :start start :end end :cursor nil
                 :unit-limit 2 :character-limit 32)))
@@ -108,7 +108,7 @@
            :offset (alist-get 'end selection)))
          (search-arguments
           (list :query "Needle" :case-sensitive t :direction 'forward
-                :origin nil :cursor nil :match-limit 9 :page-limit 3))
+                :origin nil :cursor nil :match-limit 9 :unit-limit 3))
          (selection-arguments
           (list :start start :end end :cursor nil
                 :unit-limit 2 :character-limit 32)))

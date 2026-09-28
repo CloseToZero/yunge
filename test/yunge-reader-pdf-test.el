@@ -231,9 +231,9 @@
         (set-window-start nil 1 t)
         (set-window-hscroll nil 0)
         (setq yunge-reader-search-query "needle"
-              yunge-reader--search-navigation-intent 'forward
-              yunge-reader--search-navigation-count 2
-              yunge-reader--search-detached nil)
+              yunge-reader-search--navigation-intent 'forward
+              yunge-reader-search--navigation-count 2
+              yunge-reader-search--detached nil)
         (let* ((window (selected-window))
                (column-width
                 (max 1 (frame-char-width (window-frame window))))
@@ -248,9 +248,9 @@
           (should (> edge half))
           (yunge-reader-pdf-scroll-right)
           (should (= (window-hscroll) 1))
-          (should yunge-reader--search-detached)
-          (should-not yunge-reader--search-navigation-intent)
-          (should (zerop yunge-reader--search-navigation-count))
+          (should yunge-reader-search--detached)
+          (should-not yunge-reader-search--navigation-intent)
+          (should (zerop yunge-reader-search--navigation-count))
           (yunge-reader-pdf-scroll-left)
           (should (zerop (window-hscroll)))
           (yunge-reader-pdf-scroll-half-width-right)
@@ -2136,7 +2136,7 @@
                   'yunge-reader--active-presentation-p)
                  (lambda (_window) nil))
                 ((symbol-function
-                  'yunge-reader--detach-search-navigation)
+                  'yunge-reader-search-detach-navigation)
                  (lambda () (setq detached t)))
                 ((symbol-function
                   'yunge-reader-pdf--update-visible-pages)
@@ -3397,7 +3397,7 @@
                 ((symbol-function 'yunge-reader-pdf--force-redisplay)
                  (lambda (&optional _window)
                    (yunge-reader-pdf--window-scrolled 'reader-window nil)))
-                ((symbol-function 'yunge-reader--detach-search-navigation)
+                ((symbol-function 'yunge-reader-search-detach-navigation)
                  (lambda ()
                    (ert-fail
                     "Programmatic repaint detached search navigation"))))

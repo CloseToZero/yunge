@@ -278,8 +278,8 @@
          (selection (yunge-reader-reflow-smoke--search-selection)))
     (and result
          yunge-reader-search-highlight-visible
-         (not yunge-reader--search-pending)
-         (null yunge-reader--search-navigation-intent)
+         (not yunge-reader-search--pending)
+         (null yunge-reader-search--navigation-intent)
          (equal (yunge-reader-search-result-text result)
                 yunge-reader-reflow-smoke--search-query)
          (equal (yunge-reader-position-unit start) href)
@@ -321,9 +321,9 @@
          :location (yunge-reader-reflow-smoke--location)
          :anchor yunge-reader-reflow-smoke--anchor
          :search (yunge-reader-reflow-smoke--search-state)
-         :search-pending yunge-reader--search-pending
-         :search-detached yunge-reader--search-detached
-         :search-intent yunge-reader--search-navigation-intent
+         :search-pending yunge-reader-search--pending
+         :search-detached yunge-reader-search--detached
+         :search-intent yunge-reader-search--navigation-intent
          :outline (yunge-reader-reflow-smoke--outline-state)
          :second-frame
          (and (frame-live-p yunge-reader-reflow-smoke--second-frame)

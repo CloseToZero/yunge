@@ -757,7 +757,7 @@
          ((symbol-function 'yunge-reader-webview--navigate-view)
           (lambda (actual command complete &optional target)
             (setq navigated (list actual command complete target))))
-         ((symbol-function 'yunge-reader--detach-search-navigation)
+         ((symbol-function 'yunge-reader-search-detach-navigation)
           (lambda () (cl-incf detaches))))
       (yunge-reader-epub--navigate "next-screen"))
     (should (= detaches 1))
@@ -1334,7 +1334,7 @@
             (cl-letf (((symbol-function 'yunge-reader-record-place)
                        #'ignore)
                       ((symbol-function
-                        'yunge-reader--detach-search-navigation)
+                        'yunge-reader-search-detach-navigation)
                        (lambda () (cl-incf detaches))))
               (yunge-reader-epub--location-changed view t))
             (should (= detaches 1))))
