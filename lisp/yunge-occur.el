@@ -2,7 +2,7 @@
 ;; SPDX-FileCopyrightText: 2026 Chen Zhexuan
 ;; SPDX-License-Identifier: MIT
 
-(require 'yunge-edit)
+(require 'yunge-result-edit)
 (require 'yunge-key)
 
 (declare-function evil-set-initial-state "evil-core" (mode state))
@@ -23,11 +23,11 @@
 
 (defun yunge-occur--setup-edit-session ()
   "Set up source saving for the current Occur edit session."
-  (yunge-edit-setup-result-session #'occur-cease-edit))
+  (yunge-result-edit-setup #'occur-cease-edit))
 
 (with-eval-after-load 'replace
   (add-hook 'occur-edit-mode-hook #'yunge-occur--setup-edit-session)
-  (yunge-edit-configure-result-map
+  (yunge-result-edit-configure-map
    occur-edit-mode-map #'occur-cease-edit))
 
 (with-eval-after-load 'evil

@@ -3,7 +3,7 @@
 ;; SPDX-License-Identifier: MIT
 
 (require 'yunge-key)
-(require 'yunge-edit)
+(require 'yunge-result-edit)
 (require 'yunge-navigation)
 
 (declare-function evil-set-initial-state "evil-core" (mode state))
@@ -46,7 +46,7 @@
 
 (defun yunge-xref--setup-edit-session ()
   "Set up source saving for the current Xref edit session."
-  (yunge-edit-setup-result-session #'xref-edit-save-changes))
+  (yunge-result-edit-setup #'xref-edit-save-changes))
 
 (defun yunge-xref--land ()
   "Adaptively frame and reveal the current Xref destination."
@@ -73,7 +73,7 @@
   (add-hook 'xref-after-jump-hook #'yunge-xref--land)
   (add-hook 'xref-after-return-hook #'yunge-navigation-land)
   (add-hook 'xref-edit-mode-hook #'yunge-xref--setup-edit-session)
-  (yunge-edit-configure-result-map
+  (yunge-result-edit-configure-map
    xref-edit-mode-map #'xref-edit-save-changes))
 
 (with-eval-after-load 'which-key

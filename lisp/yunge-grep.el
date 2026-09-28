@@ -2,7 +2,7 @@
 ;; SPDX-FileCopyrightText: 2026 Chen Zhexuan
 ;; SPDX-License-Identifier: MIT
 
-(require 'yunge-edit)
+(require 'yunge-result-edit)
 (require 'yunge-key)
 
 (declare-function evil-set-initial-state "evil-core" (mode state))
@@ -26,11 +26,11 @@
 
 (defun yunge-grep--setup-edit-session ()
   "Set up source saving for the current Grep edit session."
-  (yunge-edit-setup-result-session #'grep-edit-save-changes))
+  (yunge-result-edit-setup #'grep-edit-save-changes))
 
 (with-eval-after-load 'grep
   (add-hook 'grep-edit-mode-hook #'yunge-grep--setup-edit-session)
-  (yunge-edit-configure-result-map
+  (yunge-result-edit-configure-map
    grep-edit-mode-map #'grep-edit-save-changes))
 
 (with-eval-after-load 'evil

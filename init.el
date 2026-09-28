@@ -2,6 +2,9 @@
 ;; SPDX-FileCopyrightText: 2026 Chen Zhexuan
 ;; SPDX-License-Identifier: MIT
 
+(setq-default indent-tabs-mode nil
+              fill-column 100)
+
 (require 'yunge-state)
 (require 'yunge-autoload)
 (yunge-autoload-load)
@@ -9,7 +12,6 @@
 (require 'yunge-config-update)
 (require 'yunge-history)
 (require 'yunge-autorevert)
-(require 'yunge-edit)
 (require 'yunge-scroll)
 (require 'yunge-project)
 (require 'yunge-treesit)

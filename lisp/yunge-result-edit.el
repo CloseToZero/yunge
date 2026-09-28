@@ -1,18 +1,15 @@
-;;; yunge-edit.el --- Editing defaults and result editors -*- lexical-binding: t; -*-
+;;; yunge-result-edit.el --- Edit source files through search results -*- lexical-binding: t; -*-
 ;; SPDX-FileCopyrightText: 2026 Chen Zhexuan
 ;; SPDX-License-Identifier: MIT
 
 (require 'cl-lib)
 
-(setq-default indent-tabs-mode nil
-              fill-column 100)
-
 (declare-function occur--targets-start "replace" (targets))
 
-(defvar-local yunge-edit--result-finish-function nil)
-(defvar-local yunge-edit--result-source-buffers nil)
+(defvar-local yunge-result-edit--finish-function nil)
+(defvar-local yunge-result-edit--source-buffers nil)
 
-(defun yunge-edit--remember-result-source-buffer (beginning _end)
+(defun yunge-result-edit--remember-source (beginning _end)
   "Remember the source buffer for the result at BEGINNING."
   (when-let* ((targets
                (or (get-text-property beginning 'occur-target)
@@ -20,46 +17,46 @@
                                       'occur-target)))
               (marker (occur--targets-start targets))
               (buffer (marker-buffer marker)))
-    (cl-pushnew buffer yunge-edit--result-source-buffers)))
+    (cl-pushnew buffer yunge-result-edit--source-buffers)))
 
-(defun yunge-edit-setup-result-session (finish-function)
+(defun yunge-result-edit-setup (finish-function)
   "Arrange to save edited result sources before FINISH-FUNCTION runs."
-  (setq-local yunge-edit--result-finish-function finish-function)
-  (setq-local yunge-edit--result-source-buffers nil)
+  (setq-local yunge-result-edit--finish-function finish-function)
+  (setq-local yunge-result-edit--source-buffers nil)
   ;; Xref may create `occur-target' in its own before-change hook.  Run
   ;; after it so the first edit of a lazily prepared result is recorded.
   (add-hook 'before-change-functions
-            #'yunge-edit--remember-result-source-buffer t t))
+            #'yunge-result-edit--remember-source t t))
 
-(defun yunge-edit-finish-result-session ()
+(defun yunge-result-edit-finish ()
   "Save source buffers changed through the current result editor."
   (interactive)
-  (unless yunge-edit--result-finish-function
+  (unless yunge-result-edit--finish-function
     (user-error "This is not an editable result buffer"))
-  (dolist (buffer yunge-edit--result-source-buffers)
+  (dolist (buffer yunge-result-edit--source-buffers)
     (when (and (buffer-live-p buffer)
                (buffer-local-value 'buffer-file-name buffer)
                (buffer-modified-p buffer))
       (with-current-buffer buffer
         (save-buffer))))
-  (funcall-interactively yunge-edit--result-finish-function))
+  (funcall-interactively yunge-result-edit--finish-function))
 
-(defun yunge-edit-refuse-result-abort ()
+(defun yunge-result-edit-refuse-abort ()
   "Refuse to discard edits that have already reached source buffers."
   (interactive)
   (user-error "Result edits are live; undo them or finish with ZZ"))
 
-(defun yunge-edit-configure-result-map (map finish-function)
+(defun yunge-result-edit-configure-map (map finish-function)
   "Configure MAP for a live result editor using FINISH-FUNCTION."
   (define-key map (vector 'remap finish-function)
-              #'yunge-edit-finish-result-session)
+              #'yunge-result-edit-finish)
   (define-key map [remap evil-save-and-close]
-              #'yunge-edit-finish-result-session)
+              #'yunge-result-edit-finish)
   (define-key map [remap evil-save-modified-and-close]
-              #'yunge-edit-finish-result-session)
+              #'yunge-result-edit-finish)
   (define-key map [remap evil-quit]
-              #'yunge-edit-refuse-result-abort))
+              #'yunge-result-edit-refuse-abort))
 
-(provide 'yunge-edit)
+(provide 'yunge-result-edit)
 
-;;; yunge-edit.el ends here
+;;; yunge-result-edit.el ends here
