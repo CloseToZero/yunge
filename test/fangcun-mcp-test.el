@@ -242,6 +242,39 @@
           (insert-file-contents file)
           (should (search-forward "#+title: Created note" nil t)))))))
 
+(ert-deftest fangcun-mcp-does-not-overwrite-a-concurrently-created-file ()
+  (fangcun-test-with-notes
+    (fangcun-db-sync)
+    (let* ((file (expand-file-name "raced.org" personal-root))
+           (response
+            (let ((write-region-annotate-functions
+                   (list
+                    (lambda (_start _end)
+                      (let ((write-region-annotate-functions nil)
+                            (coding-system-for-write 'utf-8-unix))
+                        (with-temp-file file
+                          (insert "#+title: Another writer\n")))
+                      nil))))
+              (fangcun-mcp-test--response
+               "fangcun_create_file_node"
+               '(:yiyu "personal"
+                 :file "raced.org"
+                 :title "Proposed unique title")))))
+      (should (eq (plist-get response :ok) :false))
+      (should (plist-get response :error))
+      (with-temp-buffer
+        (insert-file-contents file)
+        (should (equal (buffer-string) "#+title: Another writer\n")))
+      (should-not
+       (seq-some
+        (lambda (result)
+          (equal (plist-get (plist-get result :node) :title)
+                 "Proposed unique title"))
+        (plist-get
+         (fangcun-mcp-test--value
+          "fangcun_search_nodes" '(:query "Proposed unique title"))
+         :nodes))))))
+
 (ert-deftest fangcun-mcp-creates-and-indexes-heading-nodes ()
   (fangcun-test-with-notes
     (fangcun-test--write-file

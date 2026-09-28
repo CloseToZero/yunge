@@ -75,7 +75,7 @@ To create a new note, prefer =fangcun_create_file_node=: =file= is a portable
 =.org= path relative to the chosen yiyu root, and missing parent directories
 are created. The tool writes a file-level ID, saves, and indexes the new file
 before returning successfully. Add content afterward using filesystem tools.
-It rejects an existing path.
+It does not overwrite an existing file.
 
 To make a heading in an *existing* file into a node, call
 =fangcun_create_heading_node=. Its =headingPath= is a nonempty JSON array of

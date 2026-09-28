@@ -636,7 +636,7 @@ visited file has changed on disk before editing."
           (insert "\n")
           (goto-char (point-min))
           (org-entry-put (point) "ID" id)
-          (write-region (point-min) (point-max) file nil 'silent))
+          (write-region (point-min) (point-max) file nil 'silent nil 'excl))
         (fangcun--db-update-file-in-yiyu file yiyu t)
         (fangcun-mcp--node-object
          (or (fangcun-node-from-id id)
@@ -724,8 +724,9 @@ optional annotations, in that order."
            (concat
             "Create a new 方寸（Fangcun） Org note file in a configured "
             "一隅（yiyu）. This tool assigns its file-level Org ID, saves the file, "
-            "and indexes the node before returning successfully. Add note content "
-            "afterward with the client's filesystem tools.")
+            "and indexes the node before returning successfully. It never "
+            "overwrites an existing file. Add note content afterward with the "
+            "client's filesystem tools.")
            '(:type "object"
                    :properties
                    (:yiyu
