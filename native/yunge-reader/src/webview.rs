@@ -449,6 +449,8 @@ struct EpubSearchMatch {
 enum NavigationCommand {
     PreviousPage,
     NextPage,
+    PreviousHalfScreen,
+    NextHalfScreen,
     PreviousScreen,
     NextScreen,
     PreviousLine,
@@ -2912,6 +2914,8 @@ mod tests {
         for command in [
             "previous-page",
             "next-page",
+            "previous-half-screen",
+            "next-half-screen",
             "previous-line",
             "next-line",
             "previous-screen",

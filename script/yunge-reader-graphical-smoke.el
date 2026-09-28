@@ -5,6 +5,8 @@
 (require 'cl-lib)
 (require 'subr-x)
 
+(declare-function yunge-reader-native--publish-build-id "yunge-reader-native" ())
+
 (defvar yunge-config-directory)
 (defvar yunge-var-directory)
 (defvar yunge-reader-native-pdfium-api)
@@ -182,6 +184,7 @@ Return the Cargo executable used for the build."
       (error
        "Native module was not built: %s"
        (yunge-reader-graphical-smoke-context-module context)))
+    (yunge-reader-native--publish-build-id)
     cargo))
 
 (defun yunge-reader-graphical-smoke-cleanup (context)

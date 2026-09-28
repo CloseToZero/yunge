@@ -33,6 +33,7 @@
 
 (declare-function yunge-reader-epub-next-line "yunge-reader-epub")
 (declare-function yunge-reader-epub-next-page "yunge-reader-epub")
+(declare-function yunge-reader-epub-next-half-screen "yunge-reader-epub")
 (declare-function yunge-reader-epub-next-screen "yunge-reader-epub")
 (declare-function yunge-reader-epub-first-location "yunge-reader-epub")
 (declare-function yunge-reader-epub-last-location "yunge-reader-epub")
@@ -70,6 +71,9 @@
 (defvar yunge-reader-fixed-smoke--resize-bounds nil)
 (defvar yunge-reader-fixed-smoke--resize-not-before nil)
 (defvar yunge-reader-fixed-smoke--scrolled nil)
+(defvar yunge-reader-fixed-smoke--scroll-origin nil)
+(defvar yunge-reader-fixed-smoke--half-distance nil)
+(defvar yunge-reader-fixed-smoke--scroll-observe-after nil)
 
 (defun yunge-reader-fixed-smoke--log (format-string &rest arguments)
   "Write FORMAT-STRING with ARGUMENTS to stdout and the optional log."
@@ -302,8 +306,8 @@
                              yunge-reader-document)
                             'fixed)
                         view
-                         (yunge-reader-webview--surface-ready-p
-                          (yunge-reader-fixed-smoke--surface view))
+                        (yunge-reader-webview--surface-ready-p
+                         (yunge-reader-fixed-smoke--surface view))
                         (yunge-reader-fixed-smoke--page-p location 1))
                    (progn
                      (unless (eq yunge-reader-zoom-mode 'fit-page)
@@ -363,8 +367,8 @@
                (if (and
                     (yunge-reader-fixed-smoke--same-surface-p view)
                     (eq yunge-reader-zoom-mode 'fit-width)
-                     (eq (yunge-reader-fixed-smoke--surface-zoom view)
-                         'fit-width)
+                    (eq (yunge-reader-fixed-smoke--surface-zoom view)
+                        'fit-width)
                     (yunge-reader-fixed-smoke--different-scale-p
                      yunge-reader-effective-scale
                      yunge-reader-fixed-smoke--fit-scale)
@@ -374,8 +378,8 @@
                            yunge-reader-effective-scale
                            yunge-reader-fixed-smoke--resize-bounds
                            (copy-tree
-                             (yunge-reader-fixed-smoke--surface-bounds
-                              view))
+                            (yunge-reader-fixed-smoke--surface-bounds
+                             view))
                            yunge-reader-fixed-smoke--phase
                            'fit-width-resize)
                      (yunge-reader-fixed-smoke--observe
@@ -410,8 +414,8 @@
                (if (and
                     (yunge-reader-fixed-smoke--same-surface-p view)
                     (eq yunge-reader-zoom-mode 'fit-page)
-                     (eq (yunge-reader-fixed-smoke--surface-zoom view)
-                         'fit-page)
+                    (eq (yunge-reader-fixed-smoke--surface-zoom view)
+                        'fit-page)
                     (yunge-reader-fixed-smoke--different-scale-p
                      yunge-reader-effective-scale
                      yunge-reader-fixed-smoke--fit-scale)
@@ -421,8 +425,8 @@
                            yunge-reader-effective-scale
                            yunge-reader-fixed-smoke--resize-bounds
                            (copy-tree
-                             (yunge-reader-fixed-smoke--surface-bounds
-                              view))
+                            (yunge-reader-fixed-smoke--surface-bounds
+                             view))
                            yunge-reader-fixed-smoke--phase
                            'fit-page-resize)
                      (yunge-reader-fixed-smoke--observe
@@ -458,26 +462,76 @@
                     (eq yunge-reader-zoom-mode 'manual)
                     (= yunge-reader-scale 1.0)
                     (= yunge-reader-effective-scale 1.0)
-                     (= (yunge-reader-fixed-smoke--surface-zoom view)
-                        1.0)
+                    (= (yunge-reader-fixed-smoke--surface-zoom view)
+                       1.0)
                     (yunge-reader-fixed-smoke--page-p location 1))
                    (progn
                      (yunge-reader-fixed-smoke--observe
                       'manual view location)
-                     (setq yunge-reader-fixed-smoke--phase 'scroll)
+                     (setq yunge-reader-fixed-smoke--scroll-origin
+                           (copy-tree location)
+                           yunge-reader-fixed-smoke--scroll-observe-after
+                           (+ (float-time) 0.5)
+                           yunge-reader-fixed-smoke--phase 'half-screen)
+                     (yunge-reader-epub-next-half-screen)
+                     (yunge-reader-fixed-smoke--continue))
+                 (yunge-reader-fixed-smoke--continue)))
+              ('half-screen
+               (if (and (> (float-time)
+                           yunge-reader-fixed-smoke--scroll-observe-after)
+                        (yunge-reader-fixed-smoke--page-p location 1)
+                        (> (alist-get 'y location)
+                           (+ 1.0 (alist-get 'y
+                                             yunge-reader-fixed-smoke--scroll-origin))))
+                   (progn
+                     (setq yunge-reader-fixed-smoke--half-distance
+                           (- (alist-get 'y location)
+                              (alist-get 'y
+                                         yunge-reader-fixed-smoke--scroll-origin))
+                           yunge-reader-fixed-smoke--scroll-observe-after
+                           (+ (float-time) 0.5)
+                           yunge-reader-fixed-smoke--phase 'scroll-reset)
+                     (yunge-reader-fixed-smoke--observe
+                      'half-screen view location)
+                     (yunge-reader-webview--navigate-view
+                      view "go-to" #'ignore
+                      yunge-reader-fixed-smoke--scroll-origin)
+                     (yunge-reader-fixed-smoke--continue))
+                 (yunge-reader-fixed-smoke--continue)))
+              ('scroll-reset
+               (if (and (> (float-time)
+                           yunge-reader-fixed-smoke--scroll-observe-after)
+                        (yunge-reader-fixed-smoke--same-viewport-p
+                         location yunge-reader-fixed-smoke--scroll-origin))
+                   (progn
+                     (setq yunge-reader-fixed-smoke--scroll-observe-after
+                           (+ (float-time) 0.5)
+                           yunge-reader-fixed-smoke--phase 'scroll)
                      (yunge-reader-epub-next-screen)
                      (yunge-reader-fixed-smoke--continue))
                  (yunge-reader-fixed-smoke--continue)))
               ('scroll
-               (if (and (yunge-reader-fixed-smoke--page-p location 1)
+               (if (and (> (float-time)
+                           yunge-reader-fixed-smoke--scroll-observe-after)
+                        (yunge-reader-fixed-smoke--page-p location 1)
                         (> (alist-get 'y location) 1.0))
                    (progn
+                     (unless (> (- (alist-get 'y location)
+                                   (alist-get 'y
+                                              yunge-reader-fixed-smoke--scroll-origin))
+                                (* 1.2 yunge-reader-fixed-smoke--half-distance))
+                       (error "Full fixed screen did not exceed half screen"))
+                     (yunge-reader-fixed-smoke--log
+                      "Fixed EPUB scroll: half %.1f, full %.1f\n"
+                      yunge-reader-fixed-smoke--half-distance
+                      (- (alist-get 'y location)
+                         (alist-get 'y yunge-reader-fixed-smoke--scroll-origin)))
                      (setq yunge-reader-fixed-smoke--scrolled
                            (copy-tree location)
                            yunge-reader-fixed-smoke--resize-bounds
                            (copy-tree
-                             (yunge-reader-fixed-smoke--surface-bounds
-                              view))
+                            (yunge-reader-fixed-smoke--surface-bounds
+                             view))
                            yunge-reader-fixed-smoke--resize-not-before
                            (+ (float-time) 0.5)
                            yunge-reader-fixed-smoke--phase
@@ -510,8 +564,8 @@
                           yunge-reader-fixed-smoke--resize-bounds))
                       (eq yunge-reader-zoom-mode 'manual)
                       (= yunge-reader-effective-scale 1.0)
-                       (= (yunge-reader-fixed-smoke--surface-zoom view)
-                          1.0)
+                      (= (yunge-reader-fixed-smoke--surface-zoom view)
+                         1.0)
                       (yunge-reader-fixed-smoke--same-viewport-p
                        location yunge-reader-fixed-smoke--scrolled))
                      (progn
@@ -603,7 +657,10 @@
               yunge-reader-fixed-smoke--fit-scale nil
               yunge-reader-fixed-smoke--resize-bounds nil
               yunge-reader-fixed-smoke--resize-not-before nil
-              yunge-reader-fixed-smoke--scrolled nil)
+              yunge-reader-fixed-smoke--scrolled nil
+              yunge-reader-fixed-smoke--scroll-origin nil
+              yunge-reader-fixed-smoke--half-distance nil
+              yunge-reader-fixed-smoke--scroll-observe-after nil)
         (yunge-reader-graphical-smoke-run-process
          yunge-reader-fixed-smoke--context
          yunge-reader-fixed-smoke--cargo

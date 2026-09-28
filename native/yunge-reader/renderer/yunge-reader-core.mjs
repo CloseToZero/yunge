@@ -23,9 +23,10 @@ const APPEARANCE_COLOR_KEYS = Object.freeze([
     'search-background',
 ])
 
-export const READER_CHARACTER_KEYS = Object.freeze([
-    "'", '+', '-', '=', '<escape>', '<next>', '<prior>', 'C-d', 'C-g',
-    'C-u', 'G', 'J', 'K', 'M-m', 'SPC', 'g', 'j', 'k', 'm', 'y',
+export const READER_KEYS = Object.freeze([
+    "'", '+', '-', '=', '/', '<escape>', '<next>', '<prior>',
+    'C-d', 'C-g', 'C-i', 'C-o', 'C-u', 'G', 'J', 'K', 'M-m',
+    'N', 'P', 'SPC', 'W', 'g', 'j', 'k', 'm', 'n', 'o', 'q', 'y',
 ])
 
 export const readerKey = event => {
@@ -38,7 +39,7 @@ export const readerKey = event => {
     if (!event.shiftKey && !event.altKey && !event.metaKey
         && event.ctrlKey) {
         const key = `C-${event.key.toLowerCase()}`
-        return READER_CHARACTER_KEYS.includes(key) ? key : null
+        return READER_KEYS.includes(key) ? key : null
     }
     if (!event.shiftKey && !event.ctrlKey && !event.metaKey
         && event.altKey) {
@@ -49,7 +50,7 @@ export const readerKey = event => {
     if (event.key === 'PageDown') return '<next>'
     if (event.key === 'PageUp') return '<prior>'
     if (event.code === 'Space') return 'SPC'
-    return READER_CHARACTER_KEYS.includes(event.key)
+    return READER_KEYS.includes(event.key)
         ? event.key : null
 }
 
@@ -74,9 +75,9 @@ export const checkedExternalURI = value => {
 
 export const checkedRendererAccelerators = value => {
     if (!Array.isArray(value)
-        || value.length !== READER_CHARACTER_KEYS.length
+        || value.length !== READER_KEYS.length
         || value.some((key, index) =>
-            key !== READER_CHARACTER_KEYS[index])) {
+            key !== READER_KEYS[index])) {
         throw new Error('Incompatible EPUB renderer accelerator contract')
     }
     return value

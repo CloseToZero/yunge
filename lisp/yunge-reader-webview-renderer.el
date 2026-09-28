@@ -275,6 +275,7 @@ CALLBACK when complete."
   "Ask native VIEW to run semantic COMMAND and invoke CALLBACK.
 LOCATION is required only for the go-to command."
   (unless (member command '("previous-page" "next-page"
+                            "previous-half-screen" "next-half-screen"
                             "previous-screen" "next-screen"
                             "previous-line" "next-line"
                             "first" "last" "go-to"))

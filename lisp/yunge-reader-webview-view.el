@@ -80,7 +80,6 @@
   destroy-finished
   location-changed-function
   selection-changed-function
-  accelerator-function
   zoom-changed-function
   appearance-function
   scroll-bar-function

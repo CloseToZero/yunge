@@ -26,7 +26,7 @@ import {
     outlineFromBook,
     outlineIndexFromItem,
     readerKey,
-    READER_CHARACTER_KEYS,
+    READER_KEYS,
     readingStyleCSS,
     reduceNavigation,
     sameAppearance,
@@ -58,7 +58,7 @@ const keyEvent = overrides => ({
 })
 
 test('validates renderer accelerator and path contracts', () => {
-    const accelerators = [...READER_CHARACTER_KEYS]
+    const accelerators = [...READER_KEYS]
     assert.equal(checkedRendererAccelerators(accelerators), accelerators)
     assert.throws(() => checkedRendererAccelerators(
         [...accelerators].reverse()))
@@ -71,6 +71,8 @@ test('validates renderer accelerator and path contracts', () => {
 
 test('normalizes reader keyboard accelerators', () => {
     assert.equal(readerKey(keyEvent({ ctrlKey: true, key: 'D' })), 'C-d')
+    assert.equal(readerKey(keyEvent({ ctrlKey: true, key: 'O' })), 'C-o')
+    assert.equal(readerKey(keyEvent({ ctrlKey: true, key: 'I' })), 'C-i')
     assert.equal(readerKey(keyEvent({ altKey: true,
         code: 'KeyM', key: 'µ' })), 'M-m')
     assert.equal(readerKey(keyEvent({ key: 'Escape' })), '<escape>')
@@ -78,6 +80,10 @@ test('normalizes reader keyboard accelerators', () => {
     assert.equal(readerKey(keyEvent({ key: 'PageUp' })), '<prior>')
     assert.equal(readerKey(keyEvent({ code: 'Space', key: ' ' })), 'SPC')
     assert.equal(readerKey(keyEvent({ key: 'j' })), 'j')
+    assert.equal(readerKey(keyEvent({ code: 'Slash', key: '/' })), '/')
+    assert.equal(readerKey(keyEvent({ code: 'KeyN', key: 'N',
+        shiftKey: true })), 'N')
+    assert.equal(readerKey(keyEvent({ code: 'KeyO', key: 'o' })), 'o')
     assert.equal(readerKey(keyEvent({ code: 'KeyM', key: 'm' })), 'm')
     assert.equal(readerKey(keyEvent({ code: 'Quote', key: "'" })), "'")
 

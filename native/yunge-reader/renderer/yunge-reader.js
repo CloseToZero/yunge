@@ -1312,18 +1312,32 @@ const runNavigation = async (session, navigation) => {
                 await turnFixedPage(session, 1)
             } else await session.view.next()
             break
-        case 'previous-screen':
+        case 'previous-half-screen':
             if (session.view.isFixedLayout) {
                 await moveFixedViewport(
                     session,
                     -Math.max(1, session.view.renderer.clientHeight / 2))
+            } else await session.view.prev(
+                Math.max(1, session.view.renderer.size / 2))
+            break
+        case 'next-half-screen':
+            if (session.view.isFixedLayout) {
+                await moveFixedViewport(
+                    session,
+                    Math.max(1, session.view.renderer.clientHeight / 2))
+            } else await session.view.next(
+                Math.max(1, session.view.renderer.size / 2))
+            break
+        case 'previous-screen':
+            if (session.view.isFixedLayout) {
+                await moveFixedViewport(
+                    session, -Math.max(1, session.view.renderer.clientHeight))
             } else await session.view.prev()
             break
         case 'next-screen':
             if (session.view.isFixedLayout) {
                 await moveFixedViewport(
-                    session,
-                    Math.max(1, session.view.renderer.clientHeight / 2))
+                    session, Math.max(1, session.view.renderer.clientHeight))
             } else await session.view.next()
             break
         case 'previous-line':

@@ -33,9 +33,11 @@ The navigation keys below work in Reader buffers with or without Evil.  When
 Evil is active, Reader starts in Normal state and keeps the surface read-only;
 Visual =y= remains Evil's ordinary yank.  The mode-local =SPC m= commands
 listed below are for Evil Normal state.  Use their =M-x= names without Evil.
-After clicking an EPUB's native content, =ESC= or =C-g= returns keyboard focus
-to its Emacs window.  Other keys routed from that focused surface form a
-smaller set than the full Reader buffer map.
+After clicking an EPUB's native content, a listed Reader key returns focus
+to its Emacs window and runs through the active Emacs maps.  This includes
+=/=, =n/N=, =o=, and the view's zoom keys; =ESC= and =C-g= also dismiss
+transient highlights.  Native text and accessibility keys outside Reader's
+shortcuts keep their usual behavior in the EPUB content.
 
 ** Shared keys
 
@@ -81,7 +83,7 @@ follows the page roll.
 | Key                     | Action                                 |
 |-------------------------+----------------------------------------|
 | =j= / =k=               | Next / previous computed content line. |
-| =C-d= / =C-u=           | Next / previous reflowed screen.       |
+| =C-d= / =C-u=           | Move by half a reflowed screen.        |
 | =Page Down= / =Page Up= | Next / previous reflowed screen.       |
 | =J= / =K=               | Next / previous reflowed screen.       |
 | =gg= / =G=              | First / last linear book location.     |
@@ -95,7 +97,7 @@ and wheel input operate on the native text surface.
 |-------------------------+------------------------------------------------|
 | =j= / =k=               | Move the page viewport down / up by 40 pixels. |
 | =C-d= / =C-u=           | Move by half the view height.                  |
-| =Page Down= / =Page Up= | Move by half the view height.                  |
+| =Page Down= / =Page Up= | Move by the full view height.                  |
 | =J= / =K=               | Next / previous publisher page.                |
 | =gg= / =G=              | First / last linear book location.             |
 | =W= / =P=               | Fit width / fit page.                          |

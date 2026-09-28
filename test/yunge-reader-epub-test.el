@@ -53,8 +53,8 @@
    yunge-reader-epub-view-mode-map
    '(("j" . yunge-reader-epub-next-line)
      ("k" . yunge-reader-epub-previous-line)
-     ("C-d" . yunge-reader-epub-next-screen)
-     ("C-u" . yunge-reader-epub-previous-screen)
+     ("C-d" . yunge-reader-epub-next-half-screen)
+     ("C-u" . yunge-reader-epub-previous-half-screen)
      ("G" . yunge-reader-epub-last-location)
      ("J" . yunge-reader-epub-next-page)
      ("K" . yunge-reader-epub-previous-page)
@@ -93,8 +93,8 @@
      'normal
      '(("j" . yunge-reader-epub-next-line)
        ("k" . yunge-reader-epub-previous-line)
-       ("C-d" . yunge-reader-epub-next-screen)
-       ("C-u" . yunge-reader-epub-previous-screen)
+       ("C-d" . yunge-reader-epub-next-half-screen)
+       ("C-u" . yunge-reader-epub-previous-half-screen)
        ("G" . yunge-reader-epub-last-location)
        ("J" . yunge-reader-epub-next-page)
        ("K" . yunge-reader-epub-previous-page)
@@ -656,8 +656,6 @@
                      (plist-get options :location-changed-function)
                      :selection-changed-function
                      (plist-get options :selection-changed-function)
-                     :accelerator-function
-                     (plist-get options :accelerator-function)
                      :scroll-bar-function
                      (plist-get options :scroll-bar-function)
                      :external-link-function
@@ -683,10 +681,6 @@
          (eq (yunge-reader-webview--view-selection-changed-function
               yunge-reader-webview--buffer-view)
              #'yunge-reader-epub--selection-changed))
-        (should
-         (eq (yunge-reader-webview--view-accelerator-function
-              yunge-reader-webview--buffer-view)
-             #'yunge-reader-epub--accelerator))
         (should
          (eq (yunge-reader-webview--view-scroll-bar-function
               yunge-reader-webview--buffer-view)
@@ -752,57 +746,6 @@
         "javascript:alert(1)")
        :type 'user-error)
       (should-not opened))))
-
-(ert-deftest yunge-reader-epub-resolves-forwarded-keys-in-emacs ()
-  (let ((view (yunge-reader-webview--make-view))
-        called)
-    (with-temp-buffer
-      (yunge-reader-mode)
-      (yunge-reader-epub-view-mode 1)
-      (setq yunge-reader-webview--buffer-view view)
-      (cl-letf
-          (((symbol-function 'yunge-reader-epub-next-page)
-            (lambda (&optional count)
-              (interactive "p")
-              (setq called (list count (current-buffer))))))
-        (yunge-reader-epub--accelerator view "J"))
-      (should (equal called (list 1 (current-buffer))))
-      (cl-letf
-          (((symbol-function 'yunge-reader-epub-next-line)
-            (lambda (&optional count)
-              (interactive "p")
-              (setq called (list 'line count (current-buffer))))))
-        (yunge-reader-epub--accelerator view "j"))
-      (should
-       (equal called (list 'line 1 (current-buffer))))
-      (let ((command
-             (lambda ()
-               (interactive)
-               (setq called
-                     (list 'remapped this-command
-                           (current-buffer))))))
-        (cl-letf (((symbol-function 'key-binding)
-                   (lambda (key &rest _arguments)
-                     (should (equal key (kbd "+")))
-                     command)))
-          (yunge-reader-epub--accelerator view "+"))
-        (should (eq (car called) 'remapped))
-        (should (eq (cadr called) command))
-        (should (eq (caddr called) (current-buffer))))
-      (cl-letf
-          (((symbol-function 'yunge-reader-epub-copy-selection)
-            (lambda ()
-              (interactive)
-              (setq called (list 'copied (current-buffer))))))
-        (yunge-reader-epub--accelerator view "y"))
-      (should (equal called (list 'copied (current-buffer))))
-      (cl-letf
-          (((symbol-function 'yunge-reader-epub-last-location)
-            (lambda ()
-              (interactive)
-              (setq called (list 'last (current-buffer))))))
-        (yunge-reader-epub--accelerator view "G"))
-      (should (equal called (list 'last (current-buffer)))))))
 
 (ert-deftest yunge-reader-epub-navigation-cancels-a-delayed-search-jump ()
   (let ((view (yunge-reader-webview--make-view))
@@ -1004,37 +947,6 @@
       (should
        (equal (cadr updates)
               (yunge-reader-epub-test--selection))))))
-
-(ert-deftest yunge-reader-epub-dismiss-keys-use-active-evil-maps ()
-  (yunge-test-enable-evil)
-  (let ((view (yunge-reader-webview--make-view))
-        (clears 0))
-    (with-temp-buffer
-      (yunge-reader-mode)
-      (yunge-reader-epub-view-mode 1)
-      (setq yunge-reader-webview--buffer-view view)
-      (should (eq (key-binding (kbd "<escape>"))
-                  'evil-force-normal-state))
-      (evil-insert-state 1)
-      (should (eq evil-state 'normal))
-      (yunge-reader-epub--accelerator view "<escape>")
-      (should (eq evil-state 'normal))
-      (dolist (key '("<escape>" "C-g"))
-        (setq yunge-reader-selection
-              (make-yunge-reader-selection
-               :start
-               (make-yunge-reader-position :unit "chapter" :offset 1)
-               :end
-               (make-yunge-reader-position :unit "chapter" :offset 2))
-              yunge-reader-search-highlight-visible t)
-        (cl-letf
-            (((symbol-function
-               'yunge-reader-webview--clear-view-selection)
-              (lambda (_view) (cl-incf clears))))
-          (yunge-reader-epub--accelerator view key))
-        (should-not yunge-reader-selection)
-        (should-not yunge-reader-search-highlight-visible))
-      (should (= clears 2)))))
 
 (ert-deftest yunge-reader-epub-maps-reader-selection-text-batches ()
   (let* ((document (yunge-reader-epub-test--document))

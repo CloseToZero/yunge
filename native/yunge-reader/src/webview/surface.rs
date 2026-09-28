@@ -471,6 +471,26 @@ mod tests {
         assert_eq!(
             routed_key(
                 COREWEBVIEW2_KEY_EVENT_KIND_KEY_DOWN,
+                u32::from(b'O'),
+                true,
+                false,
+                false,
+            ),
+            Some("C-o")
+        );
+        assert_eq!(
+            routed_key(
+                COREWEBVIEW2_KEY_EVENT_KIND_KEY_DOWN,
+                u32::from(b'I'),
+                true,
+                false,
+                false,
+            ),
+            Some("C-i")
+        );
+        assert_eq!(
+            routed_key(
+                COREWEBVIEW2_KEY_EVENT_KIND_KEY_DOWN,
                 u32::from(VK_SPACE.0),
                 false,
                 false,

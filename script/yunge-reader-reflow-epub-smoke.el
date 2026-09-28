@@ -32,6 +32,7 @@
    (signal (car error-data) (cdr error-data))))
 
 (declare-function yunge-reader-epub-first-location "yunge-reader-epub")
+(declare-function yunge-reader-epub-next-half-screen "yunge-reader-epub")
 (declare-function yunge-reader-epub-next-screen "yunge-reader-epub")
 (declare-function yunge-reader-clear-search "yunge-reader")
 (declare-function yunge-reader-clear-selection "yunge-reader")
@@ -74,6 +75,9 @@
 (defvar yunge-reader-reflow-smoke--second-surface-id nil)
 (defvar yunge-reader-reflow-smoke--first-window nil)
 (defvar yunge-reader-reflow-smoke--anchor nil)
+(defvar yunge-reader-reflow-smoke--scroll-origin nil)
+(defvar yunge-reader-reflow-smoke--half-progress nil)
+(defvar yunge-reader-reflow-smoke--scroll-observe-after nil)
 (defvar yunge-reader-reflow-smoke--search-selection nil)
 (defvar yunge-reader-reflow-smoke--outline-buffer nil)
 (defvar yunge-reader-reflow-smoke--outline-window nil)
@@ -417,19 +421,68 @@
                            (yunge-reader-reflow-smoke--surface-id view)
                            yunge-reader-reflow-smoke--anchor
                            (copy-tree location)
-                           yunge-reader-reflow-smoke--phase 'retain)
+                           yunge-reader-reflow-smoke--scroll-origin
+                           (copy-tree location)
+                           yunge-reader-reflow-smoke--scroll-observe-after
+                           (+ (float-time) 0.5)
+                           yunge-reader-reflow-smoke--phase 'half-screen)
                      (yunge-reader-reflow-smoke--observe
                       'initial view location)
+                     (unless (numberp (alist-get 'fraction location))
+                       (error "Reflow EPUB location has no progress fraction"))
+                     (yunge-reader-epub-next-half-screen)
+                     (yunge-reader-reflow-smoke--continue))
+                 (yunge-reader-reflow-smoke--continue)))
+              ('half-screen
+               (if (and (> (float-time)
+                           yunge-reader-reflow-smoke--scroll-observe-after)
+                        (yunge-reader-reflow-smoke--chapter-p location 1)
+                        (numberp (alist-get 'fraction location))
+                        (> (alist-get 'fraction location)
+                           (alist-get 'fraction
+                                      yunge-reader-reflow-smoke--scroll-origin)))
+                   (progn
+                     (setq yunge-reader-reflow-smoke--half-progress
+                           (- (alist-get 'fraction location)
+                              (alist-get 'fraction
+                                         yunge-reader-reflow-smoke--scroll-origin))
+                           yunge-reader-reflow-smoke--scroll-observe-after
+                           (+ (float-time) 0.5)
+                           yunge-reader-reflow-smoke--phase 'scroll-reset)
+                     (yunge-reader-reflow-smoke--observe
+                      'half-screen view location)
+                     (yunge-reader-webview--navigate-view
+                      view "go-to" #'ignore
+                      yunge-reader-reflow-smoke--scroll-origin)
+                     (yunge-reader-reflow-smoke--continue))
+                 (yunge-reader-reflow-smoke--continue)))
+              ('scroll-reset
+               (if (and (> (float-time)
+                           yunge-reader-reflow-smoke--scroll-observe-after)
+                        (yunge-reader-reflow-smoke--same-anchor-p
+                         location yunge-reader-reflow-smoke--scroll-origin))
+                   (progn
+                     (setq yunge-reader-reflow-smoke--phase 'retain
+                           yunge-reader-reflow-smoke--scroll-observe-after
+                           (+ (float-time) 0.5))
                      (yunge-reader-epub-next-screen)
                      (yunge-reader-reflow-smoke--continue))
                  (yunge-reader-reflow-smoke--continue)))
               ('retain
                (if (and
+                    (> (float-time)
+                       yunge-reader-reflow-smoke--scroll-observe-after)
                     (yunge-reader-reflow-smoke--chapter-p location 1)
                     (not (yunge-reader-reflow-smoke--same-anchor-p
                           location
                           yunge-reader-reflow-smoke--anchor)))
                    (progn
+                     (unless (and (numberp (alist-get 'fraction location))
+                                  (> (- (alist-get 'fraction location)
+                                        (alist-get 'fraction
+                                                   yunge-reader-reflow-smoke--scroll-origin))
+                                     (* 1.2 yunge-reader-reflow-smoke--half-progress)))
+                       (error "Full reflow screen did not exceed half screen"))
                      (setq yunge-reader-reflow-smoke--anchor
                            (copy-tree location)
                            yunge-reader-reflow-smoke--phase 'hidden

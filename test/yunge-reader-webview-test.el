@@ -4,6 +4,7 @@
 
 (require 'yunge-test-helper)
 (require 'yunge-reader-webview)
+(require 'yunge-reader-epub)
 
 (defconst yunge-reader-webview-test--renderer-url
   "http://127.0.0.1:32123/0123456789abcdef0123456789abcdef/app/index.html"
@@ -77,10 +78,6 @@
      (build-id . "test-build")
      (available . t)
      (version . "test-version")
-     (accelerators
-      . ("'" "+" "-" "=" "<escape>" "<next>" "<prior>"
-         "C-d" "C-g" "C-u" "G" "J" "K" "M-m" "SPC"
-         "g" "j" "k" "m" "y"))
      (capabilities
       . ("view-appearance" "view-bounds"
          "view-clear-selection" "view-create"
@@ -101,7 +98,9 @@
           (alist-get 'engine message)
           (pcase system-type
             ('windows-nt "webview2")
-            ('darwin "wkwebview")))
+            ('darwin "wkwebview"))
+          (alist-get 'accelerators message)
+          (copy-sequence yunge-reader-webview--accelerators))
     message))
 
 (defun yunge-reader-webview-test--location (&optional fraction x y)
@@ -1107,18 +1106,16 @@
 (ert-deftest yunge-reader-webview-routes-dismiss-keys-to-owning-window ()
   (let* ((window (selected-window))
          (buffer (window-buffer window))
-         routed
          (view
           (yunge-reader-webview--make-view
            :surface
            (yunge-reader-webview-test--surface
             8 'native-ready :window window)
-           :buffer buffer
-           :accelerator-function
-           (lambda (_view key) (push key routed))))
+           :buffer buffer))
          (yunge-reader-webview--process 'fake-webview-process)
          (yunge-reader-webview--views
           (make-hash-table :test #'eql))
+         (unread-command-events nil)
          requests
          selected
          focused)
@@ -1144,7 +1141,10 @@
            (view . 8)
            (repeat . nil)
            (key . ,key)))))
-    (should (equal (nreverse routed) '("<escape>" "C-g")))
+    (should
+     (equal unread-command-events
+            (append (listify-key-sequence (kbd "<escape>"))
+                    (listify-key-sequence (kbd "C-g")))))
     (should (eq selected window))
     (should (eq focused (window-frame window)))
     (should
@@ -1227,90 +1227,149 @@
        (yunge-reader-webview--surface-focus-release-pending
         (yunge-reader-webview--view-surface view))))))
 
-(ert-deftest yunge-reader-webview-routes-keys-to-the-owning-buffer ()
-  (let* (routed
+(ert-deftest yunge-reader-webview-resolves-focused-reader-keys-in-input-order ()
+  (let* ((window (selected-window))
+         (previous (window-buffer window))
          (buffer (generate-new-buffer " *webview key owner*"))
          (view
           (yunge-reader-webview--make-view
            :surface
-           (yunge-reader-webview-test--surface 9 'ready)
-           :buffer buffer
-           :accelerator-function
-           (lambda (value key)
-             (setq routed (list value key (current-buffer))))))
+           (yunge-reader-webview-test--surface
+            9 'ready :window window)
+           :buffer buffer))
          (yunge-reader-webview--process 'fake-webview-process)
          (yunge-reader-webview--views
-          (make-hash-table :test #'eql)))
+          (make-hash-table :test #'eql))
+         (unread-command-events
+          (listify-key-sequence (kbd "j"))))
     (unwind-protect
         (progn
+          (set-window-buffer window buffer)
+          (with-current-buffer buffer
+            (yunge-reader-mode)
+            (yunge-reader-epub-view-mode 1))
           (puthash 9 view yunge-reader-webview--views)
-          (dolist (key '("y" "j" "k"))
+          (cl-letf
+              (((symbol-function 'select-frame-set-input-focus)
+                #'ignore))
+            (dolist (key '("/" "n" "o" "W" "P"))
+              (yunge-reader-webview--handle-event
+               'fake-webview-process
+               `((kind . "event")
+                 (event . "accelerator")
+                 (view . 9)
+                 (repeat . nil)
+                 (key . ,key)))))
+          (with-current-buffer buffer
+            (dolist (expected
+                     '(("j" . yunge-reader-epub-next-line)
+                       ("/" . yunge-reader-search)
+                       ("n" . yunge-reader-search-next)
+                       ("o" . yunge-reader-outline)
+                       ("W" . yunge-reader-fit-width)
+                       ("P" . yunge-reader-fit-page)))
+              (should
+               (eq (key-binding (read-key-sequence-vector ""))
+                   (cdr expected)))))
+          (let ((overriding-local-map (make-sparse-keymap)))
+            (define-key overriding-local-map (kbd "y") #'ignore)
             (yunge-reader-webview--handle-event
              'fake-webview-process
-             `((kind . "event")
+             '((kind . "event")
                (event . "accelerator")
                (view . 9)
                (repeat . nil)
-               (key . ,key)))
-            (should (equal routed (list view key buffer)))))
+               (key . "y")))
+            (with-current-buffer buffer
+              (should
+               (eq (key-binding (read-key-sequence-vector ""))
+                   #'ignore)))))
+      (set-window-buffer window previous)
       (kill-buffer buffer))))
 
-(ert-deftest yunge-reader-webview-drops-repeated-owning-prefix-keys ()
-  (let* ((buffer (generate-new-buffer " *webview repeated prefix*"))
+(ert-deftest yunge-reader-webview-ignores-keys-from-a-replaced-window ()
+  (let* ((window (selected-window))
+         (previous (window-buffer window))
+         (owner (generate-new-buffer " *stale EPUB owner*"))
          (view
           (yunge-reader-webview--make-view
            :surface
-           (yunge-reader-webview-test--surface 11 'ready)
+           (yunge-reader-webview-test--surface
+            10 'ready :window window)
+           :buffer owner))
+         (yunge-reader-webview--process 'fake-webview-process)
+         (yunge-reader-webview--views
+          (make-hash-table :test #'eql))
+         (unread-command-events nil))
+    (unwind-protect
+        (progn
+          (puthash 10 view yunge-reader-webview--views)
+          (yunge-reader-webview--handle-event
+           'fake-webview-process
+           '((kind . "event")
+             (event . "accelerator")
+             (view . 10)
+             (repeat . nil)
+             (key . "/")))
+          (should (eq (window-buffer window) previous))
+          (should-not unread-command-events))
+      (kill-buffer owner))))
+
+(ert-deftest yunge-reader-webview-drops-repeated-prefix-and-recording-keys ()
+  (let* ((window (selected-window))
+         (buffer (window-buffer window))
+         (view
+          (yunge-reader-webview--make-view
+           :surface
+           (yunge-reader-webview-test--surface
+            11 'ready :window window)
            :buffer buffer))
          (yunge-reader-webview--process 'fake-webview-process)
          (yunge-reader-webview--views
           (make-hash-table :test #'eql))
          (unread-command-events nil)
          focused)
-    (unwind-protect
-        (progn
-          (puthash 11 view yunge-reader-webview--views)
-          (cl-letf
-              (((symbol-function
-                 'yunge-reader-webview--focus-owning-window)
-                (lambda (value) (setq focused value))))
-            (dolist (key '("'" "SPC" "M-m" "g" "m"))
-              (yunge-reader-webview--handle-event
-               'fake-webview-process
-               `((kind . "event")
-                 (event . "accelerator")
-                 (view . 11)
-                 (repeat . t)
-                 (key . ,key))))
-            (should-not focused)
-            (should-not unread-command-events)))
-      (kill-buffer buffer))))
+    (puthash 11 view yunge-reader-webview--views)
+    (cl-letf
+        (((symbol-function
+           'yunge-reader-webview--focus-owning-window)
+          (lambda (value) (setq focused value))))
+      (dolist (key '("'" "SPC" "M-m" "g" "m" "q"))
+        (yunge-reader-webview--handle-event
+         'fake-webview-process
+         `((kind . "event")
+           (event . "accelerator")
+           (view . 11)
+           (repeat . t)
+           (key . ,key))))
+      (should-not focused)
+      (should-not unread-command-events))))
 
-(ert-deftest yunge-reader-webview-keeps-repeated-direct-keys ()
-  (let* (routed
-         (buffer (generate-new-buffer " *webview repeated direct*"))
+(ert-deftest yunge-reader-webview-queues-repeated-movement-keys ()
+  (let* ((window (selected-window))
+         (buffer (window-buffer window))
          (view
           (yunge-reader-webview--make-view
            :surface
-           (yunge-reader-webview-test--surface 9 'ready)
-           :buffer buffer
-           :accelerator-function
-           (lambda (_view key) (setq routed key))))
+           (yunge-reader-webview-test--surface
+            9 'ready :window window)
+           :buffer buffer))
          (yunge-reader-webview--process 'fake-webview-process)
          (yunge-reader-webview--views
-          (make-hash-table :test #'eql)))
-    (unwind-protect
-        (progn
-          (puthash 9 view yunge-reader-webview--views)
-          (yunge-reader-webview--handle-event
-           'fake-webview-process
-           '((kind . "event")
-             (event . "accelerator")
-             (view . 9)
-             (repeat . t)
-             (key . "j")))
-          (should (equal routed "j")))
-      (kill-buffer buffer))))
+          (make-hash-table :test #'eql))
+         (unread-command-events nil))
+    (puthash 9 view yunge-reader-webview--views)
+    (cl-letf (((symbol-function 'select-frame-set-input-focus)
+               #'ignore))
+      (yunge-reader-webview--handle-event
+       'fake-webview-process
+       '((kind . "event")
+         (event . "accelerator")
+         (view . 9)
+         (repeat . t)
+         (key . "j"))))
+    (should (equal (read-key-sequence-vector "")
+                   (vconcat (kbd "j"))))))
 
 (ert-deftest yunge-reader-webview-routes-external-links-to-owning-buffer ()
   (let* (routed
@@ -1349,39 +1408,38 @@
       (kill-buffer buffer))))
 
 (ert-deftest yunge-reader-webview-relays-prefixes-after-returning-focus ()
-  (let* ((buffer (generate-new-buffer " *webview leader owner*"))
+  (let* ((window (selected-window))
+         (buffer (window-buffer window))
          (view
           (yunge-reader-webview--make-view
            :surface
-           (yunge-reader-webview-test--surface 11 'ready)
+           (yunge-reader-webview-test--surface
+            11 'ready :window window)
            :buffer buffer))
          (yunge-reader-webview--process 'fake-webview-process)
          (yunge-reader-webview--views
           (make-hash-table :test #'eql))
          (unread-command-events nil)
          focused)
-    (unwind-protect
-        (progn
-          (puthash 11 view yunge-reader-webview--views)
-          (cl-letf
-              (((symbol-function
-                 'yunge-reader-webview--focus-owning-window)
-                (lambda (value) (setq focused value))))
-            (dolist (key '("'" "SPC" "M-m" "g" "m"))
-              (setq unread-command-events nil
-                    focused nil)
-              (yunge-reader-webview--handle-event
-               'fake-webview-process
-               `((kind . "event")
-                 (event . "accelerator")
-                 (view . 11)
-                 (repeat . nil)
-                 (key . ,key)))
-              (should (eq focused view))
-              (should
-               (equal unread-command-events
-                      (listify-key-sequence (kbd key)))))))
-      (kill-buffer buffer))))
+    (puthash 11 view yunge-reader-webview--views)
+    (cl-letf
+        (((symbol-function
+           'yunge-reader-webview--focus-owning-window)
+          (lambda (value) (setq focused value))))
+      (dolist (key '("'" "SPC" "M-m" "g" "m" "q"))
+        (setq unread-command-events nil
+              focused nil)
+        (yunge-reader-webview--handle-event
+         'fake-webview-process
+         `((kind . "event")
+           (event . "accelerator")
+           (view . 11)
+           (repeat . nil)
+           (key . ,key)))
+        (should (eq focused view))
+        (should
+         (equal unread-command-events
+                (listify-key-sequence (kbd key))))))))
 
 (ert-deftest yunge-reader-webview-rejects-unknown-forwarded-keys ()
   (let ((yunge-reader-webview--process 'fake-webview-process)

@@ -126,8 +126,8 @@ scrolling behavior."
 (defconst yunge-reader-epub-normal-bindings
   `(("j" yunge-reader-epub-next-line "next line")
     ("k" yunge-reader-epub-previous-line "previous line")
-    ("C-d" yunge-reader-epub-next-screen "next screen")
-    ("C-u" yunge-reader-epub-previous-screen "previous screen")
+    ("C-d" yunge-reader-epub-next-half-screen "next half screen")
+    ("C-u" yunge-reader-epub-previous-half-screen "previous half screen")
     ("G" yunge-reader-epub-last-location "last location")
     ("J" yunge-reader-epub-next-page "next page")
     ("K" yunge-reader-epub-previous-page "previous page")
@@ -142,8 +142,8 @@ scrolling behavior."
 (defvar-keymap yunge-reader-epub-view-mode-map
   "j" #'yunge-reader-epub-next-line
   "k" #'yunge-reader-epub-previous-line
-  "C-d" #'yunge-reader-epub-next-screen
-  "C-u" #'yunge-reader-epub-previous-screen
+  "C-d" #'yunge-reader-epub-next-half-screen
+  "C-u" #'yunge-reader-epub-previous-half-screen
   "G" #'yunge-reader-epub-last-location
   "J" #'yunge-reader-epub-next-page
   "K" #'yunge-reader-epub-previous-page
@@ -827,7 +827,6 @@ VALUES is an alist containing complete, already bounded property values."
            #'yunge-reader-epub--location-changed
            :selection-changed-function
            #'yunge-reader-epub--selection-changed
-           :accelerator-function #'yunge-reader-epub--accelerator
            :appearance-function
            #'yunge-reader-epub--resolved-appearance
            :style style
@@ -1287,16 +1286,6 @@ VALUES is an alist containing complete, already bounded property values."
    (yunge-reader-webview--current-ready-view)
    command #'yunge-reader-epub--restore-complete))
 
-(defun yunge-reader-epub--accelerator (view key)
-  "Run normalized WebView KEY for EPUB VIEW through active Emacs maps."
-  (when (and (eq view yunge-reader-webview--buffer-view)
-             yunge-reader-epub-view-mode)
-    (when-let* ((command (key-binding (kbd key) t))
-                ((commandp command)))
-      (let ((this-command command)
-            (real-this-command command))
-        (call-interactively command)))))
-
 (defun yunge-reader-epub-next-screen (&optional count)
   "Move forward COUNT EPUB screens."
   (interactive "p")
@@ -1314,6 +1303,24 @@ VALUES is an alist containing complete, already bounded property values."
       (yunge-reader-epub-next-screen (- count))
     (dotimes (_ count)
       (yunge-reader-epub--navigate "previous-screen"))))
+
+(defun yunge-reader-epub-next-half-screen (&optional count)
+  "Move forward COUNT half EPUB screens."
+  (interactive "p")
+  (setq count (or count 1))
+  (if (< count 0)
+      (yunge-reader-epub-previous-half-screen (- count))
+    (dotimes (_ count)
+      (yunge-reader-epub--navigate "next-half-screen"))))
+
+(defun yunge-reader-epub-previous-half-screen (&optional count)
+  "Move backward COUNT half EPUB screens."
+  (interactive "p")
+  (setq count (or count 1))
+  (if (< count 0)
+      (yunge-reader-epub-next-half-screen (- count))
+    (dotimes (_ count)
+      (yunge-reader-epub--navigate "previous-half-screen"))))
 
 (defun yunge-reader-epub-next-page (&optional count)
   "Move forward COUNT logical EPUB pages."

@@ -7,11 +7,12 @@ use serde_json::Value;
 use super::ViewEvent;
 
 pub(super) const PROTOCOL_VERSION: u32 = 2;
-pub(super) const ACCELERATORS: [&str; 20] = [
-    "'", "+", "-", "=", "<escape>", "<next>", "<prior>", "C-d", "C-g", "C-u", "G", "J", "K", "M-m",
-    "SPC", "g", "j", "k", "m", "y",
+pub(super) const ACCELERATORS: [&str; 29] = [
+    "'", "+", "-", "=", "/", "<escape>", "<next>", "<prior>", "C-d", "C-g", "C-i", "C-o",
+    "C-u", "G", "J", "K", "M-m", "N", "P", "SPC", "W", "g", "j", "k", "m", "n", "o", "q",
+    "y",
 ];
-pub(super) const RENDERER_ACCELERATORS: [&str; 20] = ACCELERATORS;
+pub(super) const RENDERER_ACCELERATORS: [&str; 29] = ACCELERATORS;
 
 #[cfg(any(target_os = "windows", test))]
 pub(super) fn control_accelerator(key: u8) -> Option<&'static str> {

@@ -441,14 +441,17 @@ When REVEAL is non-nil, navigate to the result before painting it."
                  (not (eq (selected-window) window)))
         (select-window window)))))
 
-(defun yunge-reader-webview--relay-owning-key (view key)
-  "Return focus from VIEW and enqueue normalized Emacs KEY."
-  (unless (member key yunge-reader-webview--owning-accelerators)
-    (error "Invalid WebView owning key: %s" key))
-  (yunge-reader-webview--focus-owning-window view)
-  (setq unread-command-events
-        (append (listify-key-sequence (kbd key))
-                unread-command-events)))
+(defun yunge-reader-webview--relay-key (view surface key)
+  "Return focus from VIEW's SURFACE and enqueue normalized Emacs KEY."
+  (when-let* ((window (and surface
+                          (yunge-reader-webview--surface-window surface)))
+              ((window-live-p window))
+              ((eq (window-buffer window)
+                   (yunge-reader-webview--view-buffer view))))
+    (yunge-reader-webview--focus-owning-window view)
+    (setq unread-command-events
+          (append unread-command-events
+                  (listify-key-sequence (kbd key))))))
 
 (defun yunge-reader-webview--finish-outline-waiters
     (view outline error-data)
@@ -805,16 +808,15 @@ queued creation request."
 (cl-defun yunge-reader-webview--attach-shared-publication
     (publication layout resource-root renderer-url broker-session
      &key location location-changed-function selection-changed-function
-     accelerator-function appearance-function style zoom
+     appearance-function style zoom
      zoom-changed-function scroll-bar-function external-link-function)
   "Attach shared PUBLICATION with Reader LAYOUT to the current buffer.
 RESOURCE-ROOT and RENDERER-URL belong to BROKER-SESSION.
 Restore bounded LOCATION when supplied.  Invoke LOCATION-CHANGED-FUNCTION
 with the logical view whenever its renderer reports a stable location.
 Invoke SELECTION-CHANGED-FUNCTION whenever its logical selection changes.
-Invoke ACCELERATOR-FUNCTION with the view and a normalized key when the
-focused native child forwards one.  APPEARANCE-FUNCTION resolves one bounded
-appearance for the surface window.  STYLE or ZOOM is copied into the view.
+APPEARANCE-FUNCTION resolves one bounded appearance for the surface window.
+STYLE or ZOOM is copied into the view.
 Invoke ZOOM-CHANGED-FUNCTION with the view and its effective fixed scale.
 SCROLL-BAR-FUNCTION resolves its mode for the owning Emacs window.
 Invoke EXTERNAL-LINK-FUNCTION with the view and a validated absolute URI."
@@ -851,10 +853,6 @@ Invoke EXTERNAL-LINK-FUNCTION with the view and a validated absolute URI."
              (not (functionp selection-changed-function)))
     (error "Invalid EPUB selection callback: %S"
            selection-changed-function))
-  (when (and accelerator-function
-             (not (functionp accelerator-function)))
-    (error "Invalid EPUB accelerator callback: %S"
-           accelerator-function))
   (when (and zoom-changed-function
              (not (functionp zoom-changed-function)))
     (error "Invalid EPUB zoom callback: %S"
@@ -885,7 +883,6 @@ Invoke EXTERNAL-LINK-FUNCTION with the view and a validated absolute URI."
           :location (and location (copy-tree location))
           :location-changed-function location-changed-function
           :selection-changed-function selection-changed-function
-          :accelerator-function accelerator-function
           :zoom-changed-function zoom-changed-function
           :appearance-function appearance-function
           :scroll-bar-function scroll-bar-function
