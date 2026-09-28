@@ -1,4 +1,4 @@
-;;; yunge-edit.el --- Editing defaults -*- lexical-binding: t; -*-
+;;; yunge-edit.el --- Editing defaults and result editors -*- lexical-binding: t; -*-
 ;; SPDX-FileCopyrightText: 2026 Chen Zhexuan
 ;; SPDX-License-Identifier: MIT
 

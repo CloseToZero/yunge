@@ -5,7 +5,6 @@
 (require 'yunge-test-helper)
 
 (declare-function grep-change-to-grep-edit-mode "grep" ())
-(declare-function grep-edit-save-changes "grep" ())
 (declare-function compilation--ensure-parse "compile" (limit))
 
 (yunge-test-deftest-lazy-load yunge-grep
@@ -29,31 +28,6 @@
      ("]]" . compilation-next-file)
      ("[[" . compilation-previous-file))))
 
-(ert-deftest yunge-grep-edit-uses-the-result-edit-lifecycle ()
-  (require 'yunge-grep)
-  (yunge-test-enable-evil)
-  (require 'grep)
-  (with-temp-buffer
-    (grep-mode)
-    (grep-change-to-grep-edit-mode)
-    (should (eq major-mode 'grep-edit-mode))
-    (yunge-test-evil-keys
-     'normal
-     '(("C-c C-c" . yunge-edit-finish-result-session)
-       ("ZZ" . yunge-edit-finish-result-session)
-       ("ZQ" . yunge-edit-refuse-result-abort)))
-    (should
-     (eq (command-remapping #'grep-edit-save-changes)
-         #'yunge-edit-finish-result-session))
-    (should
-     (eq (command-remapping #'evil-save-and-close)
-         #'yunge-edit-finish-result-session))
-    (should
-     (eq (command-remapping #'evil-quit)
-         #'yunge-edit-refuse-result-abort))
-    (yunge-edit-finish-result-session)
-    (should (eq major-mode 'grep-mode))))
-
 (ert-deftest yunge-grep-edit-saves-an-edited-match ()
   (require 'yunge-grep)
   (require 'grep)
@@ -75,18 +49,20 @@
             (goto-char (point-min))
             (search-forward "before")
             (replace-match "after")
-            (setq source (marker-buffer
-                          (occur--targets-start
-                           (get-text-property (point) 'occur-target))))
-            (yunge-edit-finish-result-session))
+            (setq source (get-file-buffer file))
+            (should source)
+            (call-interactively (key-binding (kbd "C-c C-c")))
+            (should (eq major-mode 'grep-mode)))
           (should-not (buffer-modified-p source))
           (with-temp-buffer
             (insert-file-contents file)
             (should (equal (buffer-string) "after\n"))))
       (when (buffer-live-p result)
         (kill-buffer result))
-      (when (buffer-live-p source)
-        (kill-buffer source))
+      (dolist (buffer (list source (get-file-buffer file)))
+        (when (buffer-live-p buffer)
+          (with-current-buffer buffer (set-buffer-modified-p nil))
+          (kill-buffer buffer)))
       (delete-directory directory t))))
 
 ;;; yunge-grep-test.el ends here

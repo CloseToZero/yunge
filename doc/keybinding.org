@@ -103,22 +103,20 @@ revision without selecting the window used for the preview.
 
 * Edit sessions
 
-An edit session is a temporary editing state with mode-specific finish and
-abort actions.  Use those actions instead of treating its buffer as an
-ordinary file.
+In Org source edit buffers, Wdired, and Magit commit messages:
 
-- ~ZZ~, ~:wq~, and ~:x~ apply the edit and leave the session.
-- ~ZQ~ and ~:q~ abort the edit and leave the session.
+- ~ZZ~, ~:wq~, and ~:x~ finish editing.
+- ~ZQ~ and ~:q~ cancel editing.
 
-Implement these semantics through command remapping so every Evil entry point
-uses the mode's lifecycle.  This convention applies to Org source edit
-buffers, Wdired, and the With-Editor buffers used by Magit.
+Grep, Occur, and Xref result editors update the source buffers as you type.
+Use ~ZZ~, ~:wq~, ~:x~, or ~C-c C-c~ to save the files edited through the
+results and return to the result view.  This saves each affected buffer in
+full, including any changes you made there before editing the results.
+Other buffers are left unsaved.
 
-Grep, Occur, and Xref result editors apply each change to the source buffer as
-it is made, so they have no truthful discard operation.  Their ~ZZ~, ~:wq~,
-~:x~, and native finish command save the source buffers touched during the
-session and return to the result view.  ~ZQ~ and ~:q~ refuse to pretend that
-the changes can be discarded; undo them first, then finish the session.
+To reverse an edit, undo it in the results before finishing.  ~ZQ~ and ~:q~
+report an error and keep the editor open because quitting cannot discard
+changes already applied to the source buffers.
 
 * Completion interfaces
 
