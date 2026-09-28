@@ -1,8 +1,13 @@
-#+title: 方寸（fangcun）
+#+title: 方寸（Fangcun）
 
-Each 一隅（yiyu） is an independent Org note root.  Fangcun indexes ID-based
-nodes from multiple yiyu roots in a local SQLite database.  Configure each
-yiyu with an identifier, display name, and root directory:
+Fangcun indexes Org notes by ID across one or more 一隅（yiyu） roots. Each yiyu is
+an independent directory with an ID and a display name. Notes remain ordinary
+Org files; the index supports finding nodes, links, tags, and backlinks.
+
+* Configure note roots
+
+Create the directories first, then configure non-overlapping roots with unique
+yiyu IDs:
 
 #+begin_src emacs-lisp
 (setq fangcun-yiyus
@@ -10,107 +15,52 @@ yiyu with an identifier, display name, and root directory:
         (work :name "Work" :root "~/notes/work")))
 #+end_src
 
-=M-x fangcun-yiyu-add= selects an existing local directory, records its ID and
-display name in the Custom file, and immediately synchronizes the index.
-=M-x fangcun-yiyu-remove= removes a selected yiyu from the saved configuration
-and index after confirmation.  It never deletes the root directory or its
-notes.  Yiyu IDs must be unique, and yiyu roots cannot overlap.
+=M-x fangcun-yiyu-add= selects an existing local directory and saves it to the
+Custom file. =M-x fangcun-yiyu-remove= removes a root from the configuration and
+index after confirmation; it does not delete notes. Both commands synchronize
+the index after the change.
 
-=M-x fangcun-file-node-create= opens a new unsaved Org file with a file-level
-ID.  It uses the current file's yiyu and directory when possible, otherwise it
-selects a configured yiyu.  The file prompt can navigate to an existing
-subdirectory or name a new one below that yiyu.  An optional title is used
-verbatim as the suggested file name, which is always shown for confirmation.
+* Create and save nodes
 
-=M-x fangcun-heading-node-create= gives the current heading its own local ID.
-It returns an existing heading ID without replacing it.  Save the file to make
-a newly created heading node available through the Fangcun index.
+=M-x fangcun-file-node-create= prepares a new Org file with a file-level =ID=.
+The prompt starts in the current yiyu and directory when possible, and accepts
+a new subdirectory below the chosen root. Confirm the suggested path, then
+*save the buffer*: the new file is indexed after it exists on disk. Paths must
+stay inside their yiyu, end in =.org=, and use portable names; existing files
+are not overwritten.
 
-Every new relative path component is checked for characters and reserved names
-that cannot be shared across the supported platforms.  Invalid input remains in
-the prompt for editing; Fangcun does not rewrite it.  The path must stay inside
-the selected yiyu, and its name must end with =.org= and must not already exist.
-Fangcun creates missing parent directories after the path is accepted.
-
-=M-x fangcun-db-sync= synchronizes the database with the =.org= files below the
-configured yiyu roots.  It indexes added or changed files and removes files
-that no longer exist.  The first synchronization and a change to the yiyu
-configuration rebuild the database.  =M-x fangcun-db-rebuild= always indexes
-every file again.
-
-The first Fangcun command in an Emacs session performs an incremental sync
-before reading the database.  This reconciles changes made while Emacs was not
-running without doing any Fangcun work in sessions that never use it.
-
-Fangcun uses a Rust helper to enumerate files and recursively monitor their
-directories.  File events are combined and processed when Emacs is idle.  The
-helper reports its source build ID when it starts.  If it is missing or does
-not match the tracked build ID, Fangcun continues the current sync with Emacs
-file operations and asks Cargo to build the helper asynchronously.  The build
-output is available in =*Fangcun Helper Build*=.  A missing Cargo or a failed
-helper disables live external-change monitoring, but saving, reverting, manual
-synchronization, and complete rebuilding continue to work.
-
-=M-x fangcun-native-build= rebuilds the helper after changing its Rust sources.
-Cargo refreshes the tracked source build ID during every build.
-The command-line and JSON interface is documented in the
-[[file:../native/fangcun-watch/README.org][native helper protocol]].
-
-A file-level =ID= creates a file node.  A heading =ID= creates a heading node.
-File nodes use =#+title= when present and otherwise use their relative file
-name without the extension.  A heading without text uses its ID as its display
-title.  The =ALIASES= property assigns alternative names to either kind of
-node.  Separate aliases with spaces and quote an alias that contains spaces:
+=M-x fangcun-heading-node-create= adds an =ID= to the current heading, or keeps
+its existing one. Save the file to make a new heading node searchable. File
+nodes use =#+title= when present and otherwise use their yiyu-relative path
+without =.org=; headings use their text, or their ID if the text is empty. Add
+alternate names to a node's property drawer with =ALIASES=:
 
 #+begin_src org
 :PROPERTIES:
-:ID:       42
 :ALIASES:  AI "Artificial Intelligence" 人工智能
 :END:
 #+end_src
 
-The synchronization also indexes =id:= links owned by the nearest enclosing
-node.
+Fangcun indexes =id:= links under their nearest file or heading node. Ordinary
+Org links remain valid; an ID not indexed by Fangcun continues through Org's
+normal lookup.
 
-After the database is initialized, =M-x fangcun-db-update-file= replaces the
-indexed nodes and links for the current saved Org file without processing the
-other yiyu files.  Saving a configured yiyu file performs the same update
-silently.  Reverting a visited yiyu file also updates it from disk.  Renaming or
-deleting a file through Emacs updates the database immediately.  These exact
-updates remain active while native monitoring is running; duplicate native
-events are discarded by comparing the indexed file state.  Set
-=fangcun-db-update-on-save= to =nil= to disable updates after saving.
+* Find, link, and tag
 
-=M-x fangcun-node-find= completes over the titles and aliases of indexed nodes.
-Each candidate shows its owning yiyu, relative file, and either =(file)= or the
-heading's full outline path.  This keeps file and heading nodes distinguishable
-when their titles and files are otherwise identical.  Selecting one opens its
-file and moves to the matching Org ID.
+=M-x fangcun-node-find= searches indexed titles, aliases, and tags, then opens
+the chosen node. Candidates identify the yiyu and relative file; headings also
+show their outline path. =M-x fangcun-node-insert= inserts an =id:= link using
+the same completion. A selected region becomes the link description; on an
+existing =id:= link, the command changes its target and keeps its description.
+Otherwise it uses the selected title or alias.
 
-=M-x fangcun-node-insert= uses the same completion to insert an =id:= link at
-point.  With an active region, completion starts unfiltered; the selected text
-is replaced by the link while remaining its description.  On an existing
-=id:= link, the command changes the target while preserving its description.
-Otherwise, the selected title or alias becomes the link description.
+=M-x org-insert-link= still supports every standard Org link type. Its =id:=
+completion offers Fangcun nodes as well as Org's native heading completion.
 
-Fangcun IDs remain ordinary Org =id:= links.  Org's general
-=M-x org-insert-link= command therefore keeps every standard link type while
-its =id:= completion also offers Fangcun nodes.  Selecting the distinguished
-=Org heading…= candidate enters Org's native heading completion, including its
-ability to create an ID when necessary.  Fangcun supplies default descriptions
-for both heading and file nodes without copying its database into
-=org-id-locations=.
-
-=M-x fangcun-node-set-tags= edits the local tags of the node at point.  File
-nodes use =#+filetags=; heading nodes use heading tags.  Fangcun indexes each
-node's effective Org tags, including tags inherited according to Org's current
-settings.  Completion candidates display these as =#tag= tokens, so node find
-and insert can search by one or more tags.  Fangcun rejects names outside
-Org's tag syntax instead of rewriting them.
-
-Org controls which tags heading nodes inherit.  For example, the following
-keeps type tags on a file node while allowing its other file tags to propagate
-to heading nodes:
+=M-x fangcun-node-set-tags= edits local tags on the node at point: =#+filetags=
+for a file node, heading tags for a heading node. Fangcun indexes effective
+tags, including inheritance allowed by your Org settings. Search candidates
+show them as =#tag= tokens. For example, exclude type tags from inheritance:
 
 #+begin_src emacs-lisp
 (setq org-use-tag-inheritance t
@@ -118,42 +68,56 @@ to heading nodes:
       '("project" "person" "reference"))
 #+end_src
 
-ID links may include an Org search suffix, such as
-=id:NODE-ID::*Heading= or =id:NODE-ID::target=.  The suffix selects a location
-inside the target node, while Fangcun attributes the backlink to the node ID.
+* Follow links and check the graph
 
-Following an ordinary Org =id:= link resolves indexed Fangcun nodes through
-the Fangcun database.  IDs not stored by Fangcun continue through Org's normal
-lookup.
+=M-x fangcun-backlink-find= lets you choose a node linking to the node at point,
+then opens its first matching link. =M-x fangcun-backlinks= shows every indexed
+occurrence, grouped by source node. An =id:= link may include an Org search
+suffix such as =id:NODE-ID::target=; the backlink still belongs to =NODE-ID=.
 
-=M-x fangcun-backlink-find= completes over nodes linking to the node at point.
-Each source node appears once.  Selecting one opens its first indexed link to
-the current node.
+=M-x fangcun-check= scans saved files in every configured yiyu for duplicate
+IDs, ID links without an owning node, and unresolved targets. It does not edit
+notes or the database and can run even when synchronization fails.
 
-=M-x fangcun-backlinks= opens a read-only buffer containing every indexed link
-to the node at point.  Occurrences are grouped by their source node and show the
-source line as a preview.  =RET= visits the link, =gr= refreshes the buffer, and
-=q= closes its window.
+In both results buffers, =RET= visits the item at point. Yunge's Evil Normal
+state also provides =gr= to refresh the results and =q= to close the window.
 
-=M-x fangcun-check= scans the saved Org files below every configured yiyu and
-opens a read-only =*Fangcun Check*= buffer.  It reports duplicate node IDs,
-=id:= links that have no owning file or heading node, and link targets that
-neither Fangcun nor Org can resolve.  The check does not change notes or the
-database, and it does not require synchronization to succeed.  =RET= visits an
-issue, =gr= runs the checks again, and =q= closes the buffer.
+In Yunge's leader map, the common commands are:
 
-The note map provides the frequent Fangcun commands under the global leader:
+| Key         | Action                |
+|-------------+-----------------------|
+| =SPC n c=   | Create heading node   |
+| =SPC n n=   | Create file node      |
+| =SPC n f=   | Find node             |
+| =SPC n i=   | Insert node link      |
+| =SPC n t=   | Set local tags        |
+| =SPC n b f= | Find backlink         |
+| =SPC n b v= | Show backlinks        |
+| =SPC n C=   | Check note graph      |
 
-- =SPC n c= creates a node from the current heading.
-- =SPC n C= checks the configured note graph.
-- =SPC n f= finds a node.
-- =SPC n i= inserts a node link.
-- =SPC n n= creates a file node.
-- =SPC n t= sets the current node's local tags.
-- =SPC n b f= finds a backlink to the current node.
-- =SPC n b v= displays backlinks to the current node.
+* Keep the index current
 
-Fangcun stores its database and native build files under =fangcun-state-directory=,
-which defaults to =var/fangcun/= below =user-emacs-directory=. Set this option
-before loading Fangcun to choose another location. An explicit
-=fangcun-database-file= overrides the database path.
+The first use of the index in an Emacs session synchronizes saved files before
+reading it. Saving or reverting a configured Org file updates that file's
+index entry; renaming or deleting it through Emacs updates the index too.
+=M-x fangcun-db-update-file= updates the current saved file explicitly.
+Set =fangcun-db-update-on-save= to =nil= to disable updates after saving.
+
+Fangcun can use an optional Rust helper to scan roots and watch external file
+changes. Events are processed after an idle delay, so the index need not change
+immediately after an external save. If the helper is absent or cannot run,
+Fangcun still scans with Emacs, but external edits may go unnoticed until you
+run =M-x fangcun-db-sync=. This command adds, updates, and removes index entries
+to match saved Org files. Run =M-x fangcun-db-rebuild= to parse every file again
+when recovering from a damaged or suspect index. Neither command rewrites notes.
+Set =fangcun-native-helper-enabled= to =nil= to disable the helper.
+
+The helper may build asynchronously through Cargo; diagnostics appear in
+=*Fangcun Helper Build*=. =M-x fangcun-native-build= rebuilds it after changing
+its Rust sources. Its command-line protocol is documented in the
+[[file:../native/fangcun-watch/README.org][native helper guide]].
+
+The database and helper build files live under =fangcun-state-directory=, which
+defaults to =var/fangcun/= below =user-emacs-directory=. Set this before loading
+Fangcun to choose another location. An explicit =fangcun-database-file= chooses
+the database path independently.

@@ -1,92 +1,90 @@
 #+title: Yunge MCP
 
-Yunge MCP exposes selected Emacs capabilities to local AI clients through a
-typed Model Context Protocol interface.  The native executable implements the
-stdio protocol and forwards only registered tool calls to the running Yunge
-Emacs.  Emacs owns tool definitions, editor state, and application semantics;
-the executable does not evaluate caller-supplied Lisp or access application
-databases itself.
+Yunge MCP lets local AI clients call selected tools in a running Yunge Emacs.
+Its native stdio executable forwards registered tool requests; Emacs defines
+and executes them. The bridge does not evaluate client-supplied Lisp or edit
+the Fangcun database directly.
 
-The minimal tool set belongs to Fangcun:
+* Install and connect
 
-- =fangcun_list_yiyus= lists the configured note roots by identifier,
-  display name, and absolute root path.
-- =fangcun_search_nodes= searches node titles, aliases, tags, yiyu names, and
-  relative files.  Results are ranked by match quality and use opaque cursor
-  pagination.
-- =fangcun_locate_node= returns one node's absolute file, line range, outline
-  path, and unsaved-buffer state without returning its content.
-- =fangcun_list_backlinks= returns unique source nodes linking to one node,
-  together with each source's occurrence count and first link position.  It
-  uses opaque cursor pagination and does not read note content.
-- =fangcun_create_file_node= creates, saves, and indexes a new Org file node;
-  its =file= argument is a path relative to the selected yiyu root, and missing
-  parent directories are created.  It writes the file-level ID and optional
-  title; agents add note content afterward with their filesystem tools.
-- =fangcun_create_heading_node= gives an existing heading a local =ID=, then
-  saves and indexes it.  The heading is selected by its exact outline path;
-  existing IDs are retained, just like =SPC n c=.
+Keep the Emacs instance that owns your notes running while clients use its
+tools. Building the bridge requires Cargo; installation also needs a working
+=emacsclient= for that Emacs. Run =M-x yunge-mcp-setup= in Emacs to build and
+install the executable, start the Emacs server if needed, and register =yunge=
+in the selected clients' user configuration. Supported targets are Codex,
+Claude Code, Gemini CLI, Cursor, and the default Visual Studio Code profile.
+Targets can be selected even if their applications are not installed yet.
+Build progress and errors appear in =*Yunge MCP build*=.
 
-Heading paths run from the outermost heading to the target and use heading
-titles without TODO keywords, priorities, or tags.  A missing or ambiguous
-path is rejected.  The file-node tool generates a file-level ID while creating
-the file, so a new note is never temporarily an unindexed plain Org file.  Both
-ID tools index their saved result before returning.  The heading tool refuses
-to save a file whose visiting Emacs buffer already has unsaved changes.
+=M-x yunge-mcp-install= builds and installs without changing client
+configuration. =M-x yunge-mcp-register-agents= changes selected client entries
+without rebuilding. Registration preserves unrelated client settings. The
+installed executable has a stable path under =yunge-mcp/bin/= in
+=yunge-var-directory= (by default =var/=); the platform may add an executable
+suffix. The [[file:../native/yunge-mcp/README.org][native bridge guide]] covers its runtime manifest and protocol.
 
-* Direct file workflows
+If a client cannot reach Emacs, check that the configured Emacs server is
+running. After changing the Emacs installation or server connection, run
+=M-x yunge-mcp-install= to refresh the bridge's connection settings. Use the
+same command when the bridge reports that its helper is outdated.
 
-Fangcun yiyus contain ordinary Org files.  When those files are accessible to
-the MCP client, the client uses its own filesystem tools for reading, literal
-full-text search, inserting or deleting links, and general content edits.
-=fangcun_locate_node= bridges semantic node discovery to those tools without
-copying note content into the model context.
+* Fangcun tools
 
-Fangcun watches its configured roots and updates the index after saved external
-changes, so direct file edits do not require an MCP synchronization call.  Use
-the MCP tools only for root discovery, indexed node search, node locations,
-semantic backlinks, and ID-bearing node creation.
+Tool names and JSON arguments are shown below. A node result contains =id=,
+=title=, =aliases=, =tags=, =yiyu=, =yiyuName=, and its yiyu-relative =file=.
 
-Agents write standard Org links and targets directly.  An ID link is
-=[[id:NODE-ID][DESCRIPTION]]= or the bare =[[id:NODE-ID]]= form.  To jump to a
-named target inside that ID node, use
-=[[id:NODE-ID::target][DESCRIPTION]]= and define =<<target>>= there.  A
-standalone target link is =[[target][DESCRIPTION]]= or =[[target]]=.  A radio
-target is =<<<radio target>>>=; later exact plain-text occurrences in the same
-document become links automatically.  Fangcun needs no separate tool for these
-or for other ordinary Org link formats.
+| Tool                          | Arguments                              | Result                                            |
+|-------------------------------+----------------------------------------+---------------------------------------------------|
+| =fangcun_list_yiyus=          | none                                   | Array of configured =id=, =name=, absolute =root= |
+| =fangcun_search_nodes=        | =query=; optional =pageSize=, =cursor= | Ranked =nodes= with =matchedFields=; =nextCursor= |
+| =fangcun_locate_node=         | =id=                                   | =node= and on-disk =location=                      |
+| =fangcun_list_backlinks=      | =id=; optional =pageSize=, =cursor=    | =target=, unique source =backlinks=, =nextCursor= |
+| =fangcun_create_file_node=    | =yiyu=, =file=; optional =title=       | Saved, indexed file node                          |
+| =fangcun_create_heading_node= | =yiyu=, =file=, =headingPath=          | Saved, indexed heading node                       |
 
-* Search and backlink pagination
+Search requires at least one term and ignores case. Every whitespace-separated
+term must match a title, alias, tag, yiyu, or relative file. Each entry in
+=nodes= contains a =node= and its =matchedFields=. Use filesystem search for
+literal text inside notes.
 
-Both =fangcun_search_nodes= and =fangcun_list_backlinks= accept =pageSize=
-between 1 and 100, defaulting to 20.  When more results exist, the response
-contains an opaque =nextCursor=.  Pass that value back as =cursor= with the
-same query or target ID to read the next page.  A response without
-=nextCursor= is the final page.
+Each backlink result has a =source= node, =occurrenceCount=, and =firstPosition=.
+The position is a one-based Emacs character position in the source file.
+Repeated links in one source count as one paged result.
 
-Search requires every whitespace-separated query term to match.  Results
-prefer exact title or alias matches, then prefixes, word and substring
-matches, tags, relative files, and yiyu identifiers or names.  Ties have a
-stable node order.  Each result reports =matchedFields= so a caller can see
-why it matched without depending on an internal numeric score.
+=fangcun_locate_node= returns =absoluteFile=, =kind=, inclusive one-based
+=startLine= and =endLine=, =outlinePath=, and =modifiedInEmacs=. A file node's
+range covers the saved file; a heading node's range covers its subtree.
+=modifiedInEmacs= reports whether a visiting buffer has unsaved edits. The
+returned location describes the saved file; reconcile unsaved edits before
+changing that file externally.
 
-Backlinks are paged by unique source node rather than individual link
-occurrence.  Repeated links in one source produce one result containing
-=occurrenceCount= and =firstPosition=.
+For paged tools, =pageSize= defaults to 20 and must be 1–100. If =nextCursor=
+is present, pass it as =cursor= with the same query or target ID. Its contents
+are opaque; absence of =nextCursor= means the final page.
 
-Run =M-x yunge-mcp-setup= to build and install the server, then declare it in
-the user configuration of selected AI agents.  The prompt always lists every
-supported agent; an agent need not be installed before it is selected.
-The initial clients are Codex, Claude Code, Gemini CLI, Cursor, and the default
-Visual Studio Code profile.
+* Work with note files
 
-The installed executable has the stable path
-=var/yunge-mcp/bin/yunge-mcp=, with the platform's executable suffix where
-required.  Agent declarations keep pointing to this path when the server is
-rebuilt.  Existing agent configuration is retained; setup owns only the MCP
-server entry named =yunge=.
+Use =fangcun_list_yiyus= to discover accessible roots, then
+=fangcun_search_nodes= and =fangcun_locate_node= to find a semantic node and
+its saved file location. Use the client's filesystem tools to read content,
+search literal text, edit existing files, or add standard Org links. For
+example, =[[id:NODE-ID][description]]= links to a node; an optional Org search
+suffix, as in =[[id:NODE-ID::target][description]]=, locates a target inside it.
 
-Use =M-x yunge-mcp-install= to rebuild without changing agent configuration,
-or =M-x yunge-mcp-register-agents= to change declarations without rebuilding.
-The bridge protocol and runtime manifest are documented in
-[[file:../native/yunge-mcp/README.org][the native bridge documentation]].
+To create a new note, prefer =fangcun_create_file_node=: =file= is a portable
+=.org= path relative to the chosen yiyu root, and missing parent directories
+are created. The tool writes a file-level ID, saves, and indexes the new file
+before returning successfully. Add content afterward using filesystem tools.
+It rejects an existing path.
+
+To make a heading in an *existing* file into a node, call
+=fangcun_create_heading_node=. Its =headingPath= is a nonempty JSON array of
+exact titles from outermost heading to target, excluding TODO keywords,
+priorities, and tags. Missing or ambiguous paths fail; an existing local ID
+is kept. The tool refuses to save a file already modified in a visiting Emacs
+buffer. Save or reconcile those changes first.
+
+Saved edits made outside Emacs are indexed after Fangcun's optional watcher
+notices them and Emacs processes the events. If monitoring is unavailable or
+the index looks stale, run =M-x fangcun-db-sync= in Emacs. There is no MCP sync
+tool. See the [[file:fangcun.org][Fangcun guide]] for index recovery and checking links.

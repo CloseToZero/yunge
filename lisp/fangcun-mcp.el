@@ -651,10 +651,10 @@ optional annotations, in that order."
             "including their identifiers, display names, and absolute root paths. "
             "These are ordinary Org files: when a root is accessible, use the "
             "client's filesystem tools for normal reads, literal full-text search, "
-            "link editing, and edits to existing files. Always create a new note "
-            "file with fangcun_create_file_node rather than a filesystem tool; "
-            "otherwise it will lack the file-level ID required by Fangcun. Fangcun "
-            "watches saved external changes and updates its index automatically.")
+            "link editing, and edits to existing files. Use "
+            "fangcun_create_file_node to create and index a new ID-bearing note. "
+            "When native monitoring is active, Fangcun indexes saved external "
+            "changes after an idle delay; otherwise run fangcun-db-sync in Emacs.")
            '(:type "object" :additionalProperties :false)
            #'fangcun-mcp--list-yiyus
            fangcun-mcp--read-only-annotations)
@@ -719,12 +719,10 @@ optional annotations, in that order."
   (funcall register-tool
            "fangcun_create_file_node"
            (concat
-            "Always use this tool to create a new 方寸（Fangcun） Org note file; "
-            "never create one directly with a filesystem tool, because that would "
-            "omit the required file-level ID. This tool creates and saves the file "
-            "with a file-level note node in a configured 一隅（yiyu）, assigns its "
-            "unique Org ID, and indexes it before return. Add note content afterward "
-            "with the client's filesystem tools.")
+            "Create a new 方寸（Fangcun） Org note file in a configured "
+            "一隅（yiyu）. This tool assigns its file-level Org ID, saves the file, "
+            "and indexes the node before returning successfully. Add note content "
+            "afterward with the client's filesystem tools.")
            '(:type "object"
                    :properties
                    (:yiyu
