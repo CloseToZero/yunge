@@ -315,7 +315,7 @@ the log.  Setup does not uninstall MiKTeX or roll back packages after a later
 stage fails: some state may have existed before the command, so removing it
 would be unsafe.  The operation is repeatable and a later invocation continues
 from the installed state.  If Emacs itself is forcibly terminated, its
-temporary directory may remain below =var/shuying/setup/= and can be removed
+temporary directory may remain in =setup/= below =shuying-state-directory= and can be removed
 manually.
 
 MiKTeX can install a missing package on demand, but unattended preview jobs

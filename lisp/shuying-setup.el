@@ -4,7 +4,16 @@
 
 (require 'seq)
 (require 'subr-x)
-(require 'yunge-state)
+(require 'shuying)
+
+(defconst shuying-setup--windows-script
+  (expand-file-name
+   "../script/shuying-setup-windows.ps1"
+   (file-name-directory
+    (or load-file-name
+        (locate-library "shuying-setup")
+        (error "Cannot locate the Shuying setup library"))))
+  "Bundled Windows dependency setup script.")
 
 (defcustom shuying-setup-windows-download-page
   "https://miktex.org/download"
@@ -23,35 +32,32 @@
   (or (executable-find "pwsh.exe")
       (executable-find "powershell.exe")))
 
-(defun shuying-setup--script ()
-  "Return the Windows setup script path."
-  (expand-file-name
-   "script/shuying-setup-windows.ps1" yunge-config-directory))
+(defun shuying-setup--work-root ()
+  "Return the directory containing setup runs."
+  (expand-file-name "setup/" shuying-state-directory))
 
-(defun shuying-setup--work-directory ()
-  "Create and return a private directory for one setup run."
-  (let ((root (yunge-var-subdirectory "shuying/setup")))
-    (make-directory root t)
-    (make-temp-file (expand-file-name "run-" root) t)))
+(defun shuying-setup--make-work-directory (root)
+  "Create and return a private directory under ROOT for one setup run."
+  (make-directory root t)
+  (make-temp-file (expand-file-name "run-" root) t))
 
-(defun shuying-setup--owned-work-directory-p (directory)
-  "Return non-nil when DIRECTORY is a setup work directory Shuying owns."
+(defun shuying-setup--owned-work-directory-p (directory root)
+  "Return non-nil when DIRECTORY is a setup work directory under ROOT."
   (when (and directory (file-directory-p directory))
     (let ((root (file-name-as-directory
-                 (file-truename
-                  (yunge-var-subdirectory "shuying/setup"))))
+                 (file-truename root)))
           (target (file-truename directory)))
       (and (file-in-directory-p target root)
            (string-prefix-p
             "run-" (file-name-nondirectory
                     (directory-file-name target)))))))
 
-(defun shuying-setup--cleanup (directory &optional retries)
-  "Delete the temporary setup DIRECTORY.
+(defun shuying-setup--cleanup (directory root &optional retries)
+  "Delete the temporary setup DIRECTORY owned by ROOT.
 RETRIES is the number of nonblocking retries after a sharing violation.
 Report cleanup failures without hiding the setup result."
   (when (and directory (file-exists-p directory))
-    (if (not (shuying-setup--owned-work-directory-p directory))
+    (if (not (shuying-setup--owned-work-directory-p directory root))
         (display-warning
          'shuying
          (format "Refusing to remove unowned setup directory: %s"
@@ -63,14 +69,14 @@ Report cleanup failures without hiding the setup result."
          (if (> (or retries 4) 0)
              (run-at-time
               0.5 nil #'shuying-setup--cleanup
-              directory (1- (or retries 4)))
+              directory root (1- (or retries 4)))
            (display-warning
             'shuying
             (format "Could not remove Shuying setup files in %s: %s"
                     directory (error-message-string error-data))
             :warning)))))))
 
-(defun shuying-setup--installed-bin (buffer)
+(defun shuying-setup--installed-bin-directory (buffer)
   "Return the MiKTeX binary directory reported in BUFFER."
   (with-current-buffer buffer
     (save-excursion
@@ -105,23 +111,20 @@ Report cleanup failures without hiding the setup result."
                   directory
                 (concat directory path-separator path))))))
 
-(defun shuying-setup--sentinel (process _event &optional work-directory)
+(defun shuying-setup--sentinel (process _event work-directory work-root)
   "Finish setup after PROCESS exits."
   (when (and (memq (process-status process) '(exit signal))
              (not (process-get process 'shuying-setup-finished)))
     (process-put process 'shuying-setup-finished t)
     (let* ((status (process-exit-status process))
-           (buffer (process-buffer process))
-           (work-directory
-            (or work-directory
-                (process-get process 'shuying-setup-work-directory))))
+           (buffer (process-buffer process)))
       (when (eq process shuying-setup--process)
         (setq shuying-setup--process nil))
       (unwind-protect
           (if (zerop status)
               (progn
                 (when-let* ((directory
-                             (shuying-setup--installed-bin buffer)))
+                             (shuying-setup--installed-bin-directory buffer)))
                   (shuying-setup--add-exec-directory directory))
                 (message "Shuying dependencies are ready"))
             (display-buffer buffer)
@@ -133,14 +136,14 @@ Report cleanup failures without hiding the setup result."
              :error))
         ;; The PowerShell script cleans up in its `finally' block.  This is
         ;; a fallback for startup failures and externally terminated runs.
-        (shuying-setup--cleanup work-directory)))))
+        (shuying-setup--cleanup work-directory work-root)))))
 
 (defun shuying-setup--windows ()
   "Set up Shuying's external dependencies on Windows."
   (when (process-live-p shuying-setup--process)
     (user-error "Shuying setup is already running"))
   (let ((powershell (shuying-setup--powershell))
-        (script (shuying-setup--script)))
+        (script shuying-setup--windows-script))
     (unless powershell
       (user-error "PowerShell is required to set up Shuying on Windows"))
     (unless (file-readable-p script)
@@ -152,13 +155,14 @@ Report cleanup failures without hiding the setup result."
           "per-user MiKTeX and TeX packages. "))
       (user-error "Shuying setup cancelled"))
     (let* ((buffer (get-buffer-create shuying-setup--log-buffer-name))
-           (work-directory (shuying-setup--work-directory))
+           (work-root (shuying-setup--work-root))
+           (work-directory (shuying-setup--make-work-directory work-root))
            process)
       (with-current-buffer buffer
         (let ((inhibit-read-only t))
           (erase-buffer)
           (insert "Shuying dependency setup\n\n"))
-        (setq default-directory yunge-config-directory)
+        (setq default-directory (file-name-directory script))
         (compilation-mode))
       (condition-case error-data
           (setq process
@@ -174,24 +178,23 @@ Report cleanup failures without hiding the setup result."
                   "-ExecutionPolicy" "Bypass"
                   "-File" script
                   "-WorkDirectory" work-directory
-                  "-WorkRoot" (yunge-var-subdirectory "shuying/setup")
+                  "-WorkRoot" work-root
                   "-DownloadPage" shuying-setup-windows-download-page)
                  :connection-type 'pipe
                  :coding 'utf-8-dos
                  :sentinel
                  (lambda (child event)
                    (shuying-setup--sentinel
-                    child event work-directory))))
+                    child event work-directory work-root))))
         (error
-         (shuying-setup--cleanup work-directory)
+         (shuying-setup--cleanup work-directory work-root)
          (signal (car error-data) (cdr error-data))))
-      (process-put process 'shuying-setup-work-directory work-directory)
       (unless (process-get process 'shuying-setup-finished)
         (setq shuying-setup--process process))
       ;; A very short-lived PowerShell process can exit before Emacs returns
       ;; from `make-process'.  Complete it here if its sentinel has not run.
       (when (memq (process-status process) '(exit signal))
-        (shuying-setup--sentinel process "finished" work-directory))
+        (shuying-setup--sentinel process "finished" work-directory work-root))
       (display-buffer buffer)
       process)))
 

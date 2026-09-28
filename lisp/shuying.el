@@ -10,10 +10,10 @@
 
 (defcustom shuying-state-directory
   (expand-file-name "var/shuying/" user-emacs-directory)
-  "Directory containing Shuying rendering state.
-Set this before loading Shuying to change the default cache, work, and
-LaTeX format directories.  Explicit values for those directories take
-precedence over this default."
+  "Directory containing Shuying state.
+Set this before loading Shuying to change the default cache, render work,
+LaTeX format, and dependency setup directories.  Explicit values for the
+cache, work, and format directories take precedence over this default."
   :type 'directory
   :group 'shuying)
 
