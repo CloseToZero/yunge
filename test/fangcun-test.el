@@ -6,11 +6,6 @@
 (require 'fangcun)
 (require 'fangcun-mcp)
 
-(declare-function yunge-jump-history--track-navigation
-                  "yunge-jump-history")
-(declare-function yunge-jump-history-backward "yunge-jump-history")
-(declare-function yunge-jump-history-forward "yunge-jump-history")
-
 (defun fangcun-test--write-file (file contents)
   "Write CONTENTS to FILE, creating its parent directory."
   (make-directory (file-name-directory file) t)
@@ -82,21 +77,54 @@
      (equal (fangcun-node-id node) id))
    nodes))
 
-(ert-deftest fangcun-database-file-requires-an-absolute-path ()
-  (should
-   (equal fangcun-database-file
-          (expand-file-name "fangcun/fangcun.sqlite"
-                            yunge-var-directory)))
-  (let ((symbol (make-symbol "fangcun-test-database-file"))
-        (file
-         (expand-file-name "fangcun.sqlite" temporary-file-directory)))
-    (should-error
-     (fangcun--set-database-file symbol "fangcun.sqlite"))
-    (fangcun--set-database-file symbol file)
-    (should (equal (default-value symbol) file))
-    (should
-     (eq (get 'fangcun-database-file 'custom-set)
-         #'fangcun--set-database-file))))
+(ert-deftest fangcun-indexes-without-yunge-state-or-history ()
+  (yunge-test-run-emacs
+   "--eval"
+   (prin1-to-string
+    '(let* ((root (make-temp-file "fangcun-independent-" t))
+            (notes (expand-file-name "notes/" root))
+            (file (expand-file-name "example.org" notes))
+            (state (expand-file-name "state/" root)))
+       (unwind-protect
+           (progn
+             (make-directory notes t)
+             (with-temp-file file
+               (insert ":PROPERTIES:\n:ID: independent\n:END:\n"
+                       "#+title: Independent\n"))
+             (setq fangcun-state-directory state
+                   fangcun-yiyus `((notes :name "Notes" :root ,notes))
+                   fangcun-native-helper-enabled nil)
+             (require 'fangcun)
+             (fangcun-db-sync t)
+             (unless (and (file-exists-p
+                           (expand-file-name "fangcun.sqlite" state))
+                          (equal (fangcun-node-title
+                                  (fangcun-node-from-id "independent"))
+                                 "Independent"))
+               (error "Standalone Fangcun did not index its configured state"))
+             (when (or (featurep 'yunge-state)
+                       (featurep 'yunge-jump-history))
+               (error "Standalone Fangcun loaded Yunge state or history")))
+         (delete-directory root t))))))
+
+(ert-deftest fangcun-database-customization-requires-an-absolute-path ()
+  (yunge-test-run-emacs
+   "--eval"
+   (prin1-to-string
+    '(progn
+       (require 'fangcun)
+       (let ((file (expand-file-name
+                    "fangcun.sqlite" temporary-file-directory)))
+         (unless (condition-case nil
+                     (progn
+                       (customize-set-variable
+                        'fangcun-database-file "fangcun.sqlite")
+                       nil)
+                   (error t))
+           (error "Customize accepted a relative Fangcun database path"))
+         (customize-set-variable 'fangcun-database-file file)
+         (unless (equal fangcun-database-file file)
+           (error "Customize did not set the database path")))))))
 
 (ert-deftest fangcun-detects-nonportable-file-names ()
   (dolist (name
@@ -1515,23 +1543,13 @@
                   (should
                    (equal (button-label second) "Second reference"))
                   (goto-char (button-start second))
-                  (let ((origin (point)))
-                    (set-window-parameter nil 'yunge-jump-history nil)
-                    (call-interactively #'fangcun-backlink-visit)
-                    (should (equal (buffer-file-name) source-file))
-                    (should
-                     (looking-at-p
-                      "\\[\\[id:work-file\\]\\[Second reference\\]\\]"))
-                    (yunge-jump-history-backward)
-                    (should (eq (current-buffer) buffer))
-                    (should (= (point) origin))
-                    (yunge-jump-history-forward)
-                    (should (equal (buffer-file-name) source-file))
-                    (set-window-parameter
-                     nil 'yunge-jump-history nil))))))
+                  (call-interactively #'fangcun-backlink-visit)
+                  (should (equal (buffer-file-name) source-file))
+                  (should
+                   (looking-at-p
+                    "\\[\\[id:work-file\\]\\[Second reference\\]\\]"))))))
         (when (buffer-live-p buffer)
-          (kill-buffer buffer))
-        (set-window-parameter nil 'yunge-jump-history nil)))))
+          (kill-buffer buffer))))))
 
 (ert-deftest fangcun-backlink-previews-reuse-only-matching-buffer ()
   (fangcun-test-with-notes
@@ -1583,61 +1601,6 @@
             (set-buffer-modified-p nil)))
         (when (buffer-live-p backlinks-buffer)
           (kill-buffer backlinks-buffer))))))
-
-(ert-deftest fangcun-jumps-participate-in-window-history ()
-  (dolist (command '(fangcun-node-find fangcun-backlink-visit))
-    (should
-     (advice-member-p
-      #'yunge-jump-history--track-navigation command)))
-  (yunge-test-enable-evil)
-  (fangcun-test-with-notes
-    (fangcun-db-sync)
-    (let ((origin (generate-new-buffer " *fangcun-jump-origin*")))
-      (unwind-protect
-          (save-window-excursion
-            (delete-other-windows)
-            (switch-to-buffer origin)
-            (insert "0123456789")
-            (goto-char 4)
-            (set-window-parameter nil 'yunge-jump-history nil)
-
-            (let (cancelled)
-              (cl-letf
-                  (((symbol-function 'completing-read)
-                    (lambda (&rest _arguments)
-                      (signal 'quit nil))))
-                (condition-case nil
-                    (fangcun-node-find)
-                  (quit (setq cancelled t))))
-              (should cancelled))
-            (should (eq (current-buffer) origin))
-            (should (= (point) 4))
-            (should-error
-             (yunge-jump-history-backward) :type 'user-error)
-
-            (set-window-parameter nil 'yunge-jump-history nil)
-            (cl-letf
-                (((symbol-function 'completing-read)
-                  (lambda (_prompt collection &rest _arguments)
-                    (car
-                     (seq-find
-                      (lambda (item)
-                        (string-prefix-p "A theorem" (car item)))
-                      collection)))))
-              (fangcun-node-find))
-            (should (equal (buffer-file-name) personal-file))
-            (should (equal (org-id-get) "theorem"))
-
-            (yunge-jump-history-backward)
-            (should (eq (current-buffer) origin))
-            (should (= (point) 4))
-
-            (yunge-jump-history-forward)
-            (should (equal (buffer-file-name) personal-file))
-            (should (equal (org-id-get) "theorem")))
-        (when (buffer-live-p origin)
-          (kill-buffer origin))
-        (set-window-parameter nil 'yunge-jump-history nil)))))
 
 (ert-deftest fangcun-find-shows-owner-and-locates-id ()
   (fangcun-test-with-notes

@@ -3,6 +3,14 @@
 ;; SPDX-License-Identifier: MIT
 
 (require 'yunge-evil)
+(require 'yunge-state)
+(require 'yunge-jump-history)
+
+;; Choose Fangcun's state location before Org hooks can load it.
+;; `defvar' preserves a user-configured value.
+(defvar fangcun-state-directory
+  (yunge-var-subdirectory "fangcun"))
+
 (require 'fangcun-loader)
 (require 'yunge-key)
 
@@ -60,6 +68,11 @@ context."
 
 (advice-add 'fangcun-node-insert :around
             #'yunge-fangcun--insert-node-link-at-normal-state-eol)
+
+(with-eval-after-load 'fangcun
+  (dolist (command '(fangcun-node-find fangcun-backlink-visit
+                     fangcun-check-visit))
+    (yunge-jump-history-track-command command)))
 
 (yunge-key-define yunge-fangcun-backlink-map
                   yunge-fangcun-backlink-bindings)

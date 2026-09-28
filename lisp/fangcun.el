@@ -7,14 +7,27 @@
 (require 'crm)
 (require 'fangcun-loader)
 (require 'json)
-(require 'yunge-state)
 (require 'org)
 (require 'org-element)
 (require 'org-id)
 (require 'seq)
 (require 'sqlite)
 (require 'subr-x)
-(require 'yunge-jump-history)
+
+(defun fangcun--set-state-directory (symbol value)
+  "Set SYMBOL to the normalized absolute directory VALUE."
+  (unless (and (stringp value) (file-name-absolute-p value))
+    (error "%s must be an absolute directory: %S" symbol value))
+  (set-default symbol (file-name-as-directory (expand-file-name value))))
+
+(defcustom fangcun-state-directory
+  (expand-file-name "var/fangcun/" user-emacs-directory)
+  "Directory for Fangcun state and native build output.
+Set this before loading Fangcun to change the default database file.
+An explicit `fangcun-database-file' overrides this default."
+  :type 'directory
+  :set #'fangcun--set-state-directory
+  :group 'fangcun)
 
 (defun fangcun--set-database-file (symbol value)
   "Set SYMBOL to the normalized absolute file name VALUE."
@@ -23,7 +36,7 @@
   (set-default symbol (expand-file-name value)))
 
 (defcustom fangcun-database-file
-  (yunge-var-file "fangcun" "fangcun.sqlite")
+  (expand-file-name "fangcun.sqlite" fangcun-state-directory)
   "Absolute file name of the SQLite database used by Fangcun."
   :type 'file
   :set #'fangcun--set-database-file
@@ -724,7 +737,8 @@ When INCLUDE-UNOWNED is non-nil, retain links outside Fangcun nodes."
 
 (defun fangcun--cargo-target-directory ()
   "Return the Cargo target directory for Fangcun native packages."
-  (yunge-var-subdirectory "fangcun/cargo-target"))
+  (file-name-as-directory
+   (expand-file-name "cargo-target" fangcun-state-directory)))
 
 (defun fangcun--native-helper-program ()
   "Return the expected Fangcun helper executable."
@@ -2679,10 +2693,6 @@ Each source file is read from disk at most once."
       (fangcun-check-refresh))
     (pop-to-buffer buffer)
     buffer))
-
-(dolist (command '(fangcun-node-find fangcun-backlink-visit
-                   fangcun-check-visit))
-  (yunge-jump-history-track-command command))
 
 (provide 'fangcun)
 

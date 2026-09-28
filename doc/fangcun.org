@@ -153,5 +153,7 @@ The note map provides the frequent Fangcun commands under the global leader:
 - =SPC n b f= finds a backlink to the current node.
 - =SPC n b v= displays backlinks to the current node.
 
-The database defaults to =var/fangcun/fangcun.sqlite= below
-=user-emacs-directory=.
+Fangcun stores its database and native build files under =fangcun-state-directory=,
+which defaults to =var/fangcun/= below =user-emacs-directory=. Set this option
+before loading Fangcun to choose another location. An explicit
+=fangcun-database-file= overrides the database path.
