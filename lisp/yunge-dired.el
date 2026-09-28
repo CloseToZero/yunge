@@ -73,11 +73,12 @@
       (dired-dnd-handle-file uri action)
     (dired-dnd-handle-local-file uri action)))
 
-(defun yunge-dired--perform-file-drop (window uris action)
-  "Perform ACTION on file URIS dropped into WINDOW.
-ACTION is `open', `copy', `move', or `link'."
-  (require 'dnd)
-  (with-selected-window window
+(defun yunge-dired-handle-file-drop (uris _source-action)
+  "Ask how to handle a batch of file URIS dropped into Dired.
+Ignore SOURCE-ACTION because drag-and-drop backends derive it
+inconsistently from keyboard modifiers and the source application."
+  (when-let* ((action (yunge-dired--drop-action-menu uris)))
+    (require 'dnd)
     (let ((result (if (eq action 'open) 'private action)))
       (dolist (uri uris)
         (let ((performed
@@ -87,13 +88,6 @@ ACTION is `open', `copy', `move', or `link'."
           (unless (eq performed result)
             (setq result 'private))))
       result)))
-
-(defun yunge-dired-handle-file-drop (uris _source-action)
-  "Ask how to handle a batch of file URIS dropped into Dired.
-Ignore SOURCE-ACTION because drag-and-drop backends derive it
-inconsistently from keyboard modifiers and the source application."
-  (when-let* ((action (yunge-dired--drop-action-menu uris)))
-    (yunge-dired--perform-file-drop (selected-window) uris action)))
 
 (put 'yunge-dired-handle-file-drop 'dnd-multiple-handler t)
 

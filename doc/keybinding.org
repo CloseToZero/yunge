@@ -310,6 +310,12 @@ revealed in the local file manager.
 On Windows, revealing multiple files uses PowerShell.  If PowerShell is
 unavailable, only the first selected file is revealed.
 
+Dragging files into a Dired window opens a menu for the whole group: Open,
+Copy here, Move here, Link here, or Cancel.  Choose the action in this menu;
+keyboard modifiers do not select it.  Open visits the files in Emacs.  Copy,
+move, and link use the target Dired directory.  Cancel leaves the files
+unchanged.
+
 * Org buffers
 
 Org buffers use Evil's general editing model while making common motions,
