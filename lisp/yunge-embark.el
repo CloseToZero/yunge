@@ -23,9 +23,9 @@
   "git\\\\?@[[:alnum:].-]+:[[:alnum:]_~./-]+"
   "SCP-style Git address, optionally with an escaped at sign.")
 
-(defun yunge-embark-git-ssh-to-https (address)
+(defun yunge-embark-copy-git-ssh-as-https (address)
   "Convert Git SSH ADDRESS to HTTPS and copy it to the kill ring."
-  (interactive "sGit SSH address: ")
+  (interactive (list (read-string "Git SSH address: ")))
   (unless (string-match
            (concat "\\`" yunge-embark--git-ssh-regexp "\\'") address)
     (user-error "Not a Git SSH address: %s" address))
@@ -52,7 +52,7 @@
 
 (defvar-keymap yunge-embark-git-ssh-map
   :doc "Actions for Git SSH addresses."
-  "h" #'yunge-embark-git-ssh-to-https)
+  "h" #'yunge-embark-copy-git-ssh-as-https)
 
 (defun yunge-embark--setup-git-ssh-target ()
   "Register Git SSH addresses and their actions with Embark."

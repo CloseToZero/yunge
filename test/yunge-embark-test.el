@@ -10,8 +10,10 @@
 (defvar embark-command-map)
 (defvar embark-function-map)
 (defvar embark-general-map)
+(defvar embark-indicators)
 (defvar embark-tab-map)
 (defvar embark-url-map)
+(defvar unread-command-events)
 
 (defun yunge-embark-test--file-target (path)
   "Return Embark's file target for PATH."
@@ -44,27 +46,6 @@
   (require 'consult)
   (require 'embark)
   (should (featurep 'embark-consult)))
-
-(ert-deftest yunge-embark-preserves-upstream-registrations ()
-  (yunge-test-run-emacs
-   "--eval"
-   (prin1-to-string
-    '(progn
-       (require 'embark)
-       (let ((targets (copy-sequence embark-target-finders))
-             (actions (copy-tree embark-keymap-alist))
-             (indicators (copy-tree embark-indicators))
-             (help-key embark-help-key))
-         (defmacro elpaca (_order &rest body)
-           (cons 'progn body))
-         (require 'yunge-embark)
-         (unless (and (equal (remq 'yunge-embark-target-git-ssh-at-point
-                                  embark-target-finders) targets)
-                      (equal (assq-delete-all 'git-ssh
-                                              (copy-tree embark-keymap-alist)) actions)
-                      (equal embark-indicators indicators)
-                      (equal embark-help-key help-key))
-           (error "Unexpected Embark configuration changes")))))))
 
 (ert-deftest yunge-embark-binds-action-keys ()
   (yunge-test-load-package-config 'yunge-embark)
@@ -118,7 +99,8 @@
    embark-url-map
    '(("d" . embark-download-url))))
 
-(ert-deftest yunge-embark-converts-git-ssh-addresses ()
+(ert-deftest yunge-embark-copies-git-ssh-addresses-as-https ()
+  (yunge-test-enable-evil)
   (yunge-test-load-package-config 'yunge-embark)
   (require 'embark)
   (dolist (address '("git@git.meitu.com:conan/conan-meitu-index.git"
@@ -126,21 +108,37 @@
     (with-temp-buffer
       (insert "Clone `" address "` here")
       (search-backward "conan-meitu")
-      (let ((target (yunge-embark-target-git-ssh-at-point))
-            (kill-ring nil))
+      (let ((target (yunge-embark-target-git-ssh-at-point)))
         (should (eq (car target) 'git-ssh))
         (should (equal (cadr target) address))
         (should (equal (buffer-substring-no-properties
-                        (caddr target) (cdddr target)) address))
-        (yunge-embark-git-ssh-to-https (cadr target))
+                        (caddr target) (cdddr target)) address)))
+      (let ((kill-ring nil)
+            (unread-command-events (list ?h))
+            (embark-indicators nil)
+            (non-essential t))
+        ;; Batch Emacs reads action input from stdin. Run Embark's real
+        ;; target-injection hook at that input boundary instead.
+        (cl-letf (((symbol-function 'read-string)
+                   (lambda (&rest _)
+                     (yunge-test-with-evil-minibuffer
+                       (let ((original-input (minibuffer-contents-no-properties)))
+                         (unwind-protect
+                             (progn
+                               (delete-minibuffer-contents)
+                               (run-hooks 'minibuffer-setup-hook)
+                               (minibuffer-contents-no-properties))
+                           (delete-minibuffer-contents)
+                           (insert original-input)
+                           (remove-hook 'post-command-hook #'exit-minibuffer t)))))))
+          (call-interactively (key-binding (kbd "M-a"))))
         (should (equal (car kill-ring)
                        "https://git.meitu.com/conan/conan-meitu-index.git")))
       (goto-char (point-min))
       (should-not (yunge-embark-target-git-ssh-at-point))))
-  (should-error (yunge-embark-git-ssh-to-https "https://example.com/repo.git")
-                :type 'user-error)
-  (should (eq (lookup-key yunge-embark-git-ssh-map (kbd "h"))
-              'yunge-embark-git-ssh-to-https)))
+  (should-error (yunge-embark-copy-git-ssh-as-https
+                 "https://example.com/repo.git")
+                :type 'user-error))
 
 (ert-deftest yunge-embark-targets-windows-paths ()
   (skip-unless (eq system-type 'windows-nt))

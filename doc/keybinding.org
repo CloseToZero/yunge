@@ -144,6 +144,14 @@ without closing the prompt; ~RET~ still runs that prompt's acceptance action.
 These bindings apply only while completion is active.  The surrounding mode's
 bindings resume when completion ends.
 
+* Embark actions
+
+~M-a~ opens actions for the target at point or the current completion candidate.
+In the action menu, ~y~ copies the target. For a buffer, ~q~ kills it and ~Q~
+also closes its window; for a tab, ~q~ closes the tab. Functions offer a ~D~
+prefix for debugging and tracing actions. On a Git SSH address such as
+~git@host:owner/repo.git~, ~h~ copies its HTTPS URL.
+
 * The ~g~ navigation prefix
 
 Use ~g~ as the namespace for navigation-related commands.  Beyond ~gr~, use:
