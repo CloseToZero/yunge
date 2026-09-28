@@ -170,7 +170,7 @@
                   yunge-reader--place-recording-enabled t)
             (setq outline
                   (yunge-reader-outline-create-buffer
-                   reader reader-window entry document data))
+                   reader reader-window document data))
             (let ((outline-window (split-window-right)))
               (set-window-buffer outline-window outline)
               (select-window outline-window)
@@ -218,7 +218,7 @@
                   yunge-reader--document-entry entry)
             (setq outline
                   (yunge-reader-outline-create-buffer
-                   reader (selected-window) entry document
+                   reader (selected-window) document
                    (make-yunge-reader-outline-data
                     :items
                     (list
@@ -277,7 +277,7 @@
                    :key key :file file :driver driver :state 'ready
                    :document document :views (list reader)
                    :primary-view reader :active-view reader
-                   :outline data :outline-loaded t)))
+                   :outline data)))
             (puthash key entry yunge-reader--document-registry)
             (setq yunge-reader-document document
                   yunge-reader--document-entry entry

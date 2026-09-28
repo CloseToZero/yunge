@@ -103,13 +103,21 @@ and wheel input operate on the native text surface.
 At a vertical edge, further movement turns a page.  The wheel scrolls inside
 an oversized page and turns a page at its boundary.
 
-** Outline and view commands
+** Document outline
 
-In the outline side window, =j/k= and =gg/G= move through entries; =TAB=
-folds a branch, and =q= closes the side window.  =RET= follows an entry and
-selects its Reader window.  =gf= follows it while leaving outline focus in
-place; =gc= returns to the current section.  A heading without a destination
-folds or expands rather than navigating.
+Press =o= to choose a chapter from the outline. Use =j/k= to move between
+entries, =gg/G= to reach the first or last entry, and =TAB= to fold a branch.
+Press =gf= to preview a chapter while keeping focus in the outline, then
+=RET= to continue reading there. A heading without a destination folds or
+expands its branch. To find the entry for your current reading position,
+press =gc=.
+
+The outline controls the Reader view that opened it. Press =q= to hide the
+outline and =o= in that Reader view to show it again. Loading continues
+while the outline is hidden; completion does not reopen the window or move
+focus. If loading fails, close the outline with =q= and press =o= to retry.
+
+** View and appearance commands
 
 | Evil Normal key | Command                                  | Action                      |
 |-----------------+------------------------------------------+-----------------------------|

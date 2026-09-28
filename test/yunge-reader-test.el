@@ -512,7 +512,7 @@
        :type 'user-error)
       (should-not opened))))
 
-(ert-deftest yunge-reader-updates-a-hidden-outline-without-opening-it ()
+(ert-deftest yunge-reader-recreates-and-retries-a-hidden-outline ()
   (let ((yunge-reader--document-registry
          (make-hash-table :test #'equal))
         (yunge-reader-drivers nil)
@@ -551,10 +551,25 @@
           (should (string-match-p
                    "Loading document outline"
                    (buffer-string)))
-          (should
-           (with-current-buffer reader
-             (yunge-reader--document-entry-outline-task
-              yunge-reader--document-entry)))
+          (let ((old-outline outline-buffer))
+            (kill-buffer old-outline)
+            (select-window (get-buffer-window reader t))
+            (with-current-buffer reader
+              (yunge-reader-outline))
+            (setq outline-buffer (window-buffer (selected-window)))
+            (should-not (eq outline-buffer old-outline)))
+          (should (= requests 1))
+          (quit-window)
+          (switch-to-buffer other)
+          (funcall completion nil '(error "outline unavailable"))
+          (should (eq (current-buffer) other))
+          (with-current-buffer outline-buffer
+            (should (string-match-p
+                     "Could not load document outline"
+                     (buffer-string))))
+          (switch-to-buffer reader)
+          (yunge-reader-outline)
+          (should (= requests 2))
           (quit-window)
           (switch-to-buffer other)
           (funcall
@@ -569,17 +584,10 @@
           (should-not (get-buffer-window outline-buffer t))
           (with-current-buffer outline-buffer
             (should (equal (buffer-string) "  Chapter\n")))
-          (with-current-buffer reader
-            (should
-             (yunge-reader--document-entry-outline-loaded
-              yunge-reader--document-entry))
-            (should-not
-             (yunge-reader--document-entry-outline-task
-              yunge-reader--document-entry)))
           (switch-to-buffer reader)
           (yunge-reader-outline)
           (should (eq (current-buffer) outline-buffer))
-          (should (= requests 1))
+          (should (= requests 2))
           (kill-buffer reader)
           (setq reader nil)
           (should-not (buffer-live-p outline-buffer)))
@@ -588,16 +596,19 @@
       (when (buffer-live-p other)
         (kill-buffer other)))))
 
-(ert-deftest yunge-reader-shares-one-outline-request-between-views ()
+(ert-deftest yunge-reader-keeps-a-shared-outline-after-its-first-view-closes ()
   (let ((yunge-reader--document-registry
          (make-hash-table :test #'equal))
         (yunge-reader-drivers nil)
         (requests 0)
         completion
+        child
         first
         second
+        third
         first-outline
-        second-outline)
+        second-outline
+        third-outline)
     (unwind-protect
         (save-window-excursion
           (let ((driver
@@ -613,7 +624,10 @@
                   :outline
                   (lambda (_document _arguments complete)
                     (cl-incf requests)
-                    (setq completion complete))
+                    (setq completion complete
+                          child (yunge-reader-task-create
+                                 'outline #'ignore))
+                    child)
                   :location
                   (lambda (_document _window)
                     (make-yunge-reader-position :unit 0))
@@ -623,9 +637,13 @@
                    " *reader-outline-primary*")
                   second
                   (yunge-reader-test--buffer
-                   " *reader-outline-additional*"))
+                   " *reader-outline-additional*")
+                  third
+                  (yunge-reader-test--buffer
+                   " *reader-outline-third*"))
             (yunge-reader--begin-open first driver "shared-outline.pdf")
-            (yunge-reader--begin-open second driver "shared-outline.pdf"))
+            (yunge-reader--begin-open second driver "shared-outline.pdf")
+            (yunge-reader--begin-open third driver "shared-outline.pdf"))
           (switch-to-buffer first)
           (let ((first-window (selected-window))
                 (second-window (split-window-right))
@@ -639,48 +657,33 @@
             (with-selected-window first-window
               (with-current-buffer first
                 (yunge-reader-outline)
-                (setq first-outline
-                      (buffer-local-value
-                       'yunge-reader--outline-buffer first))))
+                (setq first-outline (current-buffer))))
             (with-selected-window second-window
               (with-current-buffer second
                 (yunge-reader-outline)
-                (setq second-outline
-                      (buffer-local-value
-                       'yunge-reader--outline-buffer second))))
-            (let ((entry
-                   (buffer-local-value
-                    'yunge-reader--document-entry first)))
-              (should
-               (eq entry
-                   (buffer-local-value
-                    'yunge-reader--document-entry second)))
-              (should (= requests 1))
-              (should-not (eq first-outline second-outline))
-              (should
-               (yunge-reader--document-entry-outline-task entry))
-              (should
-               (= (length
-                   (yunge-reader--document-entry-outline-waiters entry))
-                  2))
-              (with-selected-window second-window
-                (funcall completion outline nil))
-              (should
-               (eq (yunge-reader--document-entry-outline entry)
-                   outline))
-              (should
-               (yunge-reader--document-entry-outline-loaded entry))
-              (should-not
-               (yunge-reader--document-entry-outline-waiters entry))
-              (dolist (buffer (list first-outline second-outline))
-                (with-current-buffer buffer
-                  (should (equal (buffer-string)
-                                 "  Chapter\n"))))
-              (with-selected-window first-window
-                (with-current-buffer first
-                  (yunge-reader-outline)))
-              (should (get-buffer-window first-outline t))
-              (should (= requests 1)))))
+                (setq second-outline (current-buffer))))
+            (should (= requests 1))
+            (should-not (eq first-outline second-outline))
+            (should (yunge-reader-task-active-p child))
+            (kill-buffer first)
+            (setq first nil)
+            (should-not (buffer-live-p first-outline))
+            (should (yunge-reader-task-active-p child))
+            (set-window-buffer first-window third)
+            (with-selected-window first-window
+              (with-current-buffer third
+                (yunge-reader-outline)
+                (setq third-outline (current-buffer))))
+            (should (= requests 1))
+            (let ((selected (selected-window)))
+              (funcall completion outline nil)
+              (should (eq (selected-window) selected)))
+            (dolist (buffer (list second-outline third-outline))
+              (with-current-buffer buffer
+                (should (equal (buffer-string) "  Chapter\n"))))
+            (should (= requests 1))))
+      (when (buffer-live-p third)
+        (kill-buffer third))
       (when (buffer-live-p second)
         (kill-buffer second))
       (when (buffer-live-p first)
@@ -691,6 +694,7 @@
          (make-hash-table :test #'equal))
         (yunge-reader-drivers nil)
         cancelled
+        closed
         reader)
     (unwind-protect
         (save-window-excursion
@@ -710,7 +714,7 @@
                    :open
                    (lambda (_file complete)
                      (funcall complete 'handle '(:layout fixed) nil))
-                   :close #'ignore
+                   :close (lambda (_document) (setq closed t))
                    :outline
                    (lambda (_document _arguments _complete)
                      child)
@@ -724,17 +728,12 @@
             (switch-to-buffer reader)
             (yunge-reader--begin-open reader driver "outline-cancel.pdf")
             (yunge-reader-outline)
-            (should
-             (yunge-reader-task-active-p
-              (with-current-buffer reader
-                (yunge-reader--document-entry-outline-task
-                 yunge-reader--document-entry))))
+            (should (yunge-reader-task-active-p child))
             (kill-buffer reader)
             (setq reader nil)
             (should (stringp cancelled))
-            (should
-             (zerop
-              (hash-table-count yunge-reader--document-registry)))))
+            (should (eq (yunge-reader-task-state child) 'cancelled))
+            (should closed)))
       (when (buffer-live-p reader)
         (kill-buffer reader)))))
 

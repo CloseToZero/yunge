@@ -30,6 +30,13 @@ keep resources used by in-flight work alive until that work releases them.
 EPUB's native surface belongs to one frame for its lifetime. Moving a view
 to another frame creates a separate presentation and restores its location.
 
+An outline request and its cached result belong to the shared document.
+Each Reader view owns an outline buffer with its own point and folded
+branches. Completion updates those buffers without displaying them. Closing
+an outline or one Reader view does not cancel work needed by another view;
+closing the last Reader view cancels the request. A failed request is not
+cached, so opening the outline again retries it.
+
 * Driver callbacks
 
 =yunge-reader-register-driver= accepts a symbolic name, an absolute-file

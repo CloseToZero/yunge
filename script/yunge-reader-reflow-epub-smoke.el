@@ -48,7 +48,6 @@
                   "yunge-reader-webview")
 
 (defvar yunge-reader-outline--document)
-(defvar yunge-reader-outline--entry)
 (defvar yunge-reader-outline--items)
 (defvar yunge-reader-outline--reader-buffer)
 (defvar yunge-reader-outline--reader-window)
@@ -229,10 +228,6 @@
       (window-live-p yunge-reader-outline--reader-window)
       (eq (window-buffer yunge-reader-outline--reader-window)
           yunge-reader-reflow-smoke--buffer)
-      (eq yunge-reader-outline--entry
-          (buffer-local-value
-           'yunge-reader--document-entry
-           yunge-reader-reflow-smoke--buffer))
       (eq yunge-reader-outline--document
           (buffer-local-value
            'yunge-reader-document
