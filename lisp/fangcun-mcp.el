@@ -1,4 +1,4 @@
-;;; fangcun-mcp.el --- Fangcun tools for Yunge MCP -*- lexical-binding: t; -*-
+;;; fangcun-mcp.el --- MCP tools for Fangcun -*- lexical-binding: t; -*-
 ;; SPDX-FileCopyrightText: 2026 Chen Zhexuan
 ;; SPDX-License-Identifier: MIT
 
@@ -6,7 +6,6 @@
 (require 'json)
 (require 'seq)
 (require 'subr-x)
-(require 'yunge-mcp)
 
 (defconst fangcun-mcp--default-page-size 20
   "Default number of results returned by a paginated tool call.")
@@ -641,130 +640,134 @@ Refuse to save an already modified visiting buffer."
              (user-error
               "Created Fangcun node was not indexed: %s" id)))))))
 
-(yunge-mcp-register-tool
- "fangcun_list_yiyus"
- (concat
-  "List configured 一隅（yiyu） note roots in 方寸（Fangcun）, "
-  "including their identifiers, display names, and absolute root paths. "
-  "These are ordinary Org files: when a root is accessible, use the "
-  "client's filesystem tools for normal reads, literal full-text search, "
-  "link editing, and edits to existing files. Always create a new note "
-  "file with fangcun_create_file_node rather than a filesystem tool; "
-  "otherwise it will lack the file-level ID required by Fangcun. Fangcun "
-  "watches saved external changes and updates its index automatically.")
- '(:type "object" :additionalProperties :false)
- #'fangcun-mcp--list-yiyus
- fangcun-mcp--read-only-annotations)
+(defun fangcun-mcp-register-tools (register-tool)
+  "Pass Fangcun MCP tools to REGISTER-TOOL.
+REGISTER-TOOL receives each tool's name, description, schema, handler, and
+optional annotations, in that order."
+  (funcall register-tool
+           "fangcun_list_yiyus"
+           (concat
+            "List configured 一隅（yiyu） note roots in 方寸（Fangcun）, "
+            "including their identifiers, display names, and absolute root paths. "
+            "These are ordinary Org files: when a root is accessible, use the "
+            "client's filesystem tools for normal reads, literal full-text search, "
+            "link editing, and edits to existing files. Always create a new note "
+            "file with fangcun_create_file_node rather than a filesystem tool; "
+            "otherwise it will lack the file-level ID required by Fangcun. Fangcun "
+            "watches saved external changes and updates its index automatically.")
+           '(:type "object" :additionalProperties :false)
+           #'fangcun-mcp--list-yiyus
+           fangcun-mcp--read-only-annotations)
 
-(yunge-mcp-register-tool
- "fangcun_search_nodes"
- (concat
-  "Search indexed 方寸（Fangcun） Org note nodes by title, alias, tag, "
-  "一隅（yiyu）, or relative file. Results are relevance-ranked and "
-  "returned one cursor page at a time. This is metadata discovery, not "
-  "literal content search; use the client's filesystem search for that.")
- '(:type "object"
-   :properties
-   (:query (:type "string" :description "Whitespace-separated search terms")
-    :pageSize
-    (:type "integer" :minimum 1 :maximum 100 :default 20
-     :description "Maximum nodes to return in this page")
-    :cursor
-    (:type "string"
-     :description "Opaque nextCursor from the preceding search page"))
-   :required ["query"]
-   :additionalProperties :false)
- #'fangcun-mcp--search-nodes
- fangcun-mcp--read-only-annotations)
+  (funcall register-tool
+           "fangcun_search_nodes"
+           (concat
+            "Search indexed 方寸（Fangcun） Org note nodes by title, alias, tag, "
+            "一隅（yiyu）, or relative file. Results are relevance-ranked and "
+            "returned one cursor page at a time. This is metadata discovery, not "
+            "literal content search; use the client's filesystem search for that.")
+           '(:type "object"
+                   :properties
+                   (:query (:type "string" :description "Whitespace-separated search terms")
+                           :pageSize
+                           (:type "integer" :minimum 1 :maximum 100 :default 20
+                                  :description "Maximum nodes to return in this page")
+                           :cursor
+                           (:type "string"
+                                  :description "Opaque nextCursor from the preceding search page"))
+                   :required ["query"]
+                   :additionalProperties :false)
+           #'fangcun-mcp--search-nodes
+           fangcun-mcp--read-only-annotations)
 
-(yunge-mcp-register-tool
- "fangcun_locate_node"
- (concat
-  "Locate an indexed 方寸（Fangcun） node on disk without returning its "
-  "content. The result gives its absolute file, line range, outline path, "
-  "and whether Emacs has unsaved changes. Prefer this tool before using "
-  "the client's filesystem tools for bounded reads, search, or edits.")
- '(:type "object"
-   :properties
-   (:id (:type "string" :description "方寸（Fangcun） node ID"))
-   :required ["id"]
-   :additionalProperties :false)
- #'fangcun-mcp--locate-node
- fangcun-mcp--read-only-annotations)
+  (funcall register-tool
+           "fangcun_locate_node"
+           (concat
+            "Locate an indexed 方寸（Fangcun） node on disk without returning its "
+            "content. The result gives its absolute file, line range, outline path, "
+            "and whether Emacs has unsaved changes. Prefer this tool before using "
+            "the client's filesystem tools for bounded reads, search, or edits.")
+           '(:type "object"
+                   :properties
+                   (:id (:type "string" :description "方寸（Fangcun） node ID"))
+                   :required ["id"]
+                   :additionalProperties :false)
+           #'fangcun-mcp--locate-node
+           fangcun-mcp--read-only-annotations)
 
-(yunge-mcp-register-tool
- "fangcun_list_backlinks"
- (concat
-  "List unique 方寸（Fangcun） nodes containing indexed Org ID links "
-  "to a target node. This uses Fangcun's cross-一隅（yiyu） link graph "
-  "and reports each owning source node, occurrence count, and first "
-  "position without reading note content. Results use cursor pagination.")
- '(:type "object"
-   :properties
-   (:id (:type "string" :description "Target 方寸（Fangcun） node ID")
-    :pageSize
-    (:type "integer" :minimum 1 :maximum 100 :default 20
-     :description "Maximum source nodes to return in this page")
-    :cursor
-    (:type "string"
-     :description "Opaque nextCursor from the preceding backlink page"))
-   :required ["id"]
-   :additionalProperties :false)
- #'fangcun-mcp--list-backlinks
- fangcun-mcp--read-only-annotations)
+  (funcall register-tool
+           "fangcun_list_backlinks"
+           (concat
+            "List unique 方寸（Fangcun） nodes containing indexed Org ID links "
+            "to a target node. This uses Fangcun's cross-一隅（yiyu） link graph "
+            "and reports each owning source node, occurrence count, and first "
+            "position without reading note content. Results use cursor pagination.")
+           '(:type "object"
+                   :properties
+                   (:id (:type "string" :description "Target 方寸（Fangcun） node ID")
+                        :pageSize
+                        (:type "integer" :minimum 1 :maximum 100 :default 20
+                               :description "Maximum source nodes to return in this page")
+                        :cursor
+                        (:type "string"
+                               :description "Opaque nextCursor from the preceding backlink page"))
+                   :required ["id"]
+                   :additionalProperties :false)
+           #'fangcun-mcp--list-backlinks
+           fangcun-mcp--read-only-annotations)
 
-(yunge-mcp-register-tool
- "fangcun_create_file_node"
- (concat
-  "Always use this tool to create a new 方寸（Fangcun） Org note file; "
-  "never create one directly with a filesystem tool, because that would "
-  "omit the required file-level ID. This tool creates and saves the file "
-  "with a file-level note node in a configured 一隅（yiyu）, assigns its "
-  "unique Org ID, and indexes it before return. Add note content afterward "
-  "with the client's filesystem tools.")
- '(:type "object"
-   :properties
-    (:yiyu
-     (:type "string" :description "Configured 一隅（yiyu） ID")
-     :file
-     (:type "string"
-     :description "Portable .org path relative to the 一隅（yiyu） root")
-     :title (:type "string" :description "Optional Org title"))
-   :required ["yiyu" "file"]
-   :additionalProperties :false)
- #'fangcun-mcp--create-file-node
- '(:readOnlyHint :false
-   :destructiveHint :false
-   :idempotentHint :false
-   :openWorldHint :false))
+  (funcall register-tool
+           "fangcun_create_file_node"
+           (concat
+            "Always use this tool to create a new 方寸（Fangcun） Org note file; "
+            "never create one directly with a filesystem tool, because that would "
+            "omit the required file-level ID. This tool creates and saves the file "
+            "with a file-level note node in a configured 一隅（yiyu）, assigns its "
+            "unique Org ID, and indexes it before return. Add note content afterward "
+            "with the client's filesystem tools.")
+           '(:type "object"
+                   :properties
+                   (:yiyu
+                    (:type "string" :description "Configured 一隅（yiyu） ID")
+                    :file
+                    (:type "string"
+                           :description "Portable .org path relative to the 一隅（yiyu） root")
+                    :title (:type "string" :description "Optional Org title"))
+                   :required ["yiyu" "file"]
+                   :additionalProperties :false)
+           #'fangcun-mcp--create-file-node
+           '(:readOnlyHint :false
+                           :destructiveHint :false
+                           :idempotentHint :false
+                           :openWorldHint :false))
 
-(yunge-mcp-register-tool
- "fangcun_create_heading_node"
- (concat
-  "Give one existing Org heading its own 方寸（Fangcun） node ID, then "
-  "save and index the file. Emacs generates the ID; an existing local ID "
-  "is retained. The exact heading path excludes TODO keywords, priorities, "
-  "and tags.")
- '(:type "object"
-   :properties
-   (:yiyu
-    (:type "string" :description "Configured 一隅（yiyu） ID")
-    :file
-    (:type "string"
-     :description "Existing .org path relative to the 一隅（yiyu） root")
-    :headingPath
-    (:type "array"
-     :items (:type "string" :minLength 1)
-     :minItems 1
-     :description
-     "Exact outermost-to-innermost Org heading titles"))
-   :required ["yiyu" "file" "headingPath"]
-   :additionalProperties :false)
- #'fangcun-mcp--create-heading-node
- '(:readOnlyHint :false
-   :destructiveHint :false
-   :idempotentHint t
-   :openWorldHint :false))
+  (funcall register-tool
+           "fangcun_create_heading_node"
+           (concat
+            "Give one existing Org heading its own 方寸（Fangcun） node ID, then "
+            "save and index the file. Emacs generates the ID; an existing local ID "
+            "is retained. The exact heading path excludes TODO keywords, priorities, "
+            "and tags.")
+           '(:type "object"
+                   :properties
+                   (:yiyu
+                    (:type "string" :description "Configured 一隅（yiyu） ID")
+                    :file
+                    (:type "string"
+                           :description "Existing .org path relative to the 一隅（yiyu） root")
+                    :headingPath
+                    (:type "array"
+                           :items (:type "string" :minLength 1)
+                           :minItems 1
+                           :description
+                           "Exact outermost-to-innermost Org heading titles"))
+                   :required ["yiyu" "file" "headingPath"]
+                   :additionalProperties :false)
+           #'fangcun-mcp--create-heading-node
+           '(:readOnlyHint :false
+                           :destructiveHint :false
+                           :idempotentHint t
+                           :openWorldHint :false)))
 
 (provide 'fangcun-mcp)
 

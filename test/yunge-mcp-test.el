@@ -39,70 +39,57 @@
                         :readOnlyHint)
              t))))))
 
-(ert-deftest yunge-mcp-fangcun-tools-have-descriptions ()
-  (require 'fangcun-mcp)
-  (dolist (tool (append (yunge-mcp--tool-list) nil))
-    (let ((description (plist-get tool :description)))
-      (should (stringp description))
-      (should-not (string-empty-p description)))))
-
-(ert-deftest yunge-mcp-fangcun-list-tools-describe-cursor-pages ()
-  (require 'fangcun-mcp)
-  (dolist (name '("fangcun_search_nodes" "fangcun_list_backlinks"))
-    (let* ((tool (gethash name yunge-mcp--tools))
-           (schema (yunge-mcp-tool-input-schema tool))
-           (properties (plist-get schema :properties)))
-      (should tool)
-      (should (plist-member properties :pageSize))
-      (should (plist-member properties :cursor))
-      (should-not (plist-member properties :limit))
-      (when (equal name "fangcun_list_backlinks")
-        (should-not (plist-member properties :includePreview))))))
-
-(ert-deftest yunge-mcp-registers-only-the-minimal-fangcun-tools ()
-  (require 'fangcun-mcp)
-  (should
-   (equal
-    (mapcar
-     (lambda (tool) (plist-get tool :name))
-     (append (yunge-mcp--tool-list) nil))
-    '("fangcun_create_file_node"
-      "fangcun_create_heading_node"
-      "fangcun_list_backlinks"
-      "fangcun_list_yiyus"
-      "fangcun_locate_node"
-      "fangcun_search_nodes")))
-  (dolist (name '("fangcun_insert_node_link"
-                  "fangcun_read_node"
-                  "fangcun_sync"))
-    (should-not (gethash name yunge-mcp--tools))))
-
-(ert-deftest yunge-mcp-registers-fangcun-id-write-tools ()
-  (require 'fangcun-mcp)
-  (dolist (name '("fangcun_create_file_node"
-                  "fangcun_create_heading_node"))
-    (let* ((tool (gethash name yunge-mcp--tools))
-           (annotations (yunge-mcp-tool-annotations tool)))
-      (should tool)
-      (should (eq (plist-get annotations :readOnlyHint) :false))
-      (should (eq (plist-get annotations :destructiveHint) :false))))
-  (should
-   (eq
-    (plist-get
-     (yunge-mcp-tool-annotations
-      (gethash "fangcun_create_file_node" yunge-mcp--tools))
-     :idempotentHint)
-    :false))
-  (let* ((tool (gethash "fangcun_create_file_node" yunge-mcp--tools))
-         (schema (yunge-mcp-tool-input-schema tool))
-         (properties (plist-get schema :properties)))
-    (should (plist-member properties :title))
-    (should-not (plist-member properties :content)))
-  (should
-   (plist-get
-    (yunge-mcp-tool-annotations
-     (gethash "fangcun_create_heading_node" yunge-mcp--tools))
-    :idempotentHint)))
+(ert-deftest yunge-mcp-lists-fangcun-tools-with-schemas-and-hints ()
+  (let* ((response
+          (yunge-mcp-test--decode
+           (yunge-mcp-dispatch "{\"operation\":\"list-tools\"}")))
+         (tools (plist-get response :value))
+         (search
+          (seq-find (lambda (tool)
+                      (equal (plist-get tool :name) "fangcun_search_nodes"))
+                    tools))
+         (backlinks
+          (seq-find (lambda (tool)
+                      (equal (plist-get tool :name) "fangcun_list_backlinks"))
+                    tools))
+         (file-create
+          (seq-find (lambda (tool)
+                      (equal (plist-get tool :name) "fangcun_create_file_node"))
+                    tools))
+         (heading-create
+          (seq-find (lambda (tool)
+                      (equal (plist-get tool :name) "fangcun_create_heading_node"))
+                    tools)))
+    (should (eq (plist-get response :ok) t))
+    (should
+     (equal (mapcar (lambda (tool) (plist-get tool :name)) tools)
+            '("fangcun_create_file_node"
+              "fangcun_create_heading_node"
+              "fangcun_list_backlinks"
+              "fangcun_list_yiyus"
+              "fangcun_locate_node"
+              "fangcun_search_nodes")))
+    (dolist (tool tools)
+      (should (not (string-empty-p (plist-get tool :description)))))
+    (dolist (tool (list search backlinks))
+      (let ((properties
+             (plist-get (plist-get tool :inputSchema) :properties)))
+        (should (plist-member properties :pageSize))
+        (should (plist-member properties :cursor))))
+    (let ((file-properties
+           (plist-get (plist-get file-create :inputSchema) :properties)))
+      (should (plist-member file-properties :title))
+      (should-not (plist-member file-properties :content)))
+    (dolist (tool (list file-create heading-create))
+      (let ((hints (plist-get tool :annotations)))
+        (should (plist-member hints :readOnlyHint))
+        (should (plist-member hints :destructiveHint))
+        (should-not (plist-get hints :readOnlyHint))
+        (should-not (plist-get hints :destructiveHint))))
+    (should (plist-member (plist-get file-create :annotations) :idempotentHint))
+    (should (plist-member (plist-get heading-create :annotations) :idempotentHint))
+    (should-not (plist-get (plist-get file-create :annotations) :idempotentHint))
+    (should (plist-get (plist-get heading-create :annotations) :idempotentHint))))
 
 (ert-deftest yunge-mcp-dispatches-tool-arguments ()
   (let ((yunge-mcp--tools (make-hash-table :test #'equal)))

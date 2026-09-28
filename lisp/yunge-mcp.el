@@ -7,6 +7,8 @@
 (require 'subr-x)
 (require 'yunge-state)
 
+(declare-function fangcun-mcp-register-tools "fangcun-mcp")
+
 (cl-defstruct yunge-mcp-tool
   name
   description
@@ -64,7 +66,8 @@ receives its arguments as a plist.  ANNOTATIONS contains MCP tool hints."
 
 (defun yunge-mcp--load-tools ()
   "Load the tools currently exposed by Yunge."
-  (require 'fangcun-mcp))
+  (require 'fangcun-mcp)
+  (fangcun-mcp-register-tools #'yunge-mcp-register-tool))
 
 (defun yunge-mcp--tool-description (tool)
   "Return the MCP description object for TOOL."

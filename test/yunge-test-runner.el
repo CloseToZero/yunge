@@ -103,7 +103,7 @@
          (files
           (directory-files
            directory t
-           "\\`\\(?:fangcun\\|shuying\\(?:-.+\\)?\\|yunge-.+\\)-test\\.el\\'"))
+           "\\`\\(?:fangcun\\(?:-.+\\)?\\|shuying\\(?:-.+\\)?\\|yunge-.+\\)-test\\.el\\'"))
          (selected
           (cl-remove-if-not
            (lambda (file)
