@@ -1,81 +1,92 @@
-#+title: Yunge Pinyin search compiler
+#+title: Pinyin search
 # SPDX-FileCopyrightText: 2026 Chen Zhexuan
 # SPDX-License-Identifier: MIT
 
-* Scope
+Search Chinese text with Latin letters in Yunge. Ordinary text remains a
+literal match, while valid Pinyin can also match Han characters. You can use
+full syllables, an unfinished final syllable, or initials.
 
-=yunge-pinyin= is a Pinyin query compiler shared by Evil search, Orderless,
-Avy, and any other Emacs code that accepts a regexp.
+* Search text
 
-Evil's ~f/F/t/T~ character-find commands also compile a lowercase ASCII
-letter as a one-letter Pinyin query.  The literal letter remains a candidate,
-while Han characters with that initial become additional candidates.  This
-uses the same bounded data and cache as the longer search commands.
+In Evil, press =/= to search forward or =?= to search backward, then type a
+query. For example:
 
-The public entry points are:
+| Query       | Can match  | Meaning                                |
+|-------------+------------+----------------------------------------|
+| =baoliu=    | =保留=     | Full syllables                         |
+| =baol=      | =保留=     | Incomplete final syllable              |
+| =bl=        | =保留=     | Initials only                          |
+| =xi'an=     | =西安=     | Apostrophe fixes the syllable boundary |
+| =lvse=      | =绿色=     | =v= stands for =ü=                     |
+| =:py:beijx= | =背景像素= | Mix full syllables and initials        |
 
-- =yunge-pinyin-normalize= for tone and ü normalization;
-- =yunge-pinyin-segmentations= for ranked syllable segmentation;
-- =yunge-pinyin-regexp= for a literal-or-Pinyin search regexp;
-- =yunge-pinyin-query-regexp= for shared =:py:= query-prefix handling;
-- =yunge-pinyin-clear-cache= for clearing generated character classes.
+Without =:py:=, a query must use full syllables (with at most an incomplete
+last one) *or* initials throughout. Thus =beijx= does not expand to =背景像素=
+by default, but =:py:beijx= does. The prefix selects the more permissive
+grammar for that query. After the prefix is removed, =beijx= still matches
+literally. The compiler does not guess whether Latin text is English.
 
-The regexp compiler uses a bounded syllable DAG.  Its default structured
-grammar accepts either full syllables with an optional incomplete final
-syllable, or a query made entirely of initials.  For example, =baoliu=,
-=baol=, and =bl= all match the same Pinyin phrase.  Apostrophes force syllable
-boundaries.
+Evil's =/= and =?= treat punctuation as literal text, so =a.b= does not mean
+a regexp wildcard. Start with =:re:= when you want an ordinary Evil regexp.
 
-The explicit =:py:= prefix selects a permissive grammar which may mix full
-syllables and initials inside one query.  The same syntax is accepted by Evil
-search and Avy; Orderless exposes it through =orderless-kwd=, for example
-=:py:beijx=.  Set =yunge-pinyin-query-grammar= to =permissive= to make that
-grammar the default instead.
+Uppercase Pinyin can still match Han characters. Evil retains its smart-case
+behavior for Latin text: an uppercase query does not also match lowercase
+literal letters when case-sensitive search applies.
 
-This distinction is purely grammatical: the compiler does not try to detect
-whether input is English.  A complexity budget based on the expanded
-character sets and abbreviated initials prevents broad queries from producing
-an expensive regexp.  A query always remains searchable literally.
+* Other search entries
 
-The compiler normally stops at frequency level 4.  This keeps ordinary
-queries focused on modern-use characters instead of expanding them with the
-rare Unihan tail.  Set =yunge-pinyin-max-frequency-level= to 5 when exhaustive
-coverage is more important than interactive search speed.
+- =SPC j j= starts an Avy jump to visible text. Type the same Pinyin queries,
+  including =:py:= for mixed forms. Avy does not interpret =:re:= as a regexp
+  prefix.
+- Orderless completion accepts Pinyin in ordinary components. For example,
+  =bl= can match a candidate containing =保留=; =:py:beijx= selects mixed
+  grammar. Use =:re:= for an Orderless regexp component or ~=bl~ for literal
+  matching. File-path completion uses partial completion instead of this
+  Orderless matching style.
+- Evil's =f=, =F=, =t=, and =T= also expand a *lowercase ASCII letter* to
+  Chinese characters with that Pinyin initial. The letter itself remains a
+  match. Uppercase character-find prompts are not expanded this way.
 
-Compiled character classes, cumulative character counts, and a bounded set of
-complete query regexps are cached in memory.  =yunge-pinyin-clear-cache=
-clears those caches without unloading the generated data.
+* Input and limits
 
-* Data
+Tone marks are accepted: =lǜse= and =lvse= both match =绿色=. Use =ü= or =v=
+for that vowel; the =u:= spelling is not accepted in search queries. Tone numbers
+are literal digits: =ni3= can match =你3= but does not match =你=. Apostrophes force
+boundaries; =xi'an= matches =西安= but not =先安=.
 
-The committed =lisp/yunge-pinyin-data.el= is the runtime Pinyin-to-Hanzi index.
-It is generated from Unicode Unihan 17.0.0 and loaded lazily on the first
-Pinyin query.  Users do not need to download or generate anything during
-installation or startup.
+A query always keeps its literal match. Pinyin expansion uses frequency-ranked
+characters and a complexity budget. The default
+=yunge-pinyin-max-frequency-level= is 4; level 5 admits rarer candidates but
+still obeys the budget. Broad queries may receive a narrower expansion or stay
+literal so interactive searches remain responsive. Set
+=yunge-pinyin-regexp-budget= to change the maximum expansion cost. Set
+=yunge-pinyin-query-grammar= to =permissive= to make mixed forms the default;
+=:py:= always requests that grammar explicitly.
 
-The generated data uses these Unihan properties:
+* Use from Lisp
 
-- =kMandarin=, =kHanyuPinyin=, and =kTGHZ2013= for readings;
-- =kHanyuPinlu=, =kGradeLevel=, and =kTGH= for five frequency buckets.
+Require =yunge-pinyin= and pass a compiled regexp to an Emacs regexp consumer:
 
-The data is licensed under Unicode-3.0; see
-=LICENSES/Unicode-3.0.txt=.  The compiler and generator are MIT-licensed
-original code.
+#+begin_src emacs-lisp
+(require 'yunge-pinyin)
 
-* Regenerating the data
+(string-match-p (yunge-pinyin-query-regexp "baoliu") "保留")
+(string-match-p (yunge-pinyin-query-regexp ":py:beijx") "背景像素")
+#+end_src
 
-Only maintainers updating the Unicode version need the original files.
-Download the official archive from:
+Both expressions return =0=. =yunge-pinyin-regexp= accepts an optional
+=structured= or =permissive= grammar argument for text without query syntax;
+=yunge-pinyin-query-regexp= interprets the initial =:py:= prefix.
+=M-x yunge-pinyin-clear-cache= discards compiled results without unloading
+the Pinyin data.
 
-https://www.unicode.org/Public/17.0.0/ucd/Unihan.zip
+* Update the data
 
-Extract these files from the archive:
-
-- =Unihan_Readings.txt=
-- =Unihan_DictionaryLikeData.txt=
-- =Unihan_OtherMappings.txt=
-
-Then run, from the repository root:
+The runtime index =lisp/yunge-pinyin-data.el= is committed, so searching needs
+no download or generation. It was generated from Unicode Unihan 17.0.0. To
+update it, obtain that version's =Unihan_Readings.txt=,
+=Unihan_DictionaryLikeData.txt=, and =Unihan_OtherMappings.txt= from the
+[[https://www.unicode.org/Public/17.0.0/ucd/Unihan.zip][official Unihan archive]], then run from the repository root:
 
 #+begin_src shell
 emacs --batch -Q --script script/generate-yunge-pinyin-data.el \
@@ -85,6 +96,5 @@ emacs --batch -Q --script script/generate-yunge-pinyin-data.el \
   lisp/yunge-pinyin-data.el
 #+end_src
 
-The large original Unihan text files are deliberately not committed.  The
-generated =.el= file is committed so a clean checkout works without a package
-build step or network access.
+The generated data is covered by [[file:../LICENSES/Unicode-3.0.txt][Unicode-3.0]]; the compiler and
+generator are MIT-licensed.

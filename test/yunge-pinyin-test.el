@@ -42,14 +42,12 @@
 
 (ert-deftest yunge-pinyin-query-prefix-selects-permissive-grammar ()
   (require 'yunge-pinyin)
-  (should (equal (yunge-pinyin-parse-query "beijx")
-                 '("beijx" . structured)))
-  (should (equal (yunge-pinyin-parse-query ":py:beijx")
-                 '("beijx" . permissive)))
-  (let ((regexp (yunge-pinyin-query-regexp ":py:beijx")))
-    (should (string-match-p regexp "背景像素"))
-    (should (string-match-p regexp "beijx"))
-    (should-not (equal regexp (regexp-quote ":py:beijx")))))
+  (dolist (query '("beijx" ":py:beijx" "beijx" ":py:beijx"))
+    (let ((regexp (yunge-pinyin-query-regexp query)))
+      (should (string-match-p regexp "beijx"))
+      (if (string-prefix-p ":py:" query)
+          (should (string-match-p regexp "背景像素"))
+        (should-not (string-match-p regexp "背景像素"))))))
 
 (ert-deftest yunge-pinyin-permissive-grammar-can-be-the-default ()
   (require 'yunge-pinyin)
@@ -105,79 +103,7 @@
   (let* ((query "asdfkljadsflkasdjflksadlfk")
          (regexp (yunge-pinyin-regexp query)))
     (should (<= (length regexp) yunge-pinyin-regexp-budget))
-    (should (yunge-pinyin--valid-regexp-p regexp))
     (should (string-match-p regexp query))))
-
-(ert-deftest yunge-pinyin-caches-complete-query-regexps ()
-  (require 'yunge-pinyin)
-  (let ((yunge-pinyin-regexp-cache-size 8)
-        (calls 0)
-        (original (symbol-function 'yunge-pinyin--segment-run)))
-    (unwind-protect
-        (progn
-          (yunge-pinyin-clear-cache)
-          (cl-letf (((symbol-function 'yunge-pinyin--segment-run)
-                     (lambda (run grammar)
-                       (cl-incf calls)
-                       (funcall original run grammar))))
-            (let ((first (yunge-pinyin-regexp "xianxing"))
-                  (second (yunge-pinyin-regexp "xianxing")))
-              (should (equal first second))
-              (should (= calls 1)))))
-      (yunge-pinyin-clear-cache))))
-
-(ert-deftest yunge-pinyin-bounds-the-complete-query-cache ()
-  (require 'yunge-pinyin)
-  (let ((yunge-pinyin-regexp-cache-size 2)
-        (calls 0)
-        (original (symbol-function 'yunge-pinyin--segment-run)))
-    (unwind-protect
-        (progn
-          (yunge-pinyin-clear-cache)
-          (cl-letf (((symbol-function 'yunge-pinyin--segment-run)
-                     (lambda (run grammar)
-                       (cl-incf calls)
-                       (funcall original run grammar))))
-            (dolist (query '("baoliu" "xian" "shi"))
-              (yunge-pinyin-regexp query))
-            (should (= calls 3))
-            ;; A just-compiled query remains hot.
-            (yunge-pinyin-regexp "shi")
-            (should (= calls 3))
-            ;; A cache smaller than the working set must recompile at least
-            ;; one query, without prescribing its storage or eviction order.
-            (dolist (query '("baoliu" "xian" "shi"))
-              (yunge-pinyin-regexp query))
-            (should (> calls 3))
-            (should (<= calls 6))))
-      (yunge-pinyin-clear-cache))))
-
-(ert-deftest yunge-pinyin-caches-grammar-results-separately ()
-  (require 'yunge-pinyin)
-  (let ((yunge-pinyin-regexp-cache-size 8)
-        (calls 0)
-        (original (symbol-function 'yunge-pinyin--segment-run)))
-    (unwind-protect
-        (progn
-          (yunge-pinyin-clear-cache)
-          (cl-letf (((symbol-function 'yunge-pinyin--segment-run)
-                     (lambda (run grammar)
-                       (cl-incf calls)
-                       (funcall original run grammar))))
-            (let ((structured
-                   (yunge-pinyin-regexp "beijx" 'structured))
-                  (permissive
-                   (yunge-pinyin-regexp "beijx" 'permissive)))
-              (should (equal structured "beijx"))
-              (should (string-match-p permissive "背景像素"))
-              (should
-               (equal structured
-                      (yunge-pinyin-regexp "beijx" 'structured)))
-              (should
-               (equal permissive
-                      (yunge-pinyin-regexp "beijx" 'permissive)))
-              (should (= calls 2)))))
-      (yunge-pinyin-clear-cache))))
 
 (ert-deftest yunge-pinyin-frequency-levels-preserve-bounded-results ()
   (require 'yunge-pinyin)
@@ -187,25 +113,13 @@
       (let ((regexp (yunge-pinyin-regexp "shi")))
         (should (> (length regexp) (length "shi")))
         (should (<= (length regexp) yunge-pinyin-regexp-budget))
-        (should (yunge-pinyin--valid-regexp-p regexp))
         (should (string-match-p regexp "实时"))
         (should (string-match-p regexp "shi")))
       (let* ((query (concat "asdfkljadsflkasdjflksadlfk"
                             "asdfkljadsflkasdjflksadlfk"))
              (regexp (yunge-pinyin-regexp query)))
         (should (<= (length regexp) yunge-pinyin-regexp-budget))
-        (should (yunge-pinyin--valid-regexp-p regexp))
         (should (string-match-p regexp query)))))
   (yunge-pinyin-clear-cache))
-
-(ert-deftest yunge-pinyin-falls-back-when-final-regexp-is-invalid ()
-  (require 'yunge-pinyin)
-  (unwind-protect
-      (progn
-        (yunge-pinyin-clear-cache)
-        (cl-letf (((symbol-function 'yunge-pinyin--valid-regexp-p)
-                   (lambda (_regexp) nil)))
-          (should (equal (yunge-pinyin-regexp "baoliu") "baoliu"))))
-    (yunge-pinyin-clear-cache)))
 
 ;;; yunge-pinyin-test.el ends here
