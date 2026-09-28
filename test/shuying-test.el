@@ -19,6 +19,51 @@
    :scale 1.0
    :cache-version shuying-cache-format-version))
 
+(ert-deftest shuying-renders-without-yunge-state ()
+  (yunge-test-run-emacs
+   "--eval"
+   (prin1-to-string
+    '(let ((root (make-temp-file "shuying-standalone-" t))
+           artifact)
+       (unwind-protect
+           (progn
+             (setq shuying-state-directory
+                   (expand-file-name "render-state/" root))
+             (require 'shuying-latex)
+             (when (featurep 'yunge-state)
+               (error "Shuying rendering loaded Yunge state"))
+             (let ((state (expand-file-name "render-state/" root)))
+               (unless (and (equal shuying-state-directory state)
+                            (equal shuying-cache-directory
+                                   (expand-file-name "cache/" state))
+                            (equal shuying-work-directory
+                                   (expand-file-name "work/" state))
+                            (equal shuying-latex-format-directory
+                                   (expand-file-name "formats/" state)))
+                 (error "Shuying render paths ignored its standalone root")))
+             (shuying-register-backend
+              'test
+              (lambda (requests complete)
+                (dolist (request requests)
+                  (with-temp-file
+                      (shuying-backend-request-output-file request)
+                    (insert "image"))
+                  (funcall complete request nil))))
+             (shuying-render
+              (make-shuying-render-spec
+               :source "$x$" :backend 'test :output-format "svg"
+               :cache-version shuying-cache-format-version)
+              (lambda (result error-data)
+                (when error-data (signal (car error-data) (cdr error-data)))
+                (setq artifact result)))
+             (unless (and artifact
+                          (file-exists-p (shuying-artifact-path artifact))
+                          (file-in-directory-p
+                           (shuying-artifact-path artifact)
+                           shuying-cache-directory))
+               (error "Standalone Shuying did not render into its cache")))
+         (delete-directory root t))))))
+
 (ert-deftest shuying-clears-only-completed-cache-files ()
   (let* ((root (make-temp-file "shuying-cache-test-" t))
          (shuying-cache-directory root)
@@ -43,27 +88,39 @@
 (ert-deftest shuying-refuses-to-clear-cache-while-rendering ()
   (let* ((root (make-temp-file "shuying-cache-test-" t))
          (shuying-cache-directory root)
+         (shuying-backends nil)
          (shuying--pending-jobs (make-hash-table :test #'equal))
+         (shuying--waiting-batches nil)
+         (shuying--active-batch-count 0)
+         (shuying--scheduler-running nil)
          (artifact
           (expand-file-name
-           (concat (make-string 64 ?a) ".svg") root)))
+           (concat (make-string 64 ?a) ".svg") root))
+         request complete rendered)
     (unwind-protect
         (progn
           (with-temp-file artifact)
-          (puthash "pending" t shuying--pending-jobs)
+          (shuying-register-backend
+           'test
+           (lambda (requests finish)
+             (setq request (car requests)
+                   complete finish)))
+          (shuying-render
+           (shuying-test--spec)
+           (lambda (result error-data)
+             (should-not error-data)
+             (setq rendered result)))
           (should-error (shuying-clear-cache) :type 'user-error)
-          (should (file-exists-p artifact)))
+          (should (file-exists-p artifact))
+          (with-temp-file (shuying-backend-request-output-file request)
+            (insert "artifact"))
+          (funcall complete request nil)
+          (should (file-exists-p (shuying-artifact-path rendered)))
+          (let ((inhibit-message t))
+            (shuying-clear-cache))
+          (should-not (file-exists-p artifact))
+          (should-not (file-exists-p (shuying-artifact-path rendered))))
       (delete-directory root t))))
-
-(ert-deftest shuying-keeps-artifacts-under-var ()
-  (should
-   (equal shuying-cache-directory
-          (yunge-var-subdirectory "shuying/cache"))))
-
-(ert-deftest shuying-keeps-render-work-under-var ()
-  (should
-   (equal shuying-work-directory
-          (yunge-var-subdirectory "shuying/work"))))
 
 (ert-deftest shuying-reuses-only-matching-cached-artifacts ()
   (let* ((root (make-temp-file "shuying-cache-" t))

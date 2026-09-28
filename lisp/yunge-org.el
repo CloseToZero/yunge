@@ -6,6 +6,7 @@
 (require 'subr-x)
 (require 'yunge-evil)
 (require 'yunge-key)
+(require 'yunge-state)
 
 (declare-function evil-add-command-properties "evil-common"
                   (command &rest properties))
@@ -74,6 +75,10 @@
 (defvar evil-move-beyond-eol)
 (defvar evil-respect-visual-line-mode)
 (defvar yunge-avy-candidate-project-functions)
+
+;; Choose rendering state before the Org hook loads Shuying.
+(defvar shuying-state-directory
+  (yunge-var-subdirectory "shuying"))
 
 (autoload 'shuying-org-mode "shuying-org" nil t)
 (autoload 'shuying-org-preview "shuying-org" nil t)

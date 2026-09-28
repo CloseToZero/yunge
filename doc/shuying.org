@@ -2,8 +2,7 @@
 
 Shuying is an independent Emacs library for responsive, accurate LaTeX
 previews.  Org is its first front end, but rendering, scheduling, and caching
-belong to Shuying rather than to Org-specific configuration.  The design is
-free to evolve with actual use instead of preserving unused compatibility.
+belong to Shuying rather than to Org-specific configuration.
 
 * Interaction
 
@@ -94,6 +93,12 @@ front ends decide how to apply it to their display system.
 It preserves precompiled formats, render work, and diagnostic logs, and
 refuses to run while rendering is in progress.
 
+Rendering cache, work, and LaTeX format files default below
+=shuying-state-directory= (=var/shuying/= under =user-emacs-directory=).
+Set this option before loading Shuying to choose another root. The individual
+=shuying-cache-directory=, =shuying-work-directory=, and
+=shuying-latex-format-directory= options can override their locations.
+
 An Org fragment also has independent display and work state:
 
 - display: source or image;
@@ -138,7 +143,7 @@ The direct TeX and =dvisvgm= backend uses this pipeline:
 9. Check the request generation before changing a buffer display.
 
 The TeX engine and dvisvgm run as a nonblocking process chain.  A batch uses an
-isolated working directory below =var/shuying/work/=.  Successful work is
+isolated working directory below =shuying-work-directory=.  Successful work is
 removed after its artifacts are published; failed work preserves a process log
 buffer for diagnosis.  A page containing a TeX error is never published, even
 if the engine left a partial intermediate page, so missing text cannot become a
@@ -152,7 +157,7 @@ for both paths.  =shuying-latex-engine-command= remains an explicit preview-only
 override for diagnostics or unusual toolchains.
 
 Precompiled formats are keyed by the complete preamble, preview setup, engine,
-and Shuying cache version, then retained below =var/shuying/formats/=.  Batches
+and Shuying cache version, then retained below =shuying-latex-format-directory=.  Batches
 waiting for the same missing format share one build.  A batch normally exposes
 the cached format in its working directory with a hard link; filesystems that
 cannot create that link fall back to a local copy.  If a cached format fails,

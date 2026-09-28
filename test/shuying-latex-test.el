@@ -19,11 +19,6 @@
    :scale 1.0
    :cache-version shuying-cache-format-version))
 
-(ert-deftest shuying-latex-keeps-formats-under-var ()
-  (should
-   (equal shuying-latex-format-directory
-          (yunge-var-subdirectory "shuying/formats"))))
-
 (ert-deftest shuying-latex-serializes-warmups-across-preamble-changes ()
   (let* ((root (make-temp-file "shuying-latex-warmup-test-" t))
          (system-type 'windows-nt)

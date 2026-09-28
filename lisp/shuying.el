@@ -3,20 +3,28 @@
 ;; SPDX-License-Identifier: MIT
 
 (require 'cl-lib)
-(require 'yunge-state)
 
 (defgroup shuying nil
   "Render and cache LaTeX previews."
   :group 'applications)
 
+(defcustom shuying-state-directory
+  (expand-file-name "var/shuying/" user-emacs-directory)
+  "Directory containing Shuying rendering state.
+Set this before loading Shuying to change the default cache, work, and
+LaTeX format directories.  Explicit values for those directories take
+precedence over this default."
+  :type 'directory
+  :group 'shuying)
+
 (defcustom shuying-cache-directory
-  (yunge-var-subdirectory "shuying/cache")
+  (expand-file-name "cache/" shuying-state-directory)
   "Directory containing rendered Shuying artifacts."
   :type 'directory
   :group 'shuying)
 
 (defcustom shuying-work-directory
-  (yunge-var-subdirectory "shuying/work")
+  (expand-file-name "work/" shuying-state-directory)
   "Directory containing temporary Shuying render work."
   :type 'directory
   :group 'shuying)

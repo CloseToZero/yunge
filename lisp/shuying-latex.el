@@ -34,7 +34,7 @@ preamble with each batch instead."
   :group 'shuying)
 
 (defcustom shuying-latex-format-directory
-  (yunge-var-subdirectory "shuying/formats")
+  (expand-file-name "formats/" shuying-state-directory)
   "Directory containing precompiled LaTeX formats."
   :type 'directory
   :group 'shuying)

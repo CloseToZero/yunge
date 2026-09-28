@@ -27,6 +27,72 @@
 (yunge-test-deftest-lazy-load yunge-org
   (org ob-core ol org-id shuying shuying-org which-key yunge-org-reveal))
 
+(ert-deftest yunge-org-renders-shuying-artifacts-in-yunge-state ()
+  (yunge-test-run-emacs
+   "--eval"
+   (prin1-to-string
+    '(let ((root (make-temp-file "yunge-shuying-state-" t))
+           artifact)
+       (unwind-protect
+           (progn
+             (defmacro elpaca (&rest _body) nil)
+             (setq yunge-var-directory (expand-file-name "var/" root))
+             (require 'yunge-org)
+             (require 'shuying-latex)
+             (unless (equal shuying-state-directory
+                            (expand-file-name "shuying/" yunge-var-directory))
+               (error "Yunge did not set Shuying's state root"))
+             (shuying-register-backend
+              'test
+              (lambda (requests complete)
+                (dolist (request requests)
+                  (with-temp-file
+                      (shuying-backend-request-output-file request)
+                    (insert "image"))
+                  (funcall complete request nil))))
+             (shuying-render
+              (make-shuying-render-spec
+               :source "$x$" :backend 'test :output-format "svg"
+               :cache-version shuying-cache-format-version)
+              (lambda (result error-data)
+                (when error-data (signal (car error-data) (cdr error-data)))
+                (setq artifact result)))
+             (unless (and artifact
+                          (file-exists-p (shuying-artifact-path artifact))
+                          (file-in-directory-p
+                           (shuying-artifact-path artifact)
+                           (expand-file-name "shuying/cache/"
+                                             yunge-var-directory)))
+               (error "Yunge Shuying did not render into Yunge state")))
+         (delete-directory root t))))))
+
+(ert-deftest yunge-org-preserves-custom-shuying-render-paths ()
+  (yunge-test-run-emacs
+   "--eval"
+   (prin1-to-string
+    '(let ((root (make-temp-file "yunge-shuying-custom-" t)))
+       (unwind-protect
+           (progn
+             (defmacro elpaca (&rest _body) nil)
+             (setq yunge-var-directory (expand-file-name "var/" root)
+                   shuying-state-directory (expand-file-name "chosen/" root)
+                   shuying-cache-directory (expand-file-name "cache/" root)
+                   shuying-work-directory (expand-file-name "work/" root)
+                   shuying-latex-format-directory
+                   (expand-file-name "formats/" root))
+             (require 'yunge-org)
+             (require 'shuying-latex)
+             (unless (and (equal shuying-state-directory
+                                 (expand-file-name "chosen/" root))
+                          (equal shuying-cache-directory
+                                 (expand-file-name "cache/" root))
+                          (equal shuying-work-directory
+                                 (expand-file-name "work/" root))
+                          (equal shuying-latex-format-directory
+                                 (expand-file-name "formats/" root)))
+               (error "Yunge changed configured Shuying render paths")))
+         (delete-directory root t))))))
+
 (ert-deftest yunge-org-registers-shuying-as-an-avy-projection-provider ()
   (yunge-org-test--load-config)
   (yunge-test-load-package-config 'yunge-avy)
