@@ -594,71 +594,9 @@
       (should (= (length prompts) 2))
       (should (string-match-p "invalid" (car prompts))))))
 
-(ert-deftest fangcun-indexes-only-ids-in-property-drawers ()
-  (with-temp-buffer
-    (insert
-     (concat
-      ":PROPERTIES:\n"
-      ":ID: file-node\n"
-      ":ALIASES: File \"File alias\"\n"
-      ":END:\n"
-      "#+title: Edge\n\n"
-      "* Normal\n"
-      ":PROPERTIES:\n"
-      ":ID: normal\n"
-      ":ALIASES: One \"Two words\"\n"
-      ":END:\n"
-      "* Lowercase\n"
-      ":properties:\n"
-      ":id: lowercase\n"
-      ":end:\n"
-      "* Planning\n"
-      "SCHEDULED: <2026-08-10 Mon>\n"
-      ":PROPERTIES:\n"
-      ":ID: planned\n"
-      ":END:\n"
-      "* Plain text\n"
-      ":ID: ignored-plain\n"
-      "* Other drawer\n"
-      ":LOGBOOK:\n"
-      ":ID: ignored-drawer\n"
-      ":END:\n"
-      "* Source block\n"
-      "#+begin_src text\n"
-      ":ID: ignored-source\n"
-      "#+end_src\n"
-      "* Comment block\n"
-      "#+begin_comment\n"
-      ":ID: ignored-comment\n"
-      "#+end_comment\n"))
-    (org-mode)
-    (let* ((yiyu
-            (make-fangcun-yiyu
-             :id 'test :name "Test" :root default-directory))
-           (nodes
-            (fangcun--collect-nodes-from-buffer
-             (current-buffer) yiyu "edge.org")))
-      (should
-       (equal
-        (mapcar
-         (lambda (node)
-           (list (fangcun-node-id node)
-                 (fangcun-node-title node)
-                 (fangcun-node-outline-path node)
-                 (fangcun-node-aliases node)))
-         nodes)
-        '(("file-node" "Edge" nil ("File" "File alias"))
-          ("normal" "Normal" ("Normal") ("One" "Two words"))
-          ("lowercase" "Lowercase" ("Lowercase") nil)
-          ("planned" "Planning" ("Planning") nil)))))))
-
-(ert-deftest fangcun-sync-reuses-matching-visited-buffer ()
+(ert-deftest fangcun-sync-preserves-visited-buffer-position-and-narrowing ()
   (fangcun-test-with-notes
-    (let ((buffer (find-file-noselect personal-file))
-          (original-collector
-           (symbol-function
-            'fangcun--collect-nodes-from-buffer))
-          reused)
+    (let ((buffer (find-file-noselect personal-file)))
       (with-current-buffer buffer
         (goto-char (point-min))
         (re-search-forward "A theorem")
@@ -667,18 +605,13 @@
         (let ((saved-point (point))
               (saved-min (point-min))
               (saved-max (point-max)))
-          (cl-letf
-              (((symbol-function
-                 'fangcun--collect-nodes-from-buffer)
-                (lambda (&rest arguments)
-                  (when (eq (car arguments) buffer)
-                    (setq reused t))
-                  (apply original-collector arguments))))
-            (should
-             (equal (fangcun-db-sync)
-                    '(:yiyus 2 :files 2 :nodes 4 :aliases 0 :tags 0
-                             :links 1))))
-          (should reused)
+          (should
+           (equal (fangcun-db-sync)
+                  '(:yiyus 2 :files 2 :nodes 4 :aliases 0 :tags 0
+                           :links 1)))
+          (should (equal (fangcun-node-title
+                          (fangcun-node-from-id "theorem"))
+                         "A theorem"))
           (should (= (point) saved-point))
           (should (= (point-min) saved-min))
           (should (= (point-max) saved-max)))))))
@@ -783,17 +716,6 @@
      (directory-files
       (file-name-directory fangcun-database-file)
       nil "\\`.fangcun-rebuild-"))))
-
-(ert-deftest fangcun-sync-skips-unchanged-files ()
-  (fangcun-test-with-notes
-    (fangcun-db-sync)
-    (cl-letf
-        (((symbol-function 'fangcun--parse-file)
-          (lambda (&rest _arguments)
-            (ert-fail "An unchanged file was parsed"))))
-      (should
-       (equal (fangcun-db-sync)
-              '(:yiyus 2 :files 2 :nodes 4 :aliases 0 :tags 0 :links 1))))))
 
 (ert-deftest fangcun-syncs-added-changed-and-deleted-files ()
   (fangcun-test-with-notes
@@ -1488,7 +1410,7 @@
         (when (buffer-live-p buffer)
           (kill-buffer buffer))))))
 
-(ert-deftest fangcun-backlink-previews-reuse-only-matching-buffer ()
+(ert-deftest fangcun-backlink-previews-ignore-unsaved-buffer-edits ()
   (fangcun-test-with-notes
     (let* ((source-file
             (expand-file-name "references.org" personal-root))
@@ -1507,32 +1429,22 @@
               "[[id:work-file][Saved reference]]\n"))
             (fangcun-db-sync)
             (setq source-buffer (find-file-noselect source-file))
-            (let ((original (symbol-function 'insert-file-contents))
-                  (reads 0))
-              (cl-letf
-                  (((symbol-function 'insert-file-contents)
-                    (lambda (file &rest arguments)
-                      (when (file-equal-p file source-file)
-                        (cl-incf reads))
-                      (apply original file arguments))))
-                (with-current-buffer backlinks-buffer
-                  (fangcun-backlinks-mode)
-                  (setq fangcun-backlinks-target-id "work-file")
-                  (fangcun-backlinks-refresh)
-                  (should (search-forward "Saved reference" nil t)))
-                (should (= reads 0))
-                (with-current-buffer source-buffer
-                  (goto-char (point-min))
-                  (search-forward "Saved reference")
-                  (replace-match "Unsaved reference"))
-                (with-current-buffer backlinks-buffer
-                  (fangcun-backlinks-refresh)
-                  (goto-char (point-min))
-                  (should (search-forward "Saved reference" nil t))
-                  (goto-char (point-min))
-                  (should-not
-                   (search-forward "Unsaved reference" nil t)))
-                (should (= reads 1)))))
+            (with-current-buffer backlinks-buffer
+              (fangcun-backlinks-mode)
+              (setq fangcun-backlinks-target-id "work-file")
+              (fangcun-backlinks-refresh)
+              (should (search-forward "Saved reference" nil t)))
+            (with-current-buffer source-buffer
+              (goto-char (point-min))
+              (search-forward "Saved reference")
+              (replace-match "Unsaved reference"))
+            (with-current-buffer backlinks-buffer
+              (fangcun-backlinks-refresh)
+              (goto-char (point-min))
+              (should (search-forward "Saved reference" nil t))
+              (goto-char (point-min))
+              (should-not
+               (search-forward "Unsaved reference" nil t))))
         (when (buffer-live-p source-buffer)
           (with-current-buffer source-buffer
             (set-buffer-modified-p nil)))

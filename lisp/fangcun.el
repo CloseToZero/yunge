@@ -6,6 +6,8 @@
 (require 'button)
 (require 'crm)
 (require 'fangcun-loader)
+(require 'fangcun-model)
+(require 'fangcun-org)
 (require 'json)
 (require 'org)
 (require 'org-element)
@@ -52,49 +54,6 @@ An explicit `fangcun-database-file' overrides this default."
 When the helper is unavailable, synchronization falls back to Emacs."
   :type 'boolean
   :group 'fangcun)
-
-(cl-defstruct fangcun-yiyu
-  id
-  name
-  root)
-
-(cl-defstruct fangcun-node
-  id
-  yiyu-id
-  yiyu-name
-  yiyu-root
-  file
-  title
-  outline-path
-  aliases
-  tags
-  position
-  line)
-
-(cl-defstruct fangcun-link
-  source-id
-  target-id
-  position
-  line)
-
-(cl-defstruct fangcun-file-state
-  yiyu
-  relative-file
-  absolute-file
-  mtime
-  size)
-
-(cl-defstruct fangcun-backlink
-  node
-  position
-  count)
-
-(cl-defstruct fangcun-check-issue
-  severity
-  file
-  position
-  line
-  message)
 
 (defconst fangcun-backlinks-buffer-name "*Fangcun Backlinks*")
 
@@ -522,207 +481,6 @@ directory or any notes below it."
    database
    "CREATE INDEX links_target_id ON links (target_id)"))
 
-(defun fangcun--display-title (title fallback)
-  "Return a plain display TITLE, or FALLBACK when it is empty."
-  (let ((display
-         (and title
-              (string-trim
-               (substring-no-properties
-                (org-link-display-format title))))))
-    (if (and display (not (string-empty-p display)))
-        display
-      fallback)))
-
-(defun fangcun--file-title (relative-file)
-  "Return the current Org file title, falling back to RELATIVE-FILE."
-  (let* ((keywords (org-collect-keywords '("title")))
-         (titles (cdr (assoc "TITLE" keywords))))
-    (fangcun--display-title
-     (and titles (string-join titles " "))
-     (file-name-sans-extension relative-file))))
-
-(defun fangcun--aliases-at-point ()
-  "Return the aliases assigned to the current Org entry."
-  (when-let* ((value (org-entry-get (point) "ALIASES")))
-    (delete-dups (split-string-and-unquote value))))
-
-(defun fangcun--goto-node-at-point ()
-  "Move to the nearest enclosing Fangcun node and return its ID, or nil."
-  (org-back-to-heading-or-point-min t)
-  (let ((id (org-id-get)))
-    (while (and (not id) (not (bobp)))
-      (if (org-up-heading-safe)
-          (setq id (org-id-get))
-        (goto-char (point-min))
-        (setq id (org-id-get))))
-    id))
-
-(defun fangcun--node-id-at-point ()
-  "Return the nearest enclosing Fangcun node ID, or nil."
-  (save-excursion
-    (save-restriction
-      (widen)
-      (fangcun--goto-node-at-point))))
-
-(defun fangcun--effective-tags-at-point ()
-  "Return the effective Org tags of the node at point."
-  (delete-dups
-   (mapcar
-    #'substring-no-properties
-    (if (= (org-outline-level) 0)
-        org-file-tags
-      (org-get-tags)))))
-
-(defun fangcun--element-owner-id (element)
-  "Return the nearest Fangcun node ID containing Org ELEMENT, or nil."
-  (seq-some
-   (lambda (ancestor)
-     (when (memq (org-element-type ancestor) '(headline org-data))
-       (org-element-property :ID ancestor)))
-   (org-element-lineage element)))
-
-(defun fangcun--collect-nodes-from-buffer
-  (buffer yiyu relative-file)
-  "Return Fangcun nodes parsed from Org BUFFER.
-RELATIVE-FILE names BUFFER's file relative to YIYU's root."
-  (with-current-buffer buffer
-    (save-excursion
-      (save-restriction
-        (widen)
-        ;; A reused Org buffer may have stale file-tag options after an
-        ;; external edit.  Refresh them before collecting effective tags.
-        (org-set-regexps-and-options 'tags-only)
-        (let ((file-title (fangcun--file-title relative-file))
-              (case-fold-search t)
-              (id-property-re (org-re-property "ID"))
-              nodes)
-          (goto-char (point-min))
-          ;; Point may already be on the first heading.  Without this check,
-          ;; its ID would be collected here and again below.
-          (when (= (org-outline-level) 0)
-            (when-let* ((id (org-id-get)))
-              (push
-               (make-fangcun-node
-                :id id
-                :yiyu-id (fangcun-yiyu-id yiyu)
-                :yiyu-name (fangcun-yiyu-name yiyu)
-                :yiyu-root (fangcun-yiyu-root yiyu)
-                :file relative-file
-                :title file-title
-                :outline-path nil
-                :aliases (fangcun--aliases-at-point)
-                :tags (fangcun--effective-tags-at-point)
-                :position (point)
-                :line (line-number-at-pos))
-                nodes)))
-          ;; Fangcun nodes are sparse among Org headings.  Search possible ID
-          ;; properties directly, then let Org reject lookalikes outside a
-          ;; property drawer.
-          (goto-char (point-min))
-          (while (re-search-forward id-property-re nil t)
-            (let ((id (match-string-no-properties 3)))
-              (when (org-at-property-p)
-                (save-excursion
-                  (org-back-to-heading-or-point-min t)
-                  (unless (= (org-outline-level) 0)
-                    (push
-                     (make-fangcun-node
-                      :id id
-                      :yiyu-id (fangcun-yiyu-id yiyu)
-                      :yiyu-name (fangcun-yiyu-name yiyu)
-                      :yiyu-root (fangcun-yiyu-root yiyu)
-                      :file relative-file
-                      :title
-                      (fangcun--display-title
-                       (org-get-heading t t t) id)
-                      :outline-path
-                      (mapcar
-                       #'substring-no-properties
-                       (org-get-outline-path t))
-                      :aliases (fangcun--aliases-at-point)
-                      :tags (fangcun--effective-tags-at-point)
-                      :position (point)
-                      :line (line-number-at-pos))
-                      nodes))))))
-          (nreverse nodes))))))
-
-(defun fangcun--collect-links-from-buffer (buffer &optional include-unowned)
-  "Return ID links from Org BUFFER.
-Unless INCLUDE-UNOWNED is non-nil, omit links outside Fangcun nodes."
-  (with-current-buffer buffer
-    (save-excursion
-      (save-restriction
-        (widen)
-        (goto-char (point-min))
-        (let (links)
-          (while (re-search-forward org-link-any-re nil t)
-            ;; The search leaves point after the link.  Move onto it so Org
-            ;; can reject matches in source blocks, comments, properties, and
-            ;; keywords.
-            (backward-char)
-            (let ((element (org-element-context)))
-              (when (and (eq (org-element-type element) 'link)
-                         (equal
-                          (org-element-property :type element)
-                          "id"))
-                (let ((source-id (fangcun--element-owner-id element)))
-                  (when (or source-id include-unowned)
-                    (let* ((path
-                            (org-element-property :path element))
-                           (target-id
-                            ;; A search suffix selects a location inside the
-                            ;; target node; the backlink belongs to the node.
-                            (if (string-match "::.*\\'" path)
-                                (substring path 0 (match-beginning 0))
-                              path))
-                           (position
-                            (org-element-property :begin element)))
-                      (push
-                       (make-fangcun-link
-                        :source-id source-id
-                        :target-id target-id
-                        :position position
-                        :line (line-number-at-pos position))
-                       links)))))))
-          (nreverse links))))))
-
-(defun fangcun--collect-file-data-from-buffer
-    (buffer yiyu relative-file &optional include-unowned)
-  "Return nodes and links parsed from Org BUFFER.
-RELATIVE-FILE names BUFFER's file relative to YIYU's root.
-When INCLUDE-UNOWNED is non-nil, retain links outside Fangcun nodes."
-  (list :nodes
-        (fangcun--collect-nodes-from-buffer
-         buffer yiyu relative-file)
-        :links
-        (fangcun--collect-links-from-buffer buffer include-unowned)))
-
-(defun fangcun--reusable-file-buffer (file)
-  "Return FILE's visited Org buffer when it still matches the file on disk."
-  (when-let* ((buffer (find-buffer-visiting file)))
-    (when (with-current-buffer buffer
-            (and (derived-mode-p 'org-mode)
-                 (not (buffer-modified-p))
-                 (verify-visited-file-modtime buffer)))
-      buffer)))
-
-(defun fangcun--parse-file (yiyu file &optional include-unowned)
-  "Return Fangcun nodes and links from FILE on disk, owned by YIYU.
-When INCLUDE-UNOWNED is non-nil, retain links outside Fangcun nodes."
-  (let* ((relative-file
-          (file-relative-name file (fangcun-yiyu-root yiyu)))
-         (buffer (fangcun--reusable-file-buffer file)))
-    (if buffer
-        (fangcun--collect-file-data-from-buffer
-         buffer yiyu relative-file include-unowned)
-      (with-temp-buffer
-        (setq default-directory (file-name-directory file))
-        (insert-file-contents file)
-        (let ((org-inhibit-startup t))
-          (delay-mode-hooks (org-mode)))
-        (fangcun--collect-file-data-from-buffer
-         (current-buffer) yiyu relative-file include-unowned)))))
-
 (defun fangcun--read-file-state (yiyu file)
   "Return the synchronization state of FILE owned by YIYU."
   (let ((attributes (file-attributes file 'string)))
@@ -1022,7 +780,7 @@ When NO-MESSAGE is non-nil, do not report the indexed counts."
           (lambda (state)
             (cons
              state
-             (fangcun--parse-file
+             (fangcun-org-read-file
               (fangcun-file-state-yiyu state)
               (fangcun-file-state-absolute-file state))))
           states))
@@ -1103,7 +861,7 @@ When NO-MESSAGE is non-nil, do not report the changed file counts."
                (lambda (state)
                  (cons
                   state
-                  (fangcun--parse-file
+                  (fangcun-org-read-file
                    (fangcun-file-state-yiyu state)
                    (fangcun-file-state-absolute-file state))))
                changed)))
@@ -1445,7 +1203,7 @@ When READ-DISK is non-nil, ignore an unsaved visiting buffer."
     (user-error "Run fangcun-db-sync before updating individual files"))
   (let* ((state (fangcun--read-file-state yiyu file))
          (relative-file (fangcun-file-state-relative-file state))
-         (data (fangcun--parse-file yiyu file))
+         (data (fangcun-org-read-file yiyu file))
          (result
           (fangcun--call-with-database
            (lambda (database)
@@ -2340,7 +2098,7 @@ Interactively, edit the current local tags with completion."
     (save-restriction
       (widen)
       (org-set-regexps-and-options 'tags-only)
-      (unless (fangcun--goto-node-at-point)
+      (unless (fangcun-org-goto-node)
         (user-error "Point is not inside a Fangcun node"))
       (when (called-interactively-p 'interactive)
         (setq tags
@@ -2373,7 +2131,7 @@ Interactively, edit the current local tags with completion."
   (unless (derived-mode-p 'org-mode)
     (user-error "Fangcun backlinks are only available in Org buffers"))
   (let ((target-id
-         (or (fangcun--node-id-at-point)
+         (or (fangcun-org-node-id-at-point)
              (user-error "Point is not inside a Fangcun node"))))
     (fangcun--ensure-session)
     (let ((backlink (fangcun--read-backlink target-id)))
@@ -2422,7 +2180,7 @@ Each source file is read from disk at most once."
                (puthash backlink
                         "[Source file is unavailable]"
                         previews))
-           (if-let* ((buffer (fangcun--reusable-file-buffer file)))
+           (if-let* ((buffer (fangcun-org-saved-file-buffer file)))
                (record-previews file-backlinks buffer)
              (with-temp-buffer
                (insert-file-contents file)
@@ -2495,7 +2253,7 @@ Each source file is read from disk at most once."
   (unless (derived-mode-p 'org-mode)
     (user-error "Fangcun backlinks are only available in Org buffers"))
   (let ((target-id
-         (or (fangcun--node-id-at-point)
+         (or (fangcun-org-node-id-at-point)
              (user-error "Point is not inside a Fangcun node")))
         (buffer (get-buffer-create fangcun-backlinks-buffer-name)))
     (fangcun--ensure-session)
@@ -2560,7 +2318,7 @@ Each source file is read from disk at most once."
           issues)
       (dolist (state states)
         (let ((data
-               (fangcun--parse-file
+               (fangcun-org-read-file
                 (fangcun-file-state-yiyu state)
                 (fangcun-file-state-absolute-file state)
                 t)))

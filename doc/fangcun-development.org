@@ -1,0 +1,56 @@
+#+title: Fangcun development
+# SPDX-FileCopyrightText: 2026 Chen Zhexuan
+# SPDX-License-Identifier: MIT
+
+* Reading notes and maintaining the index
+
+Org files are the source of truth. SQLite stores a derived index; reading a
+note must not require an open database or start the native file monitor.
+
+=fangcun-model.el= defines the records exchanged by parsing, indexing, and
+queries. It has no live state. =fangcun-org.el= reads Org content into those
+records. =fangcun.el= manages configured roots, synchronization, database
+queries, and interactive commands. The MCP tools use the same index and note
+operations as the Emacs commands.
+
+=fangcun-org-read-file= accepts a normalized yiyu and a file path. It returns
+a plist containing =:nodes= and =:links= from the saved file. An unmodified
+visiting Org buffer can supply that content only while its recorded file
+modification time matches the file on disk. Unsaved edits and stale buffers
+must not enter the index or replace the saved text shown in backlink previews.
+
+=fangcun-org-read-buffer= accepts a buffer, a normalized yiyu, and a file name
+relative to that yiyu. It reads the buffer's current content, including
+unsaved edits. Both reading operations inspect the whole document while
+preserving an existing buffer's point and narrowing.
+
+* Node and link meaning
+
+A file or heading becomes a node through its Org =ID= property. Text that
+looks like an ID inside a source block or another drawer is not a node.
+Titles are plain display text; aliases come from =ALIASES=, and tags follow
+Org's inheritance settings.
+
+An ID link belongs to its nearest enclosing node. A link's =::search= suffix
+selects a location within the target; it is not part of the target node ID.
+The reader normally omits links without an owning node. Its optional
+=include-unowned= argument retains them so graph checks can report them.
+
+Positions and line numbers describe the content that was read. They can
+become stale after an edit. Node navigation resolves an ID again in the
+destination buffer rather than treating an indexed position as permanent.
+
+* Verification
+
+Run the Fangcun Lisp checks from the repository root:
+
+#+begin_src sh
+emacs --batch -Q -L test -l yunge-test-runner -- --suite ert --module fangcun
+#+end_src
+
+Verify parser changes through returned nodes and links, and indexing changes
+through queries or displayed results. Include saved versus unsaved content
+when changing file reads. Do not test internal implementation details.
+
+See the [[file:development.org][development guide]] for static checks and the full repository gate.
+The [[file:../native/fangcun-watch/README.org][native helper guide]] describes scanning and file-event messages.

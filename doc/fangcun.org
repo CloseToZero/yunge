@@ -103,6 +103,12 @@ index entry; renaming or deleting it through Emacs updates the index too.
 =M-x fangcun-db-update-file= updates the current saved file explicitly.
 Set =fangcun-db-update-on-save= to =nil= to disable updates after saving.
 
+The index and backlink previews describe saved text. Save your edits before
+looking for a new node or link. If another application changes a note while
+its buffer is open, synchronization reads the file on disk and leaves your
+buffer untouched. Revert the buffer when you want to load those changes;
+save or otherwise keep any unsaved work before reverting.
+
 Fangcun can use an optional Rust helper to scan roots and watch external file
 changes. Events are processed after an idle delay, so the index need not change
 immediately after an external save. If the helper is absent or cannot run,
@@ -121,3 +127,5 @@ The database and helper build files live under =fangcun-state-directory=, which
 defaults to =var/fangcun/= below =user-emacs-directory=. Set this before loading
 Fangcun to choose another location. An explicit =fangcun-database-file= chooses
 the database path independently.
+
+For the parsing and indexing contracts, see [[file:fangcun-development.org][Fangcun development]].
