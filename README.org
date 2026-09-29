@@ -13,7 +13,7 @@ emacs --init-directory /path/to/yunge
 
 The first startup downloads and builds packages through Elpaca, using
 =elpaca-lock.el=. It needs network access. Native tools have their own setup
-requirements, described in the feature guides below.
+requirements, described in the user guides below.
 If startup fails, see [[file:doc/setup.org::*Recover from a startup error][Recover from a startup error]].
 
 In Evil Normal state, use ~SPC f f~ to open a file, ~SPC b b~ to switch
@@ -25,7 +25,7 @@ After pulling or editing the configuration, start a fresh Emacs session and
 run =M-x yunge-rebuild= to refresh autoloads and native components.
 See [[file:doc/setup.org][Setup and recovery]] for prerequisites, build results, and recovery steps.
 
-* Feature guides
+* User guides
 
 - [[file:doc/org-editing.org][Editing Org documents]]: organize an outline and edit structured text.
 - [[file:doc/fangcun.org][Fangcun]]: create, link, and search Org notes.

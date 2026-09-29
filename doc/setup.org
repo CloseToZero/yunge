@@ -59,12 +59,12 @@ emacs --debug-init --init-directory /path/to/yunge
 
 Read the first error and its file or function in =*Backtrace*=. Use
 =M-x view-echo-area-messages= to see earlier messages. Correct that problem,
-then restart; an interrupted initialization can leave later features
-unconfigured in the current session.
+then restart; an interrupted initialization can prevent the rest of the
+configuration from loading.
 
 For package errors, follow [[*Recover package installation][Recover package installation]] below. Native
 component failures have their own logs linked from =*Yunge Rebuild*= and
-the corresponding [[file:../README.org::*Feature guides][feature guide]].
+the corresponding [[file:../README.org::*User guides][user guide]].
 
 * Recover package installation
 

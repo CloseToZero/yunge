@@ -129,11 +129,12 @@ Handle observed input differences without adding speculative fallbacks.
 
 * Implementing and checking bindings
 
-Keep Evil's core bindings and leader routing in =yunge-evil.el=. Each feature
-owns its mode bindings. Bind package command maps to Evil's ~[localleader]~
-event so the physical ~SPC m~ routing stays in one place.
+Keep Evil's core bindings and leader routing in =yunge-evil.el=. Define
+mode-specific bindings in their integration modules. Bind package command
+maps to Evil's ~[localleader]~ event so the physical ~SPC m~ routing stays in
+one place.
 
-Install an integration after both Evil and its target feature have loaded.
+Install an integration after both Evil and its target package have loaded.
 Do not load an unused package just to configure its keys or call ~elpaca-wait~
 to force ordering.
 
