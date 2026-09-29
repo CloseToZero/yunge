@@ -109,6 +109,9 @@ This must not exceed `yunge-reader-cache-max-bytes'."
 (defvar yunge-reader-native--restart-after-stop nil
   "Whether the helper should start after its current process exits.")
 
+(defvar yunge-reader-native--restart-timer nil
+  "Timer for a pending helper restart, or nil.")
+
 (defvar yunge-reader-native--build-after-stop nil
   "Setup continuation requested after the current helper exits.")
 
@@ -319,9 +322,10 @@ When STOPPED is non-nil, report an intentional service stop."
         'yunge-reader-native-session-lost)
       reason))))
 
-(defun yunge-reader-native--start-after-crash ()
-  "Restart the helper once after an unexpected exit."
-  (when (> yunge-reader-native--client-count 0)
+(defun yunge-reader-native--restart (explicit)
+  "Restart the helper when EXPLICIT is non-nil or documents still need it."
+  (setq yunge-reader-native--restart-timer nil)
+  (when (or explicit (> yunge-reader-native--client-count 0))
     (condition-case error-data
         (yunge-reader-native-start)
       (error
@@ -357,12 +361,14 @@ When STOPPED is non-nil, report an intentional service stop."
        (build
         (yunge-reader-native--start-build))
        (restart
-        (run-at-time 0 nil #'yunge-reader-native--start-after-crash))
+        (setq yunge-reader-native--restart-timer
+              (run-at-time 0 nil #'yunge-reader-native--restart t)))
        ((and (not intentional)
              (> yunge-reader-native--client-count 0)
              (< yunge-reader-native--restart-count 1))
         (cl-incf yunge-reader-native--restart-count)
-        (run-at-time 0 nil #'yunge-reader-native--start-after-crash))
+        (setq yunge-reader-native--restart-timer
+              (run-at-time 0 nil #'yunge-reader-native--restart nil)))
        ((not intentional)
         (display-warning
          'yunge-reader
@@ -373,6 +379,7 @@ When STOPPED is non-nil, report an intentional service stop."
 (defun yunge-reader-native-start ()
   "Start the Yunge Reader native helper and return its process."
   (interactive)
+  (yunge-reader-native--cancel-timer 'yunge-reader-native--restart-timer)
   (if (process-live-p yunge-reader-native--process)
       yunge-reader-native--process
     (unless (yunge-reader-native--available-p)
@@ -501,18 +508,12 @@ starting or writing to another helper process."
   "Return whether the Yunge Reader native helper is running."
   (process-live-p yunge-reader-native--process))
 
-;;;###autoload
-(defun yunge-reader-native-stop (&optional force)
-  "Stop the Yunge Reader native helper.
-Without FORCE, request graceful shutdown and terminate the process only after
-`yunge-reader-native-stop-timeout'.  Interactively, a prefix argument means
-FORCE."
-  (interactive "P")
+(defun yunge-reader-native--stop (force)
+  "Stop the current helper, preserving any setup or restart continuation.
+When FORCE is non-nil, terminate it without waiting for graceful shutdown."
   (if (not (process-live-p yunge-reader-native--process))
       (progn
         (setq yunge-reader-native--process nil)
-        (when (called-interactively-p 'interactive)
-          (message "Yunge Reader native service is not running"))
         nil)
     (let ((process yunge-reader-native--process))
       (process-put process 'yunge-reader-intentional-stop t)
@@ -532,21 +533,34 @@ FORCE."
                    (process-put child 'yunge-reader-intentional-stop t)
                    (delete-process child)))
                process)))
-      (when (called-interactively-p 'interactive)
-        (message (if force
-                     "Terminating Yunge Reader native service..."
-                   "Stopping Yunge Reader native service...")))
       process)))
 
 ;;;###autoload
+(defun yunge-reader-native-stop (&optional force)
+  "Stop the Yunge Reader native helper and cancel pending restarts.
+Without FORCE, request graceful shutdown and terminate the process only after
+`yunge-reader-native-stop-timeout'.  Interactively, a prefix argument means
+FORCE."
+  (interactive "P")
+  (setq yunge-reader-native--restart-after-stop nil)
+  (yunge-reader-native--cancel-timer 'yunge-reader-native--restart-timer)
+  (let ((process (yunge-reader-native--stop force)))
+    (when (called-interactively-p 'interactive)
+      (message (cond ((not process) "Yunge Reader native service is not running")
+                     (force "Terminating Yunge Reader native service...")
+                     (t "Stopping Yunge Reader native service..."))))
+    process))
+
+;;;###autoload
 (defun yunge-reader-native-restart ()
-  "Restart the Yunge Reader native helper after graceful shutdown."
+  "Restart the native helper after graceful shutdown, even without open documents."
   (interactive)
   (setq yunge-reader-native--restart-count 0)
+  (yunge-reader-native--cancel-timer 'yunge-reader-native--restart-timer)
   (if (process-live-p yunge-reader-native--process)
       (progn
         (setq yunge-reader-native--restart-after-stop t)
-        (yunge-reader-native-stop))
+        (yunge-reader-native--stop nil))
     (yunge-reader-native-start)))
 
 ;;;###autoload
@@ -812,6 +826,9 @@ Normal document opening never downloads or compiles dependencies implicitly."
 
 (defun yunge-reader-native--shutdown-for-emacs-exit ()
   "End native processes without delaying Emacs shutdown."
+  (setq yunge-reader-native--restart-after-stop nil
+        yunge-reader-native--build-after-stop nil)
+  (yunge-reader-native--cancel-timer 'yunge-reader-native--restart-timer)
   (yunge-reader-native--cancel-timer 'yunge-reader-native--idle-timer)
   (yunge-reader-native--cancel-timer
    'yunge-reader-native--force-stop-timer)

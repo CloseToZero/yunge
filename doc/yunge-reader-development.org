@@ -186,6 +186,13 @@ invalid.  Losing a service session fails its pending tasks, and output from
 an older session cannot complete tasks in its replacement.  See the
 [[file:../native/yunge-reader/README.org][native Reader guide]] for wire-level messages and service ownership.
 
+Native helper restarts preserve the reason for starting again. An explicit
+restart starts a new process regardless of document ownership; crash
+recovery only starts one while clients still retain the service. A pending
+restart belongs to the service and is cancelled by an explicit stop or
+Emacs shutdown. Lifecycle tests drive child processes to check replacement
+sessions and cancellation.
+
 The WebView service owns its module pipe from startup through shutdown.
 Failed startup closes that pipe and attempts to stop the module before
 reporting the original error. Pipe closure completes pending requests and

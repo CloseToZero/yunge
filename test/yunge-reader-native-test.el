@@ -19,6 +19,7 @@
          (yunge-reader-native--cache-prune-stop-after nil)
          (yunge-reader-native--force-stop-timer nil)
          (yunge-reader-native--restart-after-stop nil)
+         (yunge-reader-native--restart-timer nil)
          (yunge-reader-native--build-after-stop nil)
          (yunge-reader-native--restart-count 0)
          (properties (make-hash-table :test #'equal))
@@ -260,55 +261,6 @@
            (message . "broken PDF")))))
     '(error "broken PDF"))))
 
-(ert-deftest yunge-reader-native-stop-requests-shutdown-then-arms-timeout ()
-  (yunge-reader-native-test--with-fake-process
-    (let (timer-arguments)
-      (yunge-reader-native-start)
-      (yunge-reader-native-test--mark-ready)
-      (cl-letf (((symbol-function 'run-at-time)
-                 (lambda (&rest arguments)
-                   (setq timer-arguments arguments)
-                   'fake-timer)))
-        (yunge-reader-native-stop))
-      (should (process-get 'fake-reader-process
-                           'yunge-reader-intentional-stop))
-      (should live)
-      (should (= (length sent) 1))
-      (let ((request
-             (json-parse-string (car sent) :object-type 'alist)))
-        (should (equal (alist-get 'op request) "shutdown")))
-      (should (= (car timer-arguments)
-                 yunge-reader-native-stop-timeout)))))
-
-(ert-deftest yunge-reader-native-force-stop-terminates-immediately ()
-  (yunge-reader-native-test--with-fake-process
-    (yunge-reader-native-start)
-    (yunge-reader-native-stop t)
-    (should-not live)
-    (should-not sent)))
-
-(ert-deftest yunge-reader-native-intentional-stop-fails-without-restart ()
-  (yunge-reader-native-test--with-fake-process
-    (let (request-error
-          restart-function)
-      (should (= (yunge-reader-native-acquire) 1))
-      (yunge-reader-native-test--mark-ready)
-      (yunge-reader-native-request
-       "ping" nil
-       (lambda (_result error-data)
-         (setq request-error error-data)))
-      (yunge-reader-native-stop t)
-      (cl-letf (((symbol-function 'run-at-time)
-                 (lambda (_delay _repeat function &rest _arguments)
-                   (setq restart-function function)
-                   'fake-timer)))
-        (yunge-reader-native--sentinel
-         'fake-reader-process "killed"))
-      (should
-       (eq (car request-error)
-           'yunge-reader-native-session-stopped))
-      (should-not restart-function))))
-
 (ert-deftest yunge-reader-native-reference-count-schedules-idle-stop ()
   (yunge-reader-native-test--with-fake-process
     (let ((yunge-reader-native-idle-seconds 42)
@@ -446,38 +398,6 @@
            'yunge-reader-native-session-lost))
       (should-not sent)
       (should (zerop (yunge-reader-native-test--pending-count))))))
-
-(ert-deftest yunge-reader-native-crash-fails-callbacks-for-its-session ()
-  (yunge-reader-native-test--with-fake-process
-    (let ((calls 0)
-          request-error
-          restart-function)
-      (should (= (yunge-reader-native-acquire) 1))
-      (yunge-reader-native-request
-       "ping" nil
-       (lambda (_result error-data)
-         (cl-incf calls)
-         (setq request-error error-data)))
-      (setq live nil)
-      (cl-letf (((symbol-function 'run-at-time)
-                 (lambda (_delay _repeat function &rest _arguments)
-                   (setq restart-function function)
-                   'fake-timer)))
-        (yunge-reader-native--sentinel
-         'fake-reader-process "exited"))
-      (should
-       (eq (car request-error)
-           'yunge-reader-native-session-lost))
-      (should (= calls 1))
-      (should (zerop (yunge-reader-native-test--pending-count)))
-      (should (= yunge-reader-native--restart-count 1))
-      (should (eq restart-function
-                  #'yunge-reader-native--start-after-crash))
-      (yunge-reader-native--sentinel
-       'fake-reader-process "exited again")
-      (should (= calls 1))
-      (funcall restart-function)
-      (should (= (yunge-reader-native-current-session) 2)))))
 
 (ert-deftest yunge-reader-native-status-distinguishes-starting-and-ready ()
   (yunge-reader-native-test--with-fake-process
