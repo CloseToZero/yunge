@@ -186,6 +186,13 @@ invalid.  Losing a service session fails its pending tasks, and output from
 an older session cannot complete tasks in its replacement.  See the
 [[file:../native/yunge-reader/README.org][native Reader guide]] for wire-level messages and service ownership.
 
+The WebView service owns its module pipe from startup through shutdown.
+Failed startup closes that pipe and attempts to stop the module before
+reporting the original error. Pipe closure completes pending requests and
+notifies surface owners even if the native stop operation fails. Graceful
+shutdown has a deadline, including while waiting for the initial handshake;
+an immediate shutdown response cancels that deadline during finalization.
+
 * Verify Reader
 
 Run these checks from the repository root:

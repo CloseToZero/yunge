@@ -253,7 +253,7 @@ document's idle period.  These commands control or inspect it:
 | =yunge-reader-native-stop=    | Request shutdown; prefix argument forces it.          |
 | =yunge-reader-native-restart= | Replace the helper.                                   |
 | =yunge-reader-cache-prune=    | Prune PDF page cache when no Reader document is open. |
-| =yunge-reader-webview-stop=   | Stop EPUB native surfaces.                            |
+| =yunge-reader-webview-stop=   | Stop EPUB native surfaces; prefix argument forces it. |
 
 PDF keeps rendered images for visible and neighboring pages, while the disk
 cache can reuse prior page renders.  =yunge-reader-cache-max-bytes= and
@@ -263,5 +263,15 @@ service session.  An unexpected loss can reopen an unchanged document on the
 next request; explicit stop ends pending work and does not start recovery
 until a new operation asks for it.  Stopping the helper also interrupts EPUB
 publication requests; =yunge-reader-webview-stop= controls the separate
-native-surface service. For driver contracts and development checks, see
+native-surface service.
+
+If EPUB surfaces become unresponsive, run =M-x yunge-reader-webview-stop=.
+It allows a brief graceful shutdown, then forces the service to stop; use
+=C-u M-x yunge-reader-webview-stop= to skip the wait. Pending surface requests
+finish with an error. Close and reopen the affected document to start a
+fresh service. If stopping reports a native error, the Emacs pipe is still
+closed; persistent native errors require restarting Emacs, since the loaded
+module stays in the process.
+
+For driver contracts and development checks, see
 [[file:yunge-reader-development.org][Reader development]].
