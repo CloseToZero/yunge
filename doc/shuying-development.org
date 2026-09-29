@@ -68,6 +68,38 @@ The Org integration associates each request with an overlay generation and
 discards results from older generations. A discarded display result can
 still serve other callers through the cache.
 
+* Read formulas from Org
+
+=shuying-org-source= reads formulas without loading the renderer or enabling
+previews. It owns the buffer's formula catalog and equation numbering.
+=shuying-org= uses those results to track editing, request renders, and display
+previews; overlays and viewport timers belong to that display layer.
+
+=shuying-org-source-at-position= reads the formula containing a position in
+the accessible buffer. Its optional =include-end= argument also accepts the
+formula's end position, which is useful when point has just left its source.
+This local query does not compute equation numbers. It lets editing commands
+track point without parsing the entire document on each movement.
+
+For rendering, call =shuying-org-source-formulas= to obtain formulas in document
+order with their numbering context. It reads the whole buffer, including text
+outside narrowing. =shuying-org-source-in-ranges= selects formulas overlapping
+any supplied =(BEGINNING . END)= range and retains that document-wide numbering.
+Both operations preserve point and narrowing.
+
+Each =shuying-org-formula= describes its =source=, buffer bounds, whether it is
+block math, whether it occupies its lines alone, and its initial equation number
+when applicable. =shuying-org-formula-bounds= returns the bounds as a pair;
+the end is exclusive and leaves an environment's final newline outside the
+preview. Treat these records as read-only snapshots of the text that was read.
+An edit can invalidate their positions as well as their source and numbering.
+
+After text changes, the next catalog query refreshes the stored formulas.
+=shuying-org-source-current-p= reports whether the catalog describes the current
+text; =shuying-org-source-reset= discards it explicitly, as after a buffer revert.
+The display layer rechecks visible previews when a changed formula could affect
+later numbering. Unchanged rendering inputs reuse their existing artifacts.
+
 * Implement a backend
 
 Call =(shuying-register-backend name function batch-key-function)=. The

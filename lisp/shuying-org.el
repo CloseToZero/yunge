@@ -4,7 +4,7 @@
 
 (require 'cl-lib)
 (require 'org)
-(require 'org-element)
+(require 'shuying-org-source)
 (require 'seq)
 (require 'shuying-latex)
 (require 'subr-x)
@@ -15,49 +15,8 @@
 (declare-function org-latex-make-preamble
                   "ox-latex" (info &optional template snippetp))
 
-(cl-defstruct (shuying-org-fragment
-               (:constructor shuying-org--make-fragment))
-  "The source needed to preview one Org LaTeX fragment."
-  beginning
-  end
-  value
-  block-math-p
-  standalone-p
-  equation-number)
-
-(defconst shuying-org--single-equation-environments
-  '("equation" "multline" "subequations")
-  "LaTeX environments containing one automatically numbered equation.")
-
-(defconst shuying-org--multi-equation-environments
-  '("eqnarray" "align" "alignat" "flalign" "gather" "xalignat"
-    "xxalignat")
-  "LaTeX environments that may contain several numbered equations.")
-
-(defconst shuying-org--equation-token-regexp
-  (rx
-   (or
-    "%"
-    (seq
-     "\\"
-     (or
-      (seq "begin{" (group (+ (not "}"))) "}")
-      (seq "end{" (group (+ (not "}"))) "}")
-      (group
-       (seq "\\" (? "*")
-            (? (seq "[" (* (not "]")) "]"))))
-      (group (or "nonumber" "notag"))
-      (group (seq "tag" (? "*") (* space) "{"))))))
-  "Regexp matching LaTeX structure relevant to equation numbering.")
-
-(defconst shuying-org--math-start-regexp
-  (rx string-start
-      (* (any " \t\n"))
-      (or "$" "\\(" "\\[" "\\begin{"))
-  "Regexp matching an explicit Org LaTeX math start.")
-
 (defvar-local shuying-org--active-start nil
-  "Marker at the fragment currently containing point.")
+  "Marker at the formula currently containing point.")
 
 (defvar-local shuying-org--previous-point nil
   "Point before the most recent command.")
@@ -93,248 +52,26 @@ always displays block math at its source column.  Inline math is not affected."
 (defvar-local shuying-org--changed-overlays nil
   "Preview overlays modified by the current command.")
 
-(defvar-local shuying-org--fragment-catalog nil
-  "Org LaTeX fragments found at `shuying-org--catalog-tick'.")
-
-(defvar-local shuying-org--catalog-tick nil
-  "Buffer modification tick of `shuying-org--fragment-catalog'.")
-
 (defun shuying-org--viewing-p ()
   "Return whether the current buffer is being read with View mode."
   (bound-and-true-p view-mode))
 
-(defun shuying-org--catalog-current-p ()
-  "Return whether the fragment catalog describes the current text."
-  (equal shuying-org--catalog-tick
-         (buffer-chars-modified-tick)))
-
-(defun shuying-org--fragment-bounds (fragment)
-  "Return the source bounds of Org LaTeX FRAGMENT."
-  (cons (shuying-org-fragment-beginning fragment)
-        (shuying-org-fragment-end fragment)))
-
-(defun shuying-org--block-math-p (element)
-  "Return whether Org LaTeX ELEMENT contains block math."
-  (or (eq (org-element-type element) 'latex-environment)
-      (and (string-match-p
-            (rx string-start (* (any " \t\n"))
-                (or "$$" "\\[" "\\begin{"))
-            (org-element-property :value element))
-           t)))
-
-(defun shuying-org--standalone-block-math-p (element)
-  "Return whether block math ELEMENT occupies its physical lines alone."
-  (and
-   (shuying-org--block-math-p element)
-   (let ((beginning (org-element-begin element))
-         (end (- (org-element-end element)
-                 (or (org-element-property :post-blank element) 0))))
-     (save-excursion
-       (goto-char beginning)
-       (and
-        (string-match-p
-         (rx string-start (* (any " \t")) string-end)
-         (buffer-substring-no-properties
-          (line-beginning-position) beginning))
-        (progn
-          (goto-char end)
-          (skip-chars-backward " \t\r\n" beginning)
-          (string-match-p
-           (rx string-start (* (any " \t")) string-end)
-           (buffer-substring-no-properties
-            (point) (line-end-position)))))))
-   t))
-
-(defun shuying-org--blank-latex-fragment-p (value)
-  "Return whether LaTeX fragment VALUE contains only delimiters and space."
-  (let ((trimmed (string-trim value)))
-    (seq-some
-     (lambda (delimiters)
-       (let ((opening (car delimiters))
-             (closing (cdr delimiters)))
-         (and (string-prefix-p opening trimmed)
-              (string-suffix-p closing trimmed)
-              (>= (length trimmed)
-                  (+ (length opening) (length closing)))
-              (string-empty-p
-               (string-trim
-                (substring trimmed
-                           (length opening)
-                           (- (length closing))))))))
-     '(("\\(" . "\\)")
-       ("\\[" . "\\]")
-       ("$$" . "$$")
-       ("$" . "$")))))
-
-(defun shuying-org--blank-latex-environment-p (value)
-  "Return whether LaTeX environment VALUE has a whitespace-only body."
-  (let ((trimmed (string-trim value)))
-    (when (string-match
-           (rx string-start "\\begin{" (group (+ (not "}"))) "}")
-           trimmed)
-      (let* ((name (match-string 1 trimmed))
-             (body-beginning (match-end 0))
-             (end-regexp
-              (concat "\\\\end{" (regexp-quote name) "}\\'")))
-        (when (string-match end-regexp trimmed body-beginning)
-          (string-empty-p
-           (string-trim
-            (substring trimmed body-beginning (match-beginning 0)))))))))
-
-(defun shuying-org--blank-math-p (element)
-  "Return whether Org LaTeX ELEMENT contains no formula content."
-  (pcase (org-element-type element)
-    ('latex-fragment
-     (shuying-org--blank-latex-fragment-p
-      (org-element-property :value element)))
-    ('latex-environment
-     (shuying-org--blank-latex-environment-p
-      (org-element-property :value element)))))
-
-(defun shuying-org--latex-fragment-p (datum)
-  "Return whether Org DATUM is previewable LaTeX."
-  (and (org-element-type-p datum
-                           '(latex-fragment latex-environment))
-       (not (shuying-org--blank-math-p datum))
-       (string-match-p
-        shuying-org--math-start-regexp
-        (org-element-property :value datum))))
-
-(defun shuying-org--escaped-p (position)
-  "Return whether the character at POSITION is backslash-escaped."
-  (let ((slashes 0))
-    (while (and (> position (point-min))
-                (eq (char-before position) ?\\))
-      (cl-incf slashes)
-      (cl-decf position))
-    (cl-oddp slashes)))
-
-(defun shuying-org--count-equation-rows (source multi-row-p)
-  "Count automatic equation numbers produced by SOURCE.
-When MULTI-ROW-P is non-nil, each outer row may receive a number."
-  (with-temp-buffer
-    (insert source)
-    (goto-char (point-min))
-    (let ((depth 0)
-          (count 0)
-          (row-numbered t))
-      (while (re-search-forward shuying-org--equation-token-regexp nil t)
-        (cond
-         ((match-beginning 1)
-          (cl-incf depth))
-         ((match-beginning 2)
-          (when (= depth 1)
-            (when row-numbered
-              (cl-incf count)))
-          (setq depth (max 0 (1- depth))))
-         ((and multi-row-p (match-beginning 3) (= depth 1))
-          (when row-numbered
-            (cl-incf count))
-          (setq row-numbered t))
-         ((and (= depth 1)
-               (or (match-beginning 4) (match-beginning 5)))
-          (setq row-numbered nil))
-         ((and (eq (char-after (match-beginning 0)) ?%)
-               (not (shuying-org--escaped-p (match-beginning 0))))
-          (goto-char (line-end-position)))))
-      count)))
-
-(defun shuying-org--equation-count (element)
-  "Return automatic equation count for Org ELEMENT, or nil.
-Nil means ELEMENT is not an automatically numbered environment."
-  (let ((source (org-element-property :value element)))
-    (when (and (eq (org-element-type element) 'latex-environment)
-               (string-match
-                "\\`[ \t\n]*\\\\begin{\\([^}]+\\)}" source))
-      (let ((environment (match-string 1 source)))
-        (cond
-         ((member environment shuying-org--single-equation-environments)
-          (shuying-org--count-equation-rows source nil))
-         ((member environment shuying-org--multi-equation-environments)
-          (shuying-org--count-equation-rows source t)))))))
-
-(defun shuying-org--fragment-from-element
-    (element &optional equation-number)
-  "Return a Shuying fragment described by Org ELEMENT.
-EQUATION-NUMBER is the next automatic number at the fragment's start."
-  (let* ((beginning (org-element-begin element))
-         (value (substring-no-properties
-                 (org-element-property :value element)))
-         ;; Org includes the closing line's newline in an environment's
-         ;; value.  Retain it for LaTeX, but leave it outside the display
-         ;; overlay so blank lines stay visible.
-         (end
-          (if (eq (org-element-type element) 'latex-environment)
-              (- (+ (org-element-property :post-affiliated element)
-                    (length value))
-                 (if (string-suffix-p "\n" value) 1 0))
-            (- (org-element-end element)
-               (or (org-element-property :post-blank element) 0)))))
-    (shuying-org--make-fragment
-     :beginning beginning
-     :end end
-     :value value
-     :block-math-p (shuying-org--block-math-p element)
-     :standalone-p (shuying-org--standalone-block-math-p element)
-     :equation-number equation-number)))
-
-(defun shuying-org--fragment-context-at-position (position)
-  "Return the previewable Org LaTeX context at POSITION, or nil."
-  (when (and position
-             (<= (point-min) position)
-             (<= position (point-max)))
-    (save-excursion
-      (goto-char position)
-      (let ((fragment (org-element-context)))
-        (when (shuying-org--latex-fragment-p fragment)
-          (shuying-org--fragment-from-element fragment))))))
-
-(defun shuying-org--fragment-at-position (position)
-  "Return the Org LaTeX fragment containing POSITION, or nil."
-  (when (and position (< position (point-max)))
-    (when-let* ((fragment
-                 (shuying-org--fragment-context-at-position position))
-                (bounds (shuying-org--fragment-bounds fragment)))
-      (when (and (<= (car bounds) position)
-                 (< position (cdr bounds)))
-        fragment))))
-
-(defun shuying-org--fragment-at-or-ending-at-position (position)
-  "Return the Org LaTeX fragment containing or ending at POSITION."
-  (when-let* ((fragment
-               (shuying-org--fragment-context-at-position position))
-              (bounds (shuying-org--fragment-bounds fragment)))
-    (when (and (<= (car bounds) position)
-               (<= position (cdr bounds)))
-      fragment)))
-
-(defun shuying-org--fragment-at-point ()
-  "Return the Org LaTeX fragment containing point, or nil."
-  (shuying-org--fragment-at-position (point)))
-
-(defun shuying-org--delimited-fragment-p (fragment)
-  "Return whether FRAGMENT has explicit LaTeX delimiters."
-  (string-match-p
-   shuying-org--math-start-regexp
-   (shuying-org-fragment-value fragment)))
-
-(defun shuying-org--fragment-at-edit-boundary
+(defun shuying-org--formula-at-edit-boundary
     (active-position text-changed)
-  "Return the delimited fragment whose end is point, or nil.
+  "Return the formula whose end is point, or nil.
 ACTIVE-POSITION is the start remembered from the previous command.
-TEXT-CHANGED permits a newly closed fragment to become active."
+TEXT-CHANGED permits a newly closed formula to become active."
   (when (> (point) (point-min))
-    (when-let* ((fragment
-                 (shuying-org--fragment-at-position (1- (point))))
+    (when-let* ((formula
+                 (shuying-org-source-at-position (1- (point))))
                 (beginning
-                 (shuying-org-fragment-beginning fragment)))
-      (when (and (= (shuying-org-fragment-end fragment) (point))
-                 (shuying-org--delimited-fragment-p fragment)
+                 (shuying-org-formula-beginning formula)))
+      (when (and (= (shuying-org-formula-end formula) (point))
                  (or text-changed
                      (equal beginning active-position)))
-        fragment))))
+        formula))))
 
-(defun shuying-org--fragment-overlays (beginning end)
+(defun shuying-org--formula-overlays (beginning end)
   "Return Shuying overlays between BEGINNING and END."
   (seq-filter
    (lambda (overlay)
@@ -350,22 +87,22 @@ Return nil when POSITION has no preview or its source is currently visible."
           (overlay-get overlay 'display)))
    (overlays-at position)))
 
-(defun shuying-org--fragment-overlay (fragment)
-  "Return the Shuying overlay for FRAGMENT, or nil."
+(defun shuying-org--formula-overlay (formula)
+  "Return the Shuying overlay for FORMULA, or nil."
   (pcase-let ((`(,beginning . ,end)
-               (shuying-org--fragment-bounds fragment)))
+               (shuying-org-formula-bounds formula)))
     (seq-find
      (lambda (overlay)
        (and (= (overlay-start overlay) beginning)
             (= (overlay-end overlay) end)))
-     (shuying-org--fragment-overlays beginning end))))
+     (shuying-org--formula-overlays beginning end))))
 
-(defun shuying-org--fragment-by-beginning (fragments beginning)
-  "Return the member of FRAGMENTS starting at BEGINNING, or nil."
+(defun shuying-org--formula-by-beginning (formulas beginning)
+  "Return the member of FORMULAS starting at BEGINNING, or nil."
   (seq-find
-   (lambda (fragment)
-     (= (shuying-org-fragment-beginning fragment) beginning))
-   fragments))
+   (lambda (formula)
+     (= (shuying-org-formula-beginning formula) beginning))
+   formulas))
 
 (defun shuying-org--hide-overlay (overlay)
   "Reveal the source hidden by Shuying OVERLAY."
@@ -376,8 +113,8 @@ Return nil when POSITION has no preview or its source is currently visible."
     (overlay after _beginning _end &optional _length)
   "Mark OVERLAY dirty after its source is modified."
   (unless after
-    (unless (overlay-get overlay 'shuying-org-source-beginning)
-      (overlay-put overlay 'shuying-org-source-beginning
+    (unless (overlay-get overlay 'shuying-org-formula-beginning)
+      (overlay-put overlay 'shuying-org-formula-beginning
                    (overlay-start overlay))))
   (shuying-org--hide-overlay overlay)
   (overlay-put overlay 'shuying-org-dirty t)
@@ -388,16 +125,16 @@ Return nil when POSITION has no preview or its source is currently visible."
      (1+ (or (overlay-get overlay 'shuying-org-generation) 0)))
     (cl-pushnew overlay shuying-org--changed-overlays)))
 
-(defun shuying-org--sync-overlay-fragment (overlay fragment)
-  "Synchronize OVERLAY's source and layout state with FRAGMENT."
+(defun shuying-org--sync-overlay-formula (overlay formula)
+  "Synchronize OVERLAY's source and layout state with FORMULA."
   (pcase-let ((`(,beginning . ,end)
-               (shuying-org--fragment-bounds fragment)))
+               (shuying-org-formula-bounds formula)))
     (move-overlay overlay beginning end)
-    (overlay-put overlay 'shuying-org-source-beginning beginning)
+    (overlay-put overlay 'shuying-org-formula-beginning beginning)
     (overlay-put overlay 'shuying-org-block-math
-                 (shuying-org-fragment-block-math-p fragment))
+                 (shuying-org-formula-block-math-p formula))
     (overlay-put overlay 'shuying-org-standalone
-                 (shuying-org-fragment-standalone-p fragment)))
+                 (shuying-org-formula-standalone-p formula)))
   overlay)
 
 (defun shuying-org--layout-context-changed
@@ -415,24 +152,24 @@ Return nil when POSITION has no preview or its source is currently visible."
     (when (or
            ;; Undo can recreate a formula after its overlay was deleted.
            ;; With no overlay modification hook left to report the change,
-           ;; force visible-fragment discovery at the next idle opportunity.
+           ;; force visible-formula discovery at the next idle opportunity.
            undo-change
            (seq-some
             (lambda (overlay)
               (and (overlay-get overlay 'shuying-org-block-math)
                    (not (overlay-get overlay 'shuying-org-dirty))))
-            (shuying-org--fragment-overlays line-beginning line-end)))
+            (shuying-org--formula-overlays line-beginning line-end)))
       (setq shuying-org--visible-window-state nil)
       (shuying-org--schedule-visible-preview undo-change))))
 
-(defun shuying-org--ensure-overlay (fragment)
-  "Return the display overlay for FRAGMENT, creating it if needed."
+(defun shuying-org--ensure-overlay (formula)
+  "Return the display overlay for FORMULA, creating it if needed."
   (pcase-let* ((`(,beginning . ,end)
-                (shuying-org--fragment-bounds fragment))
-               (overlay (shuying-org--fragment-overlay fragment))
+                (shuying-org-formula-bounds formula))
+               (overlay (shuying-org--formula-overlay formula))
                (shuying-overlays
-                (shuying-org--fragment-overlays beginning end)))
-    ;; Org fragments cannot nest.  A differently bounded Shuying overlay is
+                (shuying-org--formula-overlays beginning end)))
+    ;; Org formulas cannot nest.  A differently bounded Shuying overlay is
     ;; stale parser state left behind while delimiters were incomplete.
     (dolist (candidate shuying-overlays)
       (unless (eq candidate overlay)
@@ -442,14 +179,14 @@ Return nil when POSITION has no preview or its source is currently visible."
                 'org-latex-overlay)
         (delete-overlay candidate)))
     (unless overlay
-      ;; Text inserted immediately before a fragment belongs to its prose,
+      ;; Text inserted immediately before a formula belongs to its prose,
       ;; not to the source replaced by the preview.  This matters for line
       ;; joins, which insert their separating space at the overlay boundary.
       (setq overlay (make-overlay beginning end nil t nil))
       (overlay-put overlay 'shuying-org t)
       (overlay-put overlay 'modification-hooks
                    '(shuying-org--modified)))
-    (shuying-org--sync-overlay-fragment overlay fragment)))
+    (shuying-org--sync-overlay-formula overlay formula)))
 
 (defun shuying-org--latex-info ()
   "Return the LaTeX export environment for the current Org buffer."
@@ -479,15 +216,15 @@ INFO, when non-nil, is an existing LaTeX export environment."
           ("lualatex" '("lualatex" "--output-format=dvi"))
           (_ (error "Unsupported Org LaTeX compiler: %s" compiler))))))
 
-(defun shuying-org--render-spec (fragment preamble &optional engine)
-  "Return the render specification for Org FRAGMENT.
+(defun shuying-org--render-spec (formula preamble &optional engine)
+  "Return the render specification for Org FORMULA.
 PREAMBLE and optional ENGINE describe its LaTeX document context."
-  (let ((bounds (shuying-org--fragment-bounds fragment)))
+  (let ((bounds (shuying-org-formula-bounds formula)))
     (save-excursion
       (goto-char (car bounds))
       (make-shuying-render-spec
        :source
-       (shuying-org-fragment-value fragment)
+       (shuying-org-formula-source formula)
        :preamble preamble
        :engine (or engine (shuying-org--latex-engine-command))
        :backend 'shuying-latex
@@ -499,7 +236,7 @@ PREAMBLE and optional ENGINE describe its LaTeX document context."
        :foreground "Black"
        :background "Transparent"
        :equation-number
-       (shuying-org-fragment-equation-number fragment)
+       (shuying-org-formula-equation-number formula)
        ;; Preserve Org's established dvisvgm preview size.  Its process
        ;; definition applies this adjustment before the user scale.
        :scale (* 1.7
@@ -620,9 +357,9 @@ REPORT-ERROR reports a current render failure without duplicating its batch."
             overlay display-error report-error)))))))
 
 (defun shuying-org--render-request
-    (fragment specification specification-hash report-error)
-  "Return a render request for Org FRAGMENT using SPECIFICATION."
-  (let* ((overlay (shuying-org--ensure-overlay fragment))
+    (formula specification specification-hash report-error)
+  "Return a render request for Org FORMULA using SPECIFICATION."
+  (let* ((overlay (shuying-org--ensure-overlay formula))
          (generation
           (1+ (or (overlay-get overlay 'shuying-org-generation) 0)))
          (buffer (current-buffer)))
@@ -640,30 +377,30 @@ REPORT-ERROR reports a current render failure without duplicating its batch."
        (shuying-org--finish-render
         buffer overlay generation artifact error-data report-error)))))
 
-(defun shuying-org--preview-fragments
-    (fragments &optional stale-only automatic)
-  "Request previews for Org FRAGMENTS as one render group.
+(defun shuying-org--preview-formulas
+    (formulas &optional stale-only automatic)
+  "Request previews for Org FORMULAS as one render group.
 When STALE-ONLY is non-nil, reuse overlays whose render inputs still match.
 When AUTOMATIC is non-nil, silently retain unavailable dependency errors."
-  (when fragments
+  (when formulas
     (let* ((info (shuying-org--latex-info))
            (preamble (shuying-org--preamble info))
            (engine (shuying-org--latex-engine-command info))
            error-reported
            requests)
-      (dolist (fragment fragments)
+      (dolist (formula formulas)
         (let* ((specification
-                (shuying-org--render-spec fragment preamble engine))
+                (shuying-org--render-spec formula preamble engine))
                (specification-hash
                 (shuying-render-spec-hash specification))
-               (overlay (shuying-org--fragment-overlay fragment))
+               (overlay (shuying-org--formula-overlay formula))
                (artifact
                 (and overlay
                      (overlay-get overlay 'shuying-org-artifact))))
           ;; Layout context can change around an otherwise unchanged formula.
           ;; Refresh it even when the rendered artifact remains reusable.
           (when overlay
-            (shuying-org--sync-overlay-fragment overlay fragment))
+            (shuying-org--sync-overlay-formula overlay formula))
           (if (and stale-only overlay
                    (or (overlay-get overlay 'shuying-org-image)
                        (overlay-get overlay
@@ -684,7 +421,7 @@ When AUTOMATIC is non-nil, silently retain unavailable dependency errors."
                   (shuying-org--show-overlay overlay)))
             (push
              (shuying-org--render-request
-              fragment specification specification-hash
+              formula specification specification-hash
               (lambda (error-data)
                 (unless error-reported
                   (setq error-reported t)
@@ -700,73 +437,61 @@ When AUTOMATIC is non-nil, silently retain unavailable dependency errors."
       (when requests
         (shuying-render-batch (nreverse requests))))))
 
-(defun shuying-org--preview-fragment (fragment &optional automatic)
-  "Request a preview for Org FRAGMENT.
+(defun shuying-org--preview-formula (formula &optional automatic)
+  "Request a preview for Org FORMULA.
 When AUTOMATIC is non-nil, silently retain unavailable dependency errors."
-  (let* ((beginning (shuying-org-fragment-beginning fragment))
-         (catalog-stale (not (shuying-org--catalog-current-p)))
-         (old-fragment
-          (and catalog-stale
-               (shuying-org--fragment-by-beginning
-                shuying-org--fragment-catalog beginning)))
-         (catalog (shuying-org--fragments))
-         (catalog-fragment
-          (shuying-org--fragment-by-beginning catalog beginning)))
+  (let* ((beginning (shuying-org-formula-beginning formula))
+         (catalog-stale (not (shuying-org-source-current-p)))
+         (catalog (shuying-org-source-formulas))
+         (catalog-formula
+          (shuying-org--formula-by-beginning catalog beginning)))
     ;; Point tracking uses a local Org context so editing does not parse the
     ;; whole buffer on every command.  Rendering resolves that lightweight
     ;; value against the catalog to obtain document-wide numbering context.
-    (setq fragment (or catalog-fragment fragment))
-    (shuying-org--preview-fragments
-     (list fragment) catalog-stale automatic)
-    (when (and catalog-stale
-               (or (and old-fragment
-                        (shuying-org-fragment-equation-number
-                         old-fragment))
-                   (and catalog-fragment
-                        (shuying-org-fragment-equation-number
-                         catalog-fragment)))
-               (bound-and-true-p shuying-org-mode)
+    (setq formula (or catalog-formula formula))
+    (shuying-org--preview-formulas
+     (list formula) catalog-stale automatic)
+    (when (and (bound-and-true-p shuying-org-mode)
                (shuying-org--window-state))
-      ;; A changed environment can renumber every environment after it.
-      ;; Rechecking the viewport updates only previews whose hashes changed.
+      ;; An edit can renumber later formulas.  Hashes skip unchanged previews.
       (setq shuying-org--visible-window-state nil)
       (shuying-org--schedule-visible-preview t))))
 
-(defun shuying-org--leave-fragment (fragment)
-  "Show or refresh Org FRAGMENT after point leaves it."
-  (if-let* ((overlay (shuying-org--fragment-overlay fragment)))
+(defun shuying-org--leave-formula (formula)
+  "Show or refresh Org FORMULA after point leaves it."
+  (if-let* ((overlay (shuying-org--formula-overlay formula)))
       (let ((artifact
              (overlay-get overlay 'shuying-org-artifact)))
-        (if (and (shuying-org--catalog-current-p)
+        (if (and (shuying-org-source-current-p)
                  (not (overlay-get overlay 'shuying-org-dirty))
                  artifact
                  (file-exists-p artifact))
             (shuying-org--show-overlay overlay)
-          (shuying-org--preview-fragment fragment t)))
-    (shuying-org--preview-fragment fragment t)))
+          (shuying-org--preview-formula formula t)))
+    (shuying-org--preview-formula formula t)))
 
-(defun shuying-org--enter-fragment (fragment)
-  "Reveal the source of Org FRAGMENT."
+(defun shuying-org--enter-formula (formula)
+  "Reveal the source of Org FORMULA."
   (pcase-let ((`(,beginning . ,end)
-               (shuying-org--fragment-bounds fragment)))
+               (shuying-org-formula-bounds formula)))
     (dolist (overlay
-             (shuying-org--fragment-overlays beginning end))
+             (shuying-org--formula-overlays beginning end))
       (if (and (= (overlay-start overlay) beginning)
                (= (overlay-end overlay) end))
           (shuying-org--hide-overlay overlay)
         (delete-overlay overlay)))))
 
-(defun shuying-org--set-active-fragment (fragment)
-  "Remember FRAGMENT as the one containing point."
+(defun shuying-org--set-active-formula (formula)
+  "Remember FORMULA as the one containing point."
   (unless (markerp shuying-org--active-start)
     (setq shuying-org--active-start (make-marker)))
   (set-marker
    shuying-org--active-start
-   (shuying-org-fragment-beginning fragment)
+   (shuying-org-formula-beginning formula)
    (current-buffer)))
 
-(defun shuying-org--clear-active-fragment ()
-  "Forget the fragment previously containing point."
+(defun shuying-org--clear-active-formula ()
+  "Forget the formula previously containing point."
   (when (markerp shuying-org--active-start)
     (set-marker shuying-org--active-start nil))
   (setq shuying-org--active-start nil))
@@ -780,11 +505,11 @@ When AUTOMATIC is non-nil, silently retain unavailable dependency errors."
           (not (equal shuying-org--previous-tick
                       (buffer-chars-modified-tick))))
          (current
-          (or (shuying-org--fragment-at-point)
-              (shuying-org--fragment-at-edit-boundary
+          (or (shuying-org-source-at-position (point))
+              (shuying-org--formula-at-edit-boundary
                active-position text-changed)))
          (current-start
-          (and current (shuying-org-fragment-beginning current)))
+          (and current (shuying-org-formula-beginning current)))
          (changed-overlays
           (prog1 shuying-org--changed-overlays
             (setq shuying-org--changed-overlays nil)))
@@ -793,55 +518,55 @@ When AUTOMATIC is non-nil, silently retain unavailable dependency errors."
     (unless (equal current-start active-position)
       (when active-position
         (if-let* ((active
-                   (shuying-org--fragment-at-position
+                   (shuying-org-source-at-position
                     active-position)))
             (progn
-              (push (shuying-org-fragment-beginning active)
+              (push (shuying-org-formula-beginning active)
                     processed-starts)
-              (shuying-org--leave-fragment active))
+              (shuying-org--leave-formula active))
           (dolist (overlay
-                   (shuying-org--fragment-overlays
+                   (shuying-org--formula-overlays
                     active-position (1+ active-position)))
             (unless (memq overlay changed-overlays)
               (delete-overlay overlay)
               (setq refresh-visible t)))))
-      (shuying-org--clear-active-fragment)
+      (shuying-org--clear-active-formula)
       (when current
         (unless (shuying-org--viewing-p)
-          (shuying-org--enter-fragment current))
-        (shuying-org--set-active-fragment current)))
+          (shuying-org--enter-formula current))
+        (shuying-org--set-active-formula current)))
     (unless current
       (when-let* ((completed
-                  (shuying-org--fragment-at-or-ending-at-position
+                  (shuying-org-source-at-position
                    shuying-org--previous-point)))
-        (unless (or (= (point) (shuying-org-fragment-end completed))
-                    (memq (shuying-org-fragment-beginning completed)
+        (unless (or (= (point) (shuying-org-formula-end completed))
+                    (memq (shuying-org-formula-beginning completed)
                           processed-starts))
-          (push (shuying-org-fragment-beginning completed)
+          (push (shuying-org-formula-beginning completed)
                 processed-starts)
-          (shuying-org--leave-fragment completed))))
+          (shuying-org--leave-formula completed))))
     ;; Undo and programmatic edits can modify a preview while point remains
     ;; outside it, so they cannot rely on a later cursor-leave transition.
     (dolist (overlay changed-overlays)
       (when (overlay-buffer overlay)
-        (if-let* ((fragment
+        (if-let* ((formula
                    (or
                     (when-let* ((beginning
                                  (overlay-get
                                   overlay
-                                  'shuying-org-source-beginning)))
-                    (shuying-org--fragment-at-position beginning))
-                    (shuying-org--fragment-at-position
+                                  'shuying-org-formula-beginning)))
+                    (shuying-org-source-at-position beginning))
+                    (shuying-org-source-at-position
                      (overlay-start overlay)))))
             (pcase-let ((`(,beginning . ,end)
-                         (shuying-org--fragment-bounds fragment)))
+                         (shuying-org-formula-bounds formula)))
               (move-overlay overlay beginning end)
-              (overlay-put overlay 'shuying-org-source-beginning
+              (overlay-put overlay 'shuying-org-formula-beginning
                            beginning)
               (unless (or (memq beginning processed-starts)
                           (equal beginning current-start))
                 (push beginning processed-starts)
-                (shuying-org--leave-fragment fragment)))
+                (shuying-org--leave-formula formula)))
           (delete-overlay overlay)
           (setq refresh-visible t))))
     (when refresh-visible
@@ -854,73 +579,18 @@ When AUTOMATIC is non-nil, silently retain unavailable dependency errors."
 (defun shuying-org--view-mode-changed ()
   "Synchronize the preview at point after View mode changes."
   (when (bound-and-true-p shuying-org-mode)
-    (if-let* ((fragment (shuying-org--fragment-at-point)))
+    (if-let* ((formula (shuying-org-source-at-position (point))))
         (progn
           (if (shuying-org--viewing-p)
-              (shuying-org--leave-fragment fragment)
-            (shuying-org--enter-fragment fragment))
-          (shuying-org--set-active-fragment fragment))
-      (shuying-org--clear-active-fragment))))
-
-(defun shuying-org--rebuild-fragment-catalog ()
-  "Parse and remember every Org LaTeX fragment in the current buffer."
-  (save-restriction
-    (widen)
-    (let ((equation-number 1))
-      (setq shuying-org--fragment-catalog
-            (org-element-map
-                (org-element-parse-buffer)
-                '(latex-fragment latex-environment)
-              (lambda (element)
-                (let ((count (shuying-org--equation-count element)))
-                  (prog1
-                      (when (shuying-org--latex-fragment-p element)
-                        (shuying-org--fragment-from-element
-                         element (and count equation-number)))
-                    ;; A source-visible environment can still advance TeX's
-                    ;; equation counter for later previews.
-                    (when count
-                      (cl-incf equation-number count))))))
-            shuying-org--catalog-tick
-            (buffer-chars-modified-tick)))))
-
-(defun shuying-org--fragments ()
-  "Return the current buffer's catalog of Org LaTeX fragments."
-  (unless (shuying-org--catalog-current-p)
-    (shuying-org--rebuild-fragment-catalog))
-  shuying-org--fragment-catalog)
-
-(defun shuying-org--fragments-in-ranges (ranges)
-  "Return Org LaTeX fragments overlapping any of RANGES.
-RANGES and the fragment catalog are traversed in buffer order."
-  (let ((remaining
-         (sort (copy-sequence ranges)
-               (lambda (left right)
-                 (< (car left) (car right)))))
-        fragments)
-    (catch 'done
-      (dolist (fragment (shuying-org--fragments))
-        (pcase-let ((`(,beginning . ,end)
-                     (shuying-org--fragment-bounds fragment)))
-          (while (and remaining
-                      (<= (cdar remaining) beginning))
-            (setq remaining (cdr remaining)))
-          (unless remaining
-            (throw 'done nil))
-          (when (and (< beginning (cdar remaining))
-                     (< (caar remaining) end))
-            (push fragment fragments)))))
-    (nreverse fragments)))
-
-(defun shuying-org--fragments-in-region (beginning end)
-  "Return Org LaTeX fragments overlapping BEGINNING through END."
-  (shuying-org--fragments-in-ranges
-   (list (cons beginning end))))
+              (shuying-org--leave-formula formula)
+            (shuying-org--enter-formula formula))
+          (shuying-org--set-active-formula formula))
+      (shuying-org--clear-active-formula))))
 
 (defun shuying-org--preview-region (beginning end)
-  "Preview Org LaTeX fragments between BEGINNING and END."
-  (shuying-org--preview-fragments
-   (shuying-org--fragments-in-region beginning end)))
+  "Preview Org LaTeX formulas between BEGINNING and END."
+  (shuying-org--preview-formulas
+   (shuying-org-source-in-ranges (list (cons beginning end)))))
 
 (defun shuying-org--visible-ranges ()
   "Return the ranges visible in windows showing the current buffer."
@@ -946,8 +616,8 @@ RANGES and the fragment catalog are traversed in buffer order."
     (unless (equal window-state shuying-org--visible-window-state)
       (setq shuying-org--visible-window-state window-state)
       (when (and (bound-and-true-p shuying-org-mode) window-state)
-        (shuying-org--preview-fragments
-         (shuying-org--fragments-in-ranges
+        (shuying-org--preview-formulas
+         (shuying-org-source-in-ranges
           (shuying-org--visible-ranges))
          t t)))))
 
@@ -1019,20 +689,19 @@ the next idle opportunity."
 (defun shuying-org--buffer-reverted ()
   "Discard stale preview state after reverting the Org buffer."
   (shuying-org--cancel-visible-preview-timer)
-  (shuying-org--clear-active-fragment)
-  (setq shuying-org--fragment-catalog nil
-        shuying-org--catalog-tick nil
-        shuying-org--changed-overlays nil
+  (shuying-org--clear-active-formula)
+  (setq shuying-org--changed-overlays nil
         shuying-org--previous-point (point)
         shuying-org--previous-tick (buffer-chars-modified-tick)
         shuying-org--visible-window-state nil)
+  (shuying-org-source-reset)
   (shuying-org-clear-buffer)
   (when (shuying-org--window-state)
     (shuying-org--schedule-visible-preview t)))
 
 (defun shuying-org--clear-region (beginning end)
   "Remove Shuying overlays between BEGINNING and END."
-  (dolist (overlay (shuying-org--fragment-overlays beginning end))
+  (dolist (overlay (shuying-org--formula-overlays beginning end))
     (delete-overlay overlay)))
 
 (defun shuying-org--section-bounds ()
@@ -1079,8 +748,8 @@ preview the whole buffer.  With three, clear the whole buffer."
     (shuying-org--preview-region
      (region-beginning) (region-end)))
    (t
-    (if-let* ((fragment (shuying-org--fragment-at-point)))
-        (shuying-org--preview-fragment fragment)
+    (if-let* ((formula (shuying-org-source-at-position (point))))
+        (shuying-org--preview-formula formula)
       (pcase-let ((`(,beginning . ,end)
                    (shuying-org--section-bounds)))
         (shuying-org--preview-region beginning end))))))
@@ -1131,7 +800,7 @@ preview the whole buffer.  With three, clear the whole buffer."
     (setq shuying-org--visible-window-state nil)
     (shuying-org--cancel-visible-preview-timer)
     (setq shuying-org--changed-overlays nil)
-    (shuying-org--clear-active-fragment)
+    (shuying-org--clear-active-formula)
     (shuying-org-clear-buffer)))
 
 (provide 'shuying-org)

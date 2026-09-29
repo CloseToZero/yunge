@@ -81,21 +81,6 @@
                      view-mode-hook)))))
       (delete-directory root t))))
 
-(ert-deftest shuying-org-classifies-only-block-math-for-centering ()
-  (with-temp-buffer
-    (org-mode)
-    (insert
-     "$a$\n"
-     "\\(b\\)\n"
-     "$$c$$\n"
-     "\\[d\\]\n"
-     "\\begin{equation}\ne = f\n\\end{equation}\n")
-    (should
-     (equal
-      (mapcar #'shuying-org-fragment-block-math-p
-              (shuying-org--fragments))
-      '(nil nil t t t)))))
-
 (ert-deftest shuying-org-keeps-environment-line-ending-outside-preview ()
   (with-temp-buffer
     (org-mode)
@@ -104,7 +89,7 @@
      "x &= y\n"
      "\\end{align*}\n\n"
      "After.\n")
-    (let* ((fragment (car (shuying-org--fragments)))
+    (let* ((fragment (car (shuying-org-source-formulas)))
            (overlay (shuying-org--ensure-overlay fragment)))
       (overlay-put overlay 'display 'image)
       (goto-char (point-min))
@@ -112,33 +97,6 @@
       (should (shuying-org-preview-overlay-at (1- (point))))
       (should-not
        (shuying-org-preview-overlay-at (line-end-position))))))
-
-(ert-deftest shuying-org-leaves-whitespace-only-math-as-source ()
-  (with-temp-buffer
-    (org-mode)
-    (insert
-     "\\(\\)\n"
-     "\\(  \\)\n"
-     "\\[  \\]\n"
-     "$$  $$\n"
-     "\\begin{equation}\n"
-     "  \n"
-     "\\end{equation}\n"
-     "\\(x\\)\n"
-     "\\[y\\]\n"
-     "\\begin{equation}\n"
-     "z\n"
-     "\\end{equation}\n")
-    (let ((fragments (shuying-org--fragments)))
-      (should
-       (equal
-        (mapcar #'shuying-org-fragment-value fragments)
-        '("\\(x\\)"
-          "\\[y\\]"
-          "\\begin{equation}\nz\n\\end{equation}\n")))
-      (should
-       (= (shuying-org-fragment-equation-number (car (last fragments)))
-          2)))))
 
 (ert-deftest shuying-org-previews-non-standalone-block-math-at-source ()
   (with-temp-buffer
@@ -153,18 +111,18 @@
      "\\begin{equation}\n"
      "e = f\n"
      "\\end{equation}\n")
-    (let ((fragments (shuying-org--fragments))
+    (let ((fragments (shuying-org-source-formulas))
           (image '(image :type svg :data "formula")))
       (should
        (equal
-        (mapcar #'shuying-org-fragment-standalone-p fragments)
+        (mapcar #'shuying-org-formula-standalone-p fragments)
         '(nil nil nil t t)))
       (dolist (fragment fragments)
         (let ((overlay (shuying-org--ensure-overlay fragment)))
           (overlay-put overlay 'shuying-org-image image)
           (shuying-org--show-overlay overlay)
           (should (equal (overlay-get overlay 'display) image))
-          (if (shuying-org-fragment-standalone-p fragment)
+          (if (shuying-org-formula-standalone-p fragment)
               (should (overlay-get overlay 'before-string))
             (should-not (overlay-get overlay 'before-string))))))))
 
@@ -191,8 +149,8 @@
             (with-temp-buffer
               (org-mode)
               (insert "1. prefix \\[x = y\\]\n")
-              (let ((fragments (shuying-org--fragments)))
-                (shuying-org--preview-fragments fragments t)
+              (let ((fragments (shuying-org-source-formulas)))
+                (shuying-org--preview-formulas fragments t)
                 (let ((overlay (shuying-org-test--overlay)))
                   (should overlay)
                   (should-not (overlay-get overlay 'before-string))
@@ -202,8 +160,8 @@
                             #'shuying-org--layout-context-changed nil t)
                   (delete-region (point-min) (overlay-start overlay))
                   (should scheduled)
-                  (shuying-org--preview-fragments
-                   (shuying-org--fragments) t)
+                  (shuying-org--preview-formulas
+                   (shuying-org-source-formulas) t)
                   (should (eq overlay (shuying-org-test--overlay)))
                   (should (overlay-get overlay 'before-string))
                   (should (= shuying-org-test--render-count 1))
@@ -212,8 +170,8 @@
                   (goto-char (point-min))
                   (insert "prefix ")
                   (should scheduled)
-                  (shuying-org--preview-fragments
-                   (shuying-org--fragments) t)
+                  (shuying-org--preview-formulas
+                   (shuying-org-source-formulas) t)
                   (setq overlay (shuying-org-test--overlay))
                   (should overlay)
                   (should-not (overlay-get overlay 'before-string))
@@ -301,8 +259,8 @@
             (with-temp-buffer
               (org-mode)
               (insert "\\(\\phantom{x}\\)")
-              (let ((fragments (shuying-org--fragments)))
-                (shuying-org--preview-fragments fragments t)
+              (let ((fragments (shuying-org-source-formulas)))
+                (shuying-org--preview-formulas fragments t)
                 (let ((overlay (shuying-org-test--overlay)))
                   (should overlay)
                   (should (= render-count 1))
@@ -311,7 +269,7 @@
                   (should-not (overlay-get overlay 'shuying-org-image))
                   (should-not (overlay-get overlay 'display))
                   (should-not (overlay-get overlay 'shuying-org-error))
-                  (shuying-org--preview-fragments fragments t)
+                  (shuying-org--preview-formulas fragments t)
                   (should (= render-count 1)))))))
       (delete-directory root t))))
 
@@ -345,7 +303,7 @@
                 (shuying-org--post-command)
                 (goto-char (point-max))
                 (shuying-org--post-command)
-                (should-not (shuying-org--fragments))
+                (should-not (shuying-org-source-formulas))
                 (should-not (overlay-buffer overlay))
                 (should-not (shuying-org-test--overlay))
                 (should (= shuying-org-test--render-count 1))))))
@@ -387,7 +345,7 @@
       (goto-char (point-min))
       (let ((specification
              (shuying-org--render-spec
-              (shuying-org--fragment-at-point)
+              (shuying-org-source-at-position (point))
               "test-preamble")))
         (should (eq (shuying-render-spec-backend specification)
                     'shuying-latex))
@@ -432,141 +390,62 @@
                (shuying-org--latex-info))
               '("pdflatex" "-output-format=dvi"))))))
 
-(ert-deftest shuying-org-previews-only-explicit-latex-math ()
-  (with-temp-buffer
-    (org-mode)
-    (insert
-     "\\mathrm{A}\n"
-     "$x$\n"
-     "\\(y\\)\n"
-     "\\[z\\]\n"
-     "\\begin{equation}\nw = 1\n\\end{equation}\n")
-    (goto-char (point-min))
-    (should-not (shuying-org--fragment-at-point))
-    (should
-     (equal
-      (mapcar #'shuying-org-fragment-value
-              (shuying-org--fragments))
-      '("$x$" "\\(y\\)" "\\[z\\]"
-        "\\begin{equation}\nw = 1\n\\end{equation}\n")))))
-
-(ert-deftest shuying-org-tracks-equation-numbering-context ()
-  (with-temp-buffer
-    (org-mode)
-    (insert
-     "\\begin{equation}\na = b\n\\end{equation}\n\n"
-     "$x$\n\n"
-     "\\begin{align}\n"
-     "a &= b \\\\\n"
-     "c &= \\begin{aligned}\n"
-     "  x & = y \\\\\n"
-     "  z & = w\n"
-     "\\end{aligned} \\nonumber \\\\\n"
-     "d &= e \\tag{manual} \\\\\n"
-     "% A commented \\\\ does not start another row.\n"
-     "f &= g\n"
-     "\\end{align}\n\n"
-     "\\begin{equation}\nj = k \\tag{manual}\n\\end{equation}\n\n"
-     "\\begin{multline}\np + q \\\\\n"
-     "+ r = s\n\\end{multline}\n\n"
-     "\\begin{equation}\nh = i\n\\end{equation}\n")
-    (should
-     (equal
-      (mapcar #'shuying-org-fragment-equation-number
-              (shuying-org--fragments))
-      '(1 nil 2 4 4 5)))))
-
-(ert-deftest shuying-org-does-not-number-starred-environments ()
-  (with-temp-buffer
-    (org-mode)
-    (insert
-     "\\begin{align*}\na &= b\n\\end{align*}\n\n"
-     "\\begin{displaymath}\nx = y\n\\end{displaymath}\n\n"
-     "\\begin{equation}\nc = d\n\\end{equation}\n")
-    (should
-     (equal
-      (mapcar #'shuying-org-fragment-equation-number
-              (shuying-org--fragments))
-      '(nil nil 1)))))
-
 (ert-deftest shuying-org-adds-equation-number-to-render-specification ()
   (with-temp-buffer
     (org-mode)
     (insert "\\begin{equation}\nx = y\n\\end{equation}\n")
     (let ((specification
            (shuying-org--render-spec
-            (car (shuying-org--fragments)) "test-preamble")))
+            (car (shuying-org-source-formulas)) "test-preamble")))
       (should
        (= (shuying-render-spec-equation-number specification) 1)))))
 
-(ert-deftest shuying-org-renumbers-after-an-earlier-environment-changes ()
-  (with-temp-buffer
-    (org-mode)
-    (insert
-     "\\begin{equation}\nx = y\n\\end{equation}\n\n"
-     "\\begin{equation}\ny = z\n\\end{equation}\n")
-    (should
-     (equal
-      (mapcar #'shuying-org-fragment-equation-number
-              (shuying-org--fragments))
-      '(1 2)))
-    (goto-char (point-min))
-    (search-forward "x = y")
-    (insert " \\tag{manual}")
-    (should
-     (equal
-      (mapcar #'shuying-org-fragment-equation-number
-              (shuying-org--fragments))
-      '(1 1)))))
-
-(ert-deftest shuying-org-reschedules-visible-numbering-after-an-edit ()
-  (with-temp-buffer
-    (org-mode)
-    (insert
-     "\\begin{equation}\nx = y\n\\end{equation}\n\n"
-     "\\begin{equation}\ny = z\n\\end{equation}\n")
-    (let ((fragment (car (shuying-org--fragments)))
-          scheduled)
-      (cl-letf (((symbol-function 'shuying-org--preview-fragments)
-                 #'ignore)
-                ((symbol-function 'shuying-org--window-state)
-                 (lambda () 'visible))
-                ((symbol-function 'shuying-org--schedule-visible-preview)
-                 (lambda (&optional immediate)
-                   (setq scheduled immediate))))
-        (setq shuying-org-mode t
-              shuying-org--visible-window-state 'visible)
-        (goto-char (shuying-org-fragment-beginning fragment))
-        (search-forward "x = y")
-        (insert " \\tag{manual}")
-        (shuying-org--preview-fragment
-         (shuying-org--fragment-at-position (1- (point))))
-        (should scheduled)
-        (should-not shuying-org--visible-window-state)))))
-
-(ert-deftest shuying-org-selects-fragments-from-disjoint-ranges ()
-  (with-temp-buffer
-    (org-mode)
-    (insert "$a$ gap $b$ gap $c$")
-    (let* ((fragments (shuying-org--fragments))
-           (first (nth 0 fragments))
-           (second (nth 1 fragments))
-           (third (nth 2 fragments)))
-      (should
-       (equal
-        (shuying-org--fragments-in-ranges
-         (list
-          (cons (shuying-org-fragment-beginning third)
-                (shuying-org-fragment-end third))
-          (cons (shuying-org-fragment-beginning first)
-                (shuying-org-fragment-end first))))
-        (list first third)))
-      (should
-       (equal
-        (shuying-org--fragments-in-region
-         (shuying-org-fragment-end first)
-         (shuying-org-fragment-beginning third))
-        (list second))))))
+(ert-deftest shuying-org-updates-visible-equation-numbers-after-an-edit ()
+  (let* ((root (make-temp-file "shuying-org-" t))
+         (shuying-cache-directory root)
+         (shuying-backends nil)
+         (shuying--pending-jobs (make-hash-table :test #'equal))
+         rendered)
+    (unwind-protect
+        (save-window-excursion
+          (shuying-register-backend
+           'shuying-latex
+           (lambda (requests complete)
+             (dolist (request requests)
+               (let ((spec (shuying-backend-request-specification request)))
+                 (push (cons (shuying-render-spec-source spec)
+                             (shuying-render-spec-equation-number spec))
+                       rendered))
+               (with-temp-file (shuying-backend-request-output-file request)
+                 (insert "image"))
+               (setf (shuying-backend-request-metadata request)
+                     '(:width 1.0 :height 1.2 :depth 0.2))
+               (funcall complete request nil))))
+          (cl-letf (((symbol-function 'create-image)
+                     (lambda (file &rest _properties) (list 'image file))))
+            (with-temp-buffer
+              (org-mode)
+              (insert
+               "\\begin{equation}\nx = y\n\\end{equation}\n\n"
+               "\\begin{equation}\ny = z\n\\end{equation}\n")
+              (set-window-buffer (selected-window) (current-buffer))
+              (goto-char (point-min))
+              (shuying-org-mode 1)
+              (shuying-org-preview-buffer)
+              (shuying-org--preview-visible-windows)
+              (should (member '("\\begin{equation}\ny = z\n\\end{equation}\n" . 2)
+                              rendered))
+              (search-forward "x = y")
+              (insert " \\tag{manual}")
+              ;; Another consumer may refresh the source catalog first.
+              (shuying-org-source-formulas)
+              (goto-char (point-max))
+              (shuying-org--post-command)
+              (shuying-org--preview-visible-windows)
+              (should (member '("\\begin{equation}\ny = z\n\\end{equation}\n" . 1)
+                              rendered))
+              (shuying-org-mode -1))))
+      (delete-directory root t))))
 
 (ert-deftest shuying-org-previews-after-leaving-edited-source ()
   (let* ((root (make-temp-file "shuying-org-" t))
@@ -786,9 +665,7 @@
          (buffer (generate-new-buffer " *shuying-org-visible*"))
          visible-end
          window-state
-         ranges
-         (parse-count 0)
-         (parse-buffer (symbol-function 'org-element-parse-buffer)))
+         ranges)
     (unwind-protect
         (progn
           (shuying-register-backend
@@ -801,11 +678,7 @@
                      (lambda ()
                        ranges))
                     ((symbol-function 'shuying-org--window-state)
-                     (lambda () window-state))
-                    ((symbol-function 'org-element-parse-buffer)
-                     (lambda (&rest arguments)
-                       (cl-incf parse-count)
-                       (apply parse-buffer arguments))))
+                     (lambda () window-state)))
             (with-current-buffer buffer
               (org-mode)
               (insert "Visible $x$.\n")
@@ -823,25 +696,22 @@
                      post-command-hook)))
             (with-current-buffer buffer
               (shuying-org--preview-visible-windows)
-              (should (= parse-count 1))
               (should (= shuying-org-test--render-count 1))
               (should (= (length
-                          (shuying-org--fragment-overlays
+                          (shuying-org--formula-overlays
                            (point-min) (point-max)))
                          1))
               (should
                (overlay-get
                 (shuying-org-test--overlay) 'display))
               (shuying-org--preview-visible-windows)
-              (should (= parse-count 1))
               (should (= shuying-org-test--render-count 1))
               (setq window-state 'scrolled
                     ranges (list (cons (point-min) (point-max))))
               (shuying-org--preview-visible-windows)
-              (should (= parse-count 1))
               (should (= shuying-org-test--render-count 2))
               (should (= (length
-                          (shuying-org--fragment-overlays
+                          (shuying-org--formula-overlays
                            (point-min) (point-max)))
                          2))
               (goto-char (point-max))
@@ -849,7 +719,6 @@
               (setq window-state 'edited
                     ranges (list (cons (point-min) (point-max))))
               (shuying-org--preview-visible-windows)
-              (should (= parse-count 2))
               (should (= shuying-org-test--render-count 3)))))
       (when (buffer-live-p buffer)
         (kill-buffer buffer))
@@ -920,13 +789,13 @@
             (with-temp-buffer
               (org-mode)
               (insert "$x$")
-              (let ((fragments (shuying-org--fragments)))
-                (shuying-org--preview-fragments fragments t)
+              (let ((fragments (shuying-org-source-formulas)))
+                (shuying-org--preview-formulas fragments t)
                 (should (= shuying-org-test--render-count 1))
-                (shuying-org--preview-fragments fragments t)
+                (shuying-org--preview-formulas fragments t)
                 (should (= shuying-org-test--render-count 1))
                 (setq preamble "second")
-                (shuying-org--preview-fragments fragments t)
+                (shuying-org--preview-formulas fragments t)
                 (should (= shuying-org-test--render-count 2))))))
       (delete-directory root t))))
 
@@ -955,38 +824,41 @@
         (should-not
          (memq #'shuying-org--buffer-saved after-save-hook))))))
 
-(ert-deftest shuying-org-rebuilds-visible-previews-after-revert ()
-  (with-temp-buffer
-    (org-mode)
-    (insert "$x$")
-    (let (scheduled)
-      (cl-letf (((symbol-function 'shuying-org--window-state)
-                 (lambda () 'visible))
-                ((symbol-function 'shuying-org--schedule-visible-preview)
-                 (lambda (&optional immediate)
-                   (setq scheduled immediate))))
-        (shuying-org-mode 1)
-        (let* ((fragment (car (shuying-org--fragments)))
-               (overlay (shuying-org--ensure-overlay fragment)))
-          (shuying-org--set-active-fragment fragment)
-          (setq scheduled nil
-                shuying-org--changed-overlays (list overlay)
-                shuying-org--visible-window-state 'visible)
-          (run-hooks 'after-revert-hook)
-          (should-not (overlay-buffer overlay))
-          (should-not shuying-org--fragment-catalog)
-          (should-not shuying-org--catalog-tick)
-          (should-not shuying-org--active-start)
-          (should-not shuying-org--changed-overlays)
-          (should (= shuying-org--previous-point (point)))
-          (should
-           (= shuying-org--previous-tick
-              (buffer-chars-modified-tick)))
-          (should-not shuying-org--visible-window-state)
-          (should scheduled))
-        (shuying-org-mode -1)
-        (should-not
-         (memq #'shuying-org--buffer-reverted after-revert-hook))))))
+(ert-deftest shuying-org-previews-reverted-disk-formulas ()
+  (let* ((root (make-temp-file "shuying-org-" t))
+         (file (expand-file-name "notes.org" root))
+         (shuying-cache-directory (expand-file-name "cache" root))
+         (shuying-backends nil)
+         (shuying--pending-jobs (make-hash-table :test #'equal))
+         (shuying-org-test--render-count 0)
+         (org-mode-hook (cons (lambda () (shuying-org-mode 1))
+                              org-mode-hook))
+         buffer)
+    (unwind-protect
+        (save-window-excursion
+          (with-temp-file file (insert "$old$\n"))
+          (shuying-register-backend 'shuying-latex
+                                    #'shuying-org-test--render-now)
+          (cl-letf (((symbol-function 'create-image)
+                     (lambda (path &rest _properties) (list 'image path))))
+            (setq buffer (find-file-noselect file))
+            (set-window-buffer (selected-window) buffer)
+            (with-current-buffer buffer
+              (org-mode)
+              (goto-char (point-max))
+              (shuying-org-mode 1)
+              (shuying-org-preview-buffer)
+              (should (overlay-get (shuying-org-test--overlay) 'display))
+              (should (= shuying-org-test--render-count 1))
+              (with-temp-file file (insert "$new$\n"))
+              (revert-buffer t t)
+              (should (equal (buffer-string) "$new$\n"))
+              (shuying-org--preview-visible-windows)
+              (should (overlay-get (shuying-org-test--overlay) 'display))
+              (should (= shuying-org-test--render-count 2))
+              (shuying-org-mode -1))))
+      (when (buffer-live-p buffer) (kill-buffer buffer))
+      (delete-directory root t))))
 
 (ert-deftest shuying-org-collects-visible-ranges-from-every-window ()
   (let ((buffer (generate-new-buffer " *shuying-org-window-ranges*"))
@@ -1133,16 +1005,16 @@
               (goto-char (point-max))
               (shuying-org-mode 1)
               (shuying-org-preview-buffer)
-              (let* ((fragment (car (last (shuying-org--fragments))))
-                     (overlay (shuying-org--fragment-overlay fragment)))
+              (let* ((fragment (car (last (shuying-org-source-formulas))))
+                     (overlay (shuying-org--formula-overlay fragment)))
                 (should (= shuying-org-test--render-count 1))
                 (should (overlay-get overlay 'display))
                 (call-interactively #'org-meta-return)
                 (shuying-org--post-command)
-                (setq fragment (car (last (shuying-org--fragments))))
+                (setq fragment (car (last (shuying-org-source-formulas))))
                 (should
                  (eq overlay
-                     (shuying-org--fragment-overlay fragment)))
+                     (shuying-org--formula-overlay fragment)))
                 (should (= shuying-org-test--render-count 1))
                 (should (overlay-get overlay 'display))
                 (should-not
@@ -1179,7 +1051,7 @@
               (should (= shuying-org-test--backend-call-count 1))
               (should
                (= (length
-                   (shuying-org--fragment-overlays
+                   (shuying-org--formula-overlays
                     (point-min) (point-max)))
                   2)))))
       (delete-directory root t))))
@@ -1213,7 +1085,7 @@
                (seq-every-p
                 (lambda (overlay)
                   (overlay-get overlay 'shuying-org-error))
-                (shuying-org--fragment-overlays
+                (shuying-org--formula-overlays
                  (point-min) (point-max)))))))
       (delete-directory root t))))
 
@@ -1238,18 +1110,18 @@
             (with-temp-buffer
               (org-mode)
               (insert "$x$")
-              (let ((fragments (shuying-org--fragments)))
-                (shuying-org--preview-fragments fragments nil t)
+              (let ((fragments (shuying-org-source-formulas)))
+                (shuying-org--preview-formulas fragments nil t)
                 (should-not warnings)
                 (should
                  (eq
                   (car
                    (overlay-get
-                    (car (shuying-org--fragment-overlays
+                    (car (shuying-org--formula-overlays
                           (point-min) (point-max)))
                     'shuying-org-error))
                   'shuying-latex-unavailable))
-                (shuying-org--preview-fragments fragments)
+                (shuying-org--preview-formulas fragments)
                 (should (= (length warnings) 1))))))
       (delete-directory root t))))
 
@@ -1281,8 +1153,8 @@
               (goto-char (point-min))
               (search-forward "x")
               (insert "2")
-              (shuying-org--preview-fragment
-               (shuying-org--fragment-at-point))
+              (shuying-org--preview-formula
+               (shuying-org-source-at-position (point)))
               (should (= (length requests) 2))
               (let* ((overlay (shuying-org-test--overlay))
                      (older (car requests))

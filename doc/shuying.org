@@ -136,7 +136,8 @@ Use Emacs text scaling when you only need a temporary per-buffer size change.
 Shuying reuses a cached image when its source and rendering settings match.
 Cached images can be displayed even while TeX is unavailable.  Numbered
 environments follow their order in the Org buffer; changing an earlier
-equation can refresh later numbers.
+equation can refresh later numbers. Narrowing to a section keeps the numbering
+from the full document, including equations before the narrowed text.
 
 =shuying-state-directory= defaults to =var/shuying/= under
 =user-emacs-directory=.  Set it before loading Shuying to relocate defaults
