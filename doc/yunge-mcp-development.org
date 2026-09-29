@@ -66,6 +66,16 @@ request and response.
 The native executable forwards requests to =yunge-mcp.el=, which dispatches
 registered tools in the running Emacs. =fangcun-mcp.el= converts Fangcun tool
 arguments and results; saved-note operations belong to Fangcun itself.
+Unknown names signal =yunge-mcp-unknown-tool= so the native handler can return
+an invalid-parameters response. Errors from a registered tool remain tool
+execution errors, including argument validation and note conflicts.
+
+The native bridge owns the Emacs connection settings, request encoding, and
+=emacsclient= process. The MCP handler maps its result to a tool result or
+JSON-RPC error and connects the request's cancellation signal to that process.
+Keep these lifetimes distinct: stopping the bridge's wait does not roll back
+work already running in Emacs.
+
 See the [[file:../native/yunge-mcp/README.org][native bridge guide]] for the wire format and connection manifest,
 and [[file:fangcun-development.org][Fangcun development]] for file and index contracts.
 
@@ -81,3 +91,7 @@ files. Never run registration tests against personal client settings. Codex
 registration tests need the debug executable produced by this build. For
 native changes, also run =--suite native --module mcp=. The
 [[file:development.org][development guide]] covers static checks and autoload generation.
+
+The native stdio test drives a real bridge process with a test replacement
+for =emacsclient=. Check wire responses and process cleanup there; exercise
+note edits through the Lisp tests.

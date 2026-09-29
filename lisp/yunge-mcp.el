@@ -9,6 +9,8 @@
 
 (declare-function fangcun-mcp-register-tools "fangcun-mcp")
 
+(define-error 'yunge-mcp-unknown-tool "Unknown Yunge MCP tool" 'user-error)
+
 (cl-defstruct yunge-mcp-tool
   name
   description
@@ -101,7 +103,7 @@ receives its arguments as a plist.  ANNOTATIONS contains MCP tool hints."
   (yunge-mcp--load-tools)
   (if-let* ((tool (gethash name yunge-mcp--tools)))
       (funcall (yunge-mcp-tool-function tool) arguments)
-    (user-error "Unknown Yunge MCP tool: %s" name)))
+    (signal 'yunge-mcp-unknown-tool (list name))))
 
 (defun yunge-mcp--handle-request (request)
   "Return the response object for decoded MCP bridge REQUEST."

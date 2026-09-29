@@ -4,8 +4,8 @@
 
 With no arguments, =yunge-mcp= is a stdio Model Context Protocol server. An MCP
 client starts it as a child process and exchanges one JSON-RPC message per
-line.  Standard output is reserved for MCP messages; process and bridge errors
-use standard error.
+line. Standard output is reserved for MCP messages, including request errors.
+Startup diagnostics use standard error.
 
 Tool descriptions and implementations live in Emacs.  For each =tools/list=
 or =tools/call= request, the executable invokes =emacsclient= with a fixed Lisp
@@ -31,6 +31,35 @@ forms:
 {"ok":true,"value":{}}
 {"ok":false,"error":{"type":"user-error","message":"..."}}
 #+end_example
+
+The =value= field is required on success; an explicit JSON =null= is a value,
+while an omitted field is a malformed response. On failure, =error= supplies
+the Emacs condition type and its message.
+
+** Errors and cancellation
+
+The MCP handler distinguishes a failed tool from a failed bridge, following
+the [[https://modelcontextprotocol.io/specification/2025-11-25/server/tools#error-handling][MCP error model]]:
+
+| Failure | MCP response |
+|---------+--------------|
+| Unknown tool (=yunge-mcp-unknown-tool= from Emacs) | JSON-RPC =-32602=, invalid parameters |
+| Tool argument validation, note conflicts, or other tool execution errors | Tool result with =isError: true= |
+| Cannot run or connect through =emacsclient=, nonzero exit, or malformed response | JSON-RPC =-32603=, internal error |
+
+=tools/list= failures return a JSON-RPC internal error because no tool is
+being executed. Request errors leave the MCP connection available for later
+requests.
+
+When a client cancels a request, the handler stops waiting and terminates its
+=emacsclient= process. The SDK suppresses that request's response. Closing
+standard input ends the MCP session; the SDK allows pending requests a short
+drain period before the bridge exits and terminates remaining child processes.
+
+Stopping =emacsclient= does not undo an evaluation already sent to Emacs.
+A creation operation may have saved a file even when its response is lost.
+Inspect the target file before retrying; the bridge never retries requests
+automatically.
 
 * Connection settings
 

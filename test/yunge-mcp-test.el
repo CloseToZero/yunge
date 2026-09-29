@@ -109,7 +109,7 @@
          (equal (plist-get (plist-get response :value) :value)
                 "hello"))))))
 
-(ert-deftest yunge-mcp-returns-tool-errors-as-data ()
+(ert-deftest yunge-mcp-identifies-unknown-tools ()
   (let ((yunge-mcp--tools (make-hash-table :test #'equal)))
     (cl-letf (((symbol-function 'yunge-mcp--load-tools) #'ignore))
       (let ((response
@@ -119,6 +119,8 @@
                 "{\"operation\":\"call-tool\","
                 "\"name\":\"missing\",\"arguments\":{}}")))))
         (should-not (plist-get response :ok))
+        (should (equal (plist-get (plist-get response :error) :type)
+                       "yunge-mcp-unknown-tool"))
         (should
          (string-match-p
           "Unknown Yunge MCP tool"

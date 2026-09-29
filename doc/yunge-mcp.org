@@ -112,6 +112,11 @@ indexing finds a duplicate ID. If the error reports a saved file, inspect it,
 fix the reported problem, and run =M-x fangcun-db-sync=. Keep its existing ID;
 do not retry creation of the same file.
 
+If you cancel a creation request or lose the client connection, inspect the
+target file before trying again. Emacs may already have saved it even though
+the client did not receive a result. Keep any assigned ID and synchronize the
+index with =M-x fangcun-db-sync= if needed.
+
 * Tool results and pagination
 
 | Tool | Arguments | Result |

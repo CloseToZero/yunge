@@ -4,8 +4,9 @@
 use std::{
     env,
     error::Error,
-    fs::{self, OpenOptions},
+    fs,
     io::{BufRead, BufReader, Read, Write},
+    net::{SocketAddr, TcpListener, TcpStream},
     path::{Path, PathBuf},
     process::{Child, ChildStdin, Command, Stdio},
     sync::mpsc::{self, Receiver},
@@ -36,23 +37,33 @@ impl Drop for TestDirectory {
 }
 
 struct McpChild {
+    directory: PathBuf,
     child: Child,
     input: Option<ChildStdin>,
     responses: Receiver<String>,
-    output_thread: JoinHandle<()>,
-    error_thread: JoinHandle<String>,
+    output_thread: Option<JoinHandle<()>>,
+    error_thread: Option<JoinHandle<String>>,
 }
 
 impl McpChild {
     fn start(directory: &Path, fail_bridge: bool) -> Result<Self, Box<dyn Error>> {
         let current_executable = env::current_exe()?;
+        let runtime_file = directory.join("runtime.json");
+        fs::write(
+            &runtime_file,
+            serde_json::to_vec(&json!({
+                "version": 1,
+                "emacsclient": directory.join("invalid-emacsclient"),
+                "connectionArguments": ["--socket-name", "runtime"]
+            }))?,
+        )?;
         let mut command = Command::new(env!("CARGO_BIN_EXE_yunge-mcp"));
         command
             .env("YUNGE_EMACSCLIENT", &current_executable)
             .env("YUNGE_MCP_FAKE_CHILD", "stdio-roundtrip")
-            .env("YUNGE_MCP_FAKE_LOG", directory.join("bridge-calls.jsonl"))
-            .env("YUNGE_MCP_RUNTIME", directory.join("missing-runtime.json"))
-            .env_remove("YUNGE_EMACS_SERVER_FILE")
+            .env("YUNGE_MCP_FAKE_DIRECTORY", directory)
+            .env("YUNGE_MCP_RUNTIME", runtime_file)
+            .env("YUNGE_EMACS_SERVER_FILE", "override-server")
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
@@ -84,11 +95,12 @@ impl McpChild {
             text
         });
         Ok(Self {
+            directory: directory.to_path_buf(),
             child,
             input: Some(input),
             responses,
-            output_thread,
-            error_thread,
+            output_thread: Some(output_thread),
+            error_thread: Some(error_thread),
         })
     }
 
@@ -129,7 +141,7 @@ impl McpChild {
 
     fn finish(mut self) -> Result<(), Box<dyn Error>> {
         drop(self.input.take());
-        let deadline = Instant::now() + Duration::from_secs(5);
+        let deadline = Instant::now() + Duration::from_secs(10);
         let status = loop {
             if let Some(status) = self.child.try_wait()? {
                 break status;
@@ -142,10 +154,14 @@ impl McpChild {
             thread::sleep(Duration::from_millis(10));
         };
         self.output_thread
+            .take()
+            .ok_or("missing MCP output reader")?
             .join()
             .map_err(|_| "MCP output reader panicked")?;
         let stderr = self
             .error_thread
+            .take()
+            .ok_or("missing MCP error reader")?
             .join()
             .map_err(|_| "MCP error reader panicked")?;
         if !status.success() {
@@ -155,22 +171,63 @@ impl McpChild {
     }
 }
 
+impl Drop for McpChild {
+    fn drop(&mut self) {
+        if self.child.try_wait().ok().flatten().is_none() {
+            if let Ok(port) = fs::read_to_string(self.directory.join("bridge-port"))
+                && let Ok(address) = port.parse()
+            {
+                let _ = TcpStream::connect_timeout(&address, Duration::from_millis(100));
+            }
+            let _ = self.child.kill();
+            let _ = self.child.wait();
+        }
+    }
+}
+
+fn wait_for_bridge_port(directory: &Path) -> Result<SocketAddr, Box<dyn Error>> {
+    let port_file = directory.join("bridge-port");
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        if let Ok(port) = fs::read_to_string(&port_file) {
+            return Ok(port.parse()?);
+        }
+        if Instant::now() >= deadline {
+            return Err("fake emacsclient did not start listening".into());
+        }
+        thread::sleep(Duration::from_millis(10));
+    }
+}
+
+fn wait_for_port_release(address: SocketAddr) -> Result<(), Box<dyn Error>> {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        if TcpListener::bind(address).is_ok() {
+            return Ok(());
+        }
+        if Instant::now() >= deadline {
+            return Err("cancelled emacsclient still owns its listening port".into());
+        }
+        thread::sleep(Duration::from_millis(10));
+    }
+}
+
 fn fake_emacsclient() -> Result<(), Box<dyn Error>> {
     let arguments: Vec<String> = env::args().skip(1).collect();
-    let log_file = PathBuf::from(
-        env::var_os("YUNGE_MCP_FAKE_LOG")
-            .ok_or("YUNGE_MCP_FAKE_LOG was not passed to fake emacsclient")?,
+    let directory = PathBuf::from(
+        env::var_os("YUNGE_MCP_FAKE_DIRECTORY")
+            .ok_or("YUNGE_MCP_FAKE_DIRECTORY was not passed to fake emacsclient")?,
     );
-    let mut log = OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(log_file)?;
-    serde_json::to_writer(&mut log, &arguments)?;
-    log.write_all(b"\n")?;
 
     if env::var_os("YUNGE_MCP_FAKE_FAILURE").is_some() {
         eprintln!("fake emacsclient failure");
         std::process::exit(23);
+    }
+
+    if arguments.get(0).map(String::as_str) != Some("--server-file")
+        || arguments.get(1).map(String::as_str) != Some("override-server")
+    {
+        return Err("bridge did not apply environment overrides to runtime settings".into());
     }
 
     let eval = arguments
@@ -212,6 +269,22 @@ fn fake_emacsclient() -> Result<(), Box<dyn Error>> {
                 "value": null,
                 "error": {"type": "tool-error", "message": "stopped"}
             }),
+            Some("unknown") => json!({
+                "ok": false,
+                "error": {
+                    "type": "yunge-mcp-unknown-tool",
+                    "message": "Unknown Yunge MCP tool: unknown"
+                }
+            }),
+            Some("missing-value") => json!({"ok": true}),
+            Some("wait") => {
+                let listener = TcpListener::bind("127.0.0.1:0")?;
+                let temporary_port_file = directory.join("bridge-port.tmp");
+                fs::write(&temporary_port_file, listener.local_addr()?.to_string())?;
+                fs::rename(temporary_port_file, directory.join("bridge-port"))?;
+                let _ = listener.accept()?;
+                return Err("fake emacsclient wait was unexpectedly released".into());
+            }
             _ => return Err("bridge changed the tool name".into()),
         },
         operation => {
@@ -221,27 +294,6 @@ fn fake_emacsclient() -> Result<(), Box<dyn Error>> {
     let response = serde_json::to_vec(&response)?;
     println!("{}", serde_json::to_string(&STANDARD.encode(response))?);
     Ok(())
-}
-
-fn bridge_requests(log_file: &Path) -> Result<Vec<Value>, Box<dyn Error>> {
-    let file = fs::File::open(log_file)?;
-    BufReader::new(file)
-        .lines()
-        .map(|line| {
-            let arguments: Vec<String> = serde_json::from_str(&line?)?;
-            let eval = arguments
-                .iter()
-                .position(|argument| argument == "--eval")
-                .ok_or("logged bridge call omitted --eval")?;
-            if arguments.get(eval + 1).map(String::as_str) != Some(DISPATCH_FORM) {
-                return Err("logged bridge call changed dispatch form".into());
-            }
-            let encoded = arguments
-                .get(eval + 3)
-                .ok_or("logged bridge call omitted request")?;
-            Ok(serde_json::from_slice(&STANDARD.decode(encoded)?)?)
-        })
-        .collect()
 }
 
 fn stdio_roundtrip() -> Result<(), Box<dyn Error>> {
@@ -283,16 +335,24 @@ fn stdio_roundtrip() -> Result<(), Box<dyn Error>> {
             .as_str()
             .is_some_and(|text| text.contains("Yunge tool-error: stopped"))
     );
-    helper.finish()?;
+    let unknown = helper.request(json!({
+        "jsonrpc": "2.0", "id": 6, "method": "tools/call",
+        "params": {"name": "unknown", "arguments": {}}
+    }))?;
+    assert_eq!(unknown["error"]["code"], -32602);
+    assert!(unknown.get("result").is_none());
 
-    let requests = bridge_requests(&directory.0.join("bridge-calls.jsonl"))?;
-    assert_eq!(requests.len(), 3);
-    assert_eq!(requests[0], json!({"operation": "list-tools"}));
-    assert_eq!(requests[1]["operation"], "call-tool");
-    assert_eq!(requests[1]["name"], "echo");
-    assert_eq!(requests[1]["arguments"]["value"], "中文");
-    assert_eq!(requests[2]["operation"], "call-tool");
-    assert_eq!(requests[2]["name"], "fail");
+    let malformed = helper.request(json!({
+        "jsonrpc": "2.0", "id": 7, "method": "tools/call",
+        "params": {"name": "missing-value", "arguments": {}}
+    }))?;
+    assert_eq!(malformed["error"]["code"], -32603);
+    assert!(
+        malformed["error"]["message"]
+            .as_str()
+            .is_some_and(|message| message.contains("missing value"))
+    );
+    helper.finish()?;
 
     let failure_directory = TestDirectory::new()?;
     let mut helper = McpChild::start(&failure_directory.0, true)?;
@@ -308,7 +368,47 @@ fn stdio_roundtrip() -> Result<(), Box<dyn Error>> {
         .ok_or("tools/list failure omitted its message")?;
     assert!(message.contains("status 23"), "{message}");
     assert!(message.contains("fake emacsclient failure"), "{message}");
+    let failed_call = helper.request(json!({
+        "jsonrpc": "2.0", "id": 8, "method": "tools/call",
+        "params": {"name": "echo", "arguments": {"value": "test"}}
+    }))?;
+    assert_eq!(failed_call["error"]["code"], -32603);
+    assert!(failed_call.get("result").is_none());
     helper.finish()?;
+
+    let cancel_directory = TestDirectory::new()?;
+    let mut helper = McpChild::start(&cancel_directory.0, false)?;
+    helper.initialize()?;
+    helper.send(json!({
+        "jsonrpc": "2.0", "id": 9, "method": "tools/call",
+        "params": {"name": "wait", "arguments": {}}
+    }))?;
+    let address = wait_for_bridge_port(&cancel_directory.0)?;
+    helper.send(json!({
+        "jsonrpc": "2.0", "method": "notifications/cancelled",
+        "params": {"requestId": 9, "reason": "test cancellation"}
+    }))?;
+    wait_for_port_release(address)?;
+    let after_cancel = helper.request(json!({
+        "jsonrpc": "2.0", "id": 10, "method": "tools/call",
+        "params": {"name": "echo", "arguments": {"value": "after cancellation"}}
+    }))?;
+    assert_eq!(
+        after_cancel["result"]["structuredContent"]["echo"],
+        "after cancellation"
+    );
+    helper.finish()?;
+
+    let eof_directory = TestDirectory::new()?;
+    let mut helper = McpChild::start(&eof_directory.0, false)?;
+    helper.initialize()?;
+    helper.send(json!({
+        "jsonrpc": "2.0", "id": 11, "method": "tools/call",
+        "params": {"name": "wait", "arguments": {}}
+    }))?;
+    let address = wait_for_bridge_port(&eof_directory.0)?;
+    helper.finish()?;
+    wait_for_port_release(address)?;
     println!("Yunge MCP stdio and fake-emacsclient integration passed");
     Ok(())
 }
