@@ -14,16 +14,35 @@ can be selected even if their applications are not installed yet. Build
 progress and errors appear in =*Yunge MCP build*=.
 
 =M-x yunge-mcp-install= builds and installs without changing client
-configuration. =M-x yunge-mcp-register-agents= changes selected client entries
-without rebuilding. Registration preserves unrelated client settings. The
-installed executable has a stable path under =yunge-mcp/bin/= in
-=yunge-var-directory= (by default =var/=); the platform may add an executable
+configuration. The installed executable has a stable path under
+=yunge-mcp/bin/= in =yunge-var-directory= (by default =var/=); the platform may add an executable
 suffix. The [[file:../native/yunge-mcp/README.org][native bridge guide]] explains the runtime manifest and protocol.
+
+* Register or reconnect a client
+
+After installing the bridge, use =M-x yunge-mcp-register-clients= to add
+another client or replace its =yunge= entry without rebuilding. Customize
+=yunge-mcp-client-targets= to choose the defaults offered by this command and
+=yunge-mcp-setup=. Registration does not require the client application to be
+installed, and registering one client does not remove entries from others.
+
+For JSON configuration files, registration replaces the =yunge= entry and
+preserves other settings, though formatting may change. An existing file must
+contain a JSON object; an empty file, malformed JSON, or a non-object server
+section is rejected. Correct the file named in the error and run registration
+again.
+
+If writing a configuration fails, its previous contents remain intact.
+Registration processes selected clients in order: if one fails,
+earlier updates remain and later clients are not changed. After fixing the
+error, register the remaining clients; the bridge does not need rebuilding.
 
 If a client cannot reach Emacs, check that the configured Emacs server is
 running. After changing the Emacs installation or server connection, run
 =M-x yunge-mcp-install= to refresh the connection settings. Use the same
 command when the bridge reports that its helper is outdated.
+
+For changes to registration or tool dispatch, see [[file:yunge-mcp-development.org][Yunge MCP development]].
 
 * Find and edit a note
 

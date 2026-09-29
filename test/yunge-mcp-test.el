@@ -4,7 +4,6 @@
 
 (require 'yunge-test-helper)
 (require 'yunge-mcp)
-(require 'yunge-mcp-setup)
 
 (defvar server-eval-args-left)
 
@@ -172,129 +171,6 @@
     (cl-letf (((symbol-function 'yunge-mcp--helper-build-id)
                (lambda () "test-build")))
       (should-error (yunge-mcp-server-dispatch) :type 'user-error))))
-
-(ert-deftest yunge-mcp-registers-json-without-losing-other-settings ()
-  (let ((file (make-temp-file "yunge-mcp-json-"))
-        (state (make-temp-file "yunge-mcp-state-" t)))
-    (unwind-protect
-        (progn
-          (with-temp-file file
-            (insert
-             "{\"theme\":\"dark\",\"mcpServers\":{"
-             "\"other\":{\"command\":\"other\"}}}"))
-          (let* ((yunge-var-directory
-                  (file-name-as-directory state))
-                 (program (yunge-mcp-program)))
-            (yunge-mcp--register-json file :mcpServers)
-            (let* ((configuration (yunge-mcp--json-read-object file))
-                   (servers (plist-get configuration :mcpServers)))
-              (should (equal (plist-get configuration :theme) "dark"))
-              (should
-               (equal (plist-get (plist-get servers :other) :command)
-                      "other"))
-              (should
-               (equal (plist-get (plist-get servers :yunge) :command)
-                      program)))))
-      (delete-file file)
-      (delete-directory state t))))
-
-(ert-deftest yunge-mcp-agent-display-names-ignore-input-case ()
-  (should (eq (yunge-mcp--agent-from-display-name "codex") 'codex))
-  (should
-   (eq (yunge-mcp--agent-from-display-name "claude code")
-       'claude-code)))
-
-(ert-deftest yunge-mcp-replaces-only-its-codex-section ()
-  (let ((file (make-temp-file "yunge-mcp-codex-"))
-        (state (make-temp-file "yunge-mcp-state-" t)))
-    (unwind-protect
-        (progn
-          (with-temp-file file
-            (insert
-             "model = \"gpt\"\n\n"
-             "[mcp_servers.yunge]\ncommand = \"old\"\n\n"
-             "[mcp_servers.other]\ncommand = \"other\"\n"))
-          (let ((yunge-var-directory
-                 (file-name-as-directory state)))
-            (cl-letf (((symbol-function 'yunge-mcp--codex-config-file)
-                       (lambda () file)))
-              (yunge-mcp--register-codex)))
-          (with-temp-buffer
-            (insert-file-contents file)
-            (let ((contents (buffer-string)))
-              (should (string-match-p "model = \"gpt\"" contents))
-              (should (string-match-p
-                       "command = \"other\"" contents))
-              (should (string-match-p
-                       (regexp-quote
-                        (concat
-                         "command = "
-                         (yunge-mcp--toml-string
-                          (let ((yunge-var-directory
-                                 (file-name-as-directory state)))
-                            (yunge-mcp-program)))))
-                       contents))
-              (should-not (string-match-p "command = \"old\"" contents)))))
-      (delete-file file)
-      (delete-directory state t))))
-
-(ert-deftest yunge-mcp-registers-selected-agents-when-not-installed ()
-  (let ((directory (make-temp-file "yunge-mcp-agents-" t))
-        (yunge-var-directory "C:/state/"))
-    (unwind-protect
-        (let ((files
-               (mapcar
-                (lambda (name)
-                  (cons name (expand-file-name
-                              (concat (symbol-name name) ".json")
-                              directory)))
-                '(codex claude-code gemini cursor vscode))))
-          (cl-letf (((symbol-function 'yunge-mcp--register-codex)
-                     (lambda ()
-                       (yunge-mcp--register-json
-                        (alist-get 'codex files) :mcpServers)))
-                    ((symbol-function 'yunge-mcp--claude-config-file)
-                     (lambda () (alist-get 'claude-code files)))
-                    ((symbol-function 'yunge-mcp--gemini-config-file)
-                     (lambda () (alist-get 'gemini files)))
-                    ((symbol-function 'yunge-mcp--cursor-config-file)
-                     (lambda () (alist-get 'cursor files)))
-                    ((symbol-function 'yunge-mcp--vscode-config-file)
-                     (lambda () (alist-get 'vscode files))))
-            ;; Agent executables deliberately do not participate in setup.
-            (cl-letf (((symbol-function 'executable-find)
-                       (lambda (_program) nil)))
-              (yunge-mcp-register-agents
-               '(codex claude-code gemini cursor vscode))))
-          (dolist (entry files)
-            (should (file-exists-p (cdr entry)))))
-      (delete-directory directory t))))
-
-(ert-deftest yunge-mcp-runtime-records-the-running-emacs-connection ()
-  (require 'yunge-server)
-  (let ((directory (make-temp-file "yunge-mcp-runtime-" t)))
-    (unwind-protect
-        (let ((yunge-var-directory
-               (file-name-as-directory directory)))
-          (cl-letf (((symbol-function 'yunge-server-start) #'ignore)
-                    ((symbol-function 'yunge-mcp--emacsclient-program)
-                     (lambda () "C:/Emacs/emacsclient.exe"))
-                    ((symbol-function 'yunge-mcp--connection-arguments)
-                     (lambda ()
-                       '("--server-file" "C:/state/server"))))
-            (yunge-mcp--write-runtime))
-          (let ((runtime
-                 (yunge-mcp--json-read-object
-                  (yunge-mcp--runtime-file))))
-            (should (= (plist-get runtime :version) 1))
-            (should
-             (equal (plist-get runtime :emacsclient)
-                    "C:/Emacs/emacsclient.exe"))
-            (should
-             (equal (append
-                     (plist-get runtime :connectionArguments) nil)
-                    '("--server-file" "C:/state/server")))))
-      (delete-directory directory t))))
 
 (provide 'yunge-mcp-test)
 

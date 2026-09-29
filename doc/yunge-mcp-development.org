@@ -1,0 +1,55 @@
+#+title: Yunge MCP development
+# SPDX-FileCopyrightText: 2026 Chen Zhexuan
+# SPDX-License-Identifier: MIT
+
+* Register clients from Lisp
+
+Client configuration accepts an explicit bridge executable path. It does not
+build the executable, start Emacs's server, or require a client installation:
+
+#+begin_src emacs-lisp
+(require 'yunge-mcp-clients)
+(yunge-mcp-clients-register '(cursor vscode) "/path/to/yunge-mcp")
+#+end_src
+
+=yunge-mcp-setup.el= owns building and installing that executable, recording
+the Emacs connection, and the interactive setup commands. Its registration
+command supplies =yunge-mcp-program= to the client module. The client module
+does not depend on the installer or tool dispatch.
+
+Registration validates all client identifiers before writing. It then updates
+each selected client in order, removing duplicate selections. If an update
+fails, completed files remain updated and later files are untouched. Callers
+can register the unfinished clients again after correcting the error.
+
+* JSON configuration updates
+
+Treat configuration as user data. Keep JSON objects, arrays, null, and false
+distinct when reading and writing: an empty object must not become null.
+Create an object for a missing file or missing server section; reject an
+existing value of the wrong type. Only the =yunge= server entry is replaced.
+
+Serialize before replacing the destination. Write a temporary file in its
+directory and rename it into place only after writing succeeds. Preserve an
+existing file's mode and follow configuration symlinks to their target.
+Remove the temporary file on failure. These guarantees apply to one file;
+registration is not a transaction across client configurations.
+
+* Tool requests
+
+The native executable forwards requests to =yunge-mcp.el=, which dispatches
+registered tools in the running Emacs. =fangcun-mcp.el= converts Fangcun tool
+arguments and results; saved-note operations belong to Fangcun itself.
+See the [[file:../native/yunge-mcp/README.org][native bridge guide]] for the wire format and connection manifest,
+and [[file:fangcun-development.org][Fangcun development]] for file and index contracts.
+
+Run the Lisp checks with:
+
+#+begin_src sh
+emacs --batch -Q -L test -l yunge-test-runner -- --suite ert --module mcp
+#+end_src
+
+Configuration tests use temporary configuration paths and inspect the resulting
+files. Never run registration tests against personal client settings. For
+native changes, also run =--suite native --module mcp=. The
+[[file:development.org][development guide]] covers static checks and autoload generation.
