@@ -288,14 +288,15 @@ KEY-PREDICATE returns non-nil for a valid decoded sort key."
 
 (defun fangcun-mcp--list-yiyus (_arguments)
   "Return the configured Fangcun yiyus."
-  (vconcat
-   (mapcar
-    (lambda (yiyu)
-      (list
-       :id (fangcun-yiyu-id yiyu)
-       :name (fangcun-yiyu-name yiyu)
-       :root (fangcun-yiyu-root yiyu)))
-    (fangcun--configured-yiyus))))
+  (list :yiyus
+        (vconcat
+         (mapcar
+          (lambda (yiyu)
+            (list
+             :id (fangcun-yiyu-id yiyu)
+             :name (fangcun-yiyu-name yiyu)
+             :root (fangcun-yiyu-root yiyu)))
+          (fangcun--configured-yiyus)))))
 
 (defun fangcun-mcp--search-nodes (arguments)
   "Search Fangcun nodes described by MCP ARGUMENTS."

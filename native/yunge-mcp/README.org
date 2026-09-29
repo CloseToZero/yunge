@@ -32,9 +32,16 @@ forms:
 {"ok":false,"error":{"type":"user-error","message":"..."}}
 #+end_example
 
-The =value= field is required on success; an explicit JSON =null= is a value,
-while an omitted field is a malformed response. On failure, =error= supplies
-the Emacs condition type and its message.
+The =value= field is required on success. For =list-tools= it contains an
+array of tool descriptions; for =call-tool= it must contain an object.
+On failure, =error= supplies the Emacs condition type and its message.
+
+Successful tool calls publish that object as =structuredContent= and the
+same JSON as a text block in =content=, following the
+[[https://modelcontextprotocol.io/specification/2025-11-25/server/tools#structured-content][MCP structured content format]]. Collection results belong in a named field:
+=fangcun_list_yiyus= returns ={"yiyus": [...] }=, with an empty array when
+no roots are configured. A non-object tool result returns JSON-RPC
+=-32603= instead of an invalid =structuredContent= value.
 
 ** Errors and cancellation
 

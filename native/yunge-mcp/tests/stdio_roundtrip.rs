@@ -277,6 +277,7 @@ fn fake_emacsclient() -> Result<(), Box<dyn Error>> {
                 }
             }),
             Some("missing-value") => json!({"ok": true}),
+            Some("non-object") => json!({"ok": true, "value": []}),
             Some("wait") => {
                 let listener = TcpListener::bind("127.0.0.1:0")?;
                 let temporary_port_file = directory.join("bridge-port.tmp");
@@ -322,6 +323,12 @@ fn stdio_roundtrip() -> Result<(), Box<dyn Error>> {
         "params": {"name": "echo", "arguments": {"value": "中文"}}
     }))?;
     assert_eq!(called["result"]["structuredContent"]["echo"], "中文");
+    let text_result: Value = serde_json::from_str(
+        called["result"]["content"][0]["text"]
+            .as_str()
+            .ok_or("tool result omitted its JSON text")?,
+    )?;
+    assert_eq!(text_result, called["result"]["structuredContent"]);
 
     let tool_error = helper.request(json!({
         "jsonrpc": "2.0",
@@ -352,6 +359,12 @@ fn stdio_roundtrip() -> Result<(), Box<dyn Error>> {
             .as_str()
             .is_some_and(|message| message.contains("missing value"))
     );
+    let non_object = helper.request(json!({
+        "jsonrpc": "2.0", "id": 12, "method": "tools/call",
+        "params": {"name": "non-object", "arguments": {}}
+    }))?;
+    assert_eq!(non_object["error"]["code"], -32603);
+    assert!(non_object.get("result").is_none());
     helper.finish()?;
 
     let failure_directory = TestDirectory::new()?;

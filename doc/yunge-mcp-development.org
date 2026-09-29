@@ -70,6 +70,11 @@ Unknown names signal =yunge-mcp-unknown-tool= so the native handler can return
 an invalid-parameters response. Errors from a registered tool remain tool
 execution errors, including argument validation and note conflicts.
 
+Tool handlers return JSON objects. Collection results use a named array,
+such as ={"yiyus": []}=, including when empty. The native handler publishes
+the object as =structuredContent= and its JSON text as =content=. A handler
+returning a top-level array, scalar, or null is a server error.
+
 The native bridge owns the Emacs connection settings, request encoding, and
 =emacsclient= process. The MCP handler maps its result to a tool result or
 JSON-RPC error and connects the request's cancellation signal to that process.

@@ -149,8 +149,11 @@
     (should
      (equal
       (fangcun-mcp-test--value "fangcun_list_yiyus" nil)
-      `[(:id "personal" :name "Personal" :root ,personal-root)
-        (:id "work" :name "Work" :root ,work-root)]))))
+      `(:yiyus [(:id "personal" :name "Personal" :root ,personal-root)
+                (:id "work" :name "Work" :root ,work-root)])))
+    (let ((fangcun-yiyus nil))
+      (should (equal (fangcun-mcp-test--value "fangcun_list_yiyus" nil)
+                     '(:yiyus []))))))
 
 (ert-deftest fangcun-mcp-groups-and-pages-backlink-sources ()
   (fangcun-test-with-notes

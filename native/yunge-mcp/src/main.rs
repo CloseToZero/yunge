@@ -78,7 +78,10 @@ and keep its assigned ID before trying again.",
             }
             result = self.bridge.call_tool(&request.name, request.arguments.as_ref()) => {
                 match result {
-                    Ok(value) => Ok(CallToolResult::structured(value).into()),
+                    Ok(value) if value.is_object() => Ok(CallToolResult::structured(value).into()),
+                    Ok(_) => Err(McpError::internal_error(
+                        "Yunge tool result must be a JSON object", None,
+                    )),
                     Err(error @ BridgeError::UnknownTool(_)) => {
                         Err(McpError::invalid_params(error.to_string(), None))
                     }

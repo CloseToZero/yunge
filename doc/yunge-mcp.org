@@ -121,12 +121,16 @@ index with =M-x fangcun-db-sync= if needed.
 
 | Tool | Arguments | Result |
 |------+-----------+--------|
-| =fangcun_list_yiyus= | none | Array of configured =id=, =name=, absolute =root= |
+| =fangcun_list_yiyus= | none | =yiyus= array of configured =id=, =name=, absolute =root= |
 | =fangcun_search_nodes= | =query=; optional =pageSize=, =cursor= | Ranked =nodes= with =matchedFields=; optional =nextCursor= |
 | =fangcun_locate_node= | =id= | =node= and saved-file =location= |
 | =fangcun_list_backlinks= | =id=; optional =pageSize=, =cursor= | =target=, unique source =backlinks=; optional =nextCursor= |
 | =fangcun_create_file_node= | =yiyu=, =file=; optional =title= | Saved, indexed file node |
 | =fangcun_create_heading_node= | =yiyu=, =file=, =headingPath= | Saved, indexed heading node |
+
+Each successful tool result is an object in =structuredContent=, also
+returned as JSON text in =content=. With no configured roots,
+=fangcun_list_yiyus= returns ={"yiyus": []}=.
 
 A node result contains =id=, =title=, =aliases=, =tags=, =yiyu=, =yiyuName=,
 and its yiyu-relative =file=. Each search entry contains a =node= and the
