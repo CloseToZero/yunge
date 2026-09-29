@@ -45,6 +45,7 @@
                  (find-file-noselect ,file-d)
                  (with-current-buffer (get-buffer-create ,special-name)
                    (insert "ephemeral"))
+                 (set-window-buffer (split-window-right) ,special-name)
 
                  (yunge-workspace-save "coding")
                  ;; Exercise the interactive exit hook with a distinct default
@@ -73,7 +74,13 @@
                            (> (length (tab-bar-tabs)) 1))
                    (error "A workspace was restored during startup"))
 
+                 ;; An unrelated buffer may already own a saved buffer name.
+                 (with-current-buffer (get-buffer-create "a.txt")
+                   (insert "unsaved scratch text"))
+                 (with-current-buffer (get-buffer-create ,special-name)
+                   (insert "current session"))
                  (yunge-workspace-restore "default")
+                 (yunge-workspace-save "restored")
                  (unless
                      (equal
                       (mapcar (lambda (tab) (alist-get 'name tab))
@@ -81,6 +88,9 @@
                       '("code" "latest"))
                    (error "The default workspace was not saved on exit"))
 
+                 (with-current-buffer (get-file-buffer ,file-b)
+                   (goto-char (point-max))
+                   (insert " draft"))
                  (yunge-workspace-restore "coding")
                  (let ((names
                         (mapcar (lambda (tab) (alist-get 'name tab))
@@ -95,8 +105,9 @@
                  (dolist (file (list ,file-a ,file-b ,file-c ,file-d))
                    (unless (get-file-buffer file)
                      (error "File buffer was not restored: %s" file)))
-                 (when (get-buffer ,special-name)
-                   (error "A non-file buffer was unexpectedly restored"))
+                 (with-current-buffer ,special-name
+                   (unless (equal (buffer-string) "current session")
+                     (error "Restore changed an excluded buffer")))
                  (unless
                      (and (= (length (window-list)) 1)
                           (equal (buffer-file-name (window-buffer)) ,file-c))
@@ -115,6 +126,15 @@
                             (equal files
                                    (sort (list ,file-a ,file-b) #'string<)))
                      (error "The code layout was not restored: %S" files)))
+                 (with-current-buffer "a.txt"
+                   (unless (and (not buffer-file-name)
+                                (buffer-modified-p)
+                                (equal (buffer-string) "unsaved scratch text"))
+                     (error "Restore changed an unrelated buffer")))
+                 (with-current-buffer (get-file-buffer ,file-b)
+                   (unless (and (buffer-modified-p)
+                                (equal (buffer-string) "b draft"))
+                     (error "Restore discarded unsaved file edits")))
                  (yunge-workspace-auto-save-mode -1))))))
       (delete-directory root t))))
 

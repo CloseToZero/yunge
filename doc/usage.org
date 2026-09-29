@@ -229,7 +229,9 @@ layouts; it does not save the text of unsaved edits or running terminal jobs.
 After restarting Emacs, use ~SPC TAB l~ and choose that name. Restore reopens
 readable files and restores the layout. Non-file and remote buffers are
 excluded, so their layout regions may collapse. Existing buffers outside the
-saved workspace remain open.
+saved workspace remain open. Files are matched by path, so a buffer with the
+same name cannot replace a saved file in the layout. Restoring also keeps
+unsaved edits in files that are already open; it does not revert their text.
 
 Automatic workspace saving updates =default= every five minutes and before
 a normal exit, including ~SPC q r~ to restart. Emacs starts without restoring

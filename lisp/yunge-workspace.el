@@ -107,8 +107,6 @@ Signal a user error otherwise."
      :version yunge-workspace-format-version
      :name name
      :saved-at (format-time-string "%Y-%m-%dT%H:%M:%S%z")
-     ;; Tagged records leave room for mode-owned special-buffer serializers in
-     ;; a later format without coupling them to frame or tab persistence.
      :buffers (delq nil
                     (mapcar #'yunge-workspace--file-buffer-record
                             (buffer-list)))
@@ -201,6 +199,41 @@ Signal a user error otherwise."
             :warning)
            nil))))))
 
+(defun yunge-workspace--resolve-window-buffers (state buffers missing)
+  "Resolve buffer names in window STATE using BUFFERS.
+BUFFERS maps saved names to current names.  MISSING is an unused buffer
+name for locations that cannot be restored."
+  (dolist (item (cdr state))
+    (pcase (car-safe item)
+      ('buffer
+       (setcar (cdr item) (or (cdr (assoc (cadr item) buffers)) missing)))
+      ('prev-buffers
+       (setcdr item
+               (delq nil
+                     (mapcar
+                      (lambda (entry)
+                        (when-let* ((buffer (cdr (assoc (car entry) buffers))))
+                          (cons buffer (cdr entry))))
+                      (cdr item)))))
+      ('next-buffers
+       (setcdr item
+               (delq nil (mapcar (lambda (name) (cdr (assoc name buffers)))
+                                 (cdr item)))))
+      ((or 'leaf 'hc 'vc)
+       (yunge-workspace--resolve-window-buffers item buffers missing)))))
+
+(defun yunge-workspace--resolve-frameset-buffers (frameset buffers)
+  "Resolve file BUFFERS in FRAMESET's current and saved tab layouts."
+  (let ((names (mapcar (lambda (entry)
+                        (cons (car entry) (buffer-name (cdr entry))))
+                      buffers))
+        (missing (generate-new-buffer-name " *workspace-unavailable*")))
+    (dolist (state (frameset-states frameset))
+      (yunge-workspace--resolve-window-buffers (cdr state) names missing)
+      (dolist (tab (alist-get 'tabs (car state)))
+        (when-let* ((windows (alist-get 'ws (cdr tab))))
+          (yunge-workspace--resolve-window-buffers windows names missing))))))
+
 ;;;###autoload
 (defun yunge-workspace-restore (name)
   "Restore the saved workspace NAME.
@@ -215,14 +248,18 @@ Existing buffers are kept when they are not part of the workspace."
                             yunge-workspace-default-name)))))
   (let* ((data (yunge-workspace--read name))
          (records (plist-get data :buffers))
+         (frameset (plist-get data :frameset))
+         buffers
          (restored 0))
     ;; Frameset only restores windows; materialize their buffers first.
     (dolist (record records)
-      (when (yunge-workspace--restore-file-buffer record)
+      (when-let* ((buffer (yunge-workspace--restore-file-buffer record)))
+        (push (cons (plist-get record :name) buffer) buffers)
         (setq restored (1+ restored))))
+    (yunge-workspace--resolve-frameset-buffers frameset buffers)
     (let ((inhibit-redisplay t))
       (frameset-restore
-       (plist-get data :frameset)
+       frameset
        :reuse-frames t
        :cleanup-frames t
        :force-display t
