@@ -1,0 +1,75 @@
+#+title: Setup and recovery
+# SPDX-FileCopyrightText: 2026 Chen Zhexuan
+# SPDX-License-Identifier: MIT
+
+* Update and rebuild
+
+After pulling or editing Yunge, start a fresh Emacs session and run
+=M-x yunge-rebuild=. It regenerates autoloads and builds Fangcun, Yunge MCP,
+and Reader, including Reader's pinned PDFium dependency when needed. Cargo
+must be on =PATH=; downloading PDFium also needs =curl= and =tar=.
+
+Close Reader documents before starting. On Windows, stop MCP connections
+in AI clients as well: executables in use can prevent replacement. If this
+session has already loaded Reader's native module, use a fresh session
+without opening Reader to rebuild it. Restart Emacs to use a rebuilt module
+that was already loaded.
+
+On the first run, choose which AI clients should connect to Yunge MCP, or
+choose =None=. Later runs remember that setup is complete and leave client
+configuration alone. Use =M-x yunge-mcp-register-clients= to register a
+different client.
+
+Autoload generation finishes first; native builds then run in the
+background. =*Yunge Rebuild*= shows each result and points to detailed logs.
+A failed step does not prevent the remaining steps from running. Fix the
+reported error and run the command again.
+
+The command uses the current checkout and pinned dependencies. Fetching Git
+changes and upgrading Elpaca packages are separate operations.
+
+* Refresh autoloads
+
+Autoloads make commands available before their libraries are loaded. Yunge
+creates the local cache on the first startup. After a configuration update,
+it loads the existing cache and warns if its recorded version differs from
+the checkout.
+
+Run =M-x yunge-autoload-generate= to refresh just this cache; it is also the
+first step of =M-x yunge-rebuild=. If you edited an autoload declaration,
+generate it before committing and include the =autoloads.sha256= change.
+
+If an autoload error prevents normal startup, run this from the checkout's
+root directory, then start Emacs again:
+
+#+begin_src sh
+emacs --batch -Q --init-directory . -L lisp -l yunge-autoload -f yunge-autoload-generate
+#+end_src
+
+This loads only the code needed to generate autoloads. If generation itself
+reports a source error, fix that error before retrying.
+
+* Recover from a startup error
+
+For an initialization error, restart with a backtrace:
+
+#+begin_src sh
+emacs --debug-init --init-directory /path/to/yunge
+#+end_src
+
+Read the first error and its file or function in =*Backtrace*=. Use
+=M-x view-echo-area-messages= to see earlier messages. Correct that problem,
+then restart; an interrupted initialization can leave later features
+unconfigured in the current session.
+
+For a package download or build failure, inspect =M-x elpaca-log=. An error
+while installing Elpaca itself appears in =*elpaca-bootstrap*= or
+=*Messages*=. Check the reported Git, network, or build failure before
+retrying. Native component failures have their own logs linked from
+=*Yunge Rebuild*= and the corresponding [[file:../README.org::*Feature guides][feature guide]].
+
+Keep =var/= when diagnosing startup. Alongside rebuildable artifacts it
+contains saved workspaces, Custom settings, histories, and file recovery
+data. For unsaved work after a crash, use =M-x recover-session=, or
+=M-x recover-file= for one file, and inspect the recovered buffer before
+saving it.

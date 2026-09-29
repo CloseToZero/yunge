@@ -41,7 +41,7 @@
       (string-trim (buffer-string)))))
 
 (defun yunge-autoload--loaddefs-hash (file)
-  "Return a SHA-256 digest of the Lisp forms in loaddefs FILE."
+  "Hash loaddefs FILE using library names relative to the source directory."
   (with-temp-buffer
     (insert-file-contents file)
     (let ((trailer
@@ -50,6 +50,11 @@
       (condition-case nil
           (while t
             (let ((form (read (current-buffer))))
+              (when (memq (car-safe form) '(autoload custom-autoload))
+                (setcar (cddr form)
+                        (file-relative-name
+                         (expand-file-name (nth 2 form) (file-name-directory file))
+                         yunge-autoload-source-directory)))
               (unless (equal form trailer)
                 (push form forms))))
         (end-of-file))

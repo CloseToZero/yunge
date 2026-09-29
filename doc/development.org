@@ -10,11 +10,14 @@ checks need a Rust toolchain and Cargo; renderer checks need Node. Some ERT
 integrations also require platform tools and report skips when unavailable.
 
 After source changes, =M-x yunge-rebuild= refreshes local autoloads and all
-native components. See [[file:../README.org::*After updating Yunge][After updating Yunge]] for prerequisites and recovery.
+native components. See [[file:setup.org][Setup and recovery]] for prerequisites and recovery.
 
 After changing an autoload declaration, run =M-x yunge-autoload-generate=
 and review the tracked =autoloads.sha256= change. The generated loaddefs
-cache is under ignored =var/=.
+cache is under ignored =var/=. The tracked hash describes the generated
+declarations, with library names relative to the source directory; the
+cache location and generated file name do not affect it. A clean startup
+may create the local cache, but does not update the tracked hash.
 
 * Checks
 

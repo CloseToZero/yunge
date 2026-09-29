@@ -16,6 +16,7 @@ emacs --init-directory /path/to/yunge
 The first startup downloads and builds packages through Elpaca, using
 =elpaca-lock.el=. It needs network access. Native tools have their own setup
 requirements, described in the feature guides below.
+If startup fails, see [[file:doc/setup.org::*Recover from a startup error][Recover from a startup error]].
 
 In Evil Normal state, use ~SPC f f~ to open a file, ~SPC b b~ to switch
 buffers, and ~SPC SPC~ to run a command by name. See the [[file:doc/usage.org][usage guide]].
@@ -23,26 +24,8 @@ buffers, and ~SPC SPC~ to run a command by name. See the [[file:doc/usage.org][u
 * After updating Yunge
 
 After pulling or editing the configuration, start a fresh Emacs session and
-run =M-x yunge-rebuild=. It regenerates autoloads and builds Fangcun, Yunge
-MCP, and Reader, including Reader's pinned PDFium dependency when needed.
-Cargo must be on =PATH=; downloading PDFium also needs =curl= and =tar=.
-
-Close Reader documents before starting. On the first run, choose which AI
-clients should connect to Yunge MCP, or choose =None=. Later runs remember
-that setup is complete and leave client configuration alone. To register a
-different client, use =M-x yunge-mcp-register-clients=.
-
-Native builds run in the background. =*Yunge Rebuild*= shows each result and points
-to the build logs; a failed step does not prevent the remaining steps from
-running. Fix any reported error and run the command again. On Windows, an
-executable or module in use can prevent replacement: stop MCP connections in
-AI clients, and use a fresh Emacs session without opening Reader to rebuild
-its loaded module.
-
-If Reader's native module was loaded before rebuilding, restart Emacs to use
-the new module.
-This command uses the current checkout and pinned dependencies; fetching Git
-changes and upgrading Elpaca packages are separate operations.
+run =M-x yunge-rebuild= to refresh autoloads and native components.
+See [[file:doc/setup.org][Setup and recovery]] for prerequisites, build results, and recovery steps.
 
 * Feature guides
 
