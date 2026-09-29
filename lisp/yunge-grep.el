@@ -7,6 +7,8 @@
 
 (declare-function evil-set-initial-state "evil-core" (mode state))
 (declare-function grep-edit-save-changes "grep" ())
+(declare-function compilation-next-error "compile" (n &optional different-file pt))
+(declare-function compilation-display-error "compile" ())
 
 (defvar grep-edit-mode-map)
 (defvar grep-mode-map)
@@ -14,8 +16,8 @@
 (defconst yunge-grep-normal-bindings
   '(("j" evil-next-line "next line")
     ("k" evil-previous-line "previous line")
-    ("C-j" compilation-next-error "next match")
-    ("C-k" compilation-previous-error "previous match")
+    ("C-j" yunge-grep-next-match "next match")
+    ("C-k" yunge-grep-previous-match "previous match")
     ("RET" compile-goto-error "visit")
     ("q" quit-window "quit")
     ("gf" compilation-display-error "show source")
@@ -23,6 +25,17 @@
     ("i" grep-change-to-grep-edit-mode "edit results")
     ("]]" compilation-next-file "next file")
     ("[[" compilation-previous-file "previous file")))
+
+(defun yunge-grep-next-match (&optional count)
+  "Move forward COUNT matches and preview the source, keeping focus here."
+  (interactive "p")
+  (compilation-next-error (or count 1))
+  (compilation-display-error))
+
+(defun yunge-grep-previous-match (&optional count)
+  "Move backward COUNT matches and preview the source, keeping focus here."
+  (interactive "p")
+  (yunge-grep-next-match (- (or count 1))))
 
 (defun yunge-grep--setup-edit-session ()
   "Set up source saving for the current Grep edit session."

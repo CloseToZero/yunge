@@ -77,6 +77,8 @@ Extend Evil's ~g~ prefix with related actions:
 
 In result lists, ~RET~ visits and selects the destination; ~gf~ previews it
 while keeping focus in the list. Keep that distinction across related views.
+In Grep, Occur, and Xref, ~C-j/C-k~ also preview the match they move to;
+ordinary ~j/k~ move through the list without opening its source.
 Extend the existing keymap without replacing it. Check ~gg~, ~gd~, ~gf~,
 ~gt~, ~gu~, and ~gv~ before adding a sequence.
 

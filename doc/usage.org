@@ -113,9 +113,10 @@ affected buffer in full, including earlier unsaved edits there. ~:q~ and
 ~ZQ~ report an error and keep this editor open because quitting cannot
 roll back changes already applied to source buffers.
 
-Occur and Xref results use the same ~i~ and finish commands. Xref also offers
-~SPC m r~ for query replacement. For a symbol rename that should follow
-language semantics, use Eglot's rename command instead of text replacement.
+Occur and Xref results use the same ~C-j/C-k~, ~gf~, and ~RET~ navigation,
+as well as ~i~ and the finish commands. Xref also offers ~SPC m r~ for query
+replacement. For a symbol rename that should follow language semantics, use
+Eglot's rename command instead of text replacement.
 
 * Use language services
 
