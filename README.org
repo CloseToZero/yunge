@@ -2,8 +2,6 @@
 # SPDX-FileCopyrightText: 2026 Chen Zhexuan
 # SPDX-License-Identifier: MIT
 
-Yunge is an Emacs configuration using Evil for modal editing.
-
 * Start
 
 Use Emacs 31 or newer, with Git on =PATH=. Place this checkout in your Emacs
