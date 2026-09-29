@@ -124,3 +124,43 @@ results. A batch holds its scheduler slot until every request finishes;
 The backend owns its processes and working files. Shuying owns publication
 of the completed output and metadata into the cache. Front ends own display
 state; the scheduler does not depend on Org buffers or overlays.
+
+* Prepare LaTeX preambles
+
+=shuying-latex-preamble= owns preparation shared by render batches: MiKTeX
+package checks and precompiled formats. =shuying-latex= owns each batch's
+document, compiler, converter, and working directory. A batch waiting for
+preparation does not own the shared preparation process or its files.
+
+=shuying-latex-preamble-prepare= takes a render specification, a resolved
+engine command, and a callback receiving =(FORMAT-KEY FORMAT-FILE ERROR-DATA)=.
+The callback can run immediately or after a process exits. A preparation
+error prevents rendering. A nil format file with no error means the batch
+should compile its full preamble. Keep the format key opaque; it identifies
+the reusable format when reporting a failed format later.
+
+MiKTeX package checks run one at a time so concurrent batches do not start
+competing package installers. Requests with the same preamble and engine
+share a check. A failed process is retried once, since MiKTeX may have installed
+the missing package before exiting unsuccessfully. Successful checks are
+remembered for the session; a failed check can be requested again. Ordinary
+compilation and format building disable the MiKTeX installer.
+
+Precompilation is optional and currently applies to the =latex= engine.
+Compatible requests share one format build. A failed precompile process falls
+back to the full preamble and suppresses further builds of that format for the
+session. Failure to prepare its input files instead reports an error.
+A waiting callback's error is reported without preventing other waiters from
+receiving their results. Preparation releases its shared state and cleans up
+its work before notifying callers; cleanup failures produce warnings.
+
+When compilation with a cached format fails, the render batch retries once
+with the full preamble. Only a successful retry establishes that the format
+is unusable. The batch then calls =shuying-latex-preamble-invalidate-format=
+with the key and file it received during preparation. Failure to delete that
+file must not interrupt conversion of the successfully compiled document.
+
+=shuying-latex-preamble-insert= writes the complete preview preamble into the
+current buffer. Both full-document rendering and preparation use it so their
+package and driver settings agree. Successful jobs remove their temporary
+work and logs. Logs from failed processes remain available for inspection.

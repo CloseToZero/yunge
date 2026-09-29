@@ -133,6 +133,13 @@ prefix such as =("xelatex" "-no-pdf")=.  The adapter also maps =latex=,
 
 Use Emacs text scaling when you only need a temporary per-buffer size change.
 
+Preamble precompilation currently supports the =latex= engine. XeLaTeX, the
+Yunge default, compiles the full preamble for each batch. If a cached format
+fails, Shuying retries with the full preamble; it discards the format only
+when that retry succeeds. A formula error alone should not remove a reusable
+format. If the precompile process fails, that format is skipped for the rest
+of the session; restart Emacs after repairing the toolchain to try again.
+
 Shuying reuses a cached image when its source and rendering settings match.
 Cached images can be displayed even while TeX is unavailable.  Numbered
 environments follow their order in the Org buffer; changing an earlier

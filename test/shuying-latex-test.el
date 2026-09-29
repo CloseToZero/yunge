@@ -19,169 +19,6 @@
    :scale 1.0
    :cache-version shuying-cache-format-version))
 
-(ert-deftest shuying-latex-serializes-warmups-across-preamble-changes ()
-  (let* ((root (make-temp-file "shuying-latex-warmup-test-" t))
-         (system-type 'windows-nt)
-         (shuying-work-directory (expand-file-name "work" root))
-         (shuying-latex--warmed-preambles
-          (make-hash-table :test #'equal))
-         (shuying-latex--warmups (make-hash-table :test #'equal))
-         (shuying-latex--warmup-queue nil)
-         (shuying-latex--active-warmup nil)
-         (engine
-          '("C:/Programs/MiKTeX/miktex/bin/x64/xelatex.exe" "-no-pdf"))
-         (first (shuying-latex-test--spec "$x$"))
-         (same-preamble (shuying-latex-test--spec "$y$"))
-         (changed-preamble (shuying-latex-test--spec "$x$"))
-         invocations
-         completions)
-    (setf (shuying-render-spec-preamble changed-preamble)
-          "\\documentclass{article}\n\\usepackage{new-header}\n")
-    (unwind-protect
-        (cl-letf
-            (((symbol-function 'make-process)
-              (lambda (&rest arguments)
-                (let ((process (make-symbol "warmup-process")))
-                  (setq invocations
-                        (nconc invocations
-                               (list (cons process arguments))))
-                  process)))
-             ((symbol-function 'process-status)
-              (lambda (_process) 'exit))
-             ((symbol-function 'process-exit-status)
-              (lambda (_process) 0)))
-          (shuying-latex--ensure-preamble-warm
-           first engine
-           (lambda (error-data)
-             (push (cons 'first error-data) completions)))
-          (shuying-latex--ensure-preamble-warm
-           same-preamble engine
-           (lambda (error-data)
-             (push (cons 'same error-data) completions)))
-          ;; This represents a changed final preamble after LATEX_HEADER edits.
-          (shuying-latex--ensure-preamble-warm
-           changed-preamble engine
-           (lambda (error-data)
-             (push (cons 'changed error-data) completions)))
-          (should (= (length invocations) 1))
-          (should (= (length shuying-latex--warmup-queue) 1))
-          (should (= (hash-table-count shuying-latex--warmups) 2))
-          (let* ((first-invocation (car invocations))
-                 (arguments (cdr first-invocation))
-                 (command (plist-get arguments :command)))
-            (should (member "-enable-installer" command))
-            (should-not (member "-disable-installer" command))
-            (funcall (plist-get arguments :sentinel)
-                     (car first-invocation) "finished\n"))
-          (should (= (length invocations) 2))
-          (should (= (length completions) 2))
-          (should (seq-every-p #'null (mapcar #'cdr completions)))
-          (let* ((second-invocation (cadr invocations))
-                 (arguments (cdr second-invocation)))
-            (funcall (plist-get arguments :sentinel)
-                     (car second-invocation) "finished\n"))
-          (should (= (length completions) 3))
-          (should-not (cdr (assq 'changed completions)))
-          (should (= (hash-table-count
-                      shuying-latex--warmed-preambles)
-                     2))
-          (should (= (hash-table-count shuying-latex--warmups) 0))
-          (should-not shuying-latex--warmup-queue)
-          (should-not shuying-latex--active-warmup))
-      (delete-directory root t))))
-
-(ert-deftest shuying-latex-retries-one-failed-miktex-warmup ()
-  (let* ((root (make-temp-file "shuying-latex-warmup-retry-" t))
-         (system-type 'windows-nt)
-         (shuying-work-directory (expand-file-name "work" root))
-         (shuying-latex--warmed-preambles
-          (make-hash-table :test #'equal))
-         (shuying-latex--warmups (make-hash-table :test #'equal))
-         (shuying-latex--warmup-queue nil)
-         (shuying-latex--active-warmup nil)
-         (engine
-          '("C:/Programs/MiKTeX/miktex/bin/x64/xelatex.exe" "-no-pdf"))
-         invocations
-         result)
-    (unwind-protect
-        (cl-letf
-            (((symbol-function 'make-process)
-              (lambda (&rest arguments)
-                (let ((process (make-symbol "warmup-process")))
-                  (setq invocations
-                        (nconc invocations
-                               (list (cons process arguments))))
-                  process)))
-             ((symbol-function 'process-status)
-              (lambda (_process) 'exit))
-             ((symbol-function 'process-exit-status)
-              (lambda (process)
-                (if (eq process (caar invocations)) 1 0))))
-          (shuying-latex--ensure-preamble-warm
-           (shuying-latex-test--spec "$x$") engine
-           (lambda (error-data) (setq result (or error-data 'success))))
-          (let* ((first (car invocations))
-                 (sentinel (plist-get (cdr first) :sentinel)))
-            (funcall sentinel (car first) "failed\n"))
-          (should (= (length invocations) 2))
-          (should-not result)
-          (let* ((second (cadr invocations))
-                 (sentinel (plist-get (cdr second) :sentinel)))
-            (funcall sentinel (car second) "finished\n"))
-          (should (eq result 'success))
-          (should (= (hash-table-count
-                      shuying-latex--warmed-preambles)
-                     1)))
-      (delete-directory root t))))
-
-(ert-deftest shuying-latex-bounds-failed-miktex-warmup-retries ()
-  (let* ((root (make-temp-file "shuying-latex-warmup-failure-" t))
-         (system-type 'windows-nt)
-         (shuying-work-directory (expand-file-name "work" root))
-         (shuying-latex--warmed-preambles
-          (make-hash-table :test #'equal))
-         (shuying-latex--warmups (make-hash-table :test #'equal))
-         (shuying-latex--warmup-queue nil)
-         (shuying-latex--active-warmup nil)
-         (engine
-          '("C:/Programs/MiKTeX/miktex/bin/x64/xelatex.exe" "-no-pdf"))
-         invocations
-         result)
-    (unwind-protect
-        (cl-letf
-            (((symbol-function 'make-process)
-              (lambda (&rest arguments)
-                (let ((process (make-symbol "warmup-process")))
-                  (setq invocations
-                        (nconc invocations
-                               (list (cons process arguments))))
-                  process)))
-             ((symbol-function 'process-status)
-              (lambda (_process) 'exit))
-             ((symbol-function 'process-exit-status)
-              (lambda (_process) 1)))
-          (shuying-latex--ensure-preamble-warm
-           (shuying-latex-test--spec "$x$") engine
-           (lambda (error-data) (setq result error-data)))
-          (let* ((first (car invocations))
-                 (sentinel (plist-get (cdr first) :sentinel)))
-            (funcall sentinel (car first) "failed\n"))
-          (let* ((second (cadr invocations))
-                 (sentinel (plist-get (cdr second) :sentinel)))
-            (funcall sentinel (car second) "failed\n"))
-          (should (= (length invocations) 2))
-          (should (eq (car result) 'shuying-latex-error))
-          (should-not shuying-latex--active-warmup)
-          (should (= (hash-table-count shuying-latex--warmups) 0))
-          (should (= (hash-table-count
-                      shuying-latex--warmed-preambles)
-                     0)))
-      (dolist (buffer (buffer-list))
-        (when (string-prefix-p "*Shuying LaTeX warm-up*"
-                               (buffer-name buffer))
-          (kill-buffer buffer)))
-      (delete-directory root t))))
-
 (ert-deftest shuying-latex-disables-miktex-installer-for-rendering ()
   (let* ((root (make-temp-file "shuying-latex-installer-test-" t))
          (system-type 'windows-nt)
@@ -210,54 +47,6 @@
       (when (buffer-live-p log-buffer)
         (kill-buffer log-buffer))
       (delete-directory root t))))
-
-(ert-deftest shuying-latex-disables-miktex-installer-for-format-builds ()
-  (let* ((root (make-temp-file "shuying-latex-format-policy-" t))
-         (system-type 'windows-nt)
-         (shuying-work-directory (expand-file-name "work" root))
-         (shuying-latex-format-directory (expand-file-name "formats" root))
-         (shuying-latex--format-builds
-          (make-hash-table :test #'equal))
-         (engine
-          '("C:/Programs/MiKTeX/miktex/bin/x64/latex.exe"))
-         (specification (shuying-latex-test--spec "$x$"))
-         invocation)
-    (unwind-protect
-        (cl-letf (((symbol-function 'make-process)
-                   (lambda (&rest arguments)
-                     (setq invocation arguments)
-                     'format-process)))
-          (shuying-latex--start-format-build
-           "format-key" specification engine "latex" #'ignore)
-          (let ((command (plist-get invocation :command)))
-            (should (member "-disable-installer" command))
-            (should-not (member "-enable-installer" command))))
-      (maphash
-       (lambda (_key build)
-         (when (buffer-live-p
-                (shuying-latex--format-build-log-buffer build))
-           (kill-buffer (shuying-latex--format-build-log-buffer build))))
-       shuying-latex--format-builds)
-      (delete-directory root t))))
-
-(ert-deftest shuying-latex-selects-the-pgf-driver-for-its-converter ()
-  (let ((specification (shuying-latex-test--spec "$x$")))
-    (setf (shuying-render-spec-preamble specification)
-          "\\documentclass{article}\n\\usepackage{tikz-cd}\n")
-    (with-temp-buffer
-      (shuying-latex--write-preamble specification)
-      (should
-       (string-prefix-p
-        "\\def\\pgfsysdriver{pgfsys-dvisvgm.def}\n"
-        (buffer-string)))
-      (should
-       (< (string-match-p "pgfsys-dvisvgm" (buffer-string))
-          (string-match-p "usepackage{tikz-cd}" (buffer-string)))))
-    (setf (shuying-render-spec-backend-options specification)
-          '(:converter ("other-converter")))
-    (with-temp-buffer
-      (shuying-latex--write-preamble specification)
-      (should-not (search-forward "pgfsysdriver" nil t)))))
 
 (ert-deftest shuying-latex-uses-a-cache-hit-without-the-toolchain ()
   (let* ((root (make-temp-file "shuying-latex-test-" t))
@@ -486,192 +275,118 @@
         (kill-buffer log-buffer))
       (delete-directory root t))))
 
-(ert-deftest shuying-latex-shares-a-pending-format-build ()
-  (let* ((root (make-temp-file "shuying-latex-test-" t))
+(ert-deftest shuying-latex-cleans-an-unprepared-format-build ()
+  (let* ((root (make-temp-file "shuying-latex-prepare-" t))
          (shuying-work-directory (expand-file-name "work" root))
-         (shuying-latex-format-directory
-          (expand-file-name "formats" root))
-         (shuying-latex--format-builds
-          (make-hash-table :test #'equal))
-         (shuying-latex--failed-formats
-          (make-hash-table :test #'equal))
-         (specification (shuying-latex-test--spec "$x$"))
-         invocation
-         formats)
+         (shuying-latex-format-directory (expand-file-name "formats" root))
+         (shuying-latex-preamble--format-builds (make-hash-table :test #'equal))
+         (shuying-latex-preamble--failed-formats (make-hash-table :test #'equal))
+         (request
+          (make-shuying-backend-request
+           :specification (shuying-latex-test--spec "$x$")
+           :output-file (expand-file-name "out.svg" root)))
+         (write-region (symbol-function 'write-region))
+         results)
     (unwind-protect
-        (cl-letf
-            (((symbol-function 'make-process)
-              (lambda (&rest arguments)
-                (setq invocation arguments)
-                'format-process))
-             ((symbol-function 'process-status)
-              (lambda (_process) 'exit))
-             ((symbol-function 'process-exit-status)
-              (lambda (_process) 0)))
-          (dotimes (_ 2)
-            (shuying-latex--ensure-format
-             specification '("latex")
-             (lambda (_key format-file)
-               (push format-file formats))))
-          (should invocation)
-          (should-not formats)
-          (let* ((sentinel (plist-get invocation :sentinel))
-                 (key
-                  (shuying-latex--format-key
-                   specification '("latex")))
-                 (build
-                  (gethash key shuying-latex--format-builds)))
-            (with-temp-file
-                (shuying-latex--format-build-built-file build))
-            (funcall sentinel 'format-process "finished\n")
-            (should (= (length formats) 2))
-            (should (equal (car formats) (cadr formats)))
-            (should (file-exists-p (car formats)))
-            (should-not (gethash key shuying-latex--format-builds))))
-      (delete-directory root t))))
-
-(ert-deftest shuying-latex-falls-back-after-a-format-build-fails ()
-  (let* ((root (make-temp-file "shuying-latex-test-" t))
-         (shuying-work-directory (expand-file-name "work" root))
-         (shuying-latex-format-directory
-          (expand-file-name "formats" root))
-         (shuying-latex--format-builds
-          (make-hash-table :test #'equal))
-         (shuying-latex--failed-formats
-          (make-hash-table :test #'equal))
-         (specification (shuying-latex-test--spec "$x$"))
-         invocation
-         formats)
-    (unwind-protect
-        (cl-letf
-            (((symbol-function 'make-process)
-              (lambda (&rest arguments)
-                (setq invocation arguments)
-                'format-process))
-             ((symbol-function 'process-status)
-              (lambda (_process) 'exit))
-             ((symbol-function 'process-exit-status)
-              (lambda (_process) 1))
-             ((symbol-function 'display-warning) #'ignore))
-          (shuying-latex--ensure-format
-           specification '("latex")
-           (lambda (_key format-file)
-             (push format-file formats)))
-          (funcall
-           (plist-get invocation :sentinel)
-           'format-process "failed\n")
-          (should (equal formats '(nil)))
-          (should (= (hash-table-count
-                      shuying-latex--failed-formats)
-                     1))
-          (setq formats nil invocation nil)
-          (shuying-latex--ensure-format
-           specification '("latex")
-           (lambda (_key format-file)
-             (push format-file formats)))
-          (should-not invocation)
-          (should (equal formats '(nil))))
-      (delete-directory root t))))
-
-(ert-deftest shuying-latex-falls-back-when-format-process-cannot-start ()
-  (let* ((root (make-temp-file "shuying-latex-test-" t))
-         (shuying-work-directory (expand-file-name "work" root))
-         (shuying-latex-format-directory
-          (expand-file-name "formats" root))
-         (shuying-latex--format-builds
-          (make-hash-table :test #'equal))
-         (shuying-latex--failed-formats
-          (make-hash-table :test #'equal))
-         format)
-    (unwind-protect
-        (cl-letf
-            (((symbol-function 'make-process)
-              (lambda (&rest _arguments)
-                (error "Could not start LaTeX")))
-             ((symbol-function 'display-warning) #'ignore))
-          (shuying-latex--ensure-format
-           (shuying-latex-test--spec "$x$") '("latex")
-           (lambda (_key format-file)
-             (setq format format-file)))
-          (should-not format)
-          (should (= (hash-table-count
-                      shuying-latex--failed-formats)
-                     1))
-          (should (= (hash-table-count
-                      shuying-latex--format-builds)
-                     0)))
+        (cl-letf (((symbol-function 'executable-find)
+                   (lambda (program) program))
+                  ((symbol-function 'write-region)
+                   (lambda (start end filename &rest arguments)
+                     (if (and (equal (file-name-nondirectory filename)
+                                     "preamble.tex")
+                              (string-match-p "format-" filename))
+                         (error "Cannot prepare a format source")
+                       (apply write-region start end filename arguments)))))
+          (shuying-latex-render-batch
+           (list request)
+           (lambda (_request error-data) (push error-data results)))
+          (should (= (length results) 1))
+          (should (car results))
+          (should-not (directory-files shuying-work-directory nil
+                                       directory-files-no-dot-files-regexp)))
       (delete-directory root t))))
 
 (ert-deftest shuying-latex-invalidates-a-format-after-fallback-succeeds ()
-  (let* ((root (make-temp-file "shuying-latex-test-" t))
-         (directory (expand-file-name "work" root))
-         (tex-file (expand-file-name "input.tex" directory))
-         (format-file (expand-file-name "preamble.fmt" root))
-         (log-buffer (generate-new-buffer " *Shuying LaTeX test*"))
-         (shuying-latex--failed-formats
-          (make-hash-table :test #'equal))
-         errors
+  (let* ((root (make-temp-file "shuying-latex-fallback-" t))
+         (shuying-work-directory (expand-file-name "work" root))
+         (shuying-latex-format-directory (expand-file-name "formats" root))
+         (shuying-latex-preamble--format-builds (make-hash-table :test #'equal))
+         (shuying-latex-preamble--failed-formats (make-hash-table :test #'equal))
+         (output (expand-file-name "result.svg" root))
          (request
           (make-shuying-backend-request
-           :specification (shuying-latex-test--spec "$x$")))
-         (batch
-          (make-shuying-latex--batch
-           :requests (list request)
-           :complete
-           (lambda (_request error-data)
-             (push error-data errors))
-           :directory directory
-           :log-buffer log-buffer
-           :tex-file tex-file
-           :intermediate-file (expand-file-name "input.dvi" directory)
-           :engine '("latex")
-           :format-key "format-key"
-           :format-file format-file))
-         (starts 0)
-         (conversions 0))
-    (make-directory directory t)
-    (with-temp-file format-file)
+           :specification (shuying-latex-test--spec "$x$")
+           :output-file output))
+         invocations
+         completions)
     (unwind-protect
-        (cl-letf
-            (((symbol-function 'process-status)
-              (lambda (_process) 'exit))
-             ((symbol-function 'process-exit-status)
-              (lambda (_process) 1))
-             ((symbol-function 'shuying-latex--start-compiler)
-              (lambda (_batch _specification)
-                (cl-incf starts)))
-             ((symbol-function 'shuying-latex--start-converter)
-              (lambda (_batch _specification)
-                (cl-incf conversions))))
-          (shuying-latex--compilation-sentinel
-           batch
-           (shuying-backend-request-specification request)
-           'latex-process "finished\n")
-          (should-not errors)
-          (should (= starts 1))
-          (should-not (shuying-latex--batch-format-file batch))
-          (should
-           (equal
-            (shuying-latex--batch-suspect-format-file batch)
-            format-file))
-          (should (file-exists-p format-file))
-          (should-not
-           (gethash "format-key" shuying-latex--failed-formats))
-          (with-temp-buffer
-            (insert-file-contents tex-file)
-            (should (search-forward "\\documentclass" nil t)))
-          (with-temp-file
-              (shuying-latex--batch-intermediate-file batch))
-          (shuying-latex--compilation-sentinel
-           batch
-           (shuying-backend-request-specification request)
-           'latex-process "finished\n")
-          (should (= conversions 1))
-          (should-not (file-exists-p format-file))
-          (should
-           (gethash "format-key" shuying-latex--failed-formats)))
-      (when (buffer-live-p log-buffer)
-        (kill-buffer log-buffer))
+        (cl-letf (((symbol-function 'executable-find)
+                   (lambda (program) (expand-file-name program "C:/tex")))
+                  ((symbol-function 'make-process)
+                   (lambda (&rest arguments)
+                     (let ((process (make-symbol "latex-process")))
+                       (setq invocations
+                             (nconc invocations
+                                    (list (cons process
+                                                (cons default-directory arguments)))))
+                       process)))
+                  ((symbol-function 'process-status) (lambda (_process) 'exit))
+                  ((symbol-function 'process-exit-status) (lambda (_process) 0)))
+          (shuying-latex-render-batch
+           (list request)
+           (lambda (_request error-data) (push error-data completions)))
+          (let* ((format-invocation (car invocations))
+                 (directory (cadr format-invocation))
+                 (arguments (cddr format-invocation))
+                 (jobname
+                  (seq-find (lambda (item) (string-prefix-p "-jobname=" item))
+                            (plist-get arguments :command))))
+            (with-temp-file
+                (expand-file-name (concat (substring jobname 9) ".fmt") directory)
+              (insert "format"))
+            (funcall (plist-get arguments :sentinel)
+                     (car format-invocation) "finished\n"))
+          (let* ((first-compiler (nth 1 invocations))
+                 (arguments (cddr first-compiler))
+                 (format-argument
+                  (seq-find (lambda (item) (string-prefix-p "-fmt=" item))
+                            (plist-get arguments :command)))
+                 (format-file
+                  (expand-file-name
+                   (concat (substring format-argument 5) ".fmt")
+                   shuying-latex-format-directory)))
+            (should (file-exists-p format-file))
+            ;; A successful process with no DVI means the cached format failed.
+            (funcall (plist-get arguments :sentinel)
+                     (car first-compiler) "finished\n")
+            (let* ((retry (nth 2 invocations))
+                   (retry-arguments (cddr retry))
+                   (retry-command (plist-get retry-arguments :command))
+                   (tex-file (car (last retry-command)))
+                   (directory (file-name-directory tex-file)))
+              (should-not (seq-some
+                           (lambda (item) (string-prefix-p "-fmt=" item))
+                           retry-command))
+              (with-temp-buffer
+                (insert-file-contents tex-file)
+                (should (search-forward "\\documentclass" nil t)))
+              (with-temp-file (expand-file-name "input.dvi" directory))
+              (funcall (plist-get retry-arguments :sentinel)
+                       (car retry) "finished\n")
+              (let* ((converter (nth 3 invocations))
+                     (converter-arguments (cddr converter)))
+                (with-temp-file (expand-file-name "page-1.svg" directory)
+                  (insert "rendered"))
+                (with-current-buffer (plist-get converter-arguments :buffer)
+                  (insert "Preview: Fontsize 10pt\n"
+                          "  width=10pt, height=8pt, depth=2pt\n"))
+                (funcall (plist-get converter-arguments :sentinel)
+                         (car converter) "finished\n")))
+            (should (equal completions '(nil)))
+            (should-not (file-exists-p format-file))
+            (with-temp-buffer
+              (insert-file-contents output)
+              (should (equal (buffer-string) "rendered")))))
       (delete-directory root t))))
 
 (ert-deftest shuying-latex-renders-a-batch-with-two-processes ()
@@ -791,11 +506,11 @@
          (shuying-latex-precompile-preamble nil)
          (shuying-backends nil)
          (shuying--pending-jobs (make-hash-table :test #'equal))
-         (shuying-latex--warmed-preambles
+         (shuying-latex-preamble--warmed-preambles
           (make-hash-table :test #'equal))
-         (shuying-latex--warmups (make-hash-table :test #'equal))
-         (shuying-latex--warmup-queue nil)
-         (shuying-latex--active-warmup nil)
+         (shuying-latex-preamble--warmups (make-hash-table :test #'equal))
+         (shuying-latex-preamble--warmup-queue nil)
+         (shuying-latex-preamble--active-warmup nil)
          results)
     (unwind-protect
         (progn
@@ -957,15 +672,15 @@
          (shuying-latex-format-directory
           (expand-file-name "formats" root))
          (shuying-latex-precompile-preamble t)
-         (shuying-latex--format-builds
+         (shuying-latex-preamble--format-builds
           (make-hash-table :test #'equal))
-         (shuying-latex--failed-formats
+         (shuying-latex-preamble--failed-formats
           (make-hash-table :test #'equal))
-         (shuying-latex--warmed-preambles
+         (shuying-latex-preamble--warmed-preambles
           (make-hash-table :test #'equal))
-         (shuying-latex--warmups (make-hash-table :test #'equal))
-         (shuying-latex--warmup-queue nil)
-         (shuying-latex--active-warmup nil)
+         (shuying-latex-preamble--warmups (make-hash-table :test #'equal))
+         (shuying-latex-preamble--warmup-queue nil)
+         (shuying-latex-preamble--active-warmup nil)
          (original-make-process (symbol-function 'make-process))
          (format-build-count 0)
          results)
