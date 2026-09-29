@@ -30,19 +30,26 @@
        ("SPC h o" . describe-symbol)
        ("SPC h v" . describe-variable))))
 
-  (yunge-test-evil-normal-keys
-   'help-mode
-   '(("RET" . push-button)
-     ("q" . quit-window)
-     ("gr" . revert-buffer)
-     ("gh" . help-go-back)
-     ("gl" . help-go-forward)
-     ("gf" . help-view-source)
-     ("g]" . forward-button)
-     ("g[" . backward-button)
-     ("<tab>" . forward-button)
-     ("S-TAB" . backward-button)
-     ("C-o" . yunge-jump-history-backward)
-     ("C-i" . yunge-jump-history-forward))))
+  (with-temp-buffer
+    (help-mode)
+    (let ((inhibit-read-only t))
+      (insert-text-button "A help link"))
+    (goto-char (point-min))
+    (yunge-test-evil-keys
+     'normal
+     '(("RET" . push-button)
+       ("q" . quit-window)
+       ("gr" . revert-buffer)
+       ("gh" . help-go-back)
+       ("gl" . help-go-forward)
+       ("gf" . help-view-source)
+       ("g]" . forward-button)
+       ("g[" . backward-button)
+       ("<tab>" . forward-button)
+       ("S-TAB" . backward-button)
+       ("C-o" . yunge-jump-history-backward)
+       ("C-i" . yunge-jump-history-forward)))
+    (evil-emacs-state)
+    (yunge-test-key "TAB" 'forward-button)))
 
 ;;; yunge-help-test.el ends here

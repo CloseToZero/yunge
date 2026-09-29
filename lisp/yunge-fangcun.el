@@ -39,6 +39,7 @@
 
 (defconst yunge-fangcun-backlinks-normal-bindings
   `(("RET" fangcun-backlink-visit "visit")
+    ("gf" fangcun-backlink-show "show source")
     ("C-j" forward-button "next backlink")
     ("C-k" backward-button "previous backlink")
     ("q" quit-window "quit")
@@ -47,6 +48,7 @@
 
 (defconst yunge-fangcun-check-normal-bindings
   `(("RET" fangcun-check-visit "visit")
+    ("gf" fangcun-check-show "show source")
     ("C-j" forward-button "next issue")
     ("C-k" backward-button "previous issue")
     ("q" quit-window "quit")

@@ -138,6 +138,8 @@ it stops native processes but keeps Emacs file updates active."
 
 (defvar-keymap fangcun-backlinks-mode-map
   :parent special-mode-map
+  "g f" #'fangcun-backlink-show
+  "g r" #'revert-buffer
   "RET" #'fangcun-backlink-visit)
 
 (define-derived-mode fangcun-backlinks-mode special-mode "Fangcun Backlinks"
@@ -146,6 +148,8 @@ it stops native processes but keeps Emacs file updates active."
 
 (defvar-keymap fangcun-check-mode-map
   :parent special-mode-map
+  "g f" #'fangcun-check-show
+  "g r" #'revert-buffer
   "RET" #'fangcun-check-visit)
 
 (define-derived-mode fangcun-check-mode special-mode "Fangcun Check"
@@ -1443,12 +1447,15 @@ An existing non-empty DESCRIPTION always wins.  Returning nil lets
    (fangcun-node-file node)
    (fangcun-node-yiyu-root node)))
 
-(defun fangcun-node-visit (node)
-  "Visit the Org NODE and return it."
+(defun fangcun-node-visit (node &optional other-window)
+  "Visit the Org NODE and return it.
+When OTHER-WINDOW is non-nil, use another window."
   (let ((file (fangcun--node-absolute-file node)))
     (unless (file-exists-p file)
       (user-error "Fangcun node file no longer exists: %s" file))
-    (find-file file)
+    (if other-window
+        (find-file-other-window file)
+      (find-file file))
     (widen)
     (if-let* ((position
                (org-find-entry-with-id (fangcun-node-id node))))
@@ -1661,15 +1668,23 @@ Interactively, edit the current local tags with completion."
     (button-get button 'fangcun-backlink)))
 
 (defun fangcun-backlink-visit (backlink)
-  "Visit the indexed link represented by BACKLINK and return it."
+  "Visit the indexed link represented by BACKLINK and return it.
+From a backlinks buffer, select its source in another window."
   (interactive
    (list
     (or (fangcun--backlink-at-point)
         (user-error "No Fangcun backlink at point"))))
-  (fangcun-node-visit (fangcun-backlink-node backlink))
+  (fangcun-node-visit (fangcun-backlink-node backlink)
+                     (derived-mode-p 'fangcun-backlinks-mode))
   (goto-char (fangcun-backlink-position backlink))
   (org-fold-show-context 'link-search)
   backlink)
+
+(defun fangcun-backlink-show ()
+  "Show the backlink at point without leaving the results window."
+  (interactive)
+  (save-selected-window
+    (call-interactively #'fangcun-backlink-visit)))
 
 ;;;###autoload
 (defun fangcun-backlink-find ()
@@ -1908,7 +1923,7 @@ Each source file is read from disk at most once."
     (button-get button 'fangcun-check-issue)))
 
 (defun fangcun-check-visit (issue)
-  "Visit the source location represented by Fangcun check ISSUE."
+  "Visit Fangcun check ISSUE's source location in another window."
   (interactive
    (list
     (or (fangcun--check-issue-at-point)
@@ -1916,7 +1931,7 @@ Each source file is read from disk at most once."
   (let ((file (fangcun-check-issue-file issue)))
     (unless (file-exists-p file)
       (user-error "Fangcun check source file no longer exists: %s" file))
-    (find-file file)
+    (find-file-other-window file)
     (widen)
     (goto-char
      (min (or (fangcun-check-issue-position issue) (point-min))
@@ -1924,6 +1939,12 @@ Each source file is read from disk at most once."
     (when (derived-mode-p 'org-mode)
       (org-fold-show-context 'link-search))
     issue))
+
+(defun fangcun-check-show ()
+  "Show the check result at point without leaving the results window."
+  (interactive)
+  (save-selected-window
+    (call-interactively #'fangcun-check-visit)))
 
 (defun fangcun--check-button-action (button)
   "Visit the Fangcun check issue represented by BUTTON."
@@ -1971,7 +1992,7 @@ Each source file is read from disk at most once."
     (insert
      (format "Checked %d files in %d yiyu roots.\n"
              (plist-get result :files) (plist-get result :yiyus)))
-    (insert "RET visits an issue, gr checks again, q quits.\n")
+    (insert "gf previews, RET visits an issue, gr checks again, q quits.\n")
     (if issues
         (progn
           (insert (format "Found %d errors and %d warnings.\n\n"

@@ -85,8 +85,11 @@ suffix such as =id:NODE-ID::target=; the backlink still belongs to =NODE-ID=.
 IDs, ID links without an owning node, and unresolved targets. It does not edit
 notes or the database and can run even when synchronization fails.
 
-In both results buffers, =RET= visits the item at point. Yunge's Evil Normal
-state also provides =gr= to refresh the results and =q= to close the window.
+In either results buffer, use =gf= to preview the source in another window
+while keeping focus in the list. =RET= selects that source window so you can
+edit the note; the results stay open. In Yunge's Evil Normal state, =C-j/C-k=
+move between items, =gr= refreshes the results, and =q= closes the list window.
+After fixing an issue, save the note and refresh the list to check it again.
 
 In Yunge's leader map, the common commands are:
 
@@ -109,11 +112,14 @@ index entry; renaming or deleting it through Emacs updates the index too.
 =M-x fangcun-db-update-file= updates the current saved file explicitly.
 Set =fangcun-db-update-on-save= to =nil= to disable updates after saving.
 
-The index and backlink previews describe saved text. Save your edits before
-looking for a new node or link. If another application changes a note while
-its buffer is open, synchronization reads the file on disk and leaves your
-buffer untouched. Revert the buffer when you want to load those changes;
-save or otherwise keep any unsaved work before reverting.
+The index and excerpts in backlink lists describe saved text. Source windows
+show the current buffers, including unsaved edits. Save before following an
+indexed location after moving text, or looking for a new node or link.
+
+If another application changes a note while its buffer is open, synchronization
+reads the file on disk and leaves your buffer untouched. Revert the buffer when
+you want to load those changes; save or otherwise keep unsaved work before
+reverting.
 
 ** Watch external edits
 

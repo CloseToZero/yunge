@@ -25,6 +25,7 @@
 (declare-function project-current "project" (&optional maybe-prompt directory))
 (declare-function project-root "project" (project))
 
+(defvar button-map)
 (defvar evil-cross-lines)
 (defvar evil-ex-last-was-search)
 (defvar evil-ex-search-count)
@@ -459,6 +460,12 @@ punctuation equivalence rather than literally."
   (yunge-key-define yunge-marker-map yunge-marker-bindings)
   (yunge-key-define yunge-jump-map yunge-jump-bindings)
   (yunge-evil--setup-leader)
+  (with-eval-after-load 'button
+    ;; A button's text-property map precedes Evil's maps at point.
+    (keymap-set button-map "TAB"
+                '(menu-item "next button" forward-button
+                  :filter (lambda (binding)
+                            (unless (eq evil-state 'normal) binding)))))
   (yunge-key-define
    evil-motion-state-map
    '(("/" yunge-evil-pinyin-search-forward "search forward")

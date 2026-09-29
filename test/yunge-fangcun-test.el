@@ -3,6 +3,7 @@
 ;; SPDX-License-Identifier: MIT
 
 (require 'yunge-test-helper)
+(require 'fangcun-test-helper)
 
 (declare-function yunge-jump-history-backward "yunge-jump-history")
 
@@ -198,6 +199,7 @@
   (yunge-test-evil-normal-keys
    'fangcun-backlinks-mode
    '(("RET" . fangcun-backlink-visit)
+     ("gf" . fangcun-backlink-show)
      ("C-j" . forward-button)
      ("C-k" . backward-button)
      ("q" . quit-window)
@@ -216,6 +218,7 @@
   (yunge-test-evil-normal-keys
    'fangcun-check-mode
    '(("RET" . fangcun-check-visit)
+     ("gf" . fangcun-check-show)
      ("C-j" . forward-button)
      ("C-k" . backward-button)
      ("q" . quit-window)
@@ -224,6 +227,52 @@
      ("g[" . backward-button)
      ("<tab>" . forward-button)
      ("S-TAB" . backward-button))))
+
+(ert-deftest yunge-fangcun-previews-and-visits-result-sources ()
+  (yunge-test-enable-evil)
+  (require 'yunge-fangcun)
+  (fangcun-test-with-notes
+    (with-temp-buffer
+      (insert-file-contents personal-file)
+      (goto-char (point-max))
+      (insert "\n[[id:work-file][Project status]]\n")
+      (write-region (point-min) (point-max) personal-file nil 'silent))
+    (fangcun-db-sync)
+    (dolist (entry '((fangcun-backlinks . "\\[\\[id:work-file")
+                     (fangcun-check . "\\[\\[id:source")))
+      (let (results)
+        (unwind-protect
+            (save-window-excursion
+              (find-file work-file)
+              (goto-char (point-max))
+              (funcall (car entry))
+              (setq results (current-buffer))
+              (delete-other-windows)
+              (let ((result-window (selected-window))
+                    (result-position (point)))
+                (execute-kbd-macro (kbd "gf"))
+                (should (eq (selected-window) result-window))
+                (should (eq (current-buffer) results))
+                (should (= (point) result-position))
+                (let ((source-window
+                       (get-buffer-window (get-file-buffer personal-file))))
+                  (should (window-live-p source-window))
+                  (should-not (eq source-window result-window))
+                  (with-selected-window source-window
+                    (should (looking-at-p (cdr entry))))
+                  (execute-kbd-macro (kbd "RET"))
+                  (should (eq (selected-window) source-window))
+                  (should (equal (buffer-file-name) personal-file))
+                  (should (looking-at-p (cdr entry)))
+                  (should (eq (window-buffer result-window) results))
+                  (execute-kbd-macro (kbd "C-o"))
+                  (should (eq (current-buffer) results))
+                  (should (= (point) result-position))
+                  (execute-kbd-macro (kbd "C-i"))
+                  (should (equal (buffer-file-name) personal-file))
+                  (should (looking-at-p (cdr entry))))))
+          (when (buffer-live-p results)
+            (kill-buffer results)))))))
 
 (ert-deftest yunge-fangcun-inserts-after-the-normal-state-eol-character ()
   (yunge-test-enable-evil)
