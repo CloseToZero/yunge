@@ -3,6 +3,7 @@
 ;; SPDX-License-Identifier: MIT
 
 (require 'fangcun)
+(require 'fangcun-file)
 (require 'json)
 (require 'seq)
 (require 'subr-x)
@@ -360,84 +361,22 @@ KEY-PREDICATE returns non-nil for a valid decoded sort key."
   (or (fangcun-node-from-id id)
       (user-error "Fangcun node is not indexed: %s" id)))
 
-(defun fangcun-mcp--node-region-in-buffer (node)
-  "Return the source region of NODE in the current Org buffer."
-  (save-excursion
-    (save-restriction
-      (widen)
-      (goto-char (point-min))
-      (let ((position
-             (org-find-entry-with-id (fangcun-node-id node))))
-        (unless position
-          (user-error "Fangcun node ID no longer exists: %s"
-                      (fangcun-node-id node)))
-        (goto-char position))
-      (org-back-to-heading-or-point-min t)
-      (cons
-       (if (= (org-outline-level) 0)
-           (point-min)
-         (line-beginning-position))
-       (if (= (org-outline-level) 0)
-           (point-max)
-         (save-excursion
-           (org-end-of-subtree t t)))))))
-
-(defun fangcun-mcp--node-absolute-file (node)
-  "Return the absolute file name containing NODE."
-  (expand-file-name
-   (fangcun-node-file node)
-   (fangcun-node-yiyu-root node)))
-
-(defun fangcun-mcp--call-with-node-disk-buffer (node function)
-  "Call FUNCTION with NODE and its absolute file in a temporary Org buffer."
-  (let ((file (fangcun-mcp--node-absolute-file node)))
-    (unless (file-regular-p file)
-      (user-error "Fangcun node file no longer exists: %s" file))
-    (with-temp-buffer
-      (setq default-directory (file-name-directory file))
-      (insert-file-contents file)
-      (let ((org-inhibit-startup t))
-        (delay-mode-hooks (org-mode)))
-      (funcall function node file))))
-
-(defun fangcun-mcp--node-location-in-buffer (node file)
-  "Return NODE's on-disk location in the current Org buffer for FILE."
-  (pcase-let* ((`(,beginning . ,end)
-                (fangcun-mcp--node-region-in-buffer node))
-               (heading-p
-                (save-excursion
-                  (goto-char beginning)
-                  (org-at-heading-p)))
-               (visiting-buffer (find-buffer-visiting file))
-               (modified-p
-                (and visiting-buffer
-                     (buffer-modified-p visiting-buffer))))
-    (list
-     :absoluteFile file
-     :kind (if heading-p "heading" "file")
-     :startLine (line-number-at-pos beginning t)
-     :endLine
-     (line-number-at-pos
-      (max beginning (1- end)) t)
-     :outlinePath
-     (if heading-p
-         (save-excursion
-           (goto-char beginning)
-           (vconcat (org-get-outline-path t)))
-       [])
-     :modifiedInEmacs (if modified-p t :false))))
-
 (defun fangcun-mcp--locate-node (arguments)
   "Locate a Fangcun node described by MCP ARGUMENTS."
-  (let* ((id (fangcun-mcp--required-string arguments :id))
-         (node (fangcun-mcp--node-by-id id)))
-    (fangcun-mcp--call-with-node-disk-buffer
-     node
-     (lambda (disk-node file)
-       (list
-        :node (fangcun-mcp--node-object disk-node)
-        :location
-        (fangcun-mcp--node-location-in-buffer disk-node file))))))
+  (let* ((location
+          (fangcun-file-locate-node
+           (fangcun-mcp--required-string arguments :id)))
+         (node (plist-get location :node)))
+    (list
+     :node (fangcun-mcp--node-object node)
+     :location
+     (list
+      :absoluteFile (plist-get location :file)
+      :kind (symbol-name (plist-get location :kind))
+      :startLine (plist-get location :start-line)
+      :endLine (plist-get location :end-line)
+      :outlinePath (vconcat (plist-get location :outline-path))
+      :modifiedInEmacs (if (plist-get location :modified-p) t :false)))))
 
 (defun fangcun-mcp--backlink-key (backlink)
   "Return the stable display-order key for BACKLINK."
@@ -513,135 +452,24 @@ KEY-PREDICATE returns non-nil for a valid decoded sort key."
         (fangcun-mcp--encode-cursor
          "list-backlinks" id next-key))))))
 
-(defun fangcun-mcp--yiyu-by-id (id yiyus)
-  "Return the member of YIYUS named ID."
-  (or (seq-find
-       (lambda (yiyu)
-         (equal (fangcun-yiyu-id yiyu) id))
-       yiyus)
-      (user-error "Unknown Fangcun yiyu: %s" id)))
-
-(defun fangcun-mcp--existing-org-file (yiyu relative-file)
-  "Return an existing Org file below YIYU named RELATIVE-FILE."
-  (when (file-name-absolute-p relative-file)
-    (user-error ":file must be relative to the yiyu root"))
-  (let* ((root (fangcun-yiyu-root yiyu))
-         (file (expand-file-name relative-file root)))
-    (unless (file-in-directory-p file root)
-      (user-error ":file must stay below the yiyu root"))
-    (unless (string-match-p "\\.org\\'" file)
-      (user-error ":file must name an Org file"))
-    (unless (file-regular-p file)
-      (user-error "Fangcun file does not exist: %s" relative-file))
-    file))
-
-(defun fangcun-mcp--call-with-org-file-edit (file yiyu function)
-  "Call FUNCTION in saved Org FILE, then save and reindex it for YIYU.
-Refuse to save a modified visiting buffer.  Refresh a clean buffer when its
-visited file has changed on disk before editing."
-  (let* ((visiting-buffer (find-buffer-visiting file))
-         (buffer (or visiting-buffer (find-file-noselect file)))
-         (temporary-buffer-p (null visiting-buffer))
-         result)
-    (unwind-protect
-        (with-current-buffer buffer
-          (unless (derived-mode-p 'org-mode)
-            (user-error "Fangcun MCP edits require an Org buffer"))
-          (when (buffer-modified-p)
-            (user-error
-             "Fangcun file has unsaved changes; save it before MCP edits: %s"
-             file))
-          (unless (verify-visited-file-modtime buffer)
-            (revert-buffer t t t))
-          (save-excursion
-            (save-restriction
-              (widen)
-              (atomic-change-group
-                (setq result (funcall function))
-                (let ((fangcun-db-update-on-save nil))
-                  (save-buffer)))))
-          (fangcun--db-update-file-in-yiyu file yiyu t)
-          result)
-      (when (and temporary-buffer-p (buffer-live-p buffer))
-        (with-current-buffer buffer
-          (when (buffer-modified-p)
-            (set-buffer-modified-p nil)))
-        (kill-buffer buffer)))))
-
-(defun fangcun-mcp--heading-at-path (heading-path)
-  "Return the unique heading position matching HEADING-PATH."
-  (let (matches)
-    (org-map-entries
-     (lambda ()
-       (when (equal (org-get-outline-path t) heading-path)
-         (push (point) matches)))
-     nil 'file)
-    (pcase matches
-      ('nil
-       (user-error "Org heading path does not exist: %S" heading-path))
-      (`(,position) position)
-      (_
-       (user-error "Org heading path is ambiguous: %S" heading-path)))))
-
 (defun fangcun-mcp--create-heading-node (arguments)
   "Create and index a Fangcun heading node from MCP ARGUMENTS."
-  (let* ((yiyu-id
-          (fangcun-mcp--required-string arguments :yiyu))
-         (relative-file
-          (fangcun-mcp--required-string arguments :file))
-         (heading-path
-          (fangcun-mcp--required-string-list arguments :headingPath))
-         (yiyus (fangcun--ensure-session))
-         (yiyu (fangcun-mcp--yiyu-by-id yiyu-id yiyus))
-         (file (fangcun-mcp--existing-org-file yiyu relative-file))
-         (id
-          (fangcun-mcp--call-with-org-file-edit
-           file yiyu
-           (lambda ()
-             (goto-char
-              (fangcun-mcp--heading-at-path heading-path))
-             (fangcun--node-id-get-create)))))
-    (fangcun-mcp--node-object
-     (or (fangcun-node-from-id id)
-         (user-error "Created Fangcun node was not indexed: %s" id)))))
+  (fangcun-mcp--node-object
+   (fangcun-file-create-heading-node
+    (fangcun-mcp--required-string arguments :yiyu)
+    (fangcun-mcp--required-string arguments :file)
+    (fangcun-mcp--required-string-list arguments :headingPath))))
 
 (defun fangcun-mcp--create-file-node (arguments)
   "Create and index a Fangcun file node from MCP ARGUMENTS."
-  (let* ((yiyu-id
-          (fangcun-mcp--required-string arguments :yiyu))
-         (relative-file
-          (fangcun-mcp--required-string arguments :file))
-         (title (or (plist-get arguments :title) "")))
-    (unless (stringp title)
+  (let ((title (plist-get arguments :title)))
+    (unless (or (null title) (stringp title))
       (user-error ":title must be a string"))
-    (when (file-name-absolute-p relative-file)
-      (user-error ":file must be relative to the yiyu root"))
-    (let* ((yiyus (fangcun--ensure-session))
-           (yiyu (fangcun-mcp--yiyu-by-id yiyu-id yiyus))
-           (root (fangcun-yiyu-root yiyu))
-           (file (expand-file-name relative-file root))
-           (directory (file-name-directory file)))
-      (when-let* ((reason
-                   (fangcun--new-file-name-error file root)))
-        (user-error "%s" reason))
-      (make-directory directory t)
-      (let ((id (org-id-new)))
-        (with-temp-buffer
-          (setq default-directory directory
-                buffer-file-coding-system 'utf-8-unix)
-          (let ((org-inhibit-startup t))
-            (delay-mode-hooks (org-mode)))
-          (unless (string-empty-p title)
-            (insert "#+title: " title "\n"))
-          (insert "\n")
-          (goto-char (point-min))
-          (org-entry-put (point) "ID" id)
-          (write-region (point-min) (point-max) file nil 'silent nil 'excl))
-        (fangcun--db-update-file-in-yiyu file yiyu t)
-        (fangcun-mcp--node-object
-         (or (fangcun-node-from-id id)
-             (user-error
-              "Created Fangcun node was not indexed: %s" id)))))))
+    (fangcun-mcp--node-object
+     (fangcun-file-create-node
+      (fangcun-mcp--required-string arguments :yiyu)
+      (fangcun-mcp--required-string arguments :file)
+      title))))
 
 (defun fangcun-mcp-register-tools (register-tool)
   "Pass Fangcun MCP tools to REGISTER-TOOL.

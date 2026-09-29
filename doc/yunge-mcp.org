@@ -1,91 +1,107 @@
 #+title: Yunge MCP
 
-Yunge MCP lets local AI clients call selected tools in a running Yunge Emacs.
-Its native stdio executable forwards registered tool requests; Emacs defines
-and executes them. The bridge does not evaluate client-supplied Lisp or edit
-the Fangcun database directly.
+Connect a local AI client to Fangcun in a running Yunge Emacs.
 
 * Install and connect
 
 Keep the Emacs instance that owns your notes running while clients use its
 tools. Building the bridge requires Cargo; installation also needs a working
-=emacsclient= for that Emacs. Run =M-x yunge-mcp-setup= in Emacs to build and
-install the executable, start the Emacs server if needed, and register =yunge=
-in the selected clients' user configuration. Supported targets are Codex,
-Claude Code, Gemini CLI, Cursor, and the default Visual Studio Code profile.
-Targets can be selected even if their applications are not installed yet.
-Build progress and errors appear in =*Yunge MCP build*=.
+=emacsclient= for that Emacs. Run =M-x yunge-mcp-setup= to build and install
+the executable, start the Emacs server if needed, and register =yunge= in the
+selected clients' user configuration. Supported targets are Codex, Claude
+Code, Gemini CLI, Cursor, and the default Visual Studio Code profile. Targets
+can be selected even if their applications are not installed yet. Build
+progress and errors appear in =*Yunge MCP build*=.
 
 =M-x yunge-mcp-install= builds and installs without changing client
 configuration. =M-x yunge-mcp-register-agents= changes selected client entries
 without rebuilding. Registration preserves unrelated client settings. The
 installed executable has a stable path under =yunge-mcp/bin/= in
 =yunge-var-directory= (by default =var/=); the platform may add an executable
-suffix. The [[file:../native/yunge-mcp/README.org][native bridge guide]] covers its runtime manifest and protocol.
+suffix. The [[file:../native/yunge-mcp/README.org][native bridge guide]] explains the runtime manifest and protocol.
 
 If a client cannot reach Emacs, check that the configured Emacs server is
 running. After changing the Emacs installation or server connection, run
-=M-x yunge-mcp-install= to refresh the bridge's connection settings. Use the
-same command when the bridge reports that its helper is outdated.
+=M-x yunge-mcp-install= to refresh the connection settings. Use the same
+command when the bridge reports that its helper is outdated.
 
-* Fangcun tools
+* Find and edit a note
 
-Tool names and JSON arguments are shown below. A node result contains =id=,
-=title=, =aliases=, =tags=, =yiyu=, =yiyuName=, and its yiyu-relative =file=.
+Start with =fangcun_list_yiyus= to find your note roots. Search for a title,
+alias, tag, root, or relative filename with =fangcun_search_nodes=. Search
+ignores case, and every whitespace-separated term must match. To search for
+text inside a note, use the client's filesystem search within the returned
+roots.
 
-| Tool                          | Arguments                              | Result                                            |
-|-------------------------------+----------------------------------------+---------------------------------------------------|
-| =fangcun_list_yiyus=          | none                                   | Array of configured =id=, =name=, absolute =root= |
-| =fangcun_search_nodes=        | =query=; optional =pageSize=, =cursor= | Ranked =nodes= with =matchedFields=; =nextCursor= |
-| =fangcun_locate_node=         | =id=                                   | =node= and on-disk =location=                      |
-| =fangcun_list_backlinks=      | =id=; optional =pageSize=, =cursor=    | =target=, unique source =backlinks=, =nextCursor= |
-| =fangcun_create_file_node=    | =yiyu=, =file=; optional =title=       | Saved, indexed file node                          |
-| =fangcun_create_heading_node= | =yiyu=, =file=, =headingPath=          | Saved, indexed heading node                       |
+Pass a result's ID to =fangcun_locate_node=. It returns an absolute filename
+and the saved node's line range: the whole file for a file node, or the subtree
+for a heading. Use the client's filesystem tools to read that range and make
+edits. Locate again after edits that might move the node. For related notes,
+=fangcun_list_backlinks= finds nodes that link to this ID across all roots.
 
-Search requires at least one term and ignores case. Every whitespace-separated
-term must match a title, alias, tag, yiyu, or relative file. Each entry in
-=nodes= contains a =node= and its =matchedFields=. Use filesystem search for
-literal text inside notes.
+Check =modifiedInEmacs= before editing externally. If it is true, the Emacs
+buffer contains unsaved changes that the disk location and filesystem reads
+do not include. Save those changes in Emacs first, or reconcile the two
+versions before continuing. MCP location queries leave the buffer untouched.
 
-Each backlink result has a =source= node, =occurrenceCount=, and =firstPosition=.
-The position is a one-based Emacs character position in the source file.
-Repeated links in one source count as one paged result.
+Use ordinary Org links in note text: =[[id:NODE-ID][description]]= links to a
+node, and =[[id:NODE-ID::target][description]]= searches within it.
+Saved external edits reach the index when Fangcun's optional watcher notices
+them and Emacs processes the events. If monitoring is unavailable or search
+results look stale, run =M-x fangcun-db-sync= in Emacs. Search and backlinks
+use the index; locating a node rereads its saved file. See the
+[[file:fangcun.org][Fangcun guide]] for index recovery and checking links.
 
-=fangcun_locate_node= returns =absoluteFile=, =kind=, inclusive one-based
-=startLine= and =endLine=, =outlinePath=, and =modifiedInEmacs=. A file node's
-range covers the saved file; a heading node's range covers its subtree.
-=modifiedInEmacs= reports whether a visiting buffer has unsaved edits. The
-returned location describes the saved file; reconcile unsaved edits before
-changing that file externally.
+* Create a node
+
+Use =fangcun_create_file_node= for a new note. Supply a configured =yiyu= ID,
+a portable =.org= path relative to that root, and an optional =title=. Missing
+parent directories are created. The tool assigns a file-level Org ID, saves,
+and indexes the file before returning the node. Add content with filesystem
+tools afterward. An existing file or a buffer already visiting that path
+prevents creation.
+
+Use =fangcun_create_heading_node= to give an existing heading its own ID.
+For example, for a heading named =Lemma= below =Algebra=, pass:
+
+#+begin_example
+{"yiyu":"personal","file":"math.org","headingPath":["Algebra","Lemma"]}
+#+end_example
+
+Heading titles must match exactly, excluding TODO keywords, priorities, and
+tags. Missing or ambiguous paths fail; an existing local ID is kept. The tool
+saves and indexes the file. It refuses unsaved Emacs changes, and refreshes an
+unmodified visiting buffer if the file has changed on disk.
+
+A creation error can occur after the file has been saved, for example when
+indexing finds a duplicate ID. If the error reports a saved file, inspect it,
+fix the reported problem, and run =M-x fangcun-db-sync=. Keep its existing ID;
+do not retry creation of the same file.
+
+* Tool results and pagination
+
+| Tool | Arguments | Result |
+|------+-----------+--------|
+| =fangcun_list_yiyus= | none | Array of configured =id=, =name=, absolute =root= |
+| =fangcun_search_nodes= | =query=; optional =pageSize=, =cursor= | Ranked =nodes= with =matchedFields=; optional =nextCursor= |
+| =fangcun_locate_node= | =id= | =node= and saved-file =location= |
+| =fangcun_list_backlinks= | =id=; optional =pageSize=, =cursor= | =target=, unique source =backlinks=; optional =nextCursor= |
+| =fangcun_create_file_node= | =yiyu=, =file=; optional =title= | Saved, indexed file node |
+| =fangcun_create_heading_node= | =yiyu=, =file=, =headingPath= | Saved, indexed heading node |
+
+A node result contains =id=, =title=, =aliases=, =tags=, =yiyu=, =yiyuName=,
+and its yiyu-relative =file=. Each search entry contains a =node= and the
+metadata fields matched by the query in =matchedFields=.
+
+A location contains =absoluteFile=, =kind= (=file= or =heading=), inclusive
+one-based =startLine= and =endLine=, =outlinePath=, and =modifiedInEmacs=.
+The accompanying node metadata comes from the index and can lag behind the
+saved text used for its location.
+
+Each backlink has a =source= node, =occurrenceCount=, and =firstPosition=.
+The position is a one-based Emacs character position in the indexed source
+file. Repeated links in one source count as one paged result.
 
 For paged tools, =pageSize= defaults to 20 and must be 1–100. If =nextCursor=
-is present, pass it as =cursor= with the same query or target ID. Its contents
-are opaque; absence of =nextCursor= means the final page.
-
-* Work with note files
-
-Use =fangcun_list_yiyus= to discover accessible roots, then
-=fangcun_search_nodes= and =fangcun_locate_node= to find a semantic node and
-its saved file location. Use the client's filesystem tools to read content,
-search literal text, edit existing files, or add standard Org links. For
-example, =[[id:NODE-ID][description]]= links to a node; an optional Org search
-suffix, as in =[[id:NODE-ID::target][description]]=, locates a target inside it.
-
-To create a new note, prefer =fangcun_create_file_node=: =file= is a portable
-=.org= path relative to the chosen yiyu root, and missing parent directories
-are created. The tool writes a file-level ID, saves, and indexes the new file
-before returning successfully. Add content afterward using filesystem tools.
-It does not overwrite an existing file.
-
-To make a heading in an *existing* file into a node, call
-=fangcun_create_heading_node=. Its =headingPath= is a nonempty JSON array of
-exact titles from outermost heading to target, excluding TODO keywords,
-priorities, and tags. Missing or ambiguous paths fail; an existing local ID
-is kept. The tool refuses to save a file already modified in a visiting Emacs
-buffer. Save or reconcile those changes first. If an unmodified buffer no
-longer matches the saved file, the tool refreshes it from disk before editing.
-
-Saved edits made outside Emacs are indexed after Fangcun's optional watcher
-notices them and Emacs processes the events. If monitoring is unavailable or
-the index looks stale, run =M-x fangcun-db-sync= in Emacs. There is no MCP sync
-tool. See the [[file:fangcun.org][Fangcun guide]] for index recovery and checking links.
+is present, pass it as =cursor= with the same query or target ID. Treat the
+cursor as opaque; absence of =nextCursor= means the final page.

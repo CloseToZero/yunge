@@ -11,8 +11,9 @@ note must not require an open database or start the native file monitor.
 queries. It has no live state. =fangcun-org.el= reads Org content into those
 records, and =fangcun-store.el= stores and queries them through SQLite.
 =fangcun.el= coordinates configured roots, synchronization, and interactive
-commands. The MCP tools use the same index and note operations as the Emacs
-commands.
+commands. =fangcun-file.el= locates and creates nodes in saved files;
+=fangcun-mcp.el= translates tool arguments and results without editing Org
+buffers itself.
 
 =fangcun-org-read-file= accepts a normalized yiyu and a file path. It returns
 a plist containing =:nodes= and =:links= from the saved file. An unmodified
@@ -40,6 +41,42 @@ The reader normally omits links without an owning node. Its optional
 Positions and line numbers describe the content that was read. They can
 become stale after an edit. Node navigation resolves an ID again in the
 destination buffer rather than treating an indexed position as permanent.
+
+* Working with saved files
+
+Require =fangcun-file= to locate or create a node without selecting a buffer.
+These operations prepare the configured Fangcun session and use its index.
+Use the Org reader above when only parsing content is needed.
+
+=fangcun-file-locate-node= takes an indexed ID and resolves it again in the
+saved file. Its result contains the indexed =:node=, absolute =:file=,
+=:kind= (=file= or =heading=), inclusive one-based =:start-line= and
+=:end-line=, =:outline-path=, and =:modified-p=. A file node covers the whole
+file; a heading node covers its subtree. Location fields describe the current
+saved text, while the node's metadata describes the index. Neither is replaced
+by unsaved buffer content. =:modified-p= reports unsaved edits in Emacs so the
+caller can reconcile them before changing the file externally.
+
+=fangcun-file-create-node= takes a yiyu ID, a relative file path, and an
+optional title. It creates missing parent directories and writes a new Org
+file with a file-level ID. The path must pass Fangcun's portable filename
+checks. An existing file or visiting buffer prevents creation, and the write
+also refuses a file created after the initial check.
+
+=fangcun-file-create-heading-node= takes a yiyu ID, an existing relative file
+path, and a list of exact heading titles from outermost to innermost. It
+requires one matching heading and retains an existing local ID. A modified
+visiting buffer stops the operation; an unmodified buffer is refreshed if its
+saved file has changed. Editing a buffer that already matches disk preserves
+its point and narrowing. Buffers opened only for the operation are closed
+afterward.
+
+Both creation functions save and index the file before returning a node
+record. Saving and indexing are separate operations: if indexing fails after
+the save, the file and its ID remain on disk. Correct the reported problem and
+run =fangcun-db-sync= to recover the index. Do not retry file creation against
+that existing file. Interactive commands such as =fangcun-file-node-create=
+instead leave edits in a buffer for the user to save.
 
 * Writing and querying the index
 

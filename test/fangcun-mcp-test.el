@@ -242,39 +242,6 @@
           (insert-file-contents file)
           (should (search-forward "#+title: Created note" nil t)))))))
 
-(ert-deftest fangcun-mcp-does-not-overwrite-a-concurrently-created-file ()
-  (fangcun-test-with-notes
-    (fangcun-db-sync)
-    (let* ((file (expand-file-name "raced.org" personal-root))
-           (response
-            (let ((write-region-annotate-functions
-                   (list
-                    (lambda (_start _end)
-                      (let ((write-region-annotate-functions nil)
-                            (coding-system-for-write 'utf-8-unix))
-                        (with-temp-file file
-                          (insert "#+title: Another writer\n")))
-                      nil))))
-              (fangcun-mcp-test--response
-               "fangcun_create_file_node"
-               '(:yiyu "personal"
-                 :file "raced.org"
-                 :title "Proposed unique title")))))
-      (should (eq (plist-get response :ok) :false))
-      (should (plist-get response :error))
-      (with-temp-buffer
-        (insert-file-contents file)
-        (should (equal (buffer-string) "#+title: Another writer\n")))
-      (should-not
-       (seq-some
-        (lambda (result)
-          (equal (plist-get (plist-get result :node) :title)
-                 "Proposed unique title"))
-        (plist-get
-         (fangcun-mcp-test--value
-          "fangcun_search_nodes" '(:query "Proposed unique title"))
-         :nodes))))))
-
 (ert-deftest fangcun-mcp-creates-and-indexes-heading-nodes ()
   (fangcun-test-with-notes
     (fangcun-test--write-file
@@ -316,38 +283,6 @@
       (re-search-forward "^\\*\\* TODO Child$")
       (should (equal (org-entry-get (point) "ID") "mcp-heading")))))
 
-(ert-deftest fangcun-mcp-creates-heading-after-external-file-change ()
-  (fangcun-test-with-notes
-    (fangcun-db-sync)
-    (let ((visiting-buffer (find-file-noselect personal-file)))
-      (with-temp-buffer
-        (insert-file-contents personal-file)
-        (goto-char (point-max))
-        (insert "\n* Added outside Emacs\n")
-        (write-region (point-min) (point-max) personal-file nil 'silent))
-      (set-file-times personal-file
-                      (time-add (current-time) (seconds-to-time 5)))
-      (let* ((result
-              (fangcun-mcp-test--value
-               "fangcun_create_heading_node"
-               '(:yiyu "personal"
-                 :file "theorems.org"
-                 :headingPath ["Added outside Emacs"])))
-             (id (plist-get result :id)))
-        (should (and (stringp id) (not (string-empty-p id))))
-        (should (equal (fangcun-node-id (fangcun-node-from-id id)) id))
-        (with-current-buffer visiting-buffer
-          (goto-char (point-min))
-          (re-search-forward "^\\* Added outside Emacs$")
-          (should (equal (org-entry-get (point) "ID") id))
-          (should-not (buffer-modified-p)))
-        (with-temp-buffer
-          (insert-file-contents personal-file)
-          (org-mode)
-          (goto-char (point-min))
-          (re-search-forward "^\\* Added outside Emacs$")
-          (should (equal (org-entry-get (point) "ID") id)))))))
-
 (ert-deftest fangcun-mcp-rejects-ambiguous-heading-paths ()
   (fangcun-test-with-notes
     (fangcun-test--write-file
@@ -361,37 +296,6 @@
      '(:yiyu "personal"
        :file "theorems.org"
        :headingPath ["Repeated"]))))
-
-(ert-deftest fangcun-mcp-refuses-to-save-unrelated-buffer-changes ()
-  (fangcun-test-with-notes
-    (fangcun-test--write-file
-     personal-file
-     (concat
-      ":PROPERTIES:\n:ID: personal-file\n:END:\n"
-      "* Heading\n"))
-    (fangcun-db-sync)
-    (with-current-buffer (find-file-noselect personal-file)
-      (goto-char (point-max))
-      (insert "Unsaved.\n")
-      (with-temp-buffer
-        (insert-file-contents personal-file)
-        (goto-char (point-max))
-        (insert "* Added outside Emacs\n")
-        (write-region (point-min) (point-max) personal-file nil 'silent))
-      (set-file-times personal-file
-                      (time-add (current-time) (seconds-to-time 5)))
-      (fangcun-mcp-test--error
-       "fangcun_create_heading_node"
-       '(:yiyu "personal"
-         :file "theorems.org"
-         :headingPath ["Heading"]))
-      (should (buffer-modified-p))
-      (should (string-suffix-p "Unsaved.\n" (buffer-string))))
-    (with-temp-buffer
-      (insert-file-contents personal-file)
-      (should-not (search-forward "Unsaved." nil t))
-      (goto-char (point-min))
-      (should (search-forward "Added outside Emacs" nil t)))))
 
 (provide 'fangcun-mcp-test)
 
