@@ -19,7 +19,7 @@
 (require 'yunge-cc)
 (when (eq system-type 'darwin)
   (require 'yunge-mac))
-(require 'yunge-package)
+(require 'yunge-elpaca-bootstrap)
 (require 'yunge-editorconfig)
 (require 'yunge-theme)
 (require 'yunge-evil)

@@ -19,6 +19,13 @@ declarations, with library names relative to the source directory; the
 cache location and generated file name do not affect it. A clean startup
 may create the local cache, but does not update the tracked hash.
 
+Elpaca startup is in =yunge-elpaca-bootstrap.el=; its manager and log
+keybindings are in =yunge-elpaca.el=. The installer prepares the pinned
+checkout and its autoloads in a temporary directory, then moves it into
+place. Elpaca's normal build queue handles byte compilation. Bootstrap
+tests use a local Git repository and child Emacs processes without network
+access or changes to the installed packages.
+
 * Checks
 
 Run all checks:

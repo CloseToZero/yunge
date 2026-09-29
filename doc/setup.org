@@ -62,11 +62,33 @@ Read the first error and its file or function in =*Backtrace*=. Use
 then restart; an interrupted initialization can leave later features
 unconfigured in the current session.
 
-For a package download or build failure, inspect =M-x elpaca-log=. An error
-while installing Elpaca itself appears in =*elpaca-bootstrap*= or
-=*Messages*=. Check the reported Git, network, or build failure before
-retrying. Native component failures have their own logs linked from
-=*Yunge Rebuild*= and the corresponding [[file:../README.org::*Feature guides][feature guide]].
+For package errors, follow [[*Recover package installation][Recover package installation]] below. Native
+component failures have their own logs linked from =*Yunge Rebuild*= and
+the corresponding [[file:../README.org::*Feature guides][feature guide]].
+
+* Recover package installation
+
+If the error says =Elpaca installation failed=, open =*elpaca-bootstrap*=.
+It records the Git and Emacs commands and their output. Correct the reported
+problem, such as Git missing from =PATH= or a failed network connection,
+then restart Emacs. Failed installations leave the destination available
+for a fresh attempt; an error does not continue into package activation.
+
+If the error reports an incomplete Elpaca source directory, close Emacs and
+move the named directory aside. By default it is =var/elpaca/source/elpaca/=
+inside this checkout. Restart to install Elpaca again, keeping the old
+directory until you have recovered any local changes you want to retain.
+
+An incomplete =var/elpaca/build/elpaca/= directory is bypassed when it lacks
+Elpaca's library or autoload file. Startup uses the source directory and
+regenerates missing source autoloads automatically.
+
+Once Elpaca starts, failures to download or build other packages appear in
+=M-x elpaca-log=. Inspect the failing package's output there. Rebuilding
+native Yunge components with =M-x yunge-rebuild= does not repair package
+installation.
+
+* Recover unsaved work
 
 Keep =var/= when diagnosing startup. Alongside rebuildable artifacts it
 contains saved workspaces, Custom settings, histories, and file recovery
