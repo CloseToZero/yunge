@@ -811,23 +811,33 @@ When NO-MESSAGE is non-nil, do not report synchronization results."
 (defun fangcun--native-build-sentinel (process _event)
   "Start native monitoring when helper build PROCESS succeeds."
   (when (and (memq (process-status process) '(exit signal failed))
-             (eq process fangcun--native-build-process))
+             (eq process fangcun--native-build-process)
+             (not (process-get process 'fangcun-build-finished)))
+    (process-put process 'fangcun-build-finished t)
     (setq fangcun--native-build-process nil)
-    (if (and (zerop (process-exit-status process))
-             (fangcun--native-helper-available-p))
-        (progn
-          (message "Built Fangcun native helper")
-          (when (and fangcun-native-helper-enabled
-                     fangcun--session-active-p)
-            (fangcun--start-native-watch fangcun--session-yiyus)))
-      (fangcun--native-warning
-       (concat
-        "Fangcun native helper build failed; external changes require "
-        "`fangcun-db-sync'.  See %s")
-       (buffer-name (process-buffer process))))))
+    (let ((failure (unless (and (eq (process-status process) 'exit)
+                                (zerop (process-exit-status process))
+                                (fangcun--native-helper-available-p))
+                     (list 'error "Fangcun native helper build failed"))))
+      (if (not failure)
+          (progn
+            (message "Built Fangcun native helper")
+            (when (and fangcun-native-helper-enabled
+                       fangcun--session-active-p)
+              (fangcun--start-native-watch fangcun--session-yiyus)))
+        (fangcun--native-warning
+         (concat
+          "Fangcun native helper build failed; external changes require "
+          "`fangcun-db-sync'.  See %s")
+         (buffer-name (process-buffer process))))
+      (when-let* ((complete (process-get process 'fangcun-build-complete)))
+        (funcall complete failure)))))
 
-(defun fangcun--build-native-helper ()
-  "Build the Fangcun native helper asynchronously when possible."
+(defun fangcun--build-native-helper (&optional complete)
+  "Build Fangcun asynchronously and call COMPLETE with nil or an error."
+  (when (process-live-p fangcun--native-build-process)
+    (when complete
+      (user-error "Fangcun native helper is already being built")))
   (unless (process-live-p fangcun--native-build-process)
     (if-let* ((cargo (executable-find "cargo")))
         (let ((buffer (get-buffer-create fangcun--native-build-buffer-name))
@@ -840,23 +850,29 @@ When NO-MESSAGE is non-nil, do not report synchronization results."
               (insert "Fangcun native helper build\n\n"))
             (setq default-directory fangcun--source-directory)
             (compilation-mode))
-          (setq fangcun--native-build-process
-                (make-process
-                 :name "fangcun-helper-build"
-                 :buffer buffer
-                 :command
-                 (list cargo "build" "--release" "--locked"
-                       "--manifest-path"
-                       fangcun--native-helper-manifest
-                       "--target-dir" target)
-                 :noquery t
-                 :sentinel #'fangcun--native-build-sentinel))
+          (let ((process
+                 (make-process
+                  :name "fangcun-helper-build"
+                  :buffer buffer
+                  :command
+                  (list cargo "build" "--release" "--locked"
+                        "--manifest-path"
+                        fangcun--native-helper-manifest
+                        "--target-dir" target)
+                  :noquery t
+                  :sentinel #'fangcun--native-build-sentinel)))
+            (setq fangcun--native-build-process process)
+            (process-put process 'fangcun-build-complete complete)
+            (when (memq (process-status process) '(exit signal failed))
+              (fangcun--native-build-sentinel process "finished")))
           (display-buffer buffer)
           (message "Building Fangcun native helper..."))
-      (fangcun--native-warning
-       (concat
-        "Cargo is unavailable; Fangcun external changes require "
-        "`fangcun-db-sync'")))))
+      (if complete
+          (user-error "Cargo is required to build Fangcun native helper")
+        (fangcun--native-warning
+         (concat
+          "Cargo is unavailable; Fangcun external changes require "
+          "`fangcun-db-sync'"))))))
 
 (defun fangcun--ensure-native-helper (yiyus)
   "Start or build the native helper for YIYUS when enabled."
@@ -871,10 +887,10 @@ When NO-MESSAGE is non-nil, do not report synchronization results."
         (fangcun--build-native-helper))))))
 
 ;;;###autoload
-(defun fangcun-native-build ()
-  "Build the Fangcun native helper asynchronously."
+(defun fangcun-native-build (&optional complete)
+  "Build the Fangcun native helper and call COMPLETE with nil or an error."
   (interactive)
-  (fangcun--build-native-helper))
+  (fangcun--build-native-helper complete))
 
 (defun fangcun--install-operation-advice ()
   "Install file-operation updates once."
@@ -911,7 +927,10 @@ When NO-MESSAGE is non-nil, do not report synchronization results."
   (let ((process fangcun--native-build-process))
     (setq fangcun--native-build-process nil)
     (when (process-live-p process)
-      (delete-process process))))
+      (process-put process 'fangcun-build-finished t)
+      (delete-process process)
+      (when-let* ((complete (process-get process 'fangcun-build-complete)))
+        (funcall complete '(error "Fangcun native helper build was cancelled"))))))
 
 (defun fangcun--stop-session ()
   "Stop synchronization and discard work belonging to the current session."

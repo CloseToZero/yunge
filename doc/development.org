@@ -9,6 +9,9 @@ packages pinned in =elpaca-lock.el= before running Emacs tests. Native
 checks need a Rust toolchain and Cargo; renderer checks need Node. Some ERT
 integrations also require platform tools and report skips when unavailable.
 
+After source changes, =M-x yunge-rebuild= refreshes local autoloads and all
+native components. See [[file:../README.org::*After updating Yunge][After updating Yunge]] for prerequisites and recovery.
+
 After changing an autoload declaration, run =M-x yunge-autoload-generate=
 and review the tracked =autoloads.sha256= change. The generated loaddefs
 cache is under ignored =var/=.

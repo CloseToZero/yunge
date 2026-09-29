@@ -177,6 +177,27 @@
           (should (member "Built Fangcun native helper" messages))
           (should-not (process-live-p fangcun--native-watch-process)))))))
 
+(ert-deftest fangcun-disabling-native-helper-finishes-an-active-build ()
+  (let ((old-default (default-value 'fangcun-native-helper-enabled))
+        (fangcun-native-helper-enabled t)
+        (fangcun--native-build-process nil)
+        completions)
+    (unwind-protect
+        (cl-letf (((symbol-function 'executable-find)
+                   (lambda (_name) "cargo"))
+                  ((symbol-function 'make-process)
+                   (lambda (&rest options)
+                     (make-pipe-process
+                      :name (plist-get options :name)
+                      :noquery t
+                      :sentinel (plist-get options :sentinel)))))
+          (fangcun-native-build
+           (lambda (failure) (push failure completions)))
+          (setopt fangcun-native-helper-enabled nil)
+          (should (= (length completions) 1))
+          (should (eq (caar completions) 'error)))
+      (set-default 'fangcun-native-helper-enabled old-default))))
+
 (provide 'fangcun-native-test)
 
 ;;; fangcun-native-test.el ends here

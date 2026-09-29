@@ -5,23 +5,11 @@
 (require 'cl-lib)
 (require 'json)
 (require 'subr-x)
+(require 'yunge-state)
 
 (defgroup yunge-mcp nil
   "Expose Yunge capabilities through Model Context Protocol."
   :group 'applications)
-
-(defcustom yunge-mcp-client-targets
-  '(codex claude-code gemini cursor vscode)
-  "Clients that `yunge-mcp-setup' registers by default.
-Registration expresses the desired configuration and does not depend on
-whether a client is currently installed."
-  :type '(set
-          (const :tag "Codex" codex)
-          (const :tag "Claude Code" claude-code)
-          (const :tag "Gemini CLI" gemini)
-          (const :tag "Cursor" cursor)
-          (const :tag "Visual Studio Code" vscode))
-  :group 'yunge-mcp)
 
 (defconst yunge-mcp-clients--names
   '((codex . "Codex")
@@ -37,19 +25,51 @@ whether a client is currently installed."
       (symbol-name client)))
 
 (defun yunge-mcp-clients-read ()
-  "Read desired clients without checking their installation state."
-  (let* ((names (mapcar #'cdr yunge-mcp-clients--names))
-         (defaults
-          (mapcar #'yunge-mcp-clients-display-name
-                  yunge-mcp-client-targets))
+  "Read desired clients, including an explicit None choice."
+  (let* ((names (cons "None" (mapcar #'cdr yunge-mcp-clients--names)))
          (selected
           (completing-read-multiple
-           "Register Yunge MCP for clients: " names nil t nil nil defaults)))
-    (mapcar
-     (lambda (name)
-       (car (cl-rassoc name yunge-mcp-clients--names
-                       :test #'string-equal-ignore-case)))
-     selected)))
+           "Register Yunge MCP for clients (or None): " names nil t))
+         (none (cl-some (lambda (name)
+                          (string-equal-ignore-case name "None"))
+                        selected)))
+    (when (or (null selected)
+              (and none (cdr selected)))
+      (user-error "Choose clients or None explicitly"))
+    (unless none
+      (mapcar
+       (lambda (name)
+         (car (cl-rassoc name yunge-mcp-clients--names
+                         :test #'string-equal-ignore-case)))
+       selected))))
+
+(defun yunge-mcp-clients--choice-file ()
+  "Return the saved client selection file."
+  (expand-file-name "yunge-mcp/clients.json" yunge-var-directory))
+
+(defun yunge-mcp-clients-choice ()
+  "Return saved clients, nil for None, or :unselected when never chosen."
+  (let ((file (yunge-mcp-clients--choice-file)))
+    (if (not (file-exists-p file))
+        :unselected
+      (let* ((record (yunge-mcp-clients--json-object file))
+             (clients (gethash "clients" record :missing)))
+        (unless (and (eql (gethash "version" record) 1)
+                     (vectorp clients)
+                     (cl-every #'stringp clients))
+          (user-error "Invalid saved Yunge MCP clients: %s" file))
+        (condition-case nil
+            (yunge-mcp-clients-validate
+             (mapcar #'intern (append clients nil)))
+          (error
+           (user-error "Invalid saved Yunge MCP clients: %s" file)))))))
+
+(defun yunge-mcp-clients-save-choice (clients)
+  "Record CLIENTS after successful registration; nil records None."
+  (setq clients (yunge-mcp-clients-validate clients))
+  (yunge-mcp-clients--write-json
+   (yunge-mcp-clients--choice-file)
+   (list :version 1 :clients (vconcat (mapcar #'symbol-name clients)))))
 
 (defun yunge-mcp-clients-validate (clients)
   "Return CLIENTS without duplicates after validating them."

@@ -190,12 +190,14 @@
            (delete-directory root t)))))))
 
 (ert-deftest yunge-autoload-repository-hash-is-current ()
-  (make-directory yunge-autoload-cache-directory t)
-  (let ((file
-         (make-temp-file
-          (expand-file-name "yunge-loaddefs-test-"
-                            yunge-autoload-cache-directory)
-          nil ".el")))
+  ;; Generated autoload paths depend on the output's depth below this repo.
+  (let* ((cache (expand-file-name "var/autoload/" yunge-test-root))
+         (file
+          (progn
+            (make-directory cache t)
+            (make-temp-file
+             (expand-file-name "yunge-loaddefs-test-" cache)
+             nil ".el"))))
     (unwind-protect
         (progn
           (yunge-autoload--generate-file file)

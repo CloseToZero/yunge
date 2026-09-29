@@ -7,6 +7,7 @@
 
 (require 'yunge-state)
 (require 'yunge-autoload)
+(autoload 'yunge-rebuild "yunge-rebuild" nil t)
 (yunge-autoload-load)
 (require 'yunge-server)
 (require 'yunge-config-update)

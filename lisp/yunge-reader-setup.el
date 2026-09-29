@@ -25,6 +25,20 @@
 (defvar yunge-reader-setup--process nil
   "Current PDFium download or extraction process, or nil.")
 
+(defvar yunge-reader-setup--running-p nil
+  "Whether one complete Reader setup operation is in progress.")
+
+(defvar yunge-reader-setup--completion nil
+  "Completion callback of the current Reader setup operation.")
+
+(defun yunge-reader-setup--finish (failure)
+  "Finish Reader setup and call its completion with FAILURE or nil once."
+  (let ((complete yunge-reader-setup--completion))
+    (setq yunge-reader-setup--running-p nil
+          yunge-reader-setup--completion nil)
+    (when complete
+      (funcall complete failure))))
+
 (defvar yunge-reader-setup--work-directory nil
   "Private work directory of the current setup operation, or nil.")
 
@@ -139,13 +153,15 @@
 
 (defun yunge-reader-setup--fail (format-string &rest arguments)
   "Finish setup unsuccessfully with FORMAT-STRING and ARGUMENTS."
-  (setq yunge-reader-setup--process nil)
-  (yunge-reader-setup--cleanup-work)
-  (display-buffer yunge-reader-setup--buffer-name)
-  (display-warning
-   'yunge-reader
-   (apply #'format format-string arguments)
-   :error))
+  (let ((failure (list 'error (apply #'format format-string arguments))))
+    (setq yunge-reader-setup--process nil)
+    (unwind-protect
+        (progn
+          (yunge-reader-setup--cleanup-work)
+          (display-buffer (get-buffer-create yunge-reader-setup--buffer-name))
+          (display-warning 'yunge-reader
+                           (error-message-string failure) :error))
+      (yunge-reader-setup--finish failure))))
 
 (defun yunge-reader-setup--archive-entries (tar archive)
   "Return normalized entries listed by TAR in ARCHIVE."
@@ -229,7 +245,8 @@
             (yunge-reader-setup--cleanup-work)
             (message "Installed PDFium %s"
                      (plist-get manifest :pdfium-version))
-            (yunge-reader-native--start-build))
+            (yunge-reader-native--start-build
+             #'yunge-reader-setup--finish))
         (error
          (yunge-reader-setup--fail
           "Could not install PDFium: %s"
@@ -337,7 +354,8 @@
   (let* ((manifest (yunge-reader-setup--manifest))
          (asset (yunge-reader-setup--asset manifest)))
     (if (yunge-reader-setup--installed-p manifest asset)
-        (yunge-reader-native--start-build)
+        (yunge-reader-native--start-build
+         #'yunge-reader-setup--finish)
       (let ((curl (executable-find "curl"))
             (tar (executable-find "tar")))
         (unless curl
@@ -347,17 +365,34 @@
         (yunge-reader-setup--start-download
          curl tar manifest asset)))))
 
-(defun yunge-reader-setup ()
-  "Install pinned PDFium and build the Yunge Reader native helper."
+(defun yunge-reader-setup--begin-after-stop ()
+  "Resume setup after the native service stops, reporting start failures."
+  (condition-case error-data
+      (yunge-reader-setup--begin)
+    (error
+     (yunge-reader-setup--fail "%s" (error-message-string error-data)))))
+
+(defun yunge-reader-setup (&optional complete)
+  "Install pinned PDFium, build Reader, and call COMPLETE with failure or nil."
   (interactive)
+  (when yunge-reader-setup--running-p
+    (user-error "Yunge Reader setup is already running"))
   (when (> yunge-reader-native--client-count 0)
     (user-error "Close active Yunge Reader documents before setup"))
-  (if (process-live-p yunge-reader-native--process)
-      (progn
-        (setq yunge-reader-native--build-after-stop 'setup)
-        (yunge-reader-native-stop)
-        (message "Stopping Yunge Reader helper before setup..."))
-    (yunge-reader-setup--begin)))
+  (setq yunge-reader-setup--running-p t
+        yunge-reader-setup--completion complete)
+  (condition-case error-data
+      (if (process-live-p yunge-reader-native--process)
+          (progn
+            (setq yunge-reader-native--build-after-stop 'setup)
+            (yunge-reader-native-stop)
+            (message "Stopping Yunge Reader helper before setup..."))
+        (yunge-reader-setup--begin))
+    (error
+     (setq yunge-reader-setup--running-p nil
+           yunge-reader-setup--completion nil
+           yunge-reader-native--build-after-stop nil)
+     (signal (car error-data) (cdr error-data)))))
 
 (provide 'yunge-reader-setup)
 

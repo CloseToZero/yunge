@@ -103,8 +103,11 @@ CLIENTS are desired targets; they need not currently be installed."
   (interactive (list (yunge-mcp-clients-read)))
   (setq clients
         (yunge-mcp-clients-register clients (yunge-mcp-program)))
-  (message "Registered Yunge MCP for %s"
-           (mapconcat #'yunge-mcp-clients-display-name clients ", ")))
+  (yunge-mcp-clients-save-choice clients)
+  (message "Yunge MCP clients: %s"
+           (if clients
+               (mapconcat #'yunge-mcp-clients-display-name clients ", ")
+             "None")))
 
 (defun yunge-mcp--install-artifacts ()
   "Install the built server and write its runtime manifest."
@@ -118,37 +121,33 @@ CLIENTS are desired targets; they need not currently be installed."
       (set-file-modes target (logior (file-modes target) #o111)))
     (yunge-mcp--write-runtime)))
 
-(defun yunge-mcp--build-sentinel (process _event clients)
-  "Finish installing after build PROCESS exits, then register CLIENTS."
-  (when (and (memq (process-status process) '(exit signal))
+(defun yunge-mcp--build-sentinel (process _event complete)
+  "Finish installing after build PROCESS exits and call COMPLETE."
+  (when (and (memq (process-status process) '(exit signal failed))
              (not (process-get process 'yunge-mcp-finished)))
     (process-put process 'yunge-mcp-finished t)
     (when (eq process yunge-mcp--build-process)
       (setq yunge-mcp--build-process nil))
-    (if (not (zerop (process-exit-status process)))
-        (progn
-          (display-buffer (process-buffer process))
-          (display-warning
-           'yunge-mcp
-           (format "Yunge MCP build failed; see %s"
-                   (buffer-name (process-buffer process)))
-           :error))
-      (condition-case error-data
+    (let ((failure
+           (if (not (and (eq (process-status process) 'exit)
+                         (zerop (process-exit-status process))))
+               (list 'error (format "Yunge MCP build failed; see %s"
+                                    (buffer-name (process-buffer process))))
+             (condition-case error-data
+                 (progn
+                   (yunge-mcp--install-artifacts)
+                   nil)
+               (error error-data)))))
+      (if failure
           (progn
-            (yunge-mcp--install-artifacts)
-            (when clients
-              (yunge-mcp-register-clients clients))
-            (message "Yunge MCP is ready at %s" (yunge-mcp-program)))
-        (error
-         (display-buffer (process-buffer process))
-         (display-warning
-          'yunge-mcp
-          (format "Could not install Yunge MCP: %s"
-                  (error-message-string error-data))
-          :error))))))
+            (display-buffer (process-buffer process))
+            (display-warning 'yunge-mcp (error-message-string failure) :error))
+        (message "Yunge MCP is ready at %s" (yunge-mcp-program)))
+      (when complete
+        (funcall complete failure)))))
 
-(defun yunge-mcp--start-build (&optional clients)
-  "Build and install Yunge MCP, then register optional CLIENTS."
+(defun yunge-mcp--start-build (&optional complete)
+  "Build and install Yunge MCP, then call COMPLETE with nil or an error."
   (when (process-live-p yunge-mcp--build-process)
     (user-error "Yunge MCP is already being built"))
   (let ((cargo (executable-find "cargo")))
@@ -162,7 +161,6 @@ CLIENTS are desired targets; they need not currently be installed."
           (insert "Yunge MCP build\n\n"))
         (setq default-directory yunge-config-directory)
         (compilation-mode))
-      (setq clients (yunge-mcp-clients-validate clients))
       (setq process
             (make-process
              :name "yunge-mcp-build"
@@ -177,26 +175,43 @@ CLIENTS are desired targets; they need not currently be installed."
              :noquery t
              :sentinel
              (lambda (child event)
-               (yunge-mcp--build-sentinel child event clients))))
+               (yunge-mcp--build-sentinel child event complete))))
       (unless (process-get process 'yunge-mcp-finished)
         (setq yunge-mcp--build-process process))
-      (when (memq (process-status process) '(exit signal))
-        (yunge-mcp--build-sentinel process "finished" clients))
+      (when (memq (process-status process) '(exit signal failed))
+        (yunge-mcp--build-sentinel process "finished" complete))
       (display-buffer buffer)
       (message "Building Yunge MCP...")
       process)))
 
 ;;;###autoload
-(defun yunge-mcp-install ()
-  "Build and install the Yunge MCP server."
+(defun yunge-mcp-install (&optional complete)
+  "Build/install Yunge MCP and call COMPLETE with nil or an error."
   (interactive)
-  (yunge-mcp--start-build))
+  (yunge-mcp--start-build complete))
 
 ;;;###autoload
-(defun yunge-mcp-setup (clients)
-  "Build Yunge MCP and register it for the selected CLIENTS."
-  (interactive (list (yunge-mcp-clients-read)))
-  (yunge-mcp--start-build clients))
+(defun yunge-mcp-setup (&optional complete initial-choice)
+  "Build Yunge MCP and register clients only on the first successful setup.
+COMPLETE receives nil on success or an error value on failure.  INITIAL-CHOICE,
+when non-nil, is (t . CLIENTS), a selection made before this call starts work."
+  (interactive)
+  (let* ((saved (yunge-mcp-clients-choice))
+         (choice (and (eq saved :unselected)
+                      (or initial-choice (cons t (yunge-mcp-clients-read)))))
+         (clients (cdr choice)))
+    (yunge-mcp--start-build
+     (lambda (failure)
+       (when (and (not failure) choice)
+         (setq failure
+               (condition-case error-data
+                   (progn (yunge-mcp-register-clients clients) nil)
+                 (error error-data)))
+         (when failure
+           (display-warning 'yunge-mcp
+                            (error-message-string failure) :error)))
+       (when complete
+         (funcall complete failure))))))
 
 (provide 'yunge-mcp-setup)
 

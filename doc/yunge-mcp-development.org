@@ -15,8 +15,11 @@ JSON clients can be registered before the bridge is built:
 
 =yunge-mcp-setup.el= owns building and installing that executable, recording
 the Emacs connection, and the interactive setup commands. Its registration
-command supplies =yunge-mcp-program= to the client module. The client module
-does not depend on the installer or tool dispatch.
+command supplies =yunge-mcp-program= to the client module and saves the choice
+only after registration succeeds. The client module stores that choice in
+=var/yunge-mcp/clients.json=: no file means setup has not completed, while an
+empty client array records an explicit =None=. Setup reuses this decision;
+subsequent builds leave client configuration alone.
 
 Registration validates all client identifiers before writing. It then updates
 each selected client in order, removing duplicate selections. If an update

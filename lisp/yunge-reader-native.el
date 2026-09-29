@@ -11,6 +11,7 @@
 
 (declare-function yunge-reader-setup "yunge-reader-setup" ())
 (declare-function yunge-reader-setup--begin "yunge-reader-setup" ())
+(declare-function yunge-reader-setup--begin-after-stop "yunge-reader-setup" ())
 
 (define-error 'yunge-reader-native-pdf-password-error
   "PDF password is missing or incorrect")
@@ -352,7 +353,7 @@ When STOPPED is non-nil, report an intentional service stop."
       (cond
        ((eq build 'setup)
         (require 'yunge-reader-setup)
-        (yunge-reader-setup--begin))
+        (yunge-reader-setup--begin-after-stop))
        (build
         (yunge-reader-native--start-build))
        (restart
@@ -724,8 +725,8 @@ When NOTIFY is non-nil, report successful cleanup in the echo area."
              (process-live-p yunge-reader-native--process))
     (yunge-reader-native-stop)))
 
-(defun yunge-reader-native--build-sentinel (process _event)
-  "Finish setup after Cargo build PROCESS exits."
+(defun yunge-reader-native--build-sentinel (process _event complete)
+  "Finish build PROCESS, then call COMPLETE after the smoke test."
   (when (and (memq (process-status process) '(exit signal failed))
              (not (process-get process 'yunge-reader-finished)))
     (process-put process 'yunge-reader-finished t)
@@ -740,22 +741,29 @@ When NOTIFY is non-nil, report successful cleanup in the echo area."
               (yunge-reader-native-start)
               (yunge-reader-native-request
                "pdfium-info" nil
-               #'yunge-reader-native--smoke-test-complete))
+               (lambda (result failure)
+                 (unwind-protect
+                     (yunge-reader-native--smoke-test-complete result failure)
+                   (when complete (funcall complete failure))))
+               :timeout 30))
           (error
            (display-warning
             'yunge-reader
             (format "Could not publish or start Yunge Reader artifacts: %s"
                     (error-message-string error-data))
-            :error)))
+            :error)
+           (when complete (funcall complete error-data))))
       (display-buffer (process-buffer process))
       (display-warning
        'yunge-reader
        (format "Yunge Reader native build failed; see %s"
                (buffer-name (process-buffer process)))
-       :error))))
+       :error)
+      (when complete
+        (funcall complete '(error "Yunge Reader native build failed"))))))
 
-(defun yunge-reader-native--start-build ()
-  "Build native components asynchronously and run the PDF smoke test."
+(defun yunge-reader-native--start-build (&optional complete)
+  "Build native components, smoke test, then call COMPLETE with failure or nil."
   (when (process-live-p yunge-reader-native--build-process)
     (user-error "Yunge Reader native helper is already being built"))
   (let ((cargo (executable-find "cargo")))
@@ -782,7 +790,14 @@ When NOTIFY is non-nil, report successful cleanup in the echo area."
              :connection-type 'pipe
              :coding 'utf-8-unix
              :noquery t
-             :sentinel #'yunge-reader-native--build-sentinel))
+             :sentinel (lambda (child event)
+                         (yunge-reader-native--build-sentinel
+                          child event complete))))
+      (when (and yunge-reader-native--build-process
+                 (memq (process-status yunge-reader-native--build-process)
+                       '(exit signal failed)))
+        (yunge-reader-native--build-sentinel
+         yunge-reader-native--build-process "finished" complete))
       (display-buffer buffer)
       (message "Building Yunge Reader native components...")
       yunge-reader-native--build-process)))

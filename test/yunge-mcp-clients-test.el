@@ -185,7 +185,13 @@
 (ert-deftest yunge-mcp-clients-reads-targets-without-case-sensitivity ()
   (cl-letf (((symbol-function 'completing-read-multiple)
              (lambda (&rest _arguments) '("codex" "CLAUDE CODE"))))
-    (should (equal (yunge-mcp-clients-read) '(codex claude-code)))))
+    (should (equal (yunge-mcp-clients-read) '(codex claude-code))))
+  (cl-letf (((symbol-function 'completing-read-multiple)
+             (lambda (&rest _arguments) '("none"))))
+    (should-not (yunge-mcp-clients-read)))
+  (cl-letf (((symbol-function 'completing-read-multiple)
+             (lambda (&rest _arguments) '("Codex" "none"))))
+    (should-error (yunge-mcp-clients-read) :type 'user-error)))
 
 (provide 'yunge-mcp-clients-test)
 

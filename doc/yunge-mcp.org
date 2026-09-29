@@ -8,10 +8,15 @@ Keep the Emacs instance that owns your notes running while clients use its
 tools. Building the bridge requires Cargo; installation also needs a working
 =emacsclient= for that Emacs. Run =M-x yunge-mcp-setup= to build and install
 the executable, start the Emacs server if needed, and register =yunge= in the
-selected clients' user configuration. Supported targets are Codex, Claude
-Code, Gemini CLI, Cursor, and the default Visual Studio Code profile. Targets
-can be selected even if their applications are not installed yet. Build
-progress and errors appear in =*Yunge MCP build*=.
+selected clients' user configuration. The first run asks which clients to
+register; choose =None= to install without registering any. Successful setup
+is remembered, including =None=, so later runs rebuild without asking or
+rewriting client configuration. The same choice applies to
+=M-x yunge-rebuild=, which updates all of Yunge's build artifacts.
+
+Supported targets are Codex, Claude Code, Gemini CLI, Cursor, and the default
+Visual Studio Code profile. Targets can be selected even if their applications
+are not installed yet. Build progress and errors appear in =*Yunge MCP build*=.
 
 =M-x yunge-mcp-install= builds and installs without changing client
 configuration. The installed executable has a stable path under
@@ -21,10 +26,13 @@ suffix. The [[file:../native/yunge-mcp/README.org][native bridge guide]] explain
 * Register or reconnect a client
 
 After installing the bridge, use =M-x yunge-mcp-register-clients= to add
-another client or replace its =yunge= entry without rebuilding. Customize
-=yunge-mcp-client-targets= to choose the defaults offered by this command and
-=yunge-mcp-setup=. Registration does not require the client application to be
-installed, and registering one client does not remove entries from others.
+another client or replace its =yunge= entry without rebuilding. Select one or
+more clients, separated by commas. Registration does not require the client
+application to be installed, and registering one client does not remove entries
+from others.
+
+Choosing =None= records that no registration is needed; it does not remove
+existing entries. A failed registration is not saved as a completed choice.
 
 For JSON configuration files, registration replaces the =yunge= entry and
 preserves other settings, though formatting may change. An existing file must
@@ -42,7 +50,7 @@ value is rejected without changing the file.
 If writing a configuration fails, its previous contents remain intact.
 Registration processes selected clients in order: if one fails,
 earlier updates remain and later clients are not changed. After fixing the
-error, register the remaining clients; the bridge does not need rebuilding.
+error, run registration again; the bridge does not need rebuilding.
 
 If a client cannot reach Emacs, check that the configured Emacs server is
 running. After changing the Emacs installation or server connection, run
