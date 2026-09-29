@@ -129,7 +129,6 @@
          (shuying--pending-jobs (make-hash-table :test #'equal))
          (specification (shuying-test--spec))
          (calls 0)
-         cleared
          artifacts)
     (unwind-protect
         (progn
@@ -144,27 +143,23 @@
                (setf (shuying-backend-request-metadata request)
                      '(:height 1.2 :depth 0.2))
                (funcall complete request nil))))
-          (cl-letf (((symbol-function 'clear-image-cache)
-                     (lambda (file &optional _animation-filter)
-                       (push file cleared))))
-            (dotimes (_ 2)
-              (shuying-render
-               specification
-               (lambda (artifact error-data)
-                 (should-not error-data)
-                 (push artifact artifacts))))
-            (let ((scaled (copy-shuying-render-spec specification)))
-              (setf (shuying-render-spec-scale scaled) 2.0)
-              (shuying-render
-               scaled
-               (lambda (artifact error-data)
-                 (should-not error-data)
-                 (push artifact artifacts)))))
+          (dotimes (_ 2)
+            (shuying-render
+             specification
+             (lambda (artifact error-data)
+               (should-not error-data)
+               (push artifact artifacts))))
+          (let ((scaled (copy-shuying-render-spec specification)))
+            (setf (shuying-render-spec-scale scaled) 2.0)
+            (shuying-render
+             scaled
+             (lambda (artifact error-data)
+               (should-not error-data)
+               (push artifact artifacts))))
           (should (= calls 2))
           (should (= (length artifacts) 3))
           (should (equal (nth 1 artifacts) (nth 2 artifacts)))
           (should-not (equal (car artifacts) (cadr artifacts)))
-          (should (= (length cleared) 2))
           (dolist (artifact artifacts)
             (should (file-exists-p (shuying-artifact-path artifact)))
             (should
@@ -333,6 +328,107 @@
                   (cons invalid #'ignore))))
           (should-not
            (directory-files root nil "\\`\\.\\(?:render\\|metadata\\)-")))
+      (delete-directory root t))))
+
+(ert-deftest shuying-batch-key-failure-leaves-existing-render-usable ()
+  (let* ((root (make-temp-file "shuying-prepare-" t))
+         (shuying-cache-directory root)
+         (shuying-backends nil)
+         (shuying--pending-jobs (make-hash-table :test #'equal))
+         (shuying--waiting-batches nil)
+         (shuying--active-batch-count 0)
+         (shuying--scheduler-running nil)
+         (existing (shuying-test--spec "$existing$"))
+         (first (shuying-test--spec "$first$"))
+         (invalid (shuying-test--spec "$invalid$"))
+         controls results)
+    (unwind-protect
+        (progn
+          (shuying-register-backend
+           'test
+           (lambda (requests complete)
+             (dolist (request requests)
+               (push (cons request complete) controls)))
+           (lambda (specification)
+             (when (equal (shuying-render-spec-source specification)
+                          "$invalid$")
+               (error "Cannot group this request"))
+             'ordinary))
+          (shuying-render
+           existing
+           (lambda (artifact error-data)
+             (push (list 'existing artifact error-data) results)))
+          (should-error
+           (shuying-render-batch
+            (list (cons existing
+                        (lambda (artifact error-data)
+                          (push (list 'rejected artifact error-data) results)))
+                  (cons first
+                        (lambda (artifact error-data)
+                          (push (list 'first artifact error-data) results)))
+                  (cons invalid
+                        (lambda (artifact error-data)
+                          (push (list 'invalid artifact error-data) results))))))
+          (should-not results)
+          (pcase-let ((`(,request . ,complete) (pop controls)))
+            (with-temp-file (shuying-backend-request-output-file request)
+              (insert "existing artifact"))
+            (funcall complete request nil))
+          (should (equal (mapcar #'car results) '(existing)))
+          (should-not (nth 2 (car results)))
+          (shuying-clear-cache)
+          (should-not (directory-files root nil directory-files-no-dot-files-regexp))
+          (shuying-render
+           first
+           (lambda (artifact error-data)
+             (push (list 'first artifact error-data) results)))
+          (pcase-let ((`(,request . ,complete) (pop controls)))
+            (with-temp-file (shuying-backend-request-output-file request)
+              (insert "retried artifact"))
+            (funcall complete request nil))
+          (should (equal (mapcar #'car results) '(first existing)))
+          (should-not (nth 2 (car results)))
+          (should (file-exists-p
+                   (shuying-artifact-path (nth 1 (car results)))))
+          (should-not (assoc 'invalid results))
+          (should-not (assoc 'rejected results)))
+      (delete-directory root t))))
+
+(ert-deftest shuying-temp-file-failure-allows-cache-clear-and-retry ()
+  (let* ((root (make-temp-file "shuying-prepare-" t))
+         (shuying-cache-directory root)
+         (shuying-backends nil)
+         (shuying--pending-jobs (make-hash-table :test #'equal))
+         (specification (shuying-test--spec "$retry$"))
+         (real-make-temp-file (symbol-function 'make-temp-file))
+         result)
+    (unwind-protect
+        (progn
+          (shuying-register-backend
+           'test
+           (lambda (requests complete)
+             (dolist (request requests)
+               (with-temp-file (shuying-backend-request-output-file request)
+                 (insert "artifact"))
+               (funcall complete request nil))))
+          (cl-letf (((symbol-function 'make-temp-file)
+                     (lambda (prefix &rest options)
+                       (if (string-match-p "\\.metadata-\\'" prefix)
+                           (signal 'file-error '("Cannot create metadata file"))
+                         (apply real-make-temp-file prefix options)))))
+            (should-error
+             (shuying-render specification
+                             (lambda (artifact error-data)
+                               (setq result (cons artifact error-data))))))
+          (should-not result)
+          (should-not (directory-files root nil directory-files-no-dot-files-regexp))
+          (shuying-clear-cache)
+          (shuying-render specification
+                          (lambda (artifact error-data)
+                            (setq result (cons artifact error-data))))
+          (should result)
+          (should-not (cdr result))
+          (should (file-exists-p (shuying-artifact-path (car result)))))
       (delete-directory root t))))
 
 (ert-deftest shuying-groups-compatible-render-requests ()

@@ -1,8 +1,8 @@
 ﻿#+title: 数影（Shuying）
 
 Shuying renders Org LaTeX as cached SVG previews while keeping the source
-editable.  Yunge enables it in Org buffers; the rendering library can also
-serve other front ends.
+editable. Yunge enables it in Org buffers. To use the rendering library in
+another mode or implement a backend, see [[file:shuying-development.org][Shuying development]].
 
 * Start previewing
 
@@ -166,40 +166,3 @@ visible math and that point has left it.  After changing compiler, preamble,
 or appearance settings, save the buffer or request a preview to recheck
 visible formulas.  A cached artifact is reused only when its rendering
 inputs match.
-
-* Render from another front end
-
-Create a specification with =make-shuying-render-spec=.  Its fields describe
-the source, preamble, engine, backend, backend options, output format, colors,
-scale, page width, equation number, and cache format version.  Set
-=cache-version= to =shuying-cache-format-version=.  These fields together
-identify the cached artifact; include every input your backend uses.
-
-Call =(shuying-render specification callback)= for one render, or pass a list
-of =(SPECIFICATION . CALLBACK)= pairs to =shuying-render-batch=.  The callback
-receives two arguments, =ARTIFACT= and =ERROR=.  On success, =ERROR= is nil;
-use =shuying-artifact-path= and =shuying-artifact-metadata= to read the result.
-On failure, =ARTIFACT= is nil and =ERROR= describes the problem.
-
-Completion can happen before the render call returns, including on a cache
-hit.  Keep the specification unchanged until completion, and check that your
-display target and request are still current before showing a late result.
-If a consumer callback signals an error, Shuying reports a warning and continues
-other requests, including when the failed callback received a cache hit.
-Identical pending specifications share a render; compatible requests can
-share a backend call while completing independently.
-
-Register a renderer with =(shuying-register-backend name function batch-key-function)=.
-The optional batch-key function receives a specification; only equal keys
-for the same backend share a call.  Without it, all requests for that backend
-are considered compatible.
-
-The renderer receives a list of =shuying-backend-request= objects and a
-completion function.  Read each request's =specification=, write its result
-to =output-file=, and set =metadata= if needed.  Call
-=(funcall complete request nil)= on success or
-=(funcall complete request error-data)= on failure, exactly once per request.
-Use an Emacs condition such as ='(error "Rendering failed")= for error data.
-Completion may happen after the renderer returns.  If the renderer signals
-an error, Shuying fails its unfinished requests.  Shuying manages cache
-publication and reuse; the front end decides how to display each artifact.

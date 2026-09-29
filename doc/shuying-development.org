@@ -1,0 +1,94 @@
+#+title: Shuying development
+# SPDX-FileCopyrightText: 2026 Chen Zhexuan
+# SPDX-License-Identifier: MIT
+
+* Request a render
+
+Shuying returns a cached artifact or asks a backend to produce one. The
+caller decides where to display the result and whether it is still relevant
+when it arrives. For Org editing and toolchain setup, see the
+[[file:shuying.org][preview guide]].
+
+Load =shuying-latex= to register the LaTeX backend. This example renders one
+formula with XeLaTeX and reports the resulting SVG path:
+
+#+begin_src emacs-lisp
+(require 'shuying-latex)
+
+(shuying-render
+ (make-shuying-render-spec
+  :source "\\(x^2+y^2=z^2\\)"
+  :preamble "\\documentclass{article}\n\\usepackage{xcolor}"
+  :engine '("xelatex" "-no-pdf")
+  :backend 'shuying-latex
+  :backend-options '(:converter ("dvisvgm"))
+  :output-format "svg"
+  :foreground "Black"
+  :background "Transparent"
+  :scale 1.0
+  :cache-version shuying-cache-format-version)
+ (lambda (artifact error-data)
+   (if error-data
+       (message "Preview failed: %s" (error-message-string error-data))
+     (message "Preview: %s" (shuying-artifact-path artifact)))))
+#+end_src
+
+The specification identifies the cached result. Include every rendering
+input in its fields: source, preamble, engine, backend and backend options,
+output format, colors, scale, page width, equation number, and cache version.
+Keep the specification unchanged until completion.
+
+=shuying-render-batch= takes a list of =(SPECIFICATION . CALLBACK)= pairs.
+Identical pending specifications share one job. Different specifications
+may share a backend call when the backend can render them together.
+
+The callback receives =(ARTIFACT ERROR-DATA)=. Success supplies an artifact
+and nil error; failure supplies nil artifact and an Emacs condition such as
+='(error "Rendering failed")=. Read the completed file with
+=shuying-artifact-path= and its display properties with
+=shuying-artifact-metadata=.
+
+* Handle completion
+
+Request validation, batch grouping, and temporary-file preparation happen
+before Shuying accepts a submission. If preparation fails, the render call
+signals an error without invoking any of that submission's callbacks or
+changing existing jobs. Correct the cause and submit again. Once accepted,
+rendering and cache-publication failures are delivered through callbacks.
+
+A callback can run before the render call returns, including on a cache hit.
+Initialize the display target before submitting its request. A callback may
+submit another request; if it signals an error, Shuying reports a warning
+and continues notifying other callers.
+
+Rendering can also finish after the caller has edited the source, removed
+the preview, or killed the buffer. Before displaying an artifact, check that
+the target is alive and that the result belongs to its current request.
+The Org integration associates each request with an overlay generation and
+discards results from older generations. A discarded display result can
+still serve other callers through the cache.
+
+* Implement a backend
+
+Call =(shuying-register-backend name function batch-key-function)=. The
+optional batch-key function receives a specification and returns a key.
+Specifications with equal keys for the same backend can share a call.
+Without a key function, all requests for that backend are considered
+compatible. For example, the LaTeX backend groups formulas that share a
+preamble, engine, and rendering settings into one document.
+
+The renderer receives a list of =shuying-backend-request= objects and a
+completion function. Read each request's =specification=, write its result
+to =output-file=, and set =metadata= if the front end needs display properties.
+Call =(funcall complete request nil)= on success or
+=(funcall complete request error-data)= on failure, exactly once per request.
+Do not modify the output file or metadata after completion.
+
+Completion may happen after the renderer returns. If the renderer signals
+an error, Shuying fails its unfinished requests and keeps already completed
+results. A batch holds its scheduler slot until every request finishes;
+=shuying-max-concurrent-batches= limits concurrent backend batches.
+
+The backend owns its processes and working files. Shuying owns publication
+of the completed output and metadata into the cache. Front ends own display
+state; the scheduler does not depend on Org buffers or overlays.

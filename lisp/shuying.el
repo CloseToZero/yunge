@@ -354,15 +354,45 @@ Refuse to clear the cache while render jobs are pending."
             groups)))
     (shuying--run-scheduler)))
 
+(defun shuying--prepare-job-files (jobs)
+  "Create temporary output files for JOBS, cleaning up if preparation fails."
+  (let (prepared)
+    (unwind-protect
+        (progn
+          (when jobs
+            (make-directory shuying-cache-directory t))
+          (dolist (job jobs)
+            (setf (shuying--job-temporary-file job)
+                  (make-temp-file
+                   (expand-file-name ".render-" shuying-cache-directory)
+                   nil
+                   (format ".%s"
+                           (shuying-render-spec-output-format
+                            (shuying--job-specification job)))))
+            (setf (shuying--job-temporary-metadata-file job)
+                  (make-temp-file
+                   (expand-file-name ".metadata-" shuying-cache-directory)
+                   nil ".eld")))
+          (setq prepared t))
+      (unless prepared
+        (dolist (job jobs)
+          (dolist (file (list (shuying--job-temporary-file job)
+                              (shuying--job-temporary-metadata-file job)))
+            (when (and file (file-exists-p file))
+              ;; Keep the original preparation error if cleanup also fails.
+              (ignore-errors (delete-file file)))))))))
+
 (defun shuying-render-batch (requests)
   "Render REQUESTS through compatible backend batches.
 Each element of REQUESTS has the form (SPECIFICATION . CALLBACK).
 CALLBACK receives a `shuying-artifact' and an error value.  Cache hits complete
 immediately, while identical pending specifications share a job.  A callback
-error is reported as a warning without stopping other requests."
+error is reported as a warning without stopping other requests.  Preparation
+errors signal before admitting or notifying any request in this call."
   (dolist (request requests)
     (shuying--validate-render-request request))
-  (let (jobs)
+  (let ((planned (make-hash-table :test #'equal))
+        jobs pending-callbacks cache-hits)
     (dolist (request requests)
       (let* ((specification (car request))
              (callback (cdr request))
@@ -372,38 +402,35 @@ error is reported as a warning without stopping other requests."
               (shuying--artifact-metadata-file artifact-file))
              (artifact
               (shuying--read-artifact artifact-file metadata-file))
-             (pending (gethash key shuying--pending-jobs)))
+             (pending (gethash key shuying--pending-jobs))
+             (new-job (gethash key planned)))
         (cond
          (artifact
-          (shuying--notify-callbacks (list callback) artifact nil))
+          (push (cons callback artifact) cache-hits))
          (pending
-          (push callback (shuying--job-callbacks pending)))
+          (push (cons pending callback) pending-callbacks))
+         (new-job
+          (push callback (shuying--job-callbacks new-job)))
          (t
-          (make-directory shuying-cache-directory t)
           (let ((job
                  (make-shuying--job
                   :key key
                   :specification specification
                   :artifact-file artifact-file
                   :metadata-file metadata-file
-                  :temporary-file
-                  (make-temp-file
-                   (expand-file-name ".render-"
-                                     shuying-cache-directory)
-                   nil
-                   (format ".%s"
-                           (shuying-render-spec-output-format
-                            specification)))
-                  :temporary-metadata-file
-                  (make-temp-file
-                   (expand-file-name ".metadata-"
-                                     shuying-cache-directory)
-                   nil ".eld")
                   :callbacks (list callback))))
-            (puthash key job shuying--pending-jobs)
+            (puthash key job planned)
             (push job jobs))))))
-    (shuying--enqueue-job-groups
-     (shuying--group-jobs (nreverse jobs)))))
+    (setq jobs (nreverse jobs))
+    (let ((groups (shuying--group-jobs jobs)))
+      (shuying--prepare-job-files jobs)
+      (dolist (job jobs)
+        (puthash (shuying--job-key job) job shuying--pending-jobs))
+      (dolist (entry (nreverse pending-callbacks))
+        (push (cdr entry) (shuying--job-callbacks (car entry))))
+      (dolist (entry (nreverse cache-hits))
+        (shuying--notify-callbacks (list (car entry)) (cdr entry) nil))
+      (shuying--enqueue-job-groups groups))))
 
 (defun shuying-render (specification callback)
   "Render SPECIFICATION and call CALLBACK with a Shuying artifact and error.
