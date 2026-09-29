@@ -8,12 +8,12 @@
 (require 'fangcun-loader)
 (require 'fangcun-model)
 (require 'fangcun-org)
+(require 'fangcun-store)
 (require 'json)
 (require 'org)
 (require 'org-element)
 (require 'org-id)
 (require 'seq)
-(require 'sqlite)
 (require 'subr-x)
 
 (defun fangcun--set-state-directory (symbol value)
@@ -387,114 +387,6 @@ directory or any notes below it."
            "File name differs only by case from existing %S"
            conflict)))))))
 
-(defun fangcun--call-with-database (function)
-  "Call FUNCTION with an open, initialized Fangcun database."
-  (unless (sqlite-available-p)
-    (user-error "This Emacs was built without SQLite support"))
-  (let* ((file fangcun-database-file)
-         (directory (file-name-directory file))
-         (new-database-p (not (file-exists-p file)))
-         database)
-    (when new-database-p
-      (make-directory directory t))
-    (setq database (sqlite-open file nil))
-    (unwind-protect
-        (progn
-          (sqlite-execute database "PRAGMA foreign_keys = ON")
-          (when new-database-p
-            (fangcun--create-schema database))
-          (funcall function database))
-      (sqlite-close database))))
-
-(defun fangcun--create-schema (database)
-  "Create the current Fangcun schema in a new DATABASE."
-  (sqlite-execute
-   database
-   (concat
-    "CREATE TABLE yiyus ("
-    "id TEXT PRIMARY KEY, "
-    "name TEXT NOT NULL, "
-    "root TEXT NOT NULL)"))
-  ;; FILES is the synchronization boundary.  It records every indexed Org
-  ;; file, including files without nodes, and owns the graph data parsed from
-  ;; that file.  MTIME and SIZE are cheap change detectors rather than a
-  ;; content identity; a full rebuild remains the fallback for rare misses.
-  (sqlite-execute
-   database
-   (concat
-    "CREATE TABLE files ("
-    "yiyu_id TEXT NOT NULL, "
-    "file TEXT NOT NULL, "
-    "mtime REAL NOT NULL, "
-    "size INTEGER NOT NULL, "
-    "PRIMARY KEY (yiyu_id, file), "
-    "FOREIGN KEY (yiyu_id) REFERENCES yiyus (id) "
-    "ON DELETE CASCADE)"))
-  ;; The database resolves an ID to its file.  Org searches that file for the
-  ;; entry, avoiding byte positions that become stale when a buffer changes.
-  ;; File ownership also lets one file-row deletion remove its nodes and,
-  ;; through their foreign keys, their aliases, tags, and outgoing links.
-  (sqlite-execute
-   database
-   (concat
-    "CREATE TABLE nodes ("
-    "id TEXT PRIMARY KEY, "
-    "yiyu_id TEXT NOT NULL, "
-    "file TEXT NOT NULL, "
-    "title TEXT NOT NULL, "
-    "outline_path TEXT NOT NULL, "
-    "FOREIGN KEY (yiyu_id, file) "
-    "REFERENCES files (yiyu_id, file) ON DELETE CASCADE)"))
-  ;; Store aliases as rows instead of serializing them into NODES because each
-  ;; alias is an independent completion name.  The composite primary key also
-  ;; prevents duplicate names for one node and supports cascading node deletes.
-  ;; The same alias may belong to different nodes; completion disambiguates
-  ;; those nodes by their yiyu and file.
-  (sqlite-execute
-   database
-   (concat
-    "CREATE TABLE aliases ("
-    "node_id TEXT NOT NULL, "
-    "alias TEXT NOT NULL, "
-    "PRIMARY KEY (node_id, alias), "
-    "FOREIGN KEY (node_id) REFERENCES nodes (id) "
-    "ON DELETE CASCADE)"))
-  ;; Store the effective Org tags of each node as individual rows.  This keeps
-  ;; inherited and file tags searchable without duplicating node records.  The
-  ;; composite primary key removes duplicates, and deleting a node removes its
-  ;; tags.  No tag index is needed until a query filters by tag directly.
-  (sqlite-execute
-   database
-   (concat
-    "CREATE TABLE tags ("
-    "node_id TEXT NOT NULL, "
-    "tag TEXT NOT NULL, "
-    "PRIMARY KEY (node_id, tag), "
-    "FOREIGN KEY (node_id) REFERENCES nodes (id) "
-    "ON DELETE CASCADE)"))
-  ;; Keep one row for every ID-link occurrence.  Backlink views may group
-  ;; rows by SOURCE_ID, but POSITION is needed to visit the chosen link.
-  ;;
-  ;; SOURCE_ID references the nearest enclosing Fangcun node because links
-  ;; without an owning node are not part of the Fangcun graph.
-  ;;
-  ;; TARGET_ID deliberately has no foreign key.  An Org ID link may be
-  ;; unresolved or point outside the configured yiyu roots.
-  (sqlite-execute
-   database
-   (concat
-    "CREATE TABLE links ("
-    "source_id TEXT NOT NULL, "
-    "target_id TEXT NOT NULL, "
-    "position INTEGER NOT NULL, "
-    "FOREIGN KEY (source_id) REFERENCES nodes (id) "
-    "ON DELETE CASCADE)"))
-  ;; Backlink lookup starts from TARGET_ID.  SOURCE_ID does not need another
-  ;; index until Fangcun has a query that searches links in that direction.
-  (sqlite-execute
-   database
-   "CREATE INDEX links_target_id ON links (target_id)"))
-
 (defun fangcun--read-file-state (yiyu file)
   "Return the synchronization state of FILE owned by YIYU."
   (let ((attributes (file-attributes file 'string)))
@@ -650,236 +542,54 @@ directory or any notes below it."
          (fangcun--elisp-scan-file-states yiyus)))
     (fangcun--elisp-scan-file-states yiyus)))
 
-(defun fangcun--insert-yiyu (database yiyu)
-  "Insert YIYU into DATABASE."
-  (sqlite-execute
-   database
-   "INSERT INTO yiyus (id, name, root) VALUES (?, ?, ?)"
-   (vector
-    (fangcun-yiyu-id yiyu)
-    (fangcun-yiyu-name yiyu)
-    (fangcun-yiyu-root yiyu))))
-
-(defun fangcun--insert-file (database state)
-  "Insert Fangcun file STATE into DATABASE."
-  (sqlite-execute
-   database
-   (concat
-    "INSERT INTO files "
-    "(yiyu_id, file, mtime, size) "
-    "VALUES (?, ?, ?, ?)")
-   (vector
-    (fangcun-yiyu-id (fangcun-file-state-yiyu state))
-    (fangcun-file-state-relative-file state)
-    (fangcun-file-state-mtime state)
-    (fangcun-file-state-size state))))
-
-(defun fangcun--insert-node (database node)
-  "Insert NODE into DATABASE."
-  (sqlite-execute
-   database
-   (concat
-    "INSERT INTO nodes "
-    "(id, yiyu_id, file, title, outline_path) "
-    "VALUES (?, ?, ?, ?, ?)")
-   (vector
-    (fangcun-node-id node)
-    (fangcun-node-yiyu-id node)
-    (fangcun-node-file node)
-    (fangcun-node-title node)
-    (json-serialize (vconcat (fangcun-node-outline-path node)))))
-  (dolist (alias (fangcun-node-aliases node))
-    (sqlite-execute
-     database
-     "INSERT INTO aliases (node_id, alias) VALUES (?, ?)"
-     (vector (fangcun-node-id node) alias)))
-  (dolist (tag (fangcun-node-tags node))
-    (sqlite-execute
-     database
-     "INSERT INTO tags (node_id, tag) VALUES (?, ?)"
-     (vector (fangcun-node-id node) tag))))
-
-(defun fangcun--insert-link (database link)
-  "Insert LINK into DATABASE."
-  (sqlite-execute
-   database
-   (concat
-    "INSERT INTO links "
-    "(source_id, target_id, position) "
-    "VALUES (?, ?, ?)")
-   (vector
-    (fangcun-link-source-id link)
-    (fangcun-link-target-id link)
-    (fangcun-link-position link))))
-
-(defun fangcun--insert-file-data (database data)
-  "Insert parsed Fangcun file DATA into DATABASE and return its counts."
-  (let ((nodes (plist-get data :nodes))
-        (links (plist-get data :links)))
-    (dolist (node nodes)
-      (fangcun--insert-node database node))
-    (dolist (link links)
-      (fangcun--insert-link database link))
-    (list :nodes (length nodes)
-          :aliases (apply #'+ (mapcar
-                               (lambda (node)
-                                 (length (fangcun-node-aliases node)))
-                               nodes))
-          :tags (apply #'+ (mapcar
-                            (lambda (node)
-                              (length (fangcun-node-tags node)))
-                            nodes))
-          :links (length links))))
-
-(defun fangcun--file-state-key (state)
-  "Return the database key for Fangcun file STATE."
-  (cons
-   (fangcun-yiyu-id (fangcun-file-state-yiyu state))
-   (fangcun-file-state-relative-file state)))
-
-(defun fangcun--database-yiyus-match-p (database yiyus)
-  "Return whether DATABASE contains exactly YIYUS."
-  (let ((lessp
-         (lambda (left right)
-           (string-lessp (car left) (car right)))))
-    (equal
-     (sort
-      (sqlite-select database "SELECT id, name, root FROM yiyus")
-      lessp)
-     (sort
-      (mapcar
-       (lambda (yiyu)
-         (list (fangcun-yiyu-id yiyu)
-               (fangcun-yiyu-name yiyu)
-               (fangcun-yiyu-root yiyu)))
-       yiyus)
-      lessp))))
-
-(defun fangcun--database-file-states (database)
-  "Return the indexed file states in DATABASE, keyed by yiyu and file."
-  (let ((states (make-hash-table :test #'equal)))
-    (dolist (row
-             (sqlite-select
-              database
-              "SELECT yiyu_id, file, mtime, size FROM files"))
-      (puthash (cons (elt row 0) (elt row 1))
-               (cons (elt row 2) (elt row 3))
-               states))
-    states))
-
-(defun fangcun--database-counts (database)
-  "Return the current Fangcun row counts in DATABASE."
-  (let ((row
-         (car
-          (sqlite-select
-           database
-           (concat
-            "SELECT "
-            "(SELECT COUNT(*) FROM yiyus), "
-            "(SELECT COUNT(*) FROM files), "
-            "(SELECT COUNT(*) FROM nodes), "
-            "(SELECT COUNT(*) FROM aliases), "
-            "(SELECT COUNT(*) FROM tags), "
-            "(SELECT COUNT(*) FROM links)")))))
-    (list :yiyus (elt row 0)
-          :files (elt row 1)
-          :nodes (elt row 2)
-          :aliases (elt row 3)
-          :tags (elt row 4)
-          :links (elt row 5))))
+(defun fangcun--parse-file-states (states)
+  "Read saved Org contents for STATES before changing the database."
+  (mapcar
+   (lambda (state)
+     (cons state
+           (fangcun-org-read-file
+            (fangcun-file-state-yiyu state)
+            (fangcun-file-state-absolute-file state))))
+   states))
 
 (defun fangcun--rebuild-database (yiyus states &optional no-message)
-  "Replace the Fangcun database with YIYUS and file STATES.
+  "Replace the Fangcun index for YIYUS and file STATES.
 When NO-MESSAGE is non-nil, do not report the indexed counts."
-  (let ((parsed
-         (mapcar
-          (lambda (state)
-            (cons
-             state
-             (fangcun-org-read-file
-              (fangcun-file-state-yiyu state)
-              (fangcun-file-state-absolute-file state))))
-          states))
-        (database-file fangcun-database-file)
-        (directory (file-name-directory fangcun-database-file))
-        replacement-file)
-    (make-directory directory t)
-    (setq replacement-file
-          (make-temp-file
-           (expand-file-name ".fangcun-rebuild-" directory)
-           nil ".sqlite"))
-    ;; `fangcun--call-with-database' initializes only a nonexistent file.
-    ;; MAKE-TEMP-FILE reserves a unique same-directory name first.
-    (delete-file replacement-file)
-    (unwind-protect
-        (let ((result
-               (let ((fangcun-database-file replacement-file))
-                 (fangcun--call-with-database
-                  (lambda (database)
-                    (with-sqlite-transaction database
-                      (dolist (yiyu yiyus)
-                        (fangcun--insert-yiyu database yiyu))
-                      (dolist (entry parsed)
-                        (fangcun--insert-file database (car entry))
-                        (fangcun--insert-file-data database (cdr entry)))
-                      (fangcun--database-counts database)))))))
-          (rename-file replacement-file database-file t)
-          (unless no-message
-            (message
-             (concat
-              "Fangcun indexed %d nodes, %d aliases, %d tags, and %d links "
-              "from %d files in %d yiyu roots")
-             (plist-get result :nodes)
-             (plist-get result :aliases)
-             (plist-get result :tags)
-             (plist-get result :links)
-             (plist-get result :files)
-             (plist-get result :yiyus)))
-          result)
-      (when (file-exists-p replacement-file)
-        (delete-file replacement-file)))))
+  (let ((result
+         (fangcun-store-rebuild
+          fangcun-database-file yiyus (fangcun--parse-file-states states))))
+    (unless no-message
+      (message
+       (concat
+        "Fangcun indexed %d nodes, %d aliases, %d tags, and %d links "
+        "from %d files in %d yiyu roots")
+       (plist-get result :nodes)
+       (plist-get result :aliases)
+       (plist-get result :tags)
+       (plist-get result :links)
+       (plist-get result :files)
+       (plist-get result :yiyus)))
+    result))
 
 (defun fangcun--apply-file-changes (database changed deleted)
-  "Replace CHANGED file states and remove DELETED keys in DATABASE.
-Parse every changed file first, then replace all affected rows in one
-transaction so node IDs can move between files."
-  (let ((parsed
-         (mapcar
-          (lambda (state)
-            (cons
-             state
-             (fangcun-org-read-file
-              (fangcun-file-state-yiyu state)
-              (fangcun-file-state-absolute-file state))))
-          changed)))
-    (with-sqlite-transaction database
-      (dolist (key
-               (append deleted
-                       (mapcar #'fangcun--file-state-key changed)))
-        (sqlite-execute
-         database
-         (concat
-          "DELETE FROM files "
-          "WHERE yiyu_id = ? AND file = ?")
-         (vector (car key) (cdr key))))
-      (dolist (entry parsed)
-        (fangcun--insert-file database (car entry))
-        (fangcun--insert-file-data database (cdr entry))))))
+  "Parse CHANGED files, replace their entries, and remove DELETED keys."
+  (fangcun-store-replace-files
+   database (fangcun--parse-file-states changed) deleted))
 
 (defun fangcun--sync-database (states &optional no-message)
   "Synchronize an existing Fangcun database with file STATES.
 When NO-MESSAGE is non-nil, do not report the changed file counts."
-  (fangcun--call-with-database
+  (fangcun-store-call-with-database fangcun-database-file
    (lambda (database)
      (let ((database-states
-            (fangcun--database-file-states database))
+            (fangcun-store-file-states database))
            (current-keys (make-hash-table :test #'equal))
            (missing (make-symbol "missing"))
            changed deleted
            (added-count 0)
            (updated-count 0))
        (dolist (state states)
-         (let* ((key (fangcun--file-state-key state))
+         (let* ((key (fangcun-store-file-state-key state))
                 (current
                  (cons (fangcun-file-state-mtime state)
                        (fangcun-file-state-size state)))
@@ -902,7 +612,7 @@ When NO-MESSAGE is non-nil, do not report the changed file counts."
          (message
           "Fangcun synchronized files: %d added, %d updated, %d removed"
           added-count updated-count (length deleted)))
-       (fangcun--database-counts database)))))
+       (fangcun-store-counts database)))))
 
 ;;;###autoload
 (defun fangcun-db-rebuild ()
@@ -927,9 +637,9 @@ When NO-MESSAGE is non-nil, do not report the changed file counts."
   (let ((states (fangcun--scan-file-states yiyus)))
     (if (and
          (file-exists-p fangcun-database-file)
-         (fangcun--call-with-database
+         (fangcun-store-call-with-database fangcun-database-file
           (lambda (database)
-            (fangcun--database-yiyus-match-p database yiyus))))
+            (fangcun-store-roots-match-p database yiyus))))
         (fangcun--sync-database states no-message)
       (fangcun--rebuild-database yiyus states no-message))))
 
@@ -1239,38 +949,16 @@ When NO-MESSAGE is non-nil, do not report the indexed counts."
   (unless (file-exists-p fangcun-database-file)
     (user-error "Run fangcun-db-sync before updating individual files"))
   (let* ((state (fangcun--read-file-state yiyu file))
-         (relative-file (fangcun-file-state-relative-file state))
          (data (fangcun-org-read-file yiyu file))
          (result
-          (fangcun--call-with-database
+          (fangcun-store-call-with-database
+           fangcun-database-file
            (lambda (database)
-             (let ((row
-                    (car
-                     (sqlite-select
-                      database
-                      (concat
-                       "SELECT name, root FROM yiyus "
-                       "WHERE id = ?")
-                      (vector (fangcun-yiyu-id yiyu))))))
-               (unless
-                   (and row
-                        (equal (elt row 0)
-                               (fangcun-yiyu-name yiyu))
-                        (file-equal-p
-                         (elt row 1) (fangcun-yiyu-root yiyu)))
-                 (user-error
-                  (concat
-                   "Fangcun yiyu configuration changed; "
-                   "run fangcun-db-sync"))))
-             (with-sqlite-transaction database
-               (sqlite-execute
-                database
-                (concat
-                 "DELETE FROM files "
-                 "WHERE yiyu_id = ? AND file = ?")
-                (vector (fangcun-yiyu-id yiyu) relative-file))
-               (fangcun--insert-file database state)
-               (fangcun--insert-file-data database data))))))
+             (unless (fangcun-store-yiyu-match-p database yiyu)
+               (user-error
+                "Fangcun yiyu configuration changed; run fangcun-db-sync"))
+             (fangcun-store-replace-files
+              database (list (cons state data)) nil)))))
     (unless no-message
       (message
        (concat
@@ -1282,19 +970,6 @@ When NO-MESSAGE is non-nil, do not report the indexed counts."
        (plist-get result :links)
        (abbreviate-file-name file)))
     result))
-
-(defun fangcun--database-file-state (database yiyu relative-file)
-  "Return DATABASE state for RELATIVE-FILE in YIYU, or nil."
-  (when-let* ((row
-               (car
-                (sqlite-select
-                 database
-                 (concat
-                  "SELECT mtime, size FROM files "
-                  "WHERE yiyu_id = ? AND file = ?")
-                 (vector (fangcun-yiyu-id yiyu)
-                         relative-file)))))
-    (cons (elt row 0) (elt row 1))))
 
 (defun fangcun--reconcile-files (files)
   "Update indexed Org FILES from one event batch atomically."
@@ -1313,9 +988,9 @@ When NO-MESSAGE is non-nil, do not report the indexed counts."
                         (cons absolute-file yiyu))))
                   files))))
       (when managed
-        (fangcun--call-with-database
+        (fangcun-store-call-with-database fangcun-database-file
          (lambda (database)
-           (unless (fangcun--database-yiyus-match-p
+           (unless (fangcun-store-roots-match-p
                     database fangcun--session-yiyus)
              (user-error
               "Fangcun yiyu configuration changed; run fangcun-db-sync"))
@@ -1331,7 +1006,7 @@ When NO-MESSAGE is non-nil, do not report the indexed counts."
                  (unless (gethash key seen)
                    (puthash key t seen)
                    (let ((stored
-                          (fangcun--database-file-state
+                          (fangcun-store-file-state
                            database yiyu relative-file)))
                      (if (file-regular-p file)
                          (let* ((state (fangcun--read-file-state yiyu file))
@@ -1459,104 +1134,13 @@ When NO-MESSAGE is non-nil, do not report the indexed counts."
   (add-hook 'after-save-hook #'fangcun--update-after-save nil t)
   (add-hook 'after-revert-hook #'fangcun--update-after-revert nil t))
 
-(defun fangcun--node-from-row (row)
-  "Return a Fangcun node represented by SQLite ROW."
-  (make-fangcun-node
-   :id (elt row 0)
-   :yiyu-id (elt row 1)
-   :yiyu-name (elt row 2)
-   :yiyu-root (elt row 3)
-   :file (elt row 4)
-   :title (elt row 5)
-   :outline-path
-   (json-parse-string (elt row 6) :array-type 'list)))
-
-(defun fangcun--attach-node-values (nodes rows slot)
-  "Attach values from SQLite ROWS to SLOT of NODES and return NODES.
-Each row contains a node ID followed by one value."
-  (let ((nodes-by-id (make-hash-table :test #'equal)))
-    (dolist (node nodes)
-      (push node (gethash (fangcun-node-id node) nodes-by-id)))
-    (dolist (row rows)
-      (dolist (node (gethash (elt row 0) nodes-by-id))
-        (push (elt row 1)
-              (cl-struct-slot-value 'fangcun-node slot node))))
-    (dolist (node nodes)
-      (setf (cl-struct-slot-value 'fangcun-node slot node)
-            (nreverse
-             (cl-struct-slot-value 'fangcun-node slot node))))
-    nodes))
-
-(defun fangcun--attach-aliases (nodes rows)
-  "Attach aliases from SQLite ROWS to NODES and return NODES."
-  (fangcun--attach-node-values nodes rows 'aliases))
-
-(defun fangcun--attach-tags (nodes rows)
-  "Attach tags from SQLite ROWS to NODES and return NODES."
-  (fangcun--attach-node-values nodes rows 'tags))
-
 (defun fangcun-node-from-id (id)
   "Return the Fangcun node named ID, or nil when it is not indexed."
-  (fangcun--call-with-database
-   (lambda (database)
-     (when-let* ((row
-                  (car
-                   (sqlite-select
-                    database
-                    (concat
-                     "SELECT n.id, n.yiyu_id, y.name, y.root, "
-                     "n.file, n.title, n.outline_path "
-                     "FROM nodes AS n "
-                     "JOIN yiyus AS y ON y.id = n.yiyu_id "
-                     "WHERE n.id = ? LIMIT 1")
-                    (vector id))))
-                 (node (fangcun--node-from-row row)))
-       (fangcun--attach-tags
-        (fangcun--attach-aliases
-         (list node)
-         (sqlite-select
-          database
-          (concat
-           "SELECT node_id, alias FROM aliases "
-           "WHERE node_id = ? ORDER BY alias COLLATE NOCASE")
-          (vector id)))
-        (sqlite-select
-         database
-         (concat
-          "SELECT node_id, tag FROM tags "
-          "WHERE node_id = ? ORDER BY tag COLLATE NOCASE")
-         (vector id)))
-       node))))
+  (fangcun-store-node-from-id fangcun-database-file id))
 
 (defun fangcun-node-list ()
   "Return all nodes currently stored in the Fangcun database."
-  (fangcun--call-with-database
-   (lambda (database)
-     (let ((nodes
-            (mapcar
-             #'fangcun--node-from-row
-             (sqlite-select
-              database
-              (concat
-               "SELECT n.id, n.yiyu_id, y.name, y.root, "
-               "n.file, n.title, n.outline_path "
-               "FROM nodes AS n "
-               "JOIN yiyus AS y ON y.id = n.yiyu_id "
-               "ORDER BY n.title COLLATE NOCASE, "
-               "y.name COLLATE NOCASE, n.file, n.id")))))
-       (fangcun--attach-tags
-        (fangcun--attach-aliases
-         nodes
-         (sqlite-select
-          database
-          (concat
-           "SELECT node_id, alias FROM aliases "
-           "ORDER BY node_id, alias COLLATE NOCASE")))
-        (sqlite-select
-         database
-         (concat
-          "SELECT node_id, tag FROM tags "
-          "ORDER BY node_id, tag COLLATE NOCASE")))))))
+  (fangcun-store-node-list fangcun-database-file))
 
 ;;;###autoload
 (defun fangcun--id-find (id &optional markerp)
@@ -1568,104 +1152,19 @@ When MARKERP is non-nil, return the location as a marker."
          ((numberp id) (number-to-string id))
          (t id)))
   (when (file-exists-p fangcun-database-file)
-    (when-let* ((row
-                 (car
-                  (fangcun--call-with-database
-                   (lambda (database)
-                     (sqlite-select
-                      database
-                      (concat
-                       "SELECT y.root, n.file "
-                       "FROM nodes AS n "
-                       "JOIN yiyus AS y ON y.id = n.yiyu_id "
-                       "WHERE n.id = ?")
-                      (vector id)))))))
+    (when-let* ((location
+                 (fangcun-store-id-location fangcun-database-file id)))
       (org-id-find-id-in-file
-       id (expand-file-name (elt row 1) (elt row 0)) markerp))))
-
-(defun fangcun--backlink-from-row (row)
-  "Return a Fangcun backlink represented by SQLite ROW."
-  (make-fangcun-backlink
-   :node (fangcun--node-from-row (cl-subseq row 0 7))
-   :position (elt row 7)
-   :count (and (> (length row) 8) (elt row 8))))
-
-(defun fangcun--attach-backlink-node-data
-    (database backlinks target-id)
-  "Attach aliases and tags to BACKLINKS targeting TARGET-ID in DATABASE."
-  (let ((nodes (mapcar #'fangcun-backlink-node backlinks)))
-    (fangcun--attach-aliases
-     nodes
-     (sqlite-select
-      database
-      (concat
-       "SELECT DISTINCT a.node_id, a.alias "
-       "FROM aliases AS a "
-       "JOIN links AS l ON l.source_id = a.node_id "
-       "WHERE l.target_id = ? "
-       "ORDER BY a.node_id, a.alias COLLATE NOCASE")
-      (vector target-id)))
-    (fangcun--attach-tags
-     nodes
-     (sqlite-select
-      database
-      (concat
-       "SELECT DISTINCT t.node_id, t.tag "
-       "FROM tags AS t "
-       "JOIN links AS l ON l.source_id = t.node_id "
-       "WHERE l.target_id = ? "
-       "ORDER BY t.node_id, t.tag COLLATE NOCASE")
-      (vector target-id))))
-  backlinks)
+       id (expand-file-name (cdr location) (car location)) markerp))))
 
 (defun fangcun-backlink-list (target-id)
   "Return unique source nodes linking to TARGET-ID.
 When one source contains several links, retain its first occurrence."
-  (fangcun--call-with-database
-   (lambda (database)
-     (fangcun--attach-backlink-node-data
-      database
-      (mapcar
-       #'fangcun--backlink-from-row
-       (sqlite-select
-        database
-        (concat
-         "SELECT n.id, n.yiyu_id, y.name, y.root, "
-         "n.file, n.title, n.outline_path, first_link.position, "
-         "first_link.occurrence_count "
-         "FROM ("
-         "SELECT source_id, MIN(position) AS position, "
-         "COUNT(*) AS occurrence_count "
-         "FROM links WHERE target_id = ? GROUP BY source_id"
-         ") AS first_link "
-         "JOIN nodes AS n ON n.id = first_link.source_id "
-         "JOIN yiyus AS y ON y.id = n.yiyu_id "
-         "ORDER BY n.title COLLATE NOCASE, "
-         "y.name COLLATE NOCASE, n.file, n.id")
-        (vector target-id)))
-      target-id))))
+  (fangcun-store-backlink-list fangcun-database-file target-id))
 
 (defun fangcun-backlink-occurrence-list (target-id)
   "Return every indexed backlink occurrence to TARGET-ID."
-  (fangcun--call-with-database
-   (lambda (database)
-     (fangcun--attach-backlink-node-data
-      database
-      (mapcar
-       #'fangcun--backlink-from-row
-       (sqlite-select
-        database
-        (concat
-         "SELECT n.id, n.yiyu_id, y.name, y.root, "
-         "n.file, n.title, n.outline_path, l.position "
-         "FROM links AS l "
-         "JOIN nodes AS n ON n.id = l.source_id "
-         "JOIN yiyus AS y ON y.id = n.yiyu_id "
-         "WHERE l.target_id = ? "
-         "ORDER BY n.title COLLATE NOCASE, "
-         "y.name COLLATE NOCASE, n.file, n.id, l.position")
-        (vector target-id)))
-      target-id))))
+  (fangcun-store-backlink-occurrence-list fangcun-database-file target-id))
 
 (defun fangcun--node-candidate (node)
   "Return a unique completion candidate for NODE."
@@ -1807,13 +1306,7 @@ An existing non-empty DESCRIPTION always wins.  Returning nil lets
                      (car entry)))))
         (when (fangcun--valid-tag-p tag)
           (push (substring-no-properties tag) tags))))
-    (dolist (row
-             (fangcun--call-with-database
-              (lambda (database)
-                (sqlite-select
-                 database
-                 "SELECT DISTINCT tag FROM tags ORDER BY tag COLLATE NOCASE"))))
-      (push (elt row 0) tags))
+    (setq tags (append (fangcun-store-tags fangcun-database-file) tags))
     (sort (delete-dups tags) #'string-lessp)))
 
 (defun fangcun--read-tags (current-tags)

@@ -9,9 +9,10 @@ note must not require an open database or start the native file monitor.
 
 =fangcun-model.el= defines the records exchanged by parsing, indexing, and
 queries. It has no live state. =fangcun-org.el= reads Org content into those
-records. =fangcun.el= manages configured roots, synchronization, database
-queries, and interactive commands. The MCP tools use the same index and note
-operations as the Emacs commands.
+records, and =fangcun-store.el= stores and queries them through SQLite.
+=fangcun.el= coordinates configured roots, synchronization, and interactive
+commands. The MCP tools use the same index and note operations as the Emacs
+commands.
 
 =fangcun-org-read-file= accepts a normalized yiyu and a file path. It returns
 a plist containing =:nodes= and =:links= from the saved file. An unmodified
@@ -40,13 +41,40 @@ Positions and line numbers describe the content that was read. They can
 become stale after an edit. Node navigation resolves an ID again in the
 destination buffer rather than treating an indexed position as permanent.
 
-* Applying file changes
+* Writing and querying the index
 
-Complete synchronization and a queued batch of file events use the same
-update operation. Read every changed file before changing the database, then
-replace all affected file entries in one SQLite transaction. Remove the old
-entries before inserting new nodes so an ID can move between files within
-the batch. A parsing error or duplicate ID leaves the previous index intact.
+The storage module accepts model records and already-parsed data. It does not
+read Org files, choose configured paths, or manage synchronization sessions.
+Writes and metadata checks share a connection opened by
+=fangcun-store-call-with-database=. It takes an explicit database path, prepares
+the schema when new, and closes the connection when the callback returns or
+signals an error. SQL and transaction handling belong inside the storage module.
+
+Each parsed file is a pair of a =fangcun-file-state= and the =:nodes= / =:links=
+plist returned by the Org reader. =fangcun-store-replace-files= receives these
+pairs and deleted-file keys of the form =(yiyu-id . relative-file)=. It removes
+all affected entries before inserting their replacements in one transaction,
+so an ID can move between files within a batch. Duplicate IDs roll back the
+whole batch. Single-file updates use the same operation.
+
+The coordinator reads every changed file before asking the store to write.
+=fangcun-store-rebuild= writes the complete parsed set to a temporary database
+beside the destination, closes it, then replaces the destination. Parsing or
+insertion failures leave the previous index intact.
+
+File entries own their nodes, aliases, tags, and outgoing links, including an
+entry for an Org file with no nodes. Modification time and size detect saved
+changes; rebuilding parses every file when those checks miss a change. Link
+targets may be unresolved or outside configured note roots, so deleting a
+target does not remove incoming links.
+
+Node and backlink queries take a database path and manage their own connection.
+They return model records with titles, aliases, and tags ready for callers,
+without scanning notes or starting a session.
+Grouped backlinks identify each source node and its first occurrence; occurrence
+queries retain every link position.
+
+** Applying file events
 
 File events name the paths to reconcile; they do not describe the final note
 contents. Read those paths from disk when processing the batch, and remove
