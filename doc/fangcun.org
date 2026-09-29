@@ -115,14 +115,38 @@ its buffer is open, synchronization reads the file on disk and leaves your
 buffer untouched. Revert the buffer when you want to load those changes;
 save or otherwise keep any unsaved work before reverting.
 
-Fangcun can use an optional Rust helper to scan roots and watch external file
-changes. Events are processed after an idle delay, so the index need not change
-immediately after an external save. If the helper is absent or cannot run,
-Fangcun still scans with Emacs, but external edits may go unnoticed until you
-run =M-x fangcun-db-sync=. This command adds, updates, and removes index entries
-to match saved Org files. Run =M-x fangcun-db-rebuild= to parse every file again
-when recovering from a damaged or suspect index. Neither command rewrites notes.
-Set =fangcun-native-helper-enabled= to =nil= to disable the helper.
+** Watch external edits
+
+An optional Rust helper scans roots and watches changes made outside Emacs.
+Fangcun processes its events after an idle delay, so an external save may take
+a moment to appear in searches. If the helper cannot run, use
+=M-x fangcun-db-sync= after external changes; Emacs can scan the files itself.
+
+The helper builds through Cargo when needed. Build output appears in
+=*Fangcun Helper Build*=. After changing its Rust sources, use
+=M-x fangcun-native-build= to rebuild it. See the
+[[file:../native/fangcun-watch/README.org][native helper guide]] for its command-line protocol.
+
+To turn off the helper in a running Emacs, evaluate:
+
+#+begin_src emacs-lisp
+(setopt fangcun-native-helper-enabled nil)
+#+end_src
+
+This stops monitoring, cancels any helper build, and discards queued events.
+Saving notes in Emacs and running synchronization commands still update the
+index. Set the option to =t= to enable the helper again; monitoring starts if
+Fangcun is already in use, or on its next use otherwise. You can also change
+the option through =M-x customize-variable=.
+
+You may explicitly run =fangcun-native-build= while the helper is disabled to
+prepare the executable. A successful build leaves monitoring disabled.
+
+** Recover missed changes
+
+Run =M-x fangcun-db-sync= to add, update, and remove index entries to match
+saved Org files. This is also useful after a bulk edit or when searches show
+old results.
 
 When moving a node between files, keep its =ID= and save both files, then run
 =M-x fangcun-db-sync=. If synchronization reports a duplicate ID, use
@@ -135,10 +159,11 @@ full synchronization and native file-event updates stop and report the missing
 directory. The previous index stays available. Restore the directory at its
 configured path, then run =M-x fangcun-db-sync= to catch up with saved changes.
 
-The helper may build asynchronously through Cargo; diagnostics appear in
-=*Fangcun Helper Build*=. =M-x fangcun-native-build= rebuilds it after changing
-its Rust sources. Its command-line protocol is documented in the
-[[file:../native/fangcun-watch/README.org][native helper guide]].
+If the index appears damaged or still disagrees with saved notes after a sync,
+run =M-x fangcun-db-rebuild= to parse every file again. Synchronization and
+rebuilding change only the index; they never rewrite notes.
+
+* Store the index elsewhere
 
 The database and helper build files live under =fangcun-state-directory=, which
 defaults to =var/fangcun/= below =user-emacs-directory=. Set this before loading

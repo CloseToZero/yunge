@@ -81,6 +81,16 @@ submit events. Stopping only the monitor for a restart or helper rebuild keeps
 the session active. A scan may itself start a helper build, so session cleanup
 must precede the scan rather than canceling that new build afterward.
 
+Disabling the native helper stops its processes and clears queued events but
+keeps the synchronized session. Emacs saves and explicit updates can still
+write the index. Use =setopt= or Customize to apply this preference immediately;
+an ordinary assignment is picked up on the next =fangcun-db-sync=.
+
+Executable availability and the user's preference are separate facts.
+Automatic scanning, monitoring, and building respect the preference. An
+explicit =fangcun-native-build= can build while the helper is disabled; its
+result describes the build, and success does not enable monitoring.
+
 * Verification
 
 Run the Fangcun Lisp checks from the repository root:

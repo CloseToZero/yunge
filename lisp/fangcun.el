@@ -49,10 +49,25 @@ An explicit `fangcun-database-file' overrides this default."
   :type 'boolean
   :group 'fangcun)
 
+(defvar fangcun--session-active-p)
+(defvar fangcun--session-yiyus)
+
+(defun fangcun--set-native-helper-enabled (symbol value)
+  "Set SYMBOL to VALUE and apply it to the running native helper."
+  (set-default symbol value)
+  (when (featurep 'fangcun)
+    (if value
+        (when fangcun--session-active-p
+          (fangcun--ensure-native-helper fangcun--session-yiyus))
+      (fangcun--stop-native-helper))))
+
 (defcustom fangcun-native-helper-enabled t
   "Whether Fangcun may use its native scanner and directory monitor.
-When the helper is unavailable, synchronization falls back to Emacs."
+When the helper is unavailable, synchronization falls back to Emacs.
+Use `setopt' or Customize to apply changes to a running helper.  Disabling
+it stops native processes but keeps Emacs file updates active."
   :type 'boolean
+  :set #'fangcun--set-native-helper-enabled
   :group 'fangcun)
 
 (defconst fangcun-backlinks-buffer-name "*Fangcun Backlinks*")
@@ -514,9 +529,8 @@ directory or any notes below it."
           build-id)))))
 
 (defun fangcun--native-helper-available-p ()
-  "Return whether the Fangcun native helper can be started."
-  (and fangcun-native-helper-enabled
-       (file-executable-p (fangcun--native-helper-program))))
+  "Return whether the Fangcun native helper executable is available."
+  (file-executable-p (fangcun--native-helper-program)))
 
 (defun fangcun--validate-native-ready-message (message)
   "Validate native helper ready MESSAGE against the tracked build ID."
@@ -619,7 +633,8 @@ directory or any notes below it."
 (defun fangcun--scan-file-states (yiyus)
   "Return the current Org file states below YIYUS."
   (fangcun--validate-yiyu-roots yiyus)
-  (if (and yiyus (fangcun--native-helper-available-p))
+  (if (and fangcun-native-helper-enabled
+           yiyus (fangcun--native-helper-available-p))
       (condition-case error-data
           (fangcun--native-scan-file-states yiyus)
         (fangcun-native-helper-outdated
@@ -1056,7 +1071,8 @@ When NO-MESSAGE is non-nil, do not report synchronization results."
 (defun fangcun--start-native-watch (yiyus)
   "Start recursively monitoring YIYUS."
   (let ((signature (fangcun--native-yiyu-signature yiyus)))
-    (when (and yiyus (fangcun--native-helper-available-p))
+    (when (and fangcun-native-helper-enabled
+               yiyus (fangcun--native-helper-available-p))
       (unless (and (process-live-p fangcun--native-watch-process)
                    (equal signature fangcun--native-watch-yiyus))
         (fangcun--stop-native-watch)
@@ -1091,7 +1107,8 @@ When NO-MESSAGE is non-nil, do not report synchronization results."
              (fangcun--native-helper-available-p))
         (progn
           (message "Built Fangcun native helper")
-          (when fangcun--session-active-p
+          (when (and fangcun-native-helper-enabled
+                     fangcun--session-active-p)
             (fangcun--start-native-watch fangcun--session-yiyus)))
       (fangcun--native-warning
        (concat
@@ -1133,14 +1150,15 @@ When NO-MESSAGE is non-nil, do not report synchronization results."
 
 (defun fangcun--ensure-native-helper (yiyus)
   "Start or build the native helper for YIYUS when enabled."
-  (when (and fangcun-native-helper-enabled
-             yiyus)
-    (cond
-     ((process-live-p fangcun--native-build-process))
-     ((fangcun--native-helper-available-p)
-      (fangcun--start-native-watch yiyus))
-     (t
-      (fangcun--build-native-helper)))))
+  (if (not fangcun-native-helper-enabled)
+      (fangcun--stop-native-helper)
+    (when yiyus
+      (cond
+       ((process-live-p fangcun--native-build-process))
+       ((fangcun--native-helper-available-p)
+        (fangcun--start-native-watch yiyus))
+       (t
+        (fangcun--build-native-helper))))))
 
 ;;;###autoload
 (defun fangcun-native-build ()
@@ -1170,10 +1188,8 @@ When NO-MESSAGE is non-nil, do not report synchronization results."
   (fangcun--install-operation-advice)
   (fangcun--ensure-native-helper yiyus))
 
-(defun fangcun--stop-session ()
-  "Stop synchronization and discard work belonging to the current session."
-  (setq fangcun--session-active-p nil
-        fangcun--session-yiyus nil)
+(defun fangcun--stop-native-helper ()
+  "Stop native processes and discard their pending file events."
   (fangcun--stop-native-watch)
   (when (timerp fangcun--native-event-timer)
     (cancel-timer fangcun--native-event-timer))
@@ -1186,6 +1202,12 @@ When NO-MESSAGE is non-nil, do not report synchronization results."
     (setq fangcun--native-build-process nil)
     (when (process-live-p process)
       (delete-process process))))
+
+(defun fangcun--stop-session ()
+  "Stop synchronization and discard work belonging to the current session."
+  (setq fangcun--session-active-p nil
+        fangcun--session-yiyus nil)
+  (fangcun--stop-native-helper))
 
 (add-hook 'kill-emacs-hook #'fangcun--stop-session)
 
