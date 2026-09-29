@@ -40,6 +40,26 @@
       (kill-buffer code)
       (kill-buffer notes))))
 
+(ert-deftest yunge-tab-switch-offers-other-tabs-and-defaults-to-the-most-recent ()
+  (yunge-test-enable-evil)
+  (require 'yunge-tab)
+  (let ((initial-count (length (tab-bar-tabs))))
+    (unwind-protect
+        (progn
+          (yunge-tab-new "zzz-recent")
+          (yunge-tab-new "aaa-current")
+          (cl-letf (((symbol-function 'completing-read)
+                     (lambda (_prompt collection _predicate _require-match
+                              _initial _history default &rest _arguments)
+                       (should-not (member "aaa-current" (all-completions "" collection)))
+                       (should (equal (car default) "zzz-recent"))
+                       (car default))))
+            (call-interactively #'yunge-tab-switch))
+          (should (equal (alist-get 'name (assq 'current-tab (tab-bar-tabs)))
+                         "zzz-recent")))
+      (while (> (length (tab-bar-tabs)) initial-count)
+        (tab-close)))))
+
 (ert-deftest yunge-tab-rejects-ambiguous-or-missing-names-without-changing-tabs ()
   (yunge-test-enable-evil)
   (require 'yunge-tab)

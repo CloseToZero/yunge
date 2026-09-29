@@ -90,12 +90,15 @@ When RENAMING is non-nil, allow the current tab's name."
   (tab-rename (yunge-tab--validate-name name t)))
 
 (defun yunge-tab-switch (name)
-  "Select an existing tab by NAME in the current frame."
+  "Select an existing tab by NAME in the current frame.
+Interactively, offer other tabs and default to the most recently visited."
   (interactive
-   (list (completing-read "Switch to tab: "
-                          (mapcar (lambda (tab) (alist-get 'name tab))
-                                  (tab-bar-tabs))
-                          nil t)))
+   (let ((names (mapcar (lambda (tab) (alist-get 'name tab))
+                       (tab-bar--tabs-recent))))
+     (unless names
+       (user-error "No other tabs"))
+     (list (completing-read (format-prompt "Switch to tab" (car names))
+                            names nil t nil nil names))))
   (unless (member name (mapcar (lambda (tab) (alist-get 'name tab))
                               (tab-bar-tabs)))
     (user-error "No tab named %s" name))

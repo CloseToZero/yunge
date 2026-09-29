@@ -211,7 +211,8 @@ performs its ordinary buffer action.
 A tab remembers a window layout; it does not own a separate set of buffers.
 Create one with ~SPC TAB n~ and give it a task name. New names must be
 nonempty and distinct within the frame; surrounding whitespace is removed.
-Set up its windows, then use ~SPC TAB TAB~ to choose an existing tab.
+Set up its windows, then use ~SPC TAB TAB~ to choose another tab. The current
+tab is excluded; press ~RET~ without typing to return to the most recent one.
 Both tabs can display the same buffer and see the same edits. The current
 tab name appears in the mode line when there is more than one tab.
 
