@@ -25,6 +25,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use tokio::process::Command;
 
+mod codex_config;
+
 const DISPATCH_FORM: &str = "(progn (require 'yunge-mcp) (yunge-mcp-server-dispatch))";
 const BUILD_ID: &str = env!("YUNGE_MCP_BUILD_ID");
 
@@ -316,12 +318,19 @@ occurrences in the same document become links automatically.",
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> Result<(), Box<dyn Error>> {
-    YungeMcpServer::new()?
-        .serve(stdio())
-        .await?
-        .waiting()
-        .await?;
-    Ok(())
+    let mut arguments = env::args_os().skip(1);
+    match (arguments.next(), arguments.next()) {
+        (None, None) => {
+            YungeMcpServer::new()?
+                .serve(stdio())
+                .await?
+                .waiting()
+                .await?;
+            Ok(())
+        }
+        (Some(command), None) if command == "edit-codex-config" => codex_config::run(),
+        _ => Err("unknown Yunge MCP command".into()),
+    }
 }
 
 #[cfg(test)]
@@ -394,7 +403,8 @@ mod tests {
 
         fs::write(
             &file,
-            br#"{"version":1,"emacsclient":"client","connectionArguments":["--socket-name","work"]}"#,
+            br#"{"version":1,"emacsclient":"client",
+                 "connectionArguments":["--socket-name","work"]}"#,
         )
         .unwrap();
         let config = EmacsBridge::runtime_config_at(&file).unwrap().unwrap();

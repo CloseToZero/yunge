@@ -5,7 +5,7 @@
 (require 'yunge-test-helper)
 (require 'yunge-mcp-setup)
 
-(ert-deftest yunge-mcp-registers-selected-clients-without-installed-programs ()
+(ert-deftest yunge-mcp-registers-json-clients-without-installed-programs ()
   (let* ((directory (make-temp-file "yunge-mcp-clients-" t))
          (yunge-var-directory (file-name-as-directory directory))
          (files
@@ -14,14 +14,12 @@
              (cons client
                    (expand-file-name
                     (concat (symbol-name client)
-                            (if (eq client 'codex) ".toml" ".json"))
+                            ".json")
                     directory)))
-           '(codex claude-code gemini cursor vscode)))
+           '(claude-code gemini cursor vscode)))
          (program (yunge-mcp-program)))
     (unwind-protect
-        (cl-letf (((symbol-function 'yunge-mcp-clients--codex-config-file)
-                   (lambda () (alist-get 'codex files)))
-                  ((symbol-function 'yunge-mcp-clients--claude-config-file)
+        (cl-letf (((symbol-function 'yunge-mcp-clients--claude-config-file)
                    (lambda () (alist-get 'claude-code files)))
                   ((symbol-function 'yunge-mcp-clients--gemini-config-file)
                    (lambda () (alist-get 'gemini files)))
@@ -32,20 +30,17 @@
                   ((symbol-function 'executable-find)
                    (lambda (_program) nil)))
           (yunge-mcp-register-clients
-           '(codex claude-code gemini cursor vscode))
+           '(claude-code gemini cursor vscode))
           (dolist (entry files)
             (with-temp-buffer
               (insert-file-contents (cdr entry))
-              (if (eq (car entry) 'codex)
-                  (should
-                   (search-forward (concat "command = \"" program "\"") nil t))
-                (let* ((configuration
-                        (json-parse-string
-                         (buffer-string) :object-type 'hash-table))
-                       (key (if (eq (car entry) 'vscode) "servers" "mcpServers"))
-                       (server (gethash "yunge" (gethash key configuration))))
-                  (should (equal (gethash "command" server) program))
-                  (should (equal (gethash "args" server) [])))))))
+              (let* ((configuration
+                      (json-parse-string
+                       (buffer-string) :object-type 'hash-table))
+                     (key (if (eq (car entry) 'vscode) "servers" "mcpServers"))
+                     (server (gethash "yunge" (gethash key configuration))))
+                (should (equal (gethash "command" server) program))
+                (should (equal (gethash "args" server) []))))))
       (delete-directory directory t))))
 
 (ert-deftest yunge-mcp-runtime-records-the-running-emacs-connection ()

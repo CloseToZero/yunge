@@ -5,7 +5,8 @@
 * Register clients from Lisp
 
 Client configuration accepts an explicit bridge executable path. It does not
-build the executable, start Emacs's server, or require a client installation:
+build the executable, start Emacs's server, or require a client installation.
+JSON clients can be registered before the bridge is built:
 
 #+begin_src emacs-lisp
 (require 'yunge-mcp-clients)
@@ -35,6 +36,28 @@ existing file's mode and follow configuration symlinks to their target.
 Remove the temporary file on failure. These guarantees apply to one file;
 registration is not a transaction across client configurations.
 
+* Codex TOML updates
+
+Codex registration invokes the supplied bridge executable's
+=edit-codex-config= command. The native program parses TOML with =toml_edit=
+and replaces the =yunge= entry within =mcp_servers=. The server collection can
+be an ordinary or inline table. Replacing the entry also removes old Yunge
+options and subtables; unrelated settings keep their values. Comments and
+formatting are retained where supported by the editor, without promising an
+identical textual layout.
+
+The command transforms text only. Lisp owns the configuration path, reads the
+file, sends a JSON request over standard input, validates the JSON response,
+and writes the returned text through the same file replacement routine used
+for JSON clients. UTF-8 input and output carry both the executable path and
+configuration content. The native command neither opens client files nor
+connects to Emacs.
+
+Missing helpers, failed processes, and invalid responses stop registration
+before the destination is written. An older installed helper's output must
+not be accepted as configuration text. The [[file:../native/yunge-mcp/README.org][native guide]] documents the command's
+request and response.
+
 * Tool requests
 
 The native executable forwards requests to =yunge-mcp.el=, which dispatches
@@ -43,13 +66,15 @@ arguments and results; saved-note operations belong to Fangcun itself.
 See the [[file:../native/yunge-mcp/README.org][native bridge guide]] for the wire format and connection manifest,
 and [[file:fangcun-development.org][Fangcun development]] for file and index contracts.
 
-Run the Lisp checks with:
+Build the debug helper, then run the Lisp checks:
 
 #+begin_src sh
+cargo build --locked --manifest-path native/yunge-mcp/Cargo.toml
 emacs --batch -Q -L test -l yunge-test-runner -- --suite ert --module mcp
 #+end_src
 
 Configuration tests use temporary configuration paths and inspect the resulting
-files. Never run registration tests against personal client settings. For
+files. Never run registration tests against personal client settings. Codex
+registration tests need the debug executable produced by this build. For
 native changes, also run =--suite native --module mcp=. The
 [[file:development.org][development guide]] covers static checks and autoload generation.

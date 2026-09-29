@@ -32,6 +32,13 @@ contain a JSON object; an empty file, malformed JSON, or a non-object server
 section is rejected. Correct the file named in the error and run registration
 again.
 
+Codex uses TOML. Its registration runs the installed Yunge MCP executable to
+read the configuration and replace =mcp_servers.yunge=, preserving other
+settings. Run =M-x yunge-mcp-install= first if the executable is missing or
+does not support configuration editing. =yunge-mcp-setup= already builds and
+installs it before registration. Invalid TOML or a non-table =mcp_servers=
+value is rejected without changing the file.
+
 If writing a configuration fails, its previous contents remain intact.
 Registration processes selected clients in order: if one fails,
 earlier updates remain and later clients are not changed. After fixing the

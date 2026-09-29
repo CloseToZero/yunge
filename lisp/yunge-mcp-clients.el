@@ -142,61 +142,63 @@ TYPE, when non-nil, is the stdio type spelling required by the client."
     (or (getenv "CODEX_HOME")
         (expand-file-name ".codex/" "~")))))
 
-(defun yunge-mcp-clients--toml-string (string)
-  "Return STRING encoded as a TOML basic string."
-  (concat
-   "\""
-   (string-replace
-    "\"" "\\\""
-    (string-replace "\\" "\\\\" string))
-   "\""))
-
-(defun yunge-mcp-clients--codex-section-p (header)
-  "Return non-nil when TOML HEADER belongs to Yunge MCP."
-  (or (equal header "mcp_servers.yunge")
-      (string-prefix-p "mcp_servers.yunge." header)
-      (equal header "mcp_servers.\"yunge\"")
-      (string-prefix-p "mcp_servers.\"yunge\"." header)))
+(defun yunge-mcp-clients--edit-codex-config (program file configuration)
+  "Ask PROGRAM to update Codex FILE's TOML CONFIGURATION.
+Return the edited TOML text.  Reject missing, failed, or incompatible helpers
+before touching FILE."
+  (unless (file-executable-p program)
+    (user-error "Yunge MCP helper is unavailable; run M-x yunge-mcp-install"))
+  (let ((stderr-file (make-temp-file "yunge-mcp-codex-stderr-"))
+        (request (json-serialize
+                  (list :program program :configuration configuration)))
+        status stdout stderr)
+    (unwind-protect
+        (progn
+          (with-temp-buffer
+            (let ((coding-system-for-read 'utf-8-unix)
+                  (coding-system-for-write 'utf-8-unix))
+              (setq status
+                    (call-process-region
+                     request nil program nil (list t stderr-file) nil
+                     "edit-codex-config")))
+            (setq stdout (buffer-string)))
+          (with-temp-buffer
+            (insert-file-contents stderr-file)
+            (setq stderr (string-trim (buffer-string))))
+          (unless (equal status 0)
+            (user-error
+             "Cannot update Codex configuration %s: %s"
+             file
+             (if (string-empty-p stderr)
+                 (format "helper exited %S; run M-x yunge-mcp-install" status)
+               stderr)))
+          (let ((response
+                 (condition-case nil
+                     (json-parse-string stdout
+                                        :object-type 'hash-table
+                                        :null-object :null)
+                   (error nil))))
+            (unless (and (hash-table-p response)
+                         (stringp (gethash "configuration" response)))
+              (user-error
+               (concat "Yunge MCP helper returned an invalid Codex edit response; "
+                       "run M-x yunge-mcp-install")))
+            (gethash "configuration" response)))
+      (when (file-exists-p stderr-file)
+        (delete-file stderr-file)))))
 
 (defun yunge-mcp-clients--register-codex (program)
   "Register PROGRAM in the user-level Codex configuration."
-  (let* ((file (yunge-mcp-clients--codex-config-file))
-         (section
-          (concat
-           "[mcp_servers.yunge]\ncommand = "
-           (yunge-mcp-clients--toml-string program)
-           "\nargs = []\n\n")))
-    (with-temp-buffer
-      (when (file-exists-p file)
-        (insert-file-contents file))
-      (goto-char (point-min))
-      (let (start end)
-        (while (and (not start)
-                    (re-search-forward "^\\[\\([^]\n]+\\)\\][ \t]*$" nil t))
-          (when (yunge-mcp-clients--codex-section-p (match-string 1))
-            (setq start (line-beginning-position))))
-        (if start
-            (progn
-              (goto-char start)
-              (forward-line 1)
-              (while (and (not end)
-                          (re-search-forward
-                           "^\\[\\([^]\n]+\\)\\][ \t]*$" nil t))
-                (unless (yunge-mcp-clients--codex-section-p (match-string 1))
-                  (setq end (line-beginning-position))))
-              (delete-region start (or end (point-max)))
-              (goto-char start)
-              (insert section))
-          (goto-char (point-max))
-          (unless (or (bobp) (bolp))
-            (insert "\n"))
-          (unless (or (bobp)
-                      (save-excursion
-                        (forward-line -1)
-                        (looking-at-p "[ \t]*$")))
-            (insert "\n"))
-          (insert section)))
-      (yunge-mcp-clients--write-file file (buffer-string)))))
+  (let ((file (yunge-mcp-clients--codex-config-file)))
+    (let ((configuration
+           (if (file-exists-p file)
+               (with-temp-buffer
+                 (insert-file-contents file)
+                 (buffer-string))
+             "")))
+      (yunge-mcp-clients--write-file
+       file (yunge-mcp-clients--edit-codex-config
+             program file configuration)))))
 
 (defun yunge-mcp-clients--claude-config-file ()
   "Return the user-level Claude Code configuration file."

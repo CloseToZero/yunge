@@ -1,6 +1,8 @@
 #+title: Yunge MCP native bridge
 
-The =yunge-mcp= executable is a stdio Model Context Protocol server.  An MCP
+* MCP transport
+
+With no arguments, =yunge-mcp= is a stdio Model Context Protocol server. An MCP
 client starts it as a child process and exchanges one JSON-RPC message per
 line.  Standard output is reserved for MCP messages; process and bridge errors
 use standard error.
@@ -15,32 +17,58 @@ command-line encoding loss and never constructs Lisp source from tool input.
 
 The internal request is a JSON object with an =operation= member:
 
-#+begin_src json
+#+begin_example
 {"operation":"list-tools"}
 {"operation":"call-tool","name":"fangcun_locate_node",
  "arguments":{"id":"node-id"}}
-#+end_src
+#+end_example
 
 Emacs returns a base64-encoded JSON object because =emacsclient --eval= prints
 its result as a Lisp string.  Successful and failed responses have these
 forms:
 
-#+begin_src json
+#+begin_example
 {"ok":true,"value":{}}
 {"ok":false,"error":{"type":"user-error","message":"..."}}
-#+end_src
+#+end_example
 
-The installed executable reads =../runtime.json= relative to its =bin=
+* Connection settings
+
+The installed server reads =../runtime.json= relative to its =bin=
 directory.  The manifest records the exact =emacsclient= executable and the
 arguments that select Yunge's Emacs server:
 
-#+begin_src json
+#+begin_example
 {"version":1,
  "emacsclient":"D:/softwares/emacs/bin/emacsclient.exe",
  "connectionArguments":["--server-file","C:/path/to/server"]}
-#+end_src
+#+end_example
 
 =M-x yunge-mcp-install= regenerates this machine-local file.  For development
 and diagnostics, =YUNGE_MCP_RUNTIME= selects another manifest,
 =YUNGE_EMACSCLIENT= overrides its executable, and
 =YUNGE_EMACS_SERVER_FILE= overrides its connection arguments.
+
+* Edit Codex configuration
+
+=yunge-mcp edit-codex-config= processes one JSON request from standard input
+and exits. It uses neither the runtime manifest nor an Emacs connection.
+The request names the executable to register and contains the existing TOML:
+
+#+begin_example
+{"program":"D:/Yunge/yunge-mcp.exe",
+ "configuration":"[mcp_servers.yunge]\ncommand = \"old\"\n"}
+#+end_example
+
+An empty configuration string creates a new document. The command replaces
+the whole =mcp_servers.yunge= entry with =command= and an empty =args= array.
+It accepts ordinary and inline server tables, preserving unrelated settings.
+Invalid TOML or a non-table =mcp_servers= value fails without producing an
+updated configuration.
+
+On success, standard output is one JSON object with a string =configuration=
+field containing the updated TOML. On failure, the process exits nonzero and
+writes a diagnostic to standard error. Both input and output use UTF-8.
+The command does not read or write client files; the caller replaces the file
+only after validating a successful response. See [[file:../../doc/yunge-mcp-development.org][Yunge MCP development]] for
+the Lisp caller and its file-writing guarantees.

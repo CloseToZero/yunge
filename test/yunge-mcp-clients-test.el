@@ -109,17 +109,29 @@
               "C:/Yunge/mcp.exe"))))
       (delete-directory directory t))))
 
-(ert-deftest yunge-mcp-clients-replaces-only-its-codex-section ()
-  (let* ((directory (make-temp-file "yunge-mcp-codex-" t))
-         (file (expand-file-name "config.toml" directory))
-         (program "C:/Yunge/yunge-mcp.exe"))
+(defun yunge-mcp-clients-test--debug-helper ()
+  "Return the locally built MCP helper, or skip with its build command."
+  (let ((program
+         (expand-file-name
+          (concat "native/yunge-mcp/target/debug/yunge-mcp"
+                  (when (eq system-type 'windows-nt) ".exe"))
+          yunge-test-root)))
+    (unless (file-executable-p program)
+      (ert-skip
+       "Build the debug helper with cargo test --manifest-path native/yunge-mcp/Cargo.toml"))
+    program))
+
+(ert-deftest yunge-mcp-clients-edits-codex-through-the-built-helper ()
+  (let* ((program (yunge-mcp-clients-test--debug-helper))
+         (directory (make-temp-file "yunge-mcp-codex-" t))
+         (file (expand-file-name "config.toml" directory)))
     (unwind-protect
         (progn
           (with-temp-file file
             (insert
              "model = \"gpt\"\n\n"
              "[mcp_servers.yunge]\ncommand = \"old\"\n\n"
-             "[mcp_servers.other]\ncommand = \"other\"\n"))
+             "[mcp_servers.other] # keep\ncommand = \"other\"\n"))
           (cl-letf (((symbol-function 'yunge-mcp-clients--codex-config-file)
                      (lambda () file)))
             (yunge-mcp-clients-register '(codex) program))
@@ -128,10 +140,46 @@
             (let ((contents (buffer-string)))
               (should (string-match-p "model = \"gpt\"" contents))
               (should (string-match-p "command = \"other\"" contents))
-              (should (string-match-p
-                       (regexp-quote (concat "command = \"" program "\""))
-                       contents))
+              (should (string-match-p (regexp-quote program) contents))
               (should-not (string-match-p "command = \"old\"" contents)))))
+      (delete-directory directory t))))
+
+(ert-deftest yunge-mcp-clients-preserves-codex-config-on-errors ()
+  (let* ((program (yunge-mcp-clients-test--debug-helper))
+         (directory (make-temp-file "yunge-mcp-codex-invalid-" t))
+         (file (expand-file-name "config.toml" directory)))
+    (unwind-protect
+        (cl-letf (((symbol-function 'yunge-mcp-clients--codex-config-file)
+                   (lambda () file)))
+          (dolist (contents '("mcp_servers = 1\n"
+                              "secret = \"do-not-print-this\"\n[broken\n"))
+            (with-temp-file file (insert contents))
+            (let ((error-data
+                   (should-error
+                    (yunge-mcp-clients-register '(codex) program)
+                    :type 'user-error)))
+              (should (string-match-p
+                       (regexp-quote file) (error-message-string error-data)))
+              (should-not (string-match-p
+                           "do-not-print-this" (error-message-string error-data))))
+            (with-temp-buffer
+              (insert-file-contents file)
+              (should (equal (buffer-string) contents))))
+          (let ((contents "model = \"keep\"\n"))
+            (with-temp-file file (insert contents))
+            (cl-letf (((symbol-function 'call-process-region)
+                       (lambda (&rest _arguments)
+                         (insert "{\"error\":\"unsupported\"}")
+                         0)))
+              (let ((error-data
+                     (should-error
+                      (yunge-mcp-clients-register '(codex) program)
+                      :type 'user-error)))
+                (should (string-match-p
+                         "yunge-mcp-install" (error-message-string error-data)))))
+            (with-temp-buffer
+              (insert-file-contents file)
+              (should (equal (buffer-string) contents)))))
       (delete-directory directory t))))
 
 (ert-deftest yunge-mcp-clients-reads-targets-without-case-sensitivity ()
