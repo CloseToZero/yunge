@@ -18,7 +18,8 @@
 (yunge-key-define yunge-bookmark-map yunge-bookmark-bindings)
 
 (defconst yunge-bookmark-jump-bindings
-  `(("b" ,yunge-bookmark-map "bookmark")))
+  ;; Keep management separate from Consult's "b" bookmark jump.
+  `(("B" ,yunge-bookmark-map "bookmark")))
 
 (defconst yunge-bookmark-bmenu-normal-bindings
   '(("RET" bookmark-bmenu-this-window "jump")

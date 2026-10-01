@@ -21,8 +21,8 @@
                             yunge-var-directory)))
   (yunge-test-evil-normal-keys
    'fundamental-mode
-   '(("SPC j b l" . bookmark-bmenu-list)
-     ("SPC j b s" . bookmark-set)))
+   '(("SPC j B l" . bookmark-bmenu-list)
+     ("SPC j B s" . bookmark-set)))
   (require 'bookmark)
   (yunge-test-evil-normal-keys
    'bookmark-bmenu-mode
@@ -38,5 +38,18 @@
      ("R" . bookmark-bmenu-relocate)
      ("u" . bookmark-bmenu-unmark)
      ("x" . bookmark-bmenu-execute-deletions))))
+
+(ert-deftest yunge-bookmark-keeps-management-keys-with-consult ()
+  (yunge-test-enable-evil)
+  (require 'which-key)
+  (require 'yunge-bookmark)
+  (require 'consult-autoloads)
+  (yunge-test-load-package-config 'yunge-consult)
+
+  (yunge-test-evil-normal-keys
+   'fundamental-mode
+   '(("SPC j b" . consult-bookmark)
+     ("SPC j B l" . bookmark-bmenu-list)
+     ("SPC j B s" . bookmark-set))))
 
 ;;; yunge-bookmark-test.el ends here

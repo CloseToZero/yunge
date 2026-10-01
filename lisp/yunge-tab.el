@@ -106,7 +106,7 @@ Interactively, offer other tabs and default to the most recently visited."
 
 (defconst yunge-tab-bindings
   '(("TAB" yunge-tab-switch "switch tab")
-    ("<tab>" yunge-tab-switch nil)
+    ("<tab>" yunge-tab-switch "switch tab")
     ("l" yunge-workspace-restore "restore workspace")
     ("n" yunge-tab-new "new tab")
     ("q" tab-close "close tab")
@@ -116,7 +116,7 @@ Interactively, offer other tabs and default to the most recently visited."
 
 (defconst yunge-tab-leader-bindings
   `(("TAB" ,yunge-tab-map "tab")
-    ("<tab>" ,yunge-tab-map nil)))
+    ("<tab>" ,yunge-tab-map "tab")))
 
 (yunge-key-define yunge-tab-map yunge-tab-bindings)
 (yunge-key-define yunge-leader-map yunge-tab-leader-bindings)

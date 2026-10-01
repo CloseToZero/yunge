@@ -93,6 +93,13 @@ Each window has its own history. Splitting copies that history, after which
 the two windows can diverge. Making a new jump after going backward replaces
 that window's newer branch.
 
+** Save named locations
+
+Use ~SPC j B s~ to set a bookmark at the current location and give it a
+name. Bookmarks persist across Emacs sessions. ~SPC j b~ chooses a bookmark
+to visit; ~SPC j B l~ opens the bookmark list for renaming or deleting entries.
+The management prefix uses uppercase ~B~.
+
 ** Keep and edit search results
 
 From the project search prompt, press ~M-a E~ to export results to a Grep
