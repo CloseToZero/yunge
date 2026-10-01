@@ -43,6 +43,7 @@
 (defvar magit-diff-section-map)
 (defvar magit-module-section-map)
 (defvar magit-root-section)
+(defvar magit-buffer-file-name)
 (defvar project-prefix-map)
 (defvar project-switch-commands)
 (defvar transient-map)
@@ -73,6 +74,55 @@
 
 (yunge-test-deftest-lazy-load yunge-magit
   (magit project transient))
+
+(ert-deftest yunge-magit-global-path-commands-use-the-repository-root ()
+  (yunge-test-enable-evil)
+  (require 'magit-autoloads)
+  (yunge-test-load-package-config 'yunge-magit)
+  (require 'magit)
+  (let* ((root (make-temp-file "yunge-magit-path-" t))
+         (directory (expand-file-name "nested/" root))
+         (kill-ring nil)
+         (kill-ring-yank-pointer nil)
+         (interprogram-cut-function nil)
+         (interprogram-paste-function nil))
+    (unwind-protect
+        (progn
+          (should (= (call-process "git" nil nil nil "-C" root "init" "--quiet") 0))
+          (make-directory directory)
+          (dolist (mode '(magit-status-mode magit-diff-mode magit-log-mode))
+            (with-temp-buffer
+              (setq default-directory directory)
+              (funcall mode)
+              (let ((inhibit-read-only t))
+                (magit-insert-section (status)
+                  (magit-insert-section (file "nested/file.el")
+                    (magit-insert-heading "nested/file.el"))))
+              (goto-char (point-min))
+              (evil-normal-state)
+              (call-interactively (key-binding (kbd "SPC f y p")))
+              (should (equal (current-kill 0) (file-name-as-directory root)))
+              (goto-char (point-max))
+              (call-interactively (key-binding (kbd "SPC f y P")))
+              (should (equal (current-kill 0) ".")))))
+      (delete-directory root t))))
+
+(ert-deftest yunge-magit-historical-file-path-uses-the-original-file ()
+  (yunge-test-enable-evil)
+  (require 'magit-autoloads)
+  (yunge-test-load-package-config 'yunge-magit)
+  (require 'magit)
+  (with-temp-buffer
+    (let ((file (expand-file-name "deleted/file.el" temporary-file-directory))
+          (kill-ring nil)
+          (kill-ring-yank-pointer nil)
+          (interprogram-cut-function nil)
+          (interprogram-paste-function nil))
+      (setq-local magit-buffer-file-name file)
+      (magit-blob-mode 1)
+      (should-not buffer-file-name)
+      (call-interactively #'yunge-copy-buffer-absolute-path)
+      (should (equal (current-kill 0) file)))))
 
 (defun yunge-magit-test--visual-untracked-files (keys target)
   "Return the untracked files selected by KEYS before calling TARGET."

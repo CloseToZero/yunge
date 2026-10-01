@@ -9,6 +9,8 @@
 (declare-function evil-exit-visual-state "evil-states"
                   (&optional later buffer))
 (declare-function evil-insert-state "evil-states")
+(declare-function magit-buffer-file-name "magit-mode" ())
+(declare-function magit-toplevel "magit-git" (&optional directory))
 (declare-function transient-bind-q-to-quit "transient")
 (declare-function transient-suffix-put "transient"
                   (prefix loc prop value))
@@ -17,6 +19,7 @@
 (defvar git-rebase-mode-map)
 (defvar evil-state)
 (defvar magit-define-global-key-bindings)
+(defvar magit-blob-mode)
 (defvar magit-cherry-mode-map)
 (defvar magit-diff-mode-map)
 (defvar magit-diff-section-map)
@@ -206,7 +209,17 @@ Magit's section maps select the file, hunk, or region operation at point.")
         (evil-exit-visual-state)
       (deactivate-mark))))
 
+(defun yunge-magit--buffer-path ()
+  "Return the repository root of a Magit view, or a blob's original file."
+  (cond
+   ((derived-mode-p 'magit-mode)
+    (when-let* ((root (magit-toplevel)))
+      (file-name-as-directory root)))
+   ((bound-and-true-p magit-blob-mode)
+    (magit-buffer-file-name))))
+
 (elpaca magit
+  (add-hook 'yunge-path-buffer-path-functions #'yunge-magit--buffer-path)
   (yunge-key-define yunge-file-map yunge-magit-file-bindings)
   (yunge-key-define yunge-go-map yunge-magit-go-bindings)
   (yunge-key-define project-prefix-map yunge-magit-project-bindings)

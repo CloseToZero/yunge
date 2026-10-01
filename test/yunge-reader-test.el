@@ -8,6 +8,26 @@
 (yunge-test-deftest-lazy-load yunge-reader
   (evil which-key))
 
+(ert-deftest yunge-reader-path-copy-uses-the-associated-document ()
+  (with-temp-buffer
+    (yunge-reader-mode)
+    (let ((file (expand-file-name "book.epub" temporary-file-directory))
+          (kill-ring nil)
+          (kill-ring-yank-pointer nil)
+          (interprogram-cut-function nil)
+          (interprogram-paste-function nil))
+      (should-not buffer-file-name)
+      (setq yunge-reader--opening-file file)
+      (call-interactively #'yunge-copy-buffer-absolute-path)
+      (should (equal (current-kill 0) file))
+      (setq yunge-reader--opening-file nil)
+      (setq yunge-reader-document (make-yunge-reader-document :file file))
+      (unwind-protect
+          (progn
+            (call-interactively #'yunge-copy-buffer-absolute-path)
+            (should (equal (current-kill 0) file)))
+        (setq yunge-reader-document nil)))))
+
 (defun yunge-reader-test--place
     (driver unit &optional x y zoom-mode scale)
   "Return printable place data for DRIVER at UNIT."

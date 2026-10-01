@@ -6,6 +6,7 @@
 (require 'yunge-jump-history)
 (require 'yunge-minibuffer)
 (require 'yunge-pinyin)
+(require 'yunge-path)
 (require 'yunge-state)
 
 (declare-function evil-add-command-properties "evil-common")
@@ -22,8 +23,6 @@
 (declare-function evil-make-intercept-map "evil-core")
 (declare-function evil-push-search-history "evil-search" (regexp forward))
 (declare-function evil-state-auxiliary-keymaps "evil-core" (state))
-(declare-function project-current "project" (&optional maybe-prompt directory))
-(declare-function project-root "project" (project))
 
 (defvar button-map)
 (defvar evil-cross-lines)
@@ -340,31 +339,9 @@ punctuation equivalence rather than literally."
   (interactive)
   (dired yunge-config-directory))
 
-(defun yunge-copy-current-file-absolute-path ()
-  "Copy the current buffer's absolute file path."
-  (interactive)
-  (unless buffer-file-name
-    (user-error "The current buffer is not visiting a file"))
-  (let ((file (expand-file-name buffer-file-name)))
-    (kill-new file)
-    (message "Copied file path: %s" file)))
-
-(defun yunge-copy-current-file-project-path ()
-  "Copy the current buffer's project-relative file path."
-  (interactive)
-  (unless buffer-file-name
-    (user-error "The current buffer is not visiting a file"))
-  (let* ((file (expand-file-name buffer-file-name))
-         (project (project-current nil (file-name-directory file))))
-    (unless project
-      (user-error "The current file is not in a project"))
-    (let ((path (file-relative-name file (project-root project))))
-      (kill-new path)
-      (message "Copied project file path: %s" path))))
-
 (defconst yunge-file-copy-bindings
-  '(("p" yunge-copy-current-file-absolute-path "absolute path")
-    ("P" yunge-copy-current-file-project-path "project path")))
+  '(("p" yunge-copy-buffer-absolute-path "absolute path")
+    ("P" yunge-copy-buffer-project-path "project path")))
 
 (defconst yunge-file-bindings
   `(("c" yunge-open-config-directory "open config directory")

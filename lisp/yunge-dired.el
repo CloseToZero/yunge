@@ -3,6 +3,7 @@
 ;; SPDX-License-Identifier: MIT
 
 (require 'yunge-key)
+(require 'yunge-path)
 (require 'yunge-state)
 
 (declare-function dbus-call-method "dbus"
@@ -107,6 +108,13 @@ inconsistently from keyboard modifiers and the source application."
   (when (bound-and-true-p dired-directory)
     (when-let* ((project (project-current nil default-directory)))
       (project-remember-project project))))
+
+(defun yunge-dired--buffer-path ()
+  "Return this Dired buffer's opened directory, independent of point."
+  (when (derived-mode-p 'dired-mode 'wdired-mode)
+    (file-name-as-directory default-directory)))
+
+(add-hook 'yunge-path-buffer-path-functions #'yunge-dired--buffer-path)
 
 (defun yunge-dired-copy-filename ()
   "Copy the names of the selected files without their directories."

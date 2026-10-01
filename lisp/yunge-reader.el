@@ -7,6 +7,7 @@
 (require 'subr-x)
 (require 'yunge-jump-history)
 (require 'yunge-key)
+(require 'yunge-path)
 (require 'yunge-reader-model)
 (require 'yunge-reader-task)
 (require 'yunge-reader-search)
@@ -1207,6 +1208,13 @@ Only the primary view's active presentation may replace the persistent place."
       (or (and yunge-reader-document
                (yunge-reader-document-file yunge-reader-document))
           yunge-reader--opening-file))))
+
+(defun yunge-reader--buffer-path ()
+  "Return the document path associated with the current Reader view."
+  (when (derived-mode-p 'yunge-reader-mode)
+    (yunge-reader--buffer-file (current-buffer))))
+
+(add-hook 'yunge-path-buffer-path-functions #'yunge-reader--buffer-path)
 
 (defun yunge-reader--existing-buffer (file)
   "Return a live reader buffer for FILE, or nil."

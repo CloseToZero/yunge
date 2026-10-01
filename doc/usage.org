@@ -269,8 +269,27 @@ with ~d~, review the flags, then use ~x~ to execute the deletion; ~u~ removes
 a flag before execution.
 
 Use ~y f~ to copy selected file names, ~y p~ for absolute paths, and ~y P~
-for project-relative paths. From an ordinary file buffer, the path commands
-are ~SPC f y p~ and ~SPC f y P~.
+for project-relative paths.
+
+Use ~SPC f y p~ to copy the absolute path associated with the current
+buffer, or ~SPC f y P~ for the same path relative to its project root:
+
+| Buffer                        | Associated path                  |
+|-------------------------------+----------------------------------|
+| File or indirect buffer       | The original file                |
+| Dired or Wdired                | The buffer's opened directory    |
+| Magit status, diff, or log     | The repository root              |
+| Magit historical file         | The original file's path         |
+| Reader                        | The PDF or EPUB file             |
+| Terminal or compilation       | The recorded working directory   |
+
+The global commands use the buffer's associated path regardless of point,
+marks, or selections. In Dired, this includes inserted subdirectory listings:
+the global commands still copy the buffer's opened directory. In Dired,
+~y p~ and ~y P~ copy selected entries. Project-relative directories end in ~/~;
+the project root itself is ~.~. The project command reports an error if
+the path has no project. Buffers without an associated file or directory,
+such as ~*scratch*~ and help buffers, report that there is no path to copy.
 
 ~SPC m o~ opens selected files in their default applications. ~SPC m e~
 opens the directory in the system file manager; ~SPC m r~ reveals selected
