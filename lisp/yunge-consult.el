@@ -12,6 +12,7 @@
 (declare-function consult--buffer-query "consult")
 (declare-function consult--async-pipeline "consult" (&rest async))
 (declare-function consult--file-preview "consult")
+(declare-function consult--buffer-preview "consult")
 (declare-function consult-grep "consult" (&optional dir initial))
 (declare-function consult-ripgrep "consult" (&optional dir initial))
 
@@ -124,6 +125,20 @@ candidate so Consult's normal accepted-file action still opens it once."
                      (not (eq buffer current)))
             (throw 'buffer buffer)))))))
 
+(defun yunge-consult--restore-jump-preview-buffers (original &rest arguments)
+  "Keep ORIGINAL's location previews out of the buffer history.
+Consult's jump preview restores point and narrowing, but leaves previewed
+buffers in the window history.  Reuse its buffer preview cleanup to return
+to the origin before committing the selected location."
+  (let ((preview (apply original arguments))
+        (buffers (consult--buffer-preview)))
+    (lambda (action candidate)
+      (funcall preview action candidate)
+      ;; Let location previews retain their normal window selection.  Only
+      ;; use the buffer preview state for reset, exit, and return cleanup.
+      (unless (and (eq action 'preview) candidate)
+        (funcall buffers action nil)))))
+
 (defun yunge-consult--buffer-items ()
   "Return Consult buffer items with the selected window's history first."
   ;; Consult normally moves every visible buffer behind invisible buffers.
@@ -232,6 +247,13 @@ candidate so Consult's normal accepted-file action still opens it once."
   ;; has loaded.
   (eval-after-load 'consult
     '(progn
+       (unless
+           (advice-member-p
+            #'yunge-consult--restore-jump-preview-buffers
+            'consult--jump-preview)
+         (advice-add
+          'consult--jump-preview :around
+          #'yunge-consult--restore-jump-preview-buffers))
        (unless
            (advice-member-p
             #'yunge-consult--suppress-reader-file-preview

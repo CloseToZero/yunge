@@ -8,6 +8,8 @@
                   (options &rest defaults))
 (declare-function consult--async-min-input "consult" (&optional min-input))
 (declare-function consult--file-preview "consult")
+(declare-function consult--grep-state "consult")
+(declare-function consult--jump-state "consult")
 (declare-function consult-bookmark "consult" (name))
 (declare-function evil-get-command-property "evil-common")
 (declare-function evil-visual-state "evil-states")
@@ -20,6 +22,91 @@
 (defvar bookmark-default-file)
 (defvar bookmark-save-flag)
 (defvar consult-source-buffer)
+
+(defun yunge-consult-test--search-buffer-history (accept)
+  "Check buffer history after search previews, optionally ACCEPT a result."
+  (yunge-test-enable-evil)
+  (require 'consult)
+  (yunge-test-load-package-config 'yunge-consult)
+  (let* ((root (make-temp-file "yunge-consult-history-" t))
+         (origin (generate-new-buffer "*yunge-consult-origin*"))
+         (previous (generate-new-buffer "*yunge-consult-previous*"))
+         buffers candidates)
+    (unwind-protect
+        (save-window-excursion
+          (delete-other-windows)
+          (dolist (name '("preview.txt" "target.txt"))
+            (let ((file (expand-file-name name root)))
+              (with-temp-file file (insert "needle\n"))
+              ;; Already open files survive preview cleanup, exposing history
+              ;; pollution that temporary preview buffers would hide.
+              (push (find-file-noselect file) buffers)
+              (push (concat (propertize file 'face 'consult-file) ":"
+                            (propertize "1" 'face 'consult-line-number)
+                            ":needle")
+                    candidates)))
+          (switch-to-buffer previous)
+          (switch-to-buffer origin)
+          (let ((history (copy-tree (window-prev-buffers)))
+                (next (copy-sequence (window-next-buffers)))
+                (state (consult--grep-state)))
+            (funcall state 'setup nil)
+            (dolist (candidate (reverse candidates))
+              (funcall state 'preview candidate))
+            (funcall state 'preview nil)
+            (funcall state 'exit nil)
+            (funcall state 'return (and accept (car candidates)))
+            (if accept
+                (progn
+                  (should (eq (window-buffer) (car buffers)))
+                  (should (eq (yunge-consult--previous-window-buffer) origin))
+                  (should (eq (cdar (yunge-consult--buffer-items)) origin)))
+              (should (eq (window-buffer) origin))
+              (should (equal (window-prev-buffers) history))
+              (should (equal (window-next-buffers) next))
+              (should (eq (cdar (yunge-consult--buffer-items)) previous)))))
+      (dolist (buffer (append buffers (list origin previous)))
+        (when (buffer-live-p buffer) (kill-buffer buffer)))
+      (delete-directory root t))))
+
+(ert-deftest yunge-consult-search-keeps-origin-as-previous-buffer ()
+  (yunge-consult-test--search-buffer-history t))
+
+(ert-deftest yunge-consult-cancelled-search-restores-buffer-history ()
+  (yunge-consult-test--search-buffer-history nil))
+
+(ert-deftest yunge-consult-location-previews-preserve-other-windows ()
+  (yunge-test-enable-evil)
+  (require 'consult)
+  (yunge-test-load-package-config 'yunge-consult)
+  (let ((origin (generate-new-buffer "*yunge-consult-origin*"))
+        (preview (generate-new-buffer "*yunge-consult-preview*"))
+        (target (generate-new-buffer "*yunge-consult-target*")))
+    (unwind-protect
+        (save-window-excursion
+          (delete-other-windows)
+          (switch-to-buffer origin)
+          (let* ((source-window (selected-window))
+                 (other-window (split-window-right))
+                 (_ (set-window-buffer other-window target))
+                 (source-history (copy-tree (window-prev-buffers source-window)))
+                 (other-history (copy-tree (window-prev-buffers other-window)))
+                 (preview-pos (with-current-buffer preview (point-marker)))
+                 (target-pos (with-current-buffer target (point-marker)))
+                 (state (consult--jump-state)))
+            ;; Consult invokes each state action from the original window,
+            ;; even when a preview selects an already visible target window.
+            (dolist (step `((setup nil) (preview ,preview-pos)
+                            (preview ,target-pos) (preview nil)
+                            (exit nil) (return ,target-pos)))
+              (with-selected-window source-window
+                (funcall state (car step) (cadr step))))
+            (should (eq (window-buffer source-window) origin))
+            (should (eq (window-buffer other-window) target))
+            (should (equal (window-prev-buffers source-window) source-history))
+            (should (equal (window-prev-buffers other-window) other-history))))
+      (dolist (buffer (list origin preview target))
+        (when (buffer-live-p buffer) (kill-buffer buffer))))))
 
 (yunge-test-deftest-lazy-load yunge-consult
   (consult consult-imenu))
